@@ -299,7 +299,7 @@ def process_row(ws, row_idx: int, cookie: str,
 def main():
     parser = argparse.ArgumentParser(description="抖音视频采集器")
     parser.add_argument("--sheet", default="抖音视频数据", help="Excel sheet名称")
-    parser.add_argument("--excel", default="/Users/zhangyajun/Desktop/抖音视频信息.xlsx")
+    parser.add_argument("--excel", default="/Users/zhangyajun/Documents/project/video2text/output/抖音视频信息.xlsx")
     parser.add_argument("--cookie", help="完整 cookie 字符串，或 sessionid=xxx")
     parser.add_argument("--cookie-file", help="从文件读取 cookie")
     parser.add_argument("--row", type=int, help="只处理指定行号")

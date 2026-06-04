@@ -77,6 +77,12 @@ python main.py --excel "/path/to/抖音视频信息.xlsx" --row 3 --cookie "sess
 | N | 关键词摘要 |
 | O | 备注 |
 
+## 输出文件
+
+所有输出文件（处理完成的 Excel、生成的报告 Word 等）统一放在  目录，不提交 Git。
+
+
+
 ## 项目结构
 
 ```
