@@ -4,7 +4,6 @@
 用法：
   python main.py --excel /path/to/抖音视频信息.xlsx --cookie "sessionid=xxx"
   python main.py --excel /path/to/抖音视频信息.xlsx --cookie-file /path/to/cookie.txt
-  python main.py --url "https://v.douyin.com/xxx" --cookie "sessionid=xxx"
 """
 
 import argparse
@@ -16,6 +15,7 @@ import json
 import tempfile
 import subprocess
 from datetime import datetime
+from pathlib import Path
 
 # 第三方库
 try:
@@ -23,10 +23,6 @@ try:
 except ImportError:
     print("需要 openpyxl: pip install openpyxl")
     sys.exit(1)
-
-# 项目模块
-sys.path.insert(0, "/tmp/douyin_parse")
-from douyin_video_parser import DouyinVideoParser
 
 # faster-whisper（需 KMP_DUPLICATE_LIB_OK=TRUE）
 try:
@@ -45,7 +41,52 @@ COL = {
 }
 
 STATUS = {"未开始": "未开始", "处理中": "处理中",
-          "已完成": "已完成", "失败": "失败"}
+          "已完成": "已完成", "已写文稿": "已写文稿",
+          "需核查": "需核查", "已废弃": "已废弃", "失败": "失败"}
+
+
+def load_env_file(path: str) -> dict:
+    """读取简单 KEY=VALUE 配置文件，不覆盖系统环境变量。"""
+    env = {}
+    if not path or not os.path.exists(path):
+        return env
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            env[key.strip()] = value.strip().strip('"').strip("'")
+    return env
+
+
+def config_get(config: dict, key: str, default: str = "") -> str:
+    return os.environ.get(key) or config.get(key) or default
+
+
+def normalize_ai_method(method: str) -> str:
+    aliases = {
+        "openai_api": "openai",
+        "deepseek_api": "deepseek",
+        "openai": "openai",
+        "deepseek": "deepseek",
+        "skip": "skip",
+    }
+    return aliases.get((method or "skip").strip(), "skip")
+
+
+def get_douyin_parser(parser_dir: str):
+    """从可配置目录加载 douyin_parse，避免把 /tmp 路径写死。"""
+    parser_dir = os.path.abspath(parser_dir)
+    if not os.path.isdir(parser_dir):
+        raise RuntimeError(f"douyin_parse 目录不存在: {parser_dir}")
+    if parser_dir not in sys.path:
+        sys.path.insert(0, parser_dir)
+    try:
+        from douyin_video_parser import DouyinVideoParser
+    except ImportError as e:
+        raise RuntimeError(f"无法从 {parser_dir} 导入 douyin_video_parser: {e}") from e
+    return DouyinVideoParser()
 
 
 # ── 链接解析 ─────────────────────────────────────────────────────
@@ -74,11 +115,12 @@ def extract_aweme_id(url: str) -> str:
 
 
 # ── 视频元数据提取 ───────────────────────────────────────────────
-def fetch_video_info(url_or_id: str, parser: DouyinVideoParser) -> dict:
+def fetch_video_info(url_or_id: str, parser) -> dict:
     """调用 douyin_parse，返回结构化 dict"""
     try:
         raw = parser.parse_video(url_or_id)
-        desc = raw.get("desc", "")
+        raw = raw or {}
+        desc = raw.get("desc", "") or ""
         hashtags = []
         if "#" in desc:
             for part in desc.split("#")[1:]:
@@ -89,8 +131,8 @@ def fetch_video_info(url_or_id: str, parser: DouyinVideoParser) -> dict:
         ts = raw.get("create_time", 0)
         create_str = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S") if ts else ""
 
-        video_obj = raw.get("video", {})
-        statistics = raw.get("statistics", {})
+        video_obj = raw.get("video") or {}
+        statistics = raw.get("statistics") or {}
 
         return {
             "aweme_id": raw.get("aweme_id", ""),
@@ -154,8 +196,7 @@ def asr_transcribe(video_url: str, model_size: str = "base",
     # 转写
     try:
         if HAS_FASTER_WHISPER:
-            env = os.environ.copy()
-            env["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+            os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
             model = WhisperModel(model_size, device="cpu", compute_type="int8")
             segments, info = model.transcribe(
                 audio_path, language=language,
@@ -229,7 +270,7 @@ def set_cell(ws, row: int, col_name: str, value):
 
 def process_row(ws, row_idx: int, cookie: str,
                 asr_model: str, ai_config: dict,
-                parser: DouyinVideoParser) -> bool:
+                parser) -> bool:
     """处理单行，返回是否成功"""
     url = (ws.cell(row_idx, COL["链接"]).value or "").strip()
     if not url:
@@ -300,49 +341,73 @@ def main():
     parser = argparse.ArgumentParser(description="抖音视频采集器")
     parser.add_argument("--sheet", default="抖音视频数据", help="Excel sheet名称")
     parser.add_argument("--excel", default="/Users/zhangyajun/Documents/project/video2text/output/抖音视频信息.xlsx")
+    parser.add_argument("--config", default=str(Path(__file__).parent / "config/config.env.local"),
+                        help="本地配置文件，默认 config/config.env.local")
+    parser.add_argument("--parser-dir", default=os.environ.get("DOUYIN_PARSE_DIR", "/tmp/douyin_parse"),
+                        help="douyin_parse 项目目录，默认读取 DOUYIN_PARSE_DIR 或 /tmp/douyin_parse")
     parser.add_argument("--cookie", help="完整 cookie 字符串，或 sessionid=xxx")
     parser.add_argument("--cookie-file", help="从文件读取 cookie")
     parser.add_argument("--row", type=int, help="只处理指定行号")
     parser.add_argument("--asr-model", default="base",
                         choices=["tiny","base","small","medium","large"])
     parser.add_argument("--ai-method", default="skip",
-                        choices=["skip","openai","deepseek"])
+                        choices=["skip","openai","deepseek","openai_api","deepseek_api"])
     parser.add_argument("--ai-key", help="API Key")
-    parser.add_argument("--ai-base", default="https://api.deepseek.com/v1")
-    parser.add_argument("--ai-model", default="deepseek-chat")
+    parser.add_argument("--ai-base", help="OpenAI 兼容接口 base_url")
+    parser.add_argument("--ai-model", help="模型名称")
     parser.add_argument("--interval", type=int, default=5,
                         help="每个视频间隔秒数")
-    parser.add_argument("--update-index", action="store_true", default=True,
-                        help="处理完成后自动更新 video_index.json")
+    parser.add_argument("--update-index", action=argparse.BooleanOptionalAction, default=True,
+                        help="处理完成后自动更新 video_index.json（默认开启，可用 --no-update-index 关闭）")
     args = parser.parse_args()
+
+    config = {}
+    config.update(load_env_file(str(Path(__file__).parent / "config/config.env")))
+    config.update(load_env_file(args.config))
 
     # 读取 Cookie
     if args.cookie_file:
         cookie = open(args.cookie_file).read().strip()
     elif args.cookie:
         cookie = args.cookie
+    elif config_get(config, "DOUYIN_SESSIONID"):
+        sessionid = config_get(config, "DOUYIN_SESSIONID")
+        cookie = sessionid if "sessionid=" in sessionid else f"sessionid={sessionid}"
     else:
         print("错误：需要 --cookie 或 --cookie-file")
         sys.exit(1)
 
     # 写入 cookie 文件（供 douyin_parse 使用）
-    cookie_path = "/tmp/douyin_parse/douyin_cookie.txt"
+    parser_dir = os.path.abspath(args.parser_dir)
+    if not os.path.isdir(parser_dir):
+        print(f"错误：douyin_parse 目录不存在: {parser_dir}")
+        sys.exit(1)
+    cookie_path = os.path.join(parser_dir, "douyin_cookie.txt")
     with open(cookie_path, "w") as f:
         f.write(cookie)
     print(f"Cookie 已写入 {cookie_path}")
 
     # 切换到 douyin_parse 目录，让 parser 能找到 cookie 文件
-    import os
-    os.chdir("/tmp/douyin_parse")
-    # 初始化 parser
-    parser_dy = DouyinVideoParser()
+    os.chdir(parser_dir)
+    parser_dy = get_douyin_parser(parser_dir)
 
     # AI 配置
+    ai_method = normalize_ai_method(args.ai_method or config_get(config, "AI_METHOD", "skip"))
+    default_api_key = ""
+    if ai_method == "deepseek":
+        default_api_key = config_get(config, "DEEPSEEK_API_KEY") or config_get(config, "AI_API_KEY")
+        default_api_base = config_get(config, "DEEPSEEK_API_BASE", "https://api.deepseek.com/v1")
+        default_model = config_get(config, "DEEPSEEK_MODEL", "deepseek-chat")
+    else:
+        default_api_key = config_get(config, "OPENAI_API_KEY") or config_get(config, "AI_API_KEY")
+        default_api_base = config_get(config, "AI_API_BASE", "https://api.openai.com/v1")
+        default_model = config_get(config, "AI_MODEL", "gpt-4o-mini")
+
     ai_config = {
-        "method": args.ai_method,
-        "api_key": args.ai_key or os.environ.get("OPENAI_API_KEY", ""),
-        "api_base": args.ai_base,
-        "model": args.ai_model,
+        "method": ai_method,
+        "api_key": args.ai_key or default_api_key,
+        "api_base": args.ai_base or default_api_base,
+        "model": args.ai_model or default_model,
     }
 
     # 打开 Excel
@@ -367,6 +432,8 @@ def main():
 
     if not rows_to_process:
         print("没有需要处理的链接（全部已完成或无链接）")
+        if args.update_index:
+            update_video_index(args.excel)
         sys.exit(0)
 
     print(f"共 {len(rows_to_process)} 条待处理")
@@ -398,7 +465,7 @@ def update_video_index(excel_path: str):
     import re, json
     from pathlib import Path
 
-    INDEX_PATH = Path(__file__).parent / "video_index.json"  # 随仓库存放
+    INDEX_PATH = Path(__file__).parent / "video_index.json"
 
     # 读取现有索引（用于去重）
     existing = {}
@@ -412,21 +479,96 @@ def update_video_index(excel_path: str):
     wb = openpyxl.load_workbook(excel_path)
     updated_count = 0
 
+    def header_map(ws) -> dict:
+        aliases = {
+            "抖音链接": "链接",
+            "原始链接": "链接",
+            "处理状态": "状态",
+            "视频文案(ASR)": "视频文案ASR",
+            "口播原文(ASR)": "口播原文",
+            "关键词/摘要": "关键词摘要",
+            "选题等级": "选题等级",
+            "适合平台": "适合平台",
+            "文章角度": "文章角度",
+            "事实风险": "事实风险",
+            "Word文档路径": "Word文档路径",
+            "是否已发布": "是否已发布",
+        }
+        mapping = {}
+        for c in range(1, ws.max_column + 1):
+            raw = ws.cell(1, c).value
+            if not raw:
+                continue
+            name = aliases.get(str(raw).strip(), str(raw).strip())
+            mapping[name] = c
+        return mapping
+
+    def cell_value(ws, row: int, name: str, headers: dict, default=""):
+        col = headers.get(name) or COL.get(name)
+        if not col:
+            return default
+        value = ws.cell(row, col).value
+        return default if value is None else value
+
+    def infer_topic(title: str, tags: str, asr: str, author: str) -> str:
+        combined = f"{title} {tags} {asr[:800]}"
+        if "鹏宇" in author or any(k in combined for k in ["RAG", "提示词", "微调", "AI大模型"]):
+            return "AI技术教程"
+        if any(k in combined for k in ["流放", "POE", "异界", "BD", "开荒", "通货", "天赋"]):
+            return "流放2攻略"
+        if any(k in combined for k in ["暗黑", "暗黑4", "Diablo", "D4"]):
+            return "暗黑4攻略"
+        return "视频内容"
+
+    def infer_article_score(title: str, tags: str, asr: str, status: str) -> str:
+        combined = f"{title} {tags} {asr[:1200]}"
+        if status == "已写文稿":
+            return "已转文章"
+        high_value = ["开荒", "保姆", "设置", "优化", "异界", "通货", "BD", "天赋", "攻略", "避坑"]
+        risky = ["BUG", "bug", "刷出400", "版本答案", "最强", "必看"]
+        score = sum(1 for k in high_value if k in combined)
+        if score >= 3:
+            return "A"
+        if score >= 1:
+            return "B-需核查" if any(k in combined for k in risky) else "B"
+        return "C"
+
+    def infer_fact_risk(title: str, tags: str, asr: str, note: str, article_score: str) -> str:
+        combined = f"{title} {tags} {asr[:1200]}"
+        risk_terms = ["BUG", "bug", "刷出400", "版本答案", "最强", "必看", "无限", "暴涨"]
+        risks = []
+        if any(k in combined for k in risk_terms):
+            risks.append("标题或口播有强结论，写稿前核查机制/数值")
+        if note:
+            risks.append("Excel备注有异常")
+        if "需核查" in article_score:
+            risks.append("选题等级标记需核查")
+        return "；".join(risks)
+
     for ws in wb.worksheets:
+        headers = header_map(ws)
         for r in range(2, ws.max_row + 1):
-            status = ws.cell(r, COL.get("状态", 2)).value or ""
+            status = cell_value(ws, r, "状态", headers)
             if status not in ("已完成", "已写文稿"):
                 continue
-            asr = (ws.cell(r, COL.get("视频文案ASR", 7)).value or
-                   ws.cell(r, COL.get("口播原文", 11)).value or "").strip()
+            asr = (str(cell_value(ws, r, "视频文案ASR", headers) or
+                   cell_value(ws, r, "口播原文", headers) or "")).strip()
             if not asr:
                 continue
 
-            title   = ws.cell(r, COL.get("标题", 6)).value or ""
-            author  = ws.cell(r, COL.get("作者", 4)).value or ""
-            tags    = ws.cell(r, COL.get("标签", 8)).value or ""
-            vid     = ws.cell(r, COL.get("视频ID", 3)).value or ""
-            ctime  = ws.cell(r, COL.get("发布时间", 5)).value or ""
+            title   = str(cell_value(ws, r, "标题", headers) or "")
+            author  = str(cell_value(ws, r, "作者", headers) or "")
+            tags    = str(cell_value(ws, r, "标签", headers) or "")
+            vid     = str(cell_value(ws, r, "视频ID", headers) or "")
+            ctime   = str(cell_value(ws, r, "发布时间", headers) or "")
+            source_url = str(cell_value(ws, r, "链接", headers) or "")
+            video_url = str(cell_value(ws, r, "视频链接", headers) or "")
+            cover_url = str(cell_value(ws, r, "封面URL", headers) or "")
+            ai_copy = str(cell_value(ws, r, "AI优化文案", headers) or "")
+            keywords = str(cell_value(ws, r, "关键词摘要", headers) or "")
+            note = str(cell_value(ws, r, "备注", headers) or "")
+            topic = infer_topic(title, tags, asr, author)
+            article_score = str(cell_value(ws, r, "选题等级", headers) or infer_article_score(title, tags, asr, status))
 
             key = f"{ws.title}:{r}"
             existing[key] = {
@@ -434,28 +576,31 @@ def update_video_index(excel_path: str):
                 "sheet": ws.title,
                 "row": r,
                 "author": author,
-                "title": title[:100],
+                "title": title[:160],
                 "tags": tags,
                 "create_time": str(ctime)[:10] if ctime else "",
-                "asr_snippet": asr[:400],   # 暂存，AI 下次提炼描述
+                "source_url": source_url,
+                "video_url": video_url,
+                "cover_url": cover_url,
                 "status": status,
+                "topic": topic,
+                "article_score": article_score,
+                "platform_suggestion": str(cell_value(ws, r, "适合平台", headers) or "待判断"),
+                "article_angle": str(cell_value(ws, r, "文章角度", headers) or ""),
+                "fact_risk": str(cell_value(ws, r, "事实风险", headers) or infer_fact_risk(title, tags, asr, note, article_score)),
+                "word_doc_path": str(cell_value(ws, r, "Word文档路径", headers) or ""),
+                "published": str(cell_value(ws, r, "是否已发布", headers) or ""),
+                "keywords": keywords,
+                "ai_copy_exists": bool(ai_copy.strip()),
+                "transcript_length": len(asr),
+                "transcript_snippet": asr[:800],
             }
             updated_count += 1
 
     # 启发式描述生成（LLM 提炼前先用规则顶一下）
     def _make_desc(v: dict) -> str:
-        title  = v.get("title", "")
-        author = v.get("author", "")
-        tags   = v.get("tags", "")
-        asr    = v.get("asr_snippet", "")[:400]
-        combined = title + tags + asr
-
-        if "鹏宇" in author or any(k in title for k in ["RAG", "提示词", "微调", "AI"]):
-            cat = "AI技术教程"
-        elif any(k in combined for k in ["流放", "POE", "BD", "天赋", "通货", "异界", "开荒"]):
-            cat = "流放2攻略"
-        else:
-            cat = "视频内容"
+        asr = v.get("transcript_snippet", "")[:500]
+        cat = v.get("topic") or "视频内容"
 
         # 提取中文句子作为摘要
         sents = re.findall(r'[一-鿿][^。！？.\n]{4,50}[。！？.\n]?', asr)
@@ -465,14 +610,19 @@ def update_video_index(excel_path: str):
     videos = list(existing.values())
     for v in videos:
         v["description"] = _make_desc(v)
-        v.pop("asr_snippet", None)
 
     new_index = {
         "name": "抖音视频内容库",
-        "description": "抖音视频文案的轻量索引，包含标题和一句话描述，用于快速检索视频内容。",
-        "version": "1.0",
+        "description": "抖音视频文案索引，用于从短视频素材快速筛选可二创文章的题材。",
+        "version": "1.1",
         "updated": datetime.now().strftime("%Y-%m-%d %H:%M"),
         "total": len(videos),
+        "schema": {
+            "article_score": "A/B/C/已转文章。用于判断是否值得整理成文章，B-需核查表示可能有价值但必须补证据。",
+            "topic": "粗分类，如流放2攻略、暗黑4攻略、AI技术教程。",
+            "fact_risk": "事实风险提示。用于提醒写稿前必须联网核查或人工确认。",
+            "word_doc_path": "已经转成文章后的 Word 文档路径，可由人工或后续脚本回填。",
+        },
         "videos": sorted(videos, key=lambda x: (x.get("sheet", ""), x.get("row", 0))),
     }
 

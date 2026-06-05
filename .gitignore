@@ -8,6 +8,7 @@ build/
 
 # 本地配置（包含 Cookie/API Key）
 config/config.env
+config/config.env.local
 
 # 生成的索引数据
 *.json
@@ -29,3 +30,9 @@ temp/
 
 # Excel 文件（用户数据）
 *.xlsx
+
+# 输出文档和素材
+output/
+*.docx
+*.mp4
+*.wav
