@@ -105,6 +105,32 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
     </div>
     <button class="btn btn-primary" id="btn-submit" onclick="submitTask()" style="width:100%">🚀 开始处理</button>
 
+    <div class="section-label" style="margin-top:24px">📥 批量采集（用户主页）</div>
+    <div class="form-group">
+      <label>用户主页链接 / 任意视频链接</label>
+      <input id="user-url" type="text" placeholder="https://www.douyin.com/user/MS4wLjAB...">
+      <div class="hint">支持用户主页链接或该用户的任意视频链接，自动识别作者主页</div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>最大页数</label>
+        <input id="max-pages" type="number" value="3" min="1" max="20">
+      </div>
+      <div class="form-group">
+        <label style="visibility:hidden">.</label>
+        <button class="btn btn-primary" id="btn-fetch-preview" onclick="previewUserVideos()" style="width:100%">🔍 预览</button>
+      </div>
+    </div>
+    <div id="preview-area" style="display:none;margin-bottom:10px">
+      <div style="background:var(--card);border-radius:8px;padding:10px;max-height:200px;overflow-y:auto;font-size:12px">
+        <div id="preview-list"></div>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button class="btn btn-success" onclick="fetchAndProcess()" style="flex:1">📥 全部添加并处理</button>
+        <button class="btn btn-ghost" onclick="togglePreview(false)" style="flex:1">取消</button>
+      </div>
+    </div>
+
     <div class="status-box" id="status-box">
       <div class="label">处理状态</div>
       <div class="msg" id="status-msg">等待操作...</div>
@@ -306,6 +332,73 @@ function setStatus(type, msg, err) {
   else if (type === 'error') box.classList.add('status-error');
   document.getElementById('status-msg').textContent = msg || '';
   document.getElementById('status-error').textContent = err || '';
+}
+
+// ── 批量采集 ──
+async function previewUserVideos() {
+  const url = document.getElementById('user-url').value.trim();
+  const cookie = document.getElementById('cookie').value.trim();
+  const maxPages = document.getElementById('max-pages').value || 3;
+  if (!url) return alert('请输入链接');
+  if (!cookie) return alert('请输入 Cookie');
+
+  const btn = document.getElementById('btn-fetch-preview');
+  btn.disabled = true; btn.textContent = '🔍 获取中...';
+
+  try {
+    const mode = url.includes('/user/') ? 'user_url' : 'video_url';
+    const resp = await fetch('/api/preview_user_videos', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({user_url: mode==='user_url'?url:'', video_url: mode==='video_url'?url:'', cookie, max_pages: maxPages})
+    }).then(r=>r.json());
+
+    if (resp.error) { alert(resp.error); return; }
+    renderPreview(resp);
+  } catch(e) { alert('请求失败: '+e.message); }
+  finally { btn.disabled = false; btn.textContent = '🔍 预览'; }
+}
+
+function renderPreview(data) {
+  const area = document.getElementById('preview-area');
+  const list = document.getElementById('preview-list');
+  area.style.display = 'block';
+
+  let html = `<div style="color:var(--muted);margin-bottom:8px">找到 <b>${data.total}</b> 条视频 · 主页: ${data.user_url||'-'}</div>`;
+  (data.videos||[]).forEach((v,i) => {
+    html += `<div style="padding:3px 0;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px">
+      <span style="color:var(--muted);font-size:11px;min-width:24px">${i+1}.</span>
+      <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(v.url)}">${v.aweme_id||v.url}</span>
+    </div>`;
+  });
+  list.innerHTML = html;
+}
+
+async function fetchAndProcess() {
+  const url = document.getElementById('user-url').value.trim();
+  const cookie = document.getElementById('cookie').value.trim();
+  const maxPages = document.getElementById('max-pages').value || 3;
+
+  if (!cookie) return alert('请输入 Cookie');
+
+  const resp = await fetch('/api/fetch_user_videos', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      user_url: url.includes('/user/') ? url : '',
+      video_url: url.includes('/user/') ? '' : url,
+      cookie, max_pages: maxPages
+    })
+  }).then(r=>r.json());
+
+  if (resp.error) { alert(resp.error); return; }
+  alert(`已添加 ${resp.total} 条视频到 Excel！\n现在可以使用左侧「开始处理」进行 ASR 转写。`);
+  togglePreview(false);
+  loadVideos();
+}
+
+function togglePreview(show) {
+  document.getElementById('preview-area').style.display = show ? 'block' : 'none';
 }
 
 // ── 工具 ──

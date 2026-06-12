@@ -172,6 +172,57 @@ def api_process():
     return jsonify({"status": "started"})
 
 # ── 前端页面 ──
+# ── API: 批量获取用户视频列表 ──────────────────────────────────────
+@app.route("/api/fetch_user_videos", methods=["POST"])
+def api_fetch_user_videos():
+    data = request.get_json(force=True)
+    url = (data.get("user_url") or data.get("video_url") or "").strip()
+    cookie = data.get("cookie", "").strip()
+    max_pages = int(data.get("max_pages", 10))
+
+    if not url:
+        return jsonify({"error": "请输入用户主页链接或视频链接"}), 400
+    if not cookie:
+        return jsonify({"error": "请输入 Cookie"}), 400
+
+    try:
+        from src.fetch_user_videos import fetch_user_videos
+        mode = "user_url" if "/user/" in url else "video_url"
+        result = fetch_user_videos(
+            url=url, cookie=cookie,
+            max_pages=max_pages, mode=mode,
+        )
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e), "success": False}), 500
+
+
+# ── API: 预览用户信息（不写入Excel，只获取列表） ────────────────────
+@app.route("/api/preview_user_videos", methods=["POST"])
+def api_preview_user_videos():
+    """获取用户视频列表预览，不写入 Excel"""
+    data = request.get_json(force=True)
+    url = (data.get("user_url") or data.get("video_url") or "").strip()
+    cookie = data.get("cookie", "").strip()
+    max_pages = min(int(data.get("max_pages", 1)), 5)
+
+    if not url:
+        return jsonify({"error": "请输入链接"}), 400
+    if not cookie:
+        return jsonify({"error": "请输入 Cookie"}), 400
+
+    try:
+        from src.fetch_user_videos import fetch_user_videos
+        mode = "user_url" if "/user/" in url else "video_url"
+        result = fetch_user_videos(
+            url=url, cookie=cookie,
+            max_pages=max_pages, mode=mode,
+        )
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e), "success": False}), 500
+
+
 @app.route("/")
 def index():
     return send_from_directory(str(ROOT / "web" / "templates"), "index.html")
