@@ -274,29 +274,22 @@ function toggleSelect(event, sheet, row) {
       const [min,max] = [Math.min(startIdx,endIdx), Math.max(startIdx,endIdx)];
       for (let i = min; i <= max; i++) {
         selectedVideos.add(allCards[i].dataset.key);
+        allCards[i].classList.add('selected');
       }
     }
   } else {
     // 普通点击：切换选中
     if (selectedVideos.has(key)) {
       selectedVideos.delete(key);
+      card.classList.remove('selected');
     } else {
       selectedVideos.add(key);
+      card.classList.add('selected');
     }
   }
   
   window.lastSelected = key;
-  renderVideos([...document.querySelectorAll('.video-card')].map(c => ({
-    sheet: c.dataset.key.split(':')[0],
-    row: c.dataset.key.split(':')[1],
-    status: c.querySelector('.badge-done') ? '已完成' : '未开始',
-    title: c.querySelector('.title').textContent,
-    author: c.querySelector('.author').textContent,
-    topic: c.querySelector('.badge').textContent,
-    description: c.querySelector('.desc').textContent,
-    create_time: c.querySelector('.meta span').textContent.replace('🕐 ',''),
-    transcript_length: c.querySelector('.meta span:nth-child(2)').textContent.replace('📏 ','').replace('字',''),
-  })));
+  updateOptimizeButton();
 }
 
 function updateOptimizeButton() {
