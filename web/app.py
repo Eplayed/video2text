@@ -206,6 +206,10 @@ def api_preview_user_videos():
     cookie = data.get("cookie", "").strip()
     max_pages = min(int(data.get("max_pages", 1)), 5)
 
+    # DEBUG LOG
+    import json as _j
+    print(f"[DEBUG] preview_user_videos: url={url[:50]}... cookie={cookie[:20]}... max_pages={max_pages}", flush=True)
+
     if not url:
         return jsonify({"error": "请输入链接"}), 400
     if not cookie:
