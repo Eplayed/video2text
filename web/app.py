@@ -231,4 +231,4 @@ if __name__ == "__main__":
     print(f"🎬 video2text Web 面板")
     print(f"   Excel: {EXCEL_PATH}")
     print(f"   启动: http://127.0.0.1:15801")
-    app.run(host="127.0.0.1", port=15801, debug=True)
+    app.run(host="127.0.0.1", port=15801, debug=False)
