@@ -392,9 +392,33 @@ async function fetchAndProcess() {
   }).then(r=>r.json());
 
   if (resp.error) { alert(resp.error); return; }
-  alert(`已添加 ${resp.total} 条视频到 Excel！\n现在可以使用左侧「开始处理」进行 ASR 转写。`);
+
+  const total = resp.total || 0;
+  if (total === 0) { alert('没有找到视频'); return; }
+
+  if (!confirm(`将获取 ${total} 条视频并自动进行 ASR 处理（无需再点「开始处理」）。\n确定继续吗？`)) return;
+
   togglePreview(false);
-  loadVideos();
+  setStatus('running', `📥 正在获取并处理 ${total} 条视频...`);
+
+  // 调用全自动流水线 API
+  const procResp = await fetch('/api/fetch_and_process', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      user_url: url.includes('/user/') ? url : '',
+      video_url: url.includes('/user/') ? '' : url,
+      cookie, max_pages: maxPages
+    })
+  }).then(r=>r.json());
+
+  if (procResp.error) {
+    setStatus('error', procResp.error);
+    return;
+  }
+
+  // 后台已启动，轮询状态
+  startPolling();
 }
 
 function togglePreview(show) {
