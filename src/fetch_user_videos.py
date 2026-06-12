@@ -67,6 +67,10 @@ def fetch_user_videos(
             ]
         }
     """
+    # 自动加上 sessionid= 前缀（如果用户只填了值本身）
+    if cookie and "sessionid=" not in cookie:
+        cookie = f"sessionid={cookie}"
+
     # 确保 cookie 文件存在（DouyinVideoParser 依赖它）
     cookie_path = Path("/tmp/douyin_parse/douyin_cookie.txt")
     cookie_path.parent.mkdir(parents=True, exist_ok=True)

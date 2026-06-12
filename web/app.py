@@ -23,7 +23,10 @@ _task_status = {"running": False, "progress": "", "done": False, "error": ""}
 
 # ── 工具：cookie 写入与 parser 初始化 ──
 def _setup_parser_and_cookie(cookie_str: str):
-    """写入 cookie 文件并初始化 parser"""
+    """写入 cookie 文件并初始化 parser（自动加上 sessionid= 前缀）"""
+    # 自动加上 sessionid= 前缀
+    if cookie_str and "sessionid=" not in cookie_str:
+        cookie_str = f"sessionid={cookie_str}"
     if not PARSER_DIR.exists():
         raise RuntimeError(f"douyin_parse 目录不存在: {PARSER_DIR}")
     cookie_path = PARSER_DIR / "douyin_cookie.txt"
@@ -214,10 +217,6 @@ def api_preview_user_videos():
         return jsonify({"error": "请输入链接"}), 400
     if not cookie:
         return jsonify({"error": "请输入 Cookie"}), 400
-
-    # 简单验证 cookie 格式
-    if not cookie.startswith('sessionid='):
-        return jsonify({"error": f"Cookie 格式不对，需要以 sessionid= 开头\n你填的是: {cookie[:30]}..."}), 400
 
     try:
         from src.fetch_user_videos import fetch_user_videos
