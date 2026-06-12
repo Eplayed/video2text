@@ -186,6 +186,10 @@ let POLLING = false;
 
 // ── 初始化 ──
 async function init() {
+  // 恢复保存的 Cookie
+  const savedCookie = localStorage.getItem('v2t_cookie');
+  if (savedCookie) document.getElementById('cookie').value = savedCookie;
+
   await loadTopics();
   await loadVideos();
   // 检查进行中的任务
@@ -288,6 +292,9 @@ async function submitTask() {
   if (!links) return alert('请输入抖音链接');
   if (!cookie) return alert('请输入 Cookie');
 
+  // 保存成功后的 Cookie
+  localStorage.setItem('v2t_cookie', cookie);
+
   document.getElementById('btn-submit').disabled = true;
   setStatus("running", "提交中...");
 
@@ -309,8 +316,15 @@ function startPolling() {
 
   const poll = async () => {
     const st = await fetch('/api/status').then(r=>r.json());
-    if (st.error) setStatus("error", st.progress, st.error);
-    else if (st.done) {
+    if (st.error) {
+      setStatus("error", st.progress, st.error);
+      // Cookie 相关错误：清除保存的 Cookie，提示重新填写
+      if (st.error && /cookie|登录|过期|无效|认证/i.test(st.error)) {
+        localStorage.removeItem('v2t_cookie');
+        document.getElementById('cookie').value = '';
+        alert('Cookie 可能已过期或无效，请重新填写。');
+      }
+    } else if (st.done) {
       setStatus(st.error ? "error" : "done", st.progress, st.error);
       POLLING = false;
       document.getElementById('btn-submit').disabled = false;
@@ -341,6 +355,8 @@ async function previewUserVideos() {
   const maxPages = document.getElementById('max-pages').value || 3;
   if (!url) return alert('请输入链接');
   if (!cookie) return alert('请输入 Cookie');
+
+  localStorage.setItem('v2t_cookie', cookie);
 
   const btn = document.getElementById('btn-fetch-preview');
   btn.disabled = true; btn.textContent = '🔍 获取中...';
@@ -378,8 +394,9 @@ async function fetchAndProcess() {
   const url = document.getElementById('user-url').value.trim();
   const cookie = document.getElementById('cookie').value.trim();
   const maxPages = document.getElementById('max-pages').value || 3;
-
   if (!cookie) return alert('请输入 Cookie');
+
+  localStorage.setItem('v2t_cookie', cookie);
 
   const resp = await fetch('/api/fetch_user_videos', {
     method: 'POST',
