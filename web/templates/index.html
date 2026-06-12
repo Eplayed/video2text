@@ -516,12 +516,31 @@ async function optimizeSelected() {
       return;
     }
     
-    setStatus('done', `✅ 已优化 ${resp.success} 个视频`);
-    selectedVideos.clear();
-    await loadVideos();
+    // 启动后台任务后，轮询状态
+    pollOptimizeStatus();
   } catch (e) {
     setStatus('error', '请求失败: ' + e.message);
   }
+}
+
+// ── 轮询AI优化状态 ──
+function pollOptimizeStatus() {
+  const poll = async () => {
+    const st = await fetch('/api/status').then(r=>r.json());
+    if (st.error) {
+      setStatus('error', st.progress, st.error);
+    } else if (st.done) {
+      setStatus(st.error ? 'error' : 'done', `✅ 已优化 ${st.success || 0} 个视频`, st.error);
+      selectedVideos.clear();
+      document.querySelectorAll('.video-card.selected').forEach(c => c.classList.remove('selected'));
+      updateOptimizeButton();
+      await loadVideos();
+    } else {
+      setStatus('running', st.progress);
+      setTimeout(poll, 1500);
+    }
+  };
+  setTimeout(poll, 1000);
 }
 
 // ── 工具 ──
