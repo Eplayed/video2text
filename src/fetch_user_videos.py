@@ -4,14 +4,42 @@
   python src/fetch_user_videos.py --url "https://www.douyin.com/user/MS4wLjAB..." --cookie "sessionid=xxx"
   python src/fetch_user_videos.py --video-url "https://v.douyin.com/xxx" --cookie "sessionid=xxx" --max-pages 5
 """
-import argparse, sys, os
+import argparse, sys, os, re, requests
 from pathlib import Path
+from urllib.parse import quote
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, os.environ.get("DOUYIN_PARSE_DIR", "/tmp/douyin_parse"))
 
 from douyin_video_parser import DouyinVideoParser
+
+
+def resolve_short_url(short_url: str) -> str:
+    """解析抖音短链接，返回真实 URL"""
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    }
+    try:
+        resp = requests.head(short_url, headers=headers, allow_redirects=True, timeout=10)
+        return resp.url
+    except Exception as e:
+        print(f"解析短链接失败: {e}")
+        return short_url
+
+
+def extract_sec_uid_from_url(url: str) -> str:
+    """从 URL 中提取 sec_uid"""
+    patterns = [
+        r"/user/([^/?\s]+)",
+        r"sec_uid=([^&\s]+)",
+    ]
+    for pattern in patterns:
+        m = re.search(pattern, url)
+        if m:
+            return m.group(1)
+    return ""
 
 
 def fetch_user_videos(
@@ -42,7 +70,19 @@ def fetch_user_videos(
     parser = DouyinVideoParser()
     parser.cookie = cookie
 
-    if mode == "video_url":
+    # 处理短链接
+    if "v.douyin.com" in url or "/share/" in url:
+        print(f"🔗 解析短链接: {url}")
+        url = resolve_short_url(url)
+        print(f"   真实 URL: {url}")
+
+    # 提取 sec_uid
+    sec_uid = extract_sec_uid_from_url(url)
+    if sec_uid:
+        user_home = f"https://www.douyin.com/user/{sec_uid}"
+        print(f"👤 用户主页: {user_home}")
+        video_urls = parser.get_user_aweme_urls(user_home, max_pages=max_pages, count=count)
+    elif mode == "video_url":
         # 从单个视频链接自动找到作者主页
         video_urls = parser.get_user_aweme_urls_from_video_url(
             url, max_pages=max_pages, count=count
