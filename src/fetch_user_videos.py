@@ -48,6 +48,7 @@ def fetch_user_videos(
     max_pages: int = 10,
     count: int = 20,
     mode: str = "user_url",  # "user_url" or "video_url"
+    exclude_excel: str = "",  # Excel 路径，用于去重
 ) -> dict:
     """
     获取用户主页视频列表。
@@ -113,11 +114,34 @@ def fetch_user_videos(
             "url": v_url,
         })
 
+        # 去重：如果指定了 Excel 文件，排除已存在的链接
+        filtered = 0
+        if exclude_excel and Path(exclude_excel).exists():
+            import openpyxl
+            wb = openpyxl.load_workbook(exclude_excel)
+            ws = wb.worksheets[0]
+            existing = set()
+            for r in range(2, ws.max_row + 1):
+                link = ws.cell(r, 1).value
+                if link:
+                    # 提取视频ID用于比较
+                    vid = link.split("/video/")[-1].split("?")[0].split("/")[-1]
+                    if vid:
+                        existing.add(vid)
+            wb.close()
+            
+            original_count = len(videos)
+            videos = [v for v in videos if v["aweme_id"] not in existing]
+            filtered = original_count - len(videos)
+            if filtered > 0:
+                print(f"   过滤掉 {filtered} 个已存在的视频（剩余 {len(videos)} 条）")
+
     return {
         "success": True,
         "user_url": user_home or "",
         "total": len(videos),
         "videos": videos,
+        "filtered": filtered,
     }
 
 

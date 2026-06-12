@@ -194,6 +194,7 @@ def api_fetch_user_videos():
         result = fetch_user_videos(
             url=url, cookie=cookie,
             max_pages=max_pages, mode=mode,
+            exclude_excel=str(EXCEL_PATH),
         )
         return jsonify(result)
     except Exception as e:
@@ -224,10 +225,15 @@ def api_preview_user_videos():
         result = fetch_user_videos(
             url=url, cookie=cookie,
             max_pages=max_pages, mode=mode,
+            exclude_excel=str(EXCEL_PATH),
         )
-        # 如果 total=0，给出提示
+        # 如果 total=0，给出提示（但如果是去重导致的，不提示）
         if result.get('total', 0) == 0 and not result.get('error'):
-            result['warning'] = "视频数为0，请检查Cookie是否有效或已过期"
+            # 检查是否是去重导致的
+            if result.get('filtered'):
+                result['warning'] = f"所有视频已存在（去重 {result.get('filtered')} 条）"
+            else:
+                result['warning'] = "视频数为0，请检查Cookie是否有效或已过期"
         return jsonify(result)
     except Exception as e:
         import traceback
@@ -270,7 +276,8 @@ def api_fetch_and_process():
             _task_status["progress"] = "获取视频列表..."
             from src.fetch_user_videos import fetch_user_videos
             mode = "user_url" if "/user/" in url else "video_url"
-            result = fetch_user_videos(url=url, cookie=cookie, max_pages=max_pages, mode=mode)
+            result = fetch_user_videos(url=url, cookie=cookie, max_pages=max_pages, mode=mode,
+                               exclude_excel=str(EXCEL_PATH))
 
             if not result.get("success") or result.get("total", 0) == 0:
                 _task_status["error"] = f"获取视频列表失败: {result.get('error', '0条视频')}"
