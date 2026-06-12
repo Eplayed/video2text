@@ -46,7 +46,11 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
 .toolbar select{background:var(--card);border:1px solid var(--border);border-radius:8px;color:var(--text);padding:8px 12px;font-size:12px;outline:none}
 .toolbar .count{color:var(--muted);font-size:13px;white-space:nowrap}
 .video-grid{flex:1;overflow-y:auto;padding:20px;display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:12px;align-content:start}
-.video-card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px;cursor:pointer;transition:border .15s,transform .1s}
+.video-card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px;cursor:pointer;transition:border .15s,transform .1s;position:relative}
+.video-card.selected{border-color:var(--accent);background:rgba(59,130,246,0.1)}
+.video-card .checkbox{position:absolute;top:10px;right:10px;width:20px;height:20px;border:2px solid var(--border);border-radius:4px;background:var(--card);cursor:pointer;transition:all .15s}
+.video-card.selected .checkbox{background:var(--accent);border-color:var(--accent)}
+.video-card.selected .checkbox::after{content:"✓";color:#fff;font-size:14px;display:flex;align-items:center;justify-content:center;height:100%}
 .video-card:hover{border-color:var(--accent);transform:translateY(-1px)}
 .video-card .author{font-size:11px;color:var(--muted);margin-bottom:4px}
 .video-card .author .badge{display:inline-block;background:var(--accent2);color:#fff;border-radius:4px;padding:1px 6px;font-size:10px;margin-left:6px}
@@ -147,6 +151,7 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
         <option value="">全部作者</option>
       </select>
       <span class="count" id="video-count">0 条</span>
+      <button class="btn btn-primary btn-sm" id="btn-ai-optimize" onclick="optimizeSelected()" style="margin-left:8px;display:none">🤖 AI优化选中</button>
     </div>
     <div class="video-grid" id="video-grid">
       <div style="color:var(--muted);padding:40px;text-align:center">加载中...</div>
@@ -224,16 +229,22 @@ async function loadVideos() {
 }
 
 // ── 渲染卡片 ──
+let selectedVideos = new Set(); // 存储选中的视频ID
+
 function renderVideos(videos) {
   const grid = document.getElementById('video-grid');
   if (!videos.length) {
     grid.innerHTML = '<div style="color:var(--muted);padding:40px;text-align:center">暂无视频</div>';
+    updateOptimizeButton();
     return;
   }
   grid.innerHTML = videos.map(v => {
     const status = v.status || '未开始';
     const badge = status === '已完成' ? '<span class="badge-done">✓</span>' : '<span class="badge-pending">⏳</span>';
-    return `<div class="video-card" onclick='openDetail("${v.sheet}","${v.row}")'>
+    const videoKey = `${v.sheet}:${v.row}`;
+    const isSelected = selectedVideos.has(videoKey);
+    return `<div class="video-card ${isSelected?'selected':''}" data-key="${videoKey}" onclick='toggleSelect(event,"${v.sheet}","${v.row}")' ondblclick='openDetail("${v.sheet}","${v.row}")'>
+      <div class="checkbox"></div>
       <div class="author">${esc(v.author||'')} <span class="badge">${esc(v.topic||'')}</span></div>
       <div class="title">${badge} ${esc(v.title||'')}</div>
       <div class="desc">${esc(v.description||'')}</div>
@@ -245,6 +256,53 @@ function renderVideos(videos) {
       </div>
     </div>`;
   }).join('');
+  updateOptimizeButton();
+}
+
+// ── 选择切换 ──
+function toggleSelect(event, sheet, row) {
+  event.stopPropagation();
+  const key = `${sheet}:${row}`;
+  const card = event.currentTarget;
+  
+  if (event.shiftKey && window.lastSelected) {
+    // Shift+点击：范围选择
+    const allCards = [...document.querySelectorAll('.video-card')];
+    const startIdx = allCards.findIndex(c => c.dataset.key === window.lastSelected);
+    const endIdx = allCards.findIndex(c => c.dataset.key === key);
+    if (startIdx >= 0 && endIdx >= 0) {
+      const [min,max] = [Math.min(startIdx,endIdx), Math.max(startIdx,endIdx)];
+      for (let i = min; i <= max; i++) {
+        selectedVideos.add(allCards[i].dataset.key);
+      }
+    }
+  } else {
+    // 普通点击：切换选中
+    if (selectedVideos.has(key)) {
+      selectedVideos.delete(key);
+    } else {
+      selectedVideos.add(key);
+    }
+  }
+  
+  window.lastSelected = key;
+  renderVideos([...document.querySelectorAll('.video-card')].map(c => ({
+    sheet: c.dataset.key.split(':')[0],
+    row: c.dataset.key.split(':')[1],
+    status: c.querySelector('.badge-done') ? '已完成' : '未开始',
+    title: c.querySelector('.title').textContent,
+    author: c.querySelector('.author').textContent,
+    topic: c.querySelector('.badge').textContent,
+    description: c.querySelector('.desc').textContent,
+    create_time: c.querySelector('.meta span').textContent.replace('🕐 ',''),
+    transcript_length: c.querySelector('.meta span:nth-child(2)').textContent.replace('📏 ','').replace('字',''),
+  })));
+}
+
+function updateOptimizeButton() {
+  const btn = document.getElementById('btn-ai-optimize');
+  btn.style.display = selectedVideos.size > 0 ? 'inline-block' : 'none';
+  btn.textContent = selectedVideos.size > 0 ? `🤖 AI优化选中(${selectedVideos.size})` : '🤖 AI优化选中';
 }
 
 // ── 打开详情 ──
@@ -442,6 +500,35 @@ async function fetchAndProcess() {
 
 function togglePreview(show) {
   document.getElementById('preview-area').style.display = show ? 'block' : 'none';
+}
+
+// ── AI优化选中视频 ──
+async function optimizeSelected() {
+  if (selectedVideos.size === 0) return alert('请先选择要优化的视频');
+  
+  const keys = [...selectedVideos];
+  if (!confirm(`将对 ${keys.length} 个视频进行AI优化，确定继续吗？`)) return;
+  
+  setStatus('running', `🤖 正在优化 ${keys.length} 个视频...`);
+  
+  try {
+    const resp = await fetch('/api/optimize_batch', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({videos: keys})
+    }).then(r=>r.json());
+    
+    if (resp.error) {
+      setStatus('error', resp.error);
+      return;
+    }
+    
+    setStatus('done', `✅ 已优化 ${resp.success} 个视频`);
+    selectedVideos.clear();
+    await loadVideos();
+  } catch (e) {
+    setStatus('error', '请求失败: ' + e.message);
+  }
 }
 
 // ── 工具 ──

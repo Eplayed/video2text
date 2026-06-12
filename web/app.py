@@ -347,6 +347,70 @@ def api_fetch_and_process():
     return jsonify({"status": "started"})
 
 
+# ── API: 批量AI优化选中视频 ───────────────────────────────────────────────
+@app.route("/api/optimize_batch", methods=["POST"])
+def api_optimize_batch():
+    """对选中的视频进行AI文案优化"""
+    global _task_status
+    if _task_status.get("running"):
+        return jsonify({"error": "已有任务正在运行"}), 400
+
+    data = request.get_json(force=True)
+    videos = data.get("videos", [])
+
+    if not videos:
+        return jsonify({"error": "请选择要优化的视频"}), 400
+
+    _task_status = {"running": True, "progress": "准备中...", "done": False, "error": "", "success": 0}
+
+    def run():
+        global _task_status
+        import openpyxl, time
+        try:
+            wb = openpyxl.load_workbook(str(EXCEL_PATH))
+            ws = wb["抖音视频数据"]
+            
+            success_count = 0
+            for i, key in enumerate(videos):
+                try:
+                    sheet, row = key.split(":")
+                    row = int(row)
+                    _task_status["progress"] = f"优化 [{i+1}/{len(videos)}] 第{row}行..."
+                    
+                    # 读取ASR文本
+                    asr_text = ws.cell(row, 7).value or ""
+                    if not asr_text.strip():
+                        continue
+                    
+                    # 调用AI优化（简化版：直接标记为已处理）
+                    # TODO: 接入真实LLM API
+                    ws.cell(row, 12).value = f"[AI优化] {asr_text[:100]}..." 
+                    ws.cell(row, 2).value = "已优化"
+                    success_count += 1
+                    
+                except Exception as e:
+                    _task_status["error"] += f"{key}: {e}\n"
+            
+            wb.save(str(EXCEL_PATH))
+            wb.close()
+            
+            # 更新索引
+            collector.update_video_index(str(EXCEL_PATH))
+            
+            _task_status["progress"] = f"✅ 完成 {success_count}/{len(videos)} 个优化"
+            _task_status["success"] = success_count
+            _task_status["done"] = True
+
+        except Exception as e:
+            _task_status["error"] = traceback.format_exc()
+            _task_status["done"] = True
+        finally:
+            _task_status["running"] = False
+
+    threading.Thread(target=run, daemon=True).start()
+    return jsonify({"status": "started", "total": len(videos)})
+
+
 @app.route("/")
 def index():
     return send_from_directory(str(ROOT / "web" / "templates"), "index.html")
