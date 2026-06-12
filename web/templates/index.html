@@ -144,7 +144,7 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
     <div class="toolbar">
       <input id="search" type="text" placeholder="搜索标题 / 作者..." oninput="loadVideos()">
       <select id="topic-filter" onchange="loadVideos()">
-        <option value="">全部分类</option>
+        <option value="">全部作者</option>
       </select>
       <span class="count" id="video-count">0 条</span>
     </div>
@@ -198,13 +198,15 @@ async function init() {
 }
 init();
 
-// ── 加载分类 ──
+// ── 加载作者分类 ──
 async function loadTopics() {
   const st = await fetch('/api/stats').then(r=>r.json());
   const sel = document.getElementById('topic-filter');
-  for (const [t,c] of Object.entries(st.topics || {})) {
+  // 清空旧选项（保留第一行"全部"）
+  sel.innerHTML = "<option value=\"\">全部作者</option>";
+  for (const [author,count] of Object.entries(st.topics || {})) {
     const opt = document.createElement('option');
-    opt.value = t; opt.textContent = `${t}（${c}）`;
+    opt.value = author; opt.textContent = `${author}（${count}）`;
     sel.appendChild(opt);
   }
 }

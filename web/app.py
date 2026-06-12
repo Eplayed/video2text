@@ -46,7 +46,7 @@ def api_videos():
         data = json.load(f)
     videos = data.get("videos", [])
     if topic:
-        videos = [v for v in videos if v.get("topic", "") == topic]
+        videos = [v for v in videos if v.get("author", "") == topic]
     if q:
         videos = [v for v in videos if q in v.get("title", "").lower()
                    or q in v.get("author", "").lower()
@@ -89,8 +89,8 @@ def api_stats():
         data = json.load(f)
     topics = {}
     for v in data.get("videos", []):
-        t = v.get("topic", "未分类")
-        topics[t] = topics.get(t, 0) + 1
+        author = v.get("author", "未知作者") or "未知作者"
+        topics[author] = topics.get(author, 0) + 1
     return jsonify({"topics": topics, "total": data.get("total", 0),
                      "version": data.get("version")})
 
