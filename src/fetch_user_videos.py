@@ -67,6 +67,12 @@ def fetch_user_videos(
             ]
         }
     """
+    # 确保 cookie 文件存在（DouyinVideoParser 依赖它）
+    cookie_path = Path("/tmp/douyin_parse/douyin_cookie.txt")
+    cookie_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(cookie_path, "w") as f:
+        f.write(cookie)
+
     parser = DouyinVideoParser()
     parser.cookie = cookie
 
