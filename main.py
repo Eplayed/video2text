@@ -467,14 +467,18 @@ def update_video_index(excel_path: str):
 
     INDEX_PATH = Path(__file__).parent / "video_index.json"
 
-    # 读取现有索引（用于去重）
-    existing = {}
+    # 读取现有索引（用于去重，以视频ID为主key）
+    existing = {}       # sheet:row → video dict
+    existing_by_id = {}  # aweme_id → video dict（真正去重）
     if INDEX_PATH.exists():
         with open(INDEX_PATH, encoding="utf-8") as f:
             old = json.load(f)
         for v in old.get("videos", []):
             key = f"{v.get('sheet')}:{v.get('row')}"
             existing[key] = v
+            vid = v.get("id", "") or ""
+            if vid:
+                existing_by_id[vid] = v
 
     wb = openpyxl.load_workbook(excel_path)
     updated_count = 0
@@ -608,6 +612,17 @@ def update_video_index(excel_path: str):
         return f"【{cat}】{snippet}"
 
     videos = list(existing.values())
+    # 按视频ID去重（保留最新的一行）
+    seen_ids = set()
+    unique_videos = []
+    for v in videos:
+        vid = v.get("id", "")
+        if vid and vid in seen_ids:
+            continue
+        if vid:
+            seen_ids.add(vid)
+        unique_videos.append(v)
+    videos = unique_videos
     for v in videos:
         v["description"] = _make_desc(v)
 
