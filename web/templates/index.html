@@ -45,19 +45,22 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
 .toolbar input:focus{border-color:var(--accent)}
 .toolbar select{background:var(--card);border:1px solid var(--border);border-radius:8px;color:var(--text);padding:8px 12px;font-size:12px;outline:none}
 .toolbar .count{color:var(--muted);font-size:13px;white-space:nowrap}
+.view-tabs{display:flex;gap:6px}
+.view-tabs .btn.active{background:var(--accent);border-color:var(--accent);color:#fff}
 .video-grid{flex:1;overflow-y:auto;padding:20px;display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:12px;align-content:start}
-.video-card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px;cursor:pointer;transition:border .15s,transform .1s;position:relative}
+.video-card,.summary-card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px;cursor:pointer;transition:border .15s,transform .1s;position:relative}
 .video-card.selected{border-color:var(--accent);background:rgba(59,130,246,0.1)}
 .video-card .checkbox{position:absolute;top:10px;right:10px;width:20px;height:20px;border:2px solid var(--border);border-radius:4px;background:var(--card);cursor:pointer;transition:all .15s}
 .video-card.selected .checkbox{background:var(--accent);border-color:var(--accent)}
 .video-card.selected .checkbox::after{content:"✓";color:#fff;font-size:14px;display:flex;align-items:center;justify-content:center;height:100%}
-.video-card:hover{border-color:var(--accent);transform:translateY(-1px)}
-.video-card .author{font-size:11px;color:var(--muted);margin-bottom:4px}
+.video-card:hover,.summary-card:hover{border-color:var(--accent);transform:translateY(-1px)}
+.video-card .author,.summary-card .author{font-size:11px;color:var(--muted);margin-bottom:4px}
 .video-card .author .badge{display:inline-block;background:var(--accent2);color:#fff;border-radius:4px;padding:1px 6px;font-size:10px;margin-left:6px}
-.video-card .title{font-size:14px;font-weight:600;margin-bottom:6px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
-.video-card .desc{font-size:12px;color:var(--muted);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
-.video-card .meta{display:flex;gap:8px;margin-top:8px;font-size:11px;color:var(--muted);flex-wrap:wrap}
-.video-card .meta span{background:rgba(255,255,255,.04);padding:2px 8px;border-radius:4px}
+.video-card .title,.summary-card .title{font-size:14px;font-weight:600;margin-bottom:6px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.video-card .desc,.summary-card .desc{font-size:12px;color:var(--muted);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.video-card .meta,.summary-card .meta{display:flex;gap:8px;margin-top:8px;font-size:11px;color:var(--muted);flex-wrap:wrap}
+.video-card .meta span,.summary-card .meta span{background:rgba(255,255,255,.04);padding:2px 8px;border-radius:4px}
+.type-pill{display:inline-block;background:rgba(34,197,94,.15);color:var(--success);border-radius:4px;padding:1px 6px;font-size:10px;margin-left:6px}
 /* ── 详情弹窗 ── */
 .modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:100;align-items:center;justify-content:center}
 .modal-overlay.show{display:flex}
@@ -146,12 +149,26 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
   <!-- 右侧 -->
   <div class="panel-right">
     <div class="toolbar">
-      <input id="search" type="text" placeholder="搜索标题 / 作者..." oninput="loadVideos()">
-      <select id="topic-filter" onchange="loadVideos()">
+      <div class="view-tabs">
+        <button class="btn btn-ghost btn-sm active" id="tab-videos" onclick="switchView('videos')">视频库</button>
+        <button class="btn btn-ghost btn-sm" id="tab-summaries" onclick="switchView('summaries')">整理稿</button>
+      </div>
+      <input id="search" type="text" placeholder="搜索标题 / 作者..." oninput="loadCurrentView()">
+      <select id="topic-filter" onchange="loadCurrentView()" style="display:none">
         <option value="">全部作者</option>
       </select>
+      <select id="summary-type-filter" onchange="loadSummaries()" style="display:none">
+        <option value="">全部类型</option>
+        <option value="game_guide">游戏攻略</option>
+        <option value="ai_interview">AI面试题</option>
+      </select>
       <span class="count" id="video-count">0 条</span>
-      <button class="btn btn-primary btn-sm" id="btn-ai-optimize" onclick="optimizeSelected()" style="margin-left:8px;display:none">🤖 AI优化选中</button>
+      <select id="summary-type" onchange="updateOptimizeButton()" style="display:none">
+        <option value="game_guide">游戏攻略</option>
+        <option value="ai_interview">AI面试题</option>
+      </select>
+      <button class="btn btn-primary btn-sm" id="btn-ai-optimize" onclick="generateSelectedContent()" style="margin-left:8px;display:none">生成整理稿</button>
+      <button class="btn btn-ghost btn-sm" onclick="syncContentDb()">同步内容库</button>
     </div>
     <div class="video-grid" id="video-grid">
       <div style="color:var(--muted);padding:40px;text-align:center">加载中...</div>
@@ -188,6 +205,7 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
 <script>
 // ── 全局状态 ──
 let POLLING = false;
+let currentView = 'videos';
 
 // ── 初始化 ──
 async function init() {
@@ -196,12 +214,30 @@ async function init() {
   if (savedCookie) document.getElementById('cookie').value = savedCookie;
 
   await loadTopics();
-  await loadVideos();
+  await loadCurrentView();
   // 检查进行中的任务
   const st = await fetch('/api/status').then(r=>r.json());
   if (st.running) { startPolling(); setStatus("running", st.progress); }
 }
 init();
+
+function switchView(view) {
+  currentView = view;
+  document.getElementById('tab-videos').classList.toggle('active', view === 'videos');
+  document.getElementById('tab-summaries').classList.toggle('active', view === 'summaries');
+  document.getElementById('topic-filter').style.display = view === 'videos' ? '' : 'none';
+  document.getElementById('summary-type').style.display = view === 'videos' ? '' : 'none';
+  document.getElementById('summary-type-filter').style.display = view === 'summaries' ? '' : 'none';
+  document.getElementById('btn-ai-optimize').style.display = view === 'videos' ? '' : 'none';
+  selectedVideos.clear();
+  updateOptimizeButton();
+  loadCurrentView();
+}
+
+async function loadCurrentView() {
+  if (currentView === 'summaries') return loadSummaries();
+  return loadVideos();
+}
 
 // ── 加载作者分类 ──
 async function loadTopics() {
@@ -226,6 +262,17 @@ async function loadVideos() {
   const data = await fetch('/api/videos?' + params).then(r=>r.json());
   renderVideos(data.videos || []);
   document.getElementById('video-count').textContent = data.total + ' 条';
+}
+
+async function loadSummaries() {
+  const q = document.getElementById('search').value;
+  const type = document.getElementById('summary-type-filter').value;
+  const params = new URLSearchParams();
+  if (q) params.set('q', q);
+  if (type) params.set('type', type);
+  const data = await fetch('/api/content/summaries?' + params).then(r=>r.json());
+  renderSummaries(data.items || []);
+  document.getElementById('video-count').textContent = data.total + ' 篇';
 }
 
 // ── 渲染卡片 ──
@@ -257,6 +304,28 @@ function renderVideos(videos) {
     </div>`;
   }).join('');
   updateOptimizeButton();
+}
+
+function renderSummaries(items) {
+  const grid = document.getElementById('video-grid');
+  if (!items.length) {
+    grid.innerHTML = '<div style="color:var(--muted);padding:40px;text-align:center">暂无整理稿</div>';
+    return;
+  }
+  grid.innerHTML = items.map(item => {
+    const typeLabel = item.summary_type === 'ai_interview' ? 'AI面试题' : '游戏攻略';
+    const snippet = item.content || item.outline || '';
+    return `<div class="summary-card" onclick="openSummary(${item.id})">
+      <div class="author">${esc(item.author||'')} <span class="type-pill">${typeLabel}</span></div>
+      <div class="title">${esc(item.title||'')}</div>
+      <div class="desc">${esc(snippet).slice(0, 220)}</div>
+      <div class="meta">
+        <span>${esc(item.status||'draft')}</span>
+        <span>${esc(item.model||'')}</span>
+        <span>${esc(item.updated_at||'')}</span>
+      </div>
+    </div>`;
+  }).join('');
 }
 
 // ── 选择切换 ──
@@ -294,8 +363,9 @@ function toggleSelect(event, sheet, row) {
 
 function updateOptimizeButton() {
   const btn = document.getElementById('btn-ai-optimize');
-  btn.style.display = selectedVideos.size > 0 ? 'inline-block' : 'none';
-  btn.textContent = selectedVideos.size > 0 ? `🤖 AI优化选中(${selectedVideos.size})` : '🤖 AI优化选中';
+  const type = document.getElementById('summary-type').value === 'ai_interview' ? 'AI面试题' : '游戏攻略';
+  btn.style.display = currentView === 'videos' && selectedVideos.size > 0 ? 'inline-block' : 'none';
+  btn.textContent = selectedVideos.size > 0 ? `生成${type}(${selectedVideos.size})` : '生成整理稿';
 }
 
 // ── 打开详情 ──
@@ -326,6 +396,40 @@ async function openDetail(sheet, row) {
   actions.innerHTML = `
     <a href="${esc(data.video_url||'#')}" target="_blank"><button class="btn btn-primary btn-sm">▶ 观看原视频</button></a>
     <button class="btn btn-ghost btn-sm" onclick="copyText('${esc(data.raw_transcript||data.asr||'')}')">📋 复制口播</button>
+  `;
+  document.body.style.overflow = 'hidden';
+}
+
+async function openSummary(id) {
+  const overlay = document.getElementById('modal-overlay');
+  overlay.classList.add('show');
+  document.getElementById('modal-title').textContent = '加载中...';
+  document.getElementById('modal-tags').innerHTML = '';
+  document.getElementById('modal-asr').textContent = '';
+  document.getElementById('modal-ai-copy').textContent = '';
+
+  const data = await fetch(`/api/content/summaries/${id}`).then(r=>r.json());
+  if (data.error) { document.getElementById('modal-title').textContent = '❌ '+data.error; return; }
+
+  const typeLabel = data.summary_type === 'ai_interview' ? 'AI面试题' : '游戏攻略';
+  document.getElementById('modal-title').textContent = data.title || '';
+  document.getElementById('modal-info').innerHTML =
+    `${typeLabel}　👤 ${esc(data.author||'')}　📄 ${esc(data.source_sheet||'')} R${data.source_row||''}`;
+  document.getElementById('modal-basic').innerHTML =
+    `<b>原视频：</b>${esc(data.video_title||'')}<br><b>模型：</b>${esc(data.model||'')}<br><b>状态：</b>${esc(data.status||'')}`;
+  try {
+    const kws = JSON.parse(data.keywords || '[]');
+    document.getElementById('modal-tags').innerHTML = kws.map(t => `<span>${esc(t)}</span>`).join('');
+  } catch(e) {
+    document.getElementById('modal-tags').innerHTML = esc(data.keywords || '');
+  }
+  document.getElementById('modal-asr').textContent = data.transcript || '（无 ASR 数据）';
+  document.getElementById('modal-ai-copy').textContent = data.content || '';
+  document.getElementById('modal-actions').innerHTML = `
+    <a href="${esc(data.video_url||'#')}" target="_blank"><button class="btn btn-primary btn-sm">▶ 观看原视频</button></a>
+    <button class="btn btn-ghost btn-sm" onclick="regenerateSummary(${id})">🔄 重新生成</button>
+    <button class="btn btn-ghost btn-sm" onclick="deleteSummary(${id})">🗑 删除</button>
+    <button class="btn btn-ghost btn-sm" onclick="copyText(\`${escBacktick(data.content||'')}\`)">复制整理稿</button>
   `;
   document.body.style.overflow = 'hidden';
 }
@@ -381,7 +485,7 @@ function startPolling() {
       setStatus(st.error ? "error" : "done", st.progress, st.error);
       POLLING = false;
       document.getElementById('btn-submit').disabled = false;
-      await loadVideos();  // 刷新列表
+      await loadCurrentView();  // 刷新列表
     } else {
       setStatus("running", st.progress);
       setTimeout(poll, 2000);
@@ -495,6 +599,61 @@ function togglePreview(show) {
   document.getElementById('preview-area').style.display = show ? 'block' : 'none';
 }
 
+async function syncContentDb() {
+  setStatus('running', '正在同步 Excel 到内容库...');
+  try {
+    const resp = await fetch('/api/content/sync', {method:'POST'}).then(r=>r.json());
+    if (resp.error) {
+      setStatus('error', resp.error);
+      return;
+    }
+    setStatus('done', `内容库已同步：${resp.upserted || 0} 条`);
+    await loadCurrentView();
+  } catch (e) {
+    setStatus('error', '同步失败: ' + e.message);
+  }
+}
+
+async function generateSelectedContent() {
+  if (selectedVideos.size === 0) return alert('请先选择要整理的视频');
+  const keys = [...selectedVideos];
+  const summaryType = document.getElementById('summary-type').value;
+  const label = summaryType === 'ai_interview' ? 'AI面试题' : '游戏攻略';
+  if (!confirm(`将对 ${keys.length} 个视频生成${label}整理稿，确定继续吗？`)) return;
+
+  setStatus('running', `正在生成 ${keys.length} 条${label}...`);
+  try {
+    const resp = await fetch('/api/content/generate', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({videos: keys, summary_type: summaryType})
+    }).then(r=>r.json());
+    if (resp.error) {
+      setStatus('error', resp.error);
+      return;
+    }
+    pollContentStatus();
+  } catch (e) {
+    setStatus('error', '请求失败: ' + e.message);
+  }
+}
+
+function pollContentStatus() {
+  const poll = async () => {
+    const st = await fetch('/api/status').then(r=>r.json());
+    if (st.done) {
+      setStatus(st.error ? 'error' : 'done', st.progress || `已生成 ${st.success || 0} 条整理稿`, st.error);
+      selectedVideos.clear();
+      updateOptimizeButton();
+      switchView('summaries');
+    } else {
+      setStatus('running', st.progress);
+      setTimeout(poll, 1500);
+    }
+  };
+  setTimeout(poll, 1000);
+}
+
 // ── AI优化选中视频 ──
 async function optimizeSelected() {
   if (selectedVideos.size === 0) return alert('请先选择要优化的视频');
@@ -534,7 +693,7 @@ function pollOptimizeStatus() {
       selectedVideos.clear();
       document.querySelectorAll('.video-card.selected').forEach(c => c.classList.remove('selected'));
       updateOptimizeButton();
-      await loadVideos();
+      await loadCurrentView();
     } else {
       setStatus('running', st.progress);
       setTimeout(poll, 1500);
@@ -543,8 +702,38 @@ function pollOptimizeStatus() {
   setTimeout(poll, 1000);
 }
 
+// ── 整理稿：重新生成 ──
+async function regenerateSummary(id) {
+  if (!confirm('重新生成将覆盖当前整理稿，确定继续吗？')) return;
+  closeModal();
+  setStatus('running', '正在重新生成整理稿...');
+  try {
+    const resp = await fetch(`/api/content/summaries/${id}/regenerate`, {method:'POST'}).then(r=>r.json());
+    if (resp.error) { setStatus('error', resp.error); return; }
+    setStatus('done', '✅ 重新生成完成');
+    if (currentView === 'summaries') await loadSummaries();
+  } catch(e) {
+    setStatus('error', '失败: ' + e.message);
+  }
+}
+
+// ── 整理稿：删除 ──
+async function deleteSummary(id) {
+  if (!confirm('确定要删除这条整理稿吗？此操作不可撤销。')) return;
+  closeModal();
+  try {
+    const resp = await fetch(`/api/content/summaries/${id}`, {method:'DELETE'}).then(r=>r.json());
+    if (resp.error) { alert('删除失败: ' + resp.error); return; }
+    setStatus('done', '✅ 整理稿已删除');
+    if (currentView === 'summaries') await loadSummaries();
+  } catch(e) {
+    alert('删除失败: ' + e.message);
+  }
+}
+
 // ── 工具 ──
 function esc(s) { if (!s) return ''; return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function escBacktick(s) { return esc(s).replace(/`/g,'\\`').replace(/\$/g,'\\$'); }
 function copyText(t) { navigator.clipboard.writeText(t||'').then(()=>alert('已复制')); }
 </script>
 </body>

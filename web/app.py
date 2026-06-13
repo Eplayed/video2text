@@ -10,10 +10,12 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 import main as collector  # main.py
+from src import content_store
 
 # ── 路径 ──
 EXCEL_PATH    = ROOT / "output" / "抖音视频信息.xlsx"
 INDEX_PATH    = ROOT / "video_index.json"
+DB_PATH       = ROOT / "output" / "video2text.db"
 PARSER_DIR    = Path(os.environ.get("DOUYIN_PARSE_DIR", "/tmp/douyin_parse"))
 
 app = Flask(__name__, static_folder="static", static_url_path="/static")
@@ -34,6 +36,28 @@ def _setup_parser_and_cookie(cookie_str: str):
         f.write(cookie_str)
     os.chdir(str(PARSER_DIR))
     return collector.get_douyin_parser(str(PARSER_DIR))
+
+
+def _sync_content_db():
+    """把 Excel 当前内容同步到 SQLite 内容库。"""
+    if not EXCEL_PATH.exists():
+        raise RuntimeError(f"Excel 不存在: {EXCEL_PATH}")
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    return content_store.sync_excel_to_db(EXCEL_PATH, DB_PATH)
+
+
+def _ai_config():
+    config = collector.load_env_file(str(ROOT / "config" / "config.env.local"))
+    method = collector.normalize_ai_method(collector.config_get(config, "AI_METHOD", "skip"))
+    if method == "deepseek":
+        api_key = collector.config_get(config, "DEEPSEEK_API_KEY") or collector.config_get(config, "AI_API_KEY")
+        api_base = collector.config_get(config, "DEEPSEEK_API_BASE", "https://api.deepseek.com")
+        model = collector.config_get(config, "DEEPSEEK_MODEL", "deepseek-chat")
+    else:
+        api_key = collector.config_get(config, "OPENAI_API_KEY") or collector.config_get(config, "AI_API_KEY")
+        api_base = collector.config_get(config, "AI_API_BASE", "https://api.openai.com/v1")
+        model = collector.config_get(config, "AI_MODEL", "gpt-4o-mini")
+    return {"method": method, "api_key": api_key, "api_base": api_base, "model": model}
 
 # ── API: 视频列表 ──
 @app.route("/api/videos")
@@ -161,6 +185,7 @@ def api_process():
             # 4. 更新索引
             _task_status["progress"] = "更新索引..."
             collector.update_video_index(str(EXCEL_PATH))
+            _sync_content_db()
 
             _task_status["progress"] = "全部处理完成 ✅"
             _task_status["done"] = True
@@ -333,6 +358,7 @@ def api_fetch_and_process():
             # 5. 更新索引
             _task_status["progress"] = "更新索引..."
             collector.update_video_index(str(EXCEL_PATH))
+            _sync_content_db()
 
             _task_status["progress"] = f"✅ 全部 {len(videos)} 条处理完成！"
             _task_status["done"] = True
@@ -396,6 +422,7 @@ def api_optimize_batch():
             
             # 更新索引
             collector.update_video_index(str(EXCEL_PATH))
+            _sync_content_db()
             
             _task_status["progress"] = f"✅ 完成 {success_count}/{len(videos)} 个优化"
             _task_status["success"] = success_count
@@ -409,6 +436,154 @@ def api_optimize_batch():
 
     threading.Thread(target=run, daemon=True).start()
     return jsonify({"status": "started", "total": len(videos)})
+
+
+# ── API: SQLite 内容库 ────────────────────────────────────────────
+@app.route("/api/content/sync", methods=["POST"])
+def api_content_sync():
+    try:
+        result = _sync_content_db()
+        return jsonify({"success": True, **result, "db_path": str(DB_PATH)})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/content/summaries")
+def api_content_summaries():
+    try:
+        if not DB_PATH.exists():
+            _sync_content_db()
+        summary_type = request.args.get("type", "")
+        q = request.args.get("q", "")
+        items = content_store.list_summaries(DB_PATH, summary_type=summary_type, query=q)
+        return jsonify({"items": items, "total": len(items)})
+    except Exception as e:
+        return jsonify({"error": str(e), "items": [], "total": 0}), 500
+
+
+@app.route("/api/content/summaries/<int:summary_id>")
+def api_content_summary_detail(summary_id):
+    try:
+        item = content_store.get_summary(DB_PATH, summary_id)
+        if not item:
+            return jsonify({"error": "总结不存在"}), 404
+        return jsonify(item)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/content/summaries/<int:summary_id>/regenerate", methods=["POST"])
+def api_content_regenerate(summary_id):
+    """"重新生成指定整理稿（基于本地模板）"""
+    try:
+        video = content_store.get_video_by_source(DB_PATH, None, None,
+                                                  video_id=summary_id)
+        # 通过 summary 找到对应的 video
+        summary = content_store.get_summary(DB_PATH, summary_id)
+        if not summary:
+            return jsonify({"error": "整理稿不存在"}), 404
+        video = content_store.get_video_by_source(DB_PATH, summary["source_sheet"], summary["source_row"])
+        if not video:
+            return jsonify({"error": "关联视频不存在"}), 404
+
+        summary_type = request.args.get("type") or summary.get("summary_type", "game_guide")
+        config = _ai_config()
+        result, model, status = content_store.generate_summary(video, summary_type, config)
+
+        # 更新已有记录
+        content_store.update_summary(DB_PATH, summary_id, result, model, status)
+        updated = content_store.get_summary(DB_PATH, summary_id)
+        return jsonify({"success": True, "summary": updated})
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+
+@app.route("/api/content/summaries/<int:summary_id>", methods=["DELETE"])
+def api_content_delete(summary_id):
+    """删除指定整理稿"""
+    try:
+        content_store.delete_summary(DB_PATH, summary_id)
+        return jsonify({"success": True, "deleted": summary_id})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/content/generate", methods=["POST"])
+def api_content_generate():
+    """把选中的视频整理成游戏攻略或 AI 面试题，并保存到 SQLite。"""
+    global _task_status
+    if _task_status.get("running"):
+        return jsonify({"error": "已有任务正在运行"}), 400
+
+    data = request.get_json(force=True)
+    videos = data.get("videos", [])
+    summary_type = data.get("summary_type", "game_guide")
+    if summary_type not in ("game_guide", "ai_interview"):
+        return jsonify({"error": "summary_type 只能是 game_guide 或 ai_interview"}), 400
+    if not videos:
+        return jsonify({"error": "请选择要整理的视频"}), 400
+
+    _task_status = {
+        "running": True,
+        "progress": "准备生成内容...",
+        "done": False,
+        "error": "",
+        "success": 0,
+        "summary_ids": [],
+    }
+
+    def run():
+        global _task_status
+        try:
+            _task_status["progress"] = "同步 Excel 到内容库..."
+            _sync_content_db()
+            config = _ai_config()
+            success_count = 0
+            summary_ids = []
+
+            for i, key in enumerate(videos):
+                try:
+                    sheet, row_text = key.split(":", 1)
+                    row = int(row_text)
+                    _task_status["progress"] = f"整理 [{i+1}/{len(videos)}] {sheet} 第{row}行..."
+                    video = content_store.get_video_by_source(DB_PATH, sheet, row)
+                    if not video:
+                        _task_status["error"] += f"{key}: 内容库中找不到视频\n"
+                        continue
+                    if not (video.get("transcript") or "").strip():
+                        _task_status["error"] += f"{key}: 没有 ASR 文本，跳过\n"
+                        continue
+
+                    result, model, status = content_store.generate_summary(
+                        video, summary_type, config
+                    )
+                    summary_id = content_store.save_summary(
+                        DB_PATH,
+                        video_id=video["id"],
+                        summary_type=summary_type,
+                        result=result,
+                        model=model,
+                        status=status,
+                    )
+                    summary_ids.append(summary_id)
+                    success_count += 1
+                except Exception as e:
+                    _task_status["error"] += f"{key}: {e}\n"
+
+            _task_status["success"] = success_count
+            _task_status["summary_ids"] = summary_ids
+            _task_status["progress"] = f"✅ 已生成 {success_count}/{len(videos)} 条整理稿"
+            _task_status["done"] = True
+        except Exception:
+            _task_status["error"] = traceback.format_exc()
+            _task_status["done"] = True
+        finally:
+            _task_status["running"] = False
+
+    threading.Thread(target=run, daemon=True).start()
+    return jsonify({"status": "started", "total": len(videos), "summary_type": summary_type})
 
 
 @app.route("/")
