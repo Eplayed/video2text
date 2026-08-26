@@ -9,9 +9,15 @@ import json
 from datetime import datetime
 from dataclasses import dataclass, asdict
 from typing import Optional, List
+from pathlib import Path
+
+# 引入项目路径配置
+_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_ROOT))
+from src.path_config import ensure_parser_on_path, get_cookie_path
 
 # 引入 douyin_parse
-sys.path.insert(0, "/tmp/douyin_parse")
+ensure_parser_on_path()
 from douyin_video_parser import DouyinVideoParser
 
 
@@ -50,9 +56,9 @@ class VideoInfo:
 class VideoExtractor:
     """视频详情提取器"""
 
-    def __init__(self, cookie_file: str = "/tmp/douyin_parse/douyin_cookie.txt"):
+    def __init__(self, cookie_file: str = None):
         self.parser = DouyinVideoParser()
-        self.cookie_file = cookie_file
+        self.cookie_file = cookie_file or str(get_cookie_path())
 
     def extract_video(self, url_or_id: str) -> VideoInfo:
         """提取单条视频详情。

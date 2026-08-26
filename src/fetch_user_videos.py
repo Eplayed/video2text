@@ -6,12 +6,14 @@
 """
 import argparse, sys, os, re, requests
 from pathlib import Path
-from urllib.parse import quote
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-sys.path.insert(0, os.environ.get("DOUYIN_PARSE_DIR", "/tmp/douyin_parse"))
 
+from src.path_config import ensure_parser_on_path, get_cookie_path
+
+# 确保 parser 目录在 sys.path 中后再导入
+ensure_parser_on_path()
 from douyin_video_parser import DouyinVideoParser
 
 
@@ -42,11 +44,48 @@ def extract_sec_uid_from_url(url: str) -> str:
     return ""
 
 
+def extract_aweme_id_from_url(url: str) -> str:
+    """从视频 URL 中提取 aweme_id。"""
+    if not url:
+        return ""
+    match = re.search(r"/video/(\d+)", str(url))
+    if match:
+        return match.group(1)
+    return ""
+
+
+def load_existing_aweme_ids(excel_path: str) -> set[str]:
+    """读取 Excel 中已存在的视频 ID，用于主页批量抓取去重。"""
+    existing = set()
+    path = Path(excel_path)
+    if not excel_path or not path.exists():
+        return existing
+
+    import openpyxl
+
+    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    try:
+        for ws in wb.worksheets:
+            for row in range(2, ws.max_row + 1):
+                aweme_id = str(ws.cell(row, 3).value or "").strip()
+                if aweme_id:
+                    existing.add(aweme_id)
+                    continue
+                link = str(ws.cell(row, 1).value or "").strip()
+                aweme_id = extract_aweme_id_from_url(link)
+                if aweme_id:
+                    existing.add(aweme_id)
+    finally:
+        wb.close()
+    return existing
+
+
 def fetch_user_videos(
     url: str,
     cookie: str,
     max_pages: int = 10,
     count: int = 20,
+    max_videos: int = 0,
     mode: str = "user_url",  # "user_url" or "video_url"
     exclude_excel: str = "",  # Excel 路径，用于去重
 ) -> dict:
@@ -68,18 +107,23 @@ def fetch_user_videos(
             ]
         }
     """
+    requested_max_pages = max_pages
+    requested_max_videos = max_videos
+    if max_videos and max_videos > 0:
+        max_pages = max(1, (max_videos + count - 1) // count)
+
     # 自动加上 sessionid= 前缀（如果用户只填了值本身）
     if cookie and "sessionid=" not in cookie:
         cookie = f"sessionid={cookie}"
 
-    # 确保 cookie 文件存在（DouyinVideoParser 依赖它）
-    cookie_path = Path("/tmp/douyin_parse/douyin_cookie.txt")
+    # 确保 cookie 文件存在（DouyinVideoParser 初始化时会读取它）
+    cookie_path = get_cookie_path()
     cookie_path.parent.mkdir(parents=True, exist_ok=True)
     with open(cookie_path, "w") as f:
         f.write(cookie)
 
     parser = DouyinVideoParser()
-    parser.cookie = cookie
+    parser.set_cookie(cookie)
 
     # 处理短链接
     if "v.douyin.com" in url or "/share/" in url:
@@ -108,33 +152,27 @@ def fetch_user_videos(
 
     videos = []
     for v_url in video_urls:
-        aweme_id = v_url.split("/video/")[-1].split("?")[0] if "/video/" in v_url else ""
+        aweme_id = extract_aweme_id_from_url(v_url)
         videos.append({
             "aweme_id": aweme_id,
             "url": v_url,
         })
 
-        # 去重：如果指定了 Excel 文件，排除已存在的链接
-        filtered = 0
-        if exclude_excel and Path(exclude_excel).exists():
-            import openpyxl
-            wb = openpyxl.load_workbook(exclude_excel)
-            ws = wb.worksheets[0]
-            existing = set()
-            for r in range(2, ws.max_row + 1):
-                link = ws.cell(r, 1).value
-                if link:
-                    # 提取视频ID用于比较
-                    vid = link.split("/video/")[-1].split("?")[0].split("/")[-1]
-                    if vid:
-                        existing.add(vid)
-            wb.close()
-            
+    filtered = 0
+    if exclude_excel:
+        existing = load_existing_aweme_ids(exclude_excel)
+        if existing:
             original_count = len(videos)
-            videos = [v for v in videos if v["aweme_id"] not in existing]
+            videos = [
+                v for v in videos
+                if not v["aweme_id"] or v["aweme_id"] not in existing
+            ]
             filtered = original_count - len(videos)
             if filtered > 0:
                 print(f"   过滤掉 {filtered} 个已存在的视频（剩余 {len(videos)} 条）")
+
+    if max_videos and max_videos > 0:
+        videos = videos[:max_videos]
 
     return {
         "success": True,
@@ -142,6 +180,9 @@ def fetch_user_videos(
         "total": len(videos),
         "videos": videos,
         "filtered": filtered,
+        "requested_max_pages": requested_max_pages,
+        "requested_max_videos": requested_max_videos,
+        "effective_max_pages": max_pages,
     }
 
 
@@ -151,6 +192,7 @@ def main():
     parser.add_argument("--video-url", help="用户任意视频 URL（自动识别作者主页）")
     parser.add_argument("--cookie", required=True, help="Cookie（sessionid=xxx）")
     parser.add_argument("--max-pages", type=int, default=10, help="最大翻页数（默认10页，约200条）")
+    parser.add_argument("--max-videos", type=int, default=0, help="最多返回视频数（默认0表示不限）")
     parser.add_argument("--count", type=int, default=20, help="每页数量（默认20）")
     parser.add_argument("--output", help="输出到 Excel（可选，直接追加到 output/抖音视频信息.xlsx）")
     args = parser.parse_args()
@@ -167,6 +209,7 @@ def main():
         url=url,
         cookie=args.cookie,
         max_pages=args.max_pages,
+        max_videos=args.max_videos,
         count=args.count,
         mode=mode,
     )

@@ -36,3 +36,6 @@ output/
 *.docx
 *.mp4
 *.wav
+
+# 第三方解析器（含本地cookie与嵌套git，仅本地保留）
+vendor/

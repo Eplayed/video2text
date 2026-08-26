@@ -32,6 +32,10 @@ except ImportError:
     HAS_FASTER_WHISPER = False
     import whisper
 
+# ── 路径配置 ──
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from src.path_config import find_parser_dir, get_cookie_path
+
 # ── Excel 列索引（1-based）───────────────────────────────────────
 COL = {
     "链接": 1, "状态": 2, "视频ID": 3, "作者": 4, "发布时间": 5,
@@ -157,6 +161,23 @@ def fetch_video_info(url_or_id: str, parser) -> dict:
 
 
 # ── ASR 转写 ─────────────────────────────────────────────────────
+# Whisper 模型缓存：同尺寸模型只加载一次（首次加载需数十秒，重复加载严重拖慢批量处理）
+_ASR_MODELS = {}
+_ASR_LOCK = __import__("threading").Lock()
+
+
+def _get_asr_model(model_size: str):
+    """获取（并缓存）指定尺寸的 Whisper 模型。"""
+    with _ASR_LOCK:
+        if model_size not in _ASR_MODELS:
+            os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+            if HAS_FASTER_WHISPER:
+                _ASR_MODELS[model_size] = WhisperModel(model_size, device="cpu", compute_type="int8")
+            else:
+                _ASR_MODELS[model_size] = whisper.load_model(model_size)
+        return _ASR_MODELS[model_size]
+
+
 def asr_transcribe(video_url: str, model_size: str = "base",
                     language: str = "zh") -> str:
     """下载视频 → 提取音频 → faster-whisper 转写"""
@@ -196,15 +217,14 @@ def asr_transcribe(video_url: str, model_size: str = "base",
     # 转写
     try:
         if HAS_FASTER_WHISPER:
-            os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
-            model = WhisperModel(model_size, device="cpu", compute_type="int8")
+            model = _get_asr_model(model_size)
             segments, info = model.transcribe(
                 audio_path, language=language,
                 vad_filter=True, beam_size=1
             )
             text = "".join(s.text for s in segments)
         else:
-            model = whisper.load_model(model_size)
+            model = _get_asr_model(model_size)
             result = model.transcribe(audio_path, language=language)
             text = result["text"].strip()
     except Exception as e:
@@ -343,8 +363,8 @@ def main():
     parser.add_argument("--excel", default="/Users/zhangyajun/Documents/project/video2text/output/抖音视频信息.xlsx")
     parser.add_argument("--config", default=str(Path(__file__).parent / "config/config.env.local"),
                         help="本地配置文件，默认 config/config.env.local")
-    parser.add_argument("--parser-dir", default=os.environ.get("DOUYIN_PARSE_DIR", "/tmp/douyin_parse"),
-                        help="douyin_parse 项目目录，默认读取 DOUYIN_PARSE_DIR 或 /tmp/douyin_parse")
+    parser.add_argument("--parser-dir", default=find_parser_dir(),
+                        help="douyin_parse 项目目录，自动查找 vendor/douyin_parse 或 DOUYIN_PARSE_DIR")
     parser.add_argument("--cookie", help="完整 cookie 字符串，或 sessionid=xxx")
     parser.add_argument("--cookie-file", help="从文件读取 cookie")
     parser.add_argument("--row", type=int, help="只处理指定行号")

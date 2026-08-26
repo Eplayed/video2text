@@ -3,199 +3,798 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>video2text · 抖音采集</title>
+<title>video2text · 我的内容工作台</title>
 <style>
-:root{--bg:#0f1419;--card:#1a2332;--border:#2a3a50;--text:#e2e8f0;--muted:#8899aa;--accent:#3b82f6;--accent2:#6366f1;--success:#22c55e;--warn:#f59e0b;--danger:#ef4444}
+/* ============================================================
+   THEME TOKENS — 墨色中性（与 personal-workbench 设计体系一致）
+   ============================================================ */
+:root{
+  /* 页面与表面 */
+  --page-bg:#f4f3f0; --surface-card:#fcfbf8; --surface-nested:#f7f6f1;
+  /* 边框 */
+  --border:#ecebe5; --border-input:#e0ded6;
+  /* 文本层级 */
+  --text:#232220; --text-secondary:#8f8a80; --text-tertiary:#b6b1a6;
+  /* 主色 */
+  --accent:#2f2e2b; --accent-muted:#efeee8; --on-accent:#f4f3f0;
+  /* 模块色 */
+  --module-1:#6f8f6a; --module-2:#5f7a99; --module-3:#bd8a4e;
+  --module-4:#b5715a; --module-5:#7d7195;
+  /* 危险色 */
+  --danger:#c25d4f; --danger-muted:#f6ece9;
+  /* 侧栏 */
+  --drawer-bg:#232220; --drawer-bg-top:#2d2c29; --drawer-text:#f4f3f0;
+  --drawer-text-mute:rgba(244,243,240,.55); --drawer-hover:rgba(244,243,240,.08);
+  --drawer-active:rgba(244,243,240,.12);
+  /* 背景图 */
+  --greet-image:url("/static/assets/greet-banner.jpg");
+  /* 圆角 */
+  --radius-control:8px; --radius-tile:12px; --radius-card:16px; --radius-sheet:22px;
+  /* 阴影 */
+  --shadow-card:0 1px 2px rgba(35,34,32,.04),0 4px 16px rgba(35,34,32,.05);
+  --shadow-overlay:0 10px 28px rgba(35,34,32,.12);
+  /* 字体与布局 */
+  --font:-apple-system,"PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+  --sidebar-w:236px;
+}
 *{margin:0;padding:0;box-sizing:border-box}
-body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:14px;line-height:1.5;min-height:100vh}
-.app{display:grid;grid-template-columns:420px 1fr;height:100vh;max-width:100vw}
-/* ── 左侧面板 ── */
-.panel-left{border-right:1px solid var(--border);overflow-y:auto;padding:20px}
-.panel-left h1{font-size:18px;margin-bottom:4px;display:flex;align-items:center;gap:8px}
-.panel-left .sub{color:var(--muted);font-size:12px;margin-bottom:20px}
-.section-label{font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin:16px 0 8px}
-.form-group{margin-bottom:14px}
-.form-group label{display:block;font-size:12px;font-weight:600;color:var(--muted);margin-bottom:4px}
-.form-group textarea,.form-group input{width:100%;background:var(--card);border:1px solid var(--border);border-radius:8px;color:var(--text);padding:10px 12px;font-size:13px;outline:none;transition:border .15s}
-.form-group textarea:focus,.form-group input:focus{border-color:var(--accent)}
-.form-group textarea{font-family:SFMono-Regular,Consolas,monospace;font-size:12px;resize:vertical}
-.form-group .hint{font-size:11px;color:var(--muted);margin-top:3px}
-.form-row{display:flex;gap:10px}
-.form-row>*{flex:1}
-.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:9px 16px;border-radius:8px;border:none;font-size:13px;font-weight:600;cursor:pointer;transition:all .15s}
-.btn-primary{background:var(--accent);color:#fff}
-.btn-primary:hover{background:#2563eb}
-.btn-primary:disabled{opacity:.4;cursor:not-allowed}
-.btn-success{background:var(--success);color:#fff}
-.btn-ghost{background:transparent;border:1px solid var(--border);color:var(--text)}
-.btn-ghost:hover{border-color:var(--accent);color:var(--accent)}
-.btn-sm{padding:5px 10px;font-size:12px}
-/* 状态区 */
-.status-box{background:var(--card);border-radius:8px;padding:14px;margin-top:16px;min-height:80px}
-.status-box .label{color:var(--muted);font-size:11px;margin-bottom:4px}
-.status-box .msg{font-size:13px}
-.status-box .error{color:var(--danger);white-space:pre-wrap;font-size:12px;margin-top:8px}
-.status-running .msg{color:var(--accent)}
-.status-done .msg{color:var(--success)}
-.status-error .msg{color:var(--danger)}
-/* ── 右侧面板 ── */
-.panel-right{display:flex;flex-direction:column;overflow:hidden}
-.toolbar{display:flex;align-items:center;gap:12px;padding:14px 20px;border-bottom:1px solid var(--border);flex-wrap:wrap}
-.toolbar input{border:1px solid var(--border);border-radius:8px;padding:8px 12px;background:var(--card);color:var(--text);font-size:13px;outline:none;flex:1;min-width:150px}
-.toolbar input:focus{border-color:var(--accent)}
-.toolbar select{background:var(--card);border:1px solid var(--border);border-radius:8px;color:var(--text);padding:8px 12px;font-size:12px;outline:none}
-.toolbar .count{color:var(--muted);font-size:13px;white-space:nowrap}
-.view-tabs{display:flex;gap:6px}
-.view-tabs .btn.active{background:var(--accent);border-color:var(--accent);color:#fff}
-.video-grid{flex:1;overflow-y:auto;padding:20px;display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:12px;align-content:start}
-.video-card,.summary-card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px;cursor:pointer;transition:border .15s,transform .1s;position:relative}
-.video-card.selected{border-color:var(--accent);background:rgba(59,130,246,0.1)}
-.video-card .checkbox{position:absolute;top:10px;right:10px;width:20px;height:20px;border:2px solid var(--border);border-radius:4px;background:var(--card);cursor:pointer;transition:all .15s}
-.video-card.selected .checkbox{background:var(--accent);border-color:var(--accent)}
-.video-card.selected .checkbox::after{content:"✓";color:#fff;font-size:14px;display:flex;align-items:center;justify-content:center;height:100%}
-.video-card:hover,.summary-card:hover{border-color:var(--accent);transform:translateY(-1px)}
-.video-card .author,.summary-card .author{font-size:11px;color:var(--muted);margin-bottom:4px}
-.video-card .author .badge{display:inline-block;background:var(--accent2);color:#fff;border-radius:4px;padding:1px 6px;font-size:10px;margin-left:6px}
-.video-card .title,.summary-card .title{font-size:14px;font-weight:600;margin-bottom:6px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
-.video-card .desc,.summary-card .desc{font-size:12px;color:var(--muted);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
-.video-card .meta,.summary-card .meta{display:flex;gap:8px;margin-top:8px;font-size:11px;color:var(--muted);flex-wrap:wrap}
-.video-card .meta span,.summary-card .meta span{background:rgba(255,255,255,.04);padding:2px 8px;border-radius:4px}
-.type-pill{display:inline-block;background:rgba(34,197,94,.15);color:var(--success);border-radius:4px;padding:1px 6px;font-size:10px;margin-left:6px}
-/* ── 详情弹窗 ── */
-.modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:100;align-items:center;justify-content:center}
+body{background:var(--page-bg);color:var(--text);font-family:var(--font);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased;min-height:100vh;min-width:1020px}
+svg{display:block}
+button{font-family:var(--font)}
+
+/* ── 侧栏 ── */
+.layout{min-height:100vh}
+.sidebar{background:linear-gradient(180deg,var(--drawer-bg-top),var(--drawer-bg));color:var(--drawer-text);display:flex;flex-direction:column;position:fixed;top:0;left:0;width:var(--sidebar-w);height:100vh;z-index:30}
+.sidebar .brand{padding:24px 20px 16px;display:flex;align-items:center;gap:12px}
+.sidebar .brand .ava{width:44px;height:44px;border-radius:13px;background:var(--drawer-hover);box-shadow:0 0 0 1px var(--drawer-active);display:grid;place-items:center;flex:0 0 auto;color:var(--drawer-text)}
+.sidebar .brand h1{font-size:16.5px;font-weight:800;letter-spacing:-.01em}
+.sidebar .brand p{font-size:11px;opacity:.5;margin-top:3px;letter-spacing:.04em}
+.sidebar .nav{flex:1;overflow-y:auto;padding:4px 12px 12px}
+.sidebar .nav::-webkit-scrollbar{width:6px}
+.sidebar .nav::-webkit-scrollbar-thumb{background:var(--drawer-text-mute);border-radius:6px}
+.nav-sep{font-size:10.5px;opacity:.42;padding:14px 14px 6px;letter-spacing:.1em}
+.navi{display:flex;align-items:center;gap:12px;padding:10px 14px;border-radius:11px;cursor:pointer;font-size:13.5px;font-weight:500;color:color-mix(in srgb,var(--drawer-text) 82%,transparent);transition:background .15s;margin-bottom:2px}
+.navi:hover{background:var(--drawer-hover)}
+.navi.active{background:var(--drawer-active);color:var(--drawer-text);font-weight:700}
+.navi svg{color:var(--drawer-text-mute);flex:0 0 auto}
+.navi.active svg{color:var(--drawer-text)}
+.navi .cnt{margin-left:auto;font-size:11px;opacity:.55;font-weight:600}
+.sidebar .foot{padding:14px 16px;font-size:11px;opacity:.5;border-top:1px solid var(--drawer-hover)}
+.sidebar .foot .task-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--module-1);margin-right:6px;vertical-align:1px}
+.sidebar .foot .task-dot.running{background:var(--module-3);animation:pulse 1.2s infinite}
+.sidebar .foot .task-dot.error{background:var(--danger)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+
+/* ── 主区 ── */
+.main{margin-left:var(--sidebar-w);padding:26px 34px 56px}
+.main>section{max-width:1180px;display:none}
+.main>section.on{display:block}
+.header{display:flex;align-items:flex-end;gap:14px;margin-bottom:6px}
+.header h2{font-size:26px;font-weight:800;letter-spacing:-.03em}
+.header p{color:var(--text-secondary);font-size:13px;margin-top:5px}
+.header .spacer{flex:1}
+.header .count{font-size:12.5px;color:var(--text-secondary);font-weight:700;background:var(--surface-card);border:1px solid var(--border);border-radius:999px;padding:7px 14px;box-shadow:var(--shadow-card)}
+.date-chip{display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--text-secondary);background:var(--surface-card);border:1px solid var(--border);border-radius:999px;padding:8px 15px;box-shadow:var(--shadow-card)}
+.date-chip svg{color:var(--text-tertiary)}
+
+/* ── 首页 hero ── */
+.hero-banner{position:relative;overflow:hidden;border-radius:var(--radius-sheet);border:1px solid var(--border);box-shadow:var(--shadow-card);min-height:196px;display:flex;flex-direction:column;justify-content:center;padding:32px 38px;margin:14px 0 22px;background:var(--surface-nested) var(--greet-image) right center/cover no-repeat}
+.hero-banner::before{content:"";position:absolute;inset:0;pointer-events:none;background:linear-gradient(100deg,var(--surface-card) 34%,color-mix(in srgb,var(--surface-card) 82%,transparent) 52%,transparent 76%)}
+.hero-banner>*{position:relative;z-index:1}
+.hero-banner .hi{font-size:32px;font-weight:800;letter-spacing:-.03em}
+.hero-banner .sub{color:var(--text-secondary);font-size:13.5px;margin-top:7px;max-width:440px}
+.hero-banner .hstats{display:flex;gap:24px;margin-top:20px}
+.hero-banner .hstat{display:flex;flex-direction:column;gap:2px;cursor:pointer}
+.hero-banner .hstat .n{font-size:21px;font-weight:800;letter-spacing:-.02em}
+.hero-banner .hstat .t{font-size:12px;color:var(--text-secondary)}
+.hero-banner .hstat+.hstat{padding-left:24px;border-left:1px solid var(--border-input)}
+.hero-banner .htop{position:absolute;top:20px;right:24px;z-index:2;display:flex;gap:10px;align-items:center}
+
+/* ── 卡片与面板 ── */
+.card{background:var(--surface-card);border:1px solid var(--border);border-radius:var(--radius-card);box-shadow:var(--shadow-card)}
+.panel{background:var(--surface-card);border:1px solid var(--border);border-radius:var(--radius-card);box-shadow:var(--shadow-card);padding:20px}
+.sec-title{display:flex;align-items:center;gap:9px;font-size:14px;font-weight:800;margin:22px 2px 12px;letter-spacing:-.01em}
+.sec-title::before{content:"";width:3px;height:14px;border-radius:2px;background:var(--accent)}
+
+/* 统计 mini 卡 */
+.stat-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+.mini{background:var(--surface-card);border:1px solid var(--border);border-radius:var(--radius-tile);box-shadow:var(--shadow-card);padding:14px 16px;cursor:pointer;transition:transform .12s,box-shadow .16s}
+.mini:hover{transform:translateY(-2px);box-shadow:var(--shadow-overlay)}
+.mini .mh{display:flex;align-items:center;gap:9px}
+.mini .mh .ic{width:32px;height:32px;border-radius:9px;display:grid;place-items:center;flex:0 0 auto}
+.mini .mh .l{font-size:12.5px;color:var(--text-secondary);font-weight:700}
+.mini .v{font-size:22px;font-weight:800;margin-top:8px;letter-spacing:-.02em}
+.mini .d{font-size:11.5px;color:var(--text-tertiary);margin-top:2px}
+
+/* 模块导航卡 */
+.modcard-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+.modcard{background:var(--surface-card);border:1px solid var(--border);border-radius:var(--radius-card);box-shadow:var(--shadow-card);padding:15px 16px;cursor:pointer;transition:transform .12s,box-shadow .18s,border-color .15s}
+.modcard:hover{transform:translateY(-2px);box-shadow:var(--shadow-overlay);border-color:var(--border-input)}
+.modcard .mc-head{display:flex;align-items:center;gap:11px}
+.modcard .mc-ic{width:36px;height:36px;border-radius:10px;display:grid;place-items:center;flex:0 0 auto}
+.modcard .mc-tt{flex:1;min-width:0}
+.modcard .mc-name{font-size:14.5px;font-weight:800;letter-spacing:-.01em}
+.modcard .mc-desc{font-size:11.5px;color:var(--text-secondary);margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.modcard .mc-arw{color:var(--text-tertiary);flex:0 0 auto}
+.modcard .mc-body{display:flex;align-items:baseline;gap:8px;margin-top:11px}
+.modcard .mc-main{font-size:15px;font-weight:800;letter-spacing:-.01em}
+.modcard .mc-extra{font-size:12px;color:var(--text-secondary)}
+
+/* 最近动态两列 */
+.dash-cols{display:grid;grid-template-columns:1.4fr 1fr;gap:16px;align-items:start}
+.recent-list{display:flex;flex-direction:column}
+.recent-item{display:flex;align-items:center;gap:12px;padding:11px 4px;border-bottom:1px solid var(--border);cursor:pointer}
+.recent-item:last-child{border-bottom:none}
+.recent-item:hover .rt{color:var(--text)}
+.recent-item .rdot{width:8px;height:8px;border-radius:50%;flex:0 0 auto}
+.recent-item .rt{flex:1;min-width:0;font-size:13px;font-weight:600;color:var(--text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.recent-item .rm{font-size:11.5px;color:var(--text-tertiary);white-space:nowrap}
+
+/* ── 工具栏 / 按钮 / 表单 ── */
+.toolbar{display:flex;align-items:center;gap:10px;margin:16px 0 14px;flex-wrap:wrap}
+.btn{background:var(--accent);color:var(--on-accent);border:none;border-radius:10px;padding:10px 18px;font-size:13.5px;cursor:pointer;font-weight:700;box-shadow:var(--shadow-card);transition:filter .15s,transform .1s;display:inline-flex;align-items:center;gap:7px}
+.btn:hover{filter:brightness(1.12)} .btn:active{transform:translateY(1px)}
+.btn:disabled{opacity:.4;cursor:not-allowed;filter:none}
+.btn.ghost{background:var(--surface-card);color:var(--text-secondary);border:1px solid var(--border-input);box-shadow:none;font-weight:500}
+.btn.ghost:hover{color:var(--text);filter:none}
+.btn.ghost.active{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+.btn.sm{padding:7px 13px;font-size:12.5px;border-radius:9px}
+.btn.block{width:100%;justify-content:center}
+.spacer{flex:1}
+input,textarea,select{font-family:var(--font);font-size:13.5px;border:1px solid var(--border-input);border-radius:10px;padding:9px 12px;background:var(--surface-card);color:var(--text);outline:none;transition:border-color .15s,box-shadow .15s;width:100%}
+input:focus,textarea:focus,select:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-muted)}
+textarea{resize:vertical;min-height:84px}
+.search-box{position:relative;width:250px}
+.search-box svg{position:absolute;left:11px;top:50%;transform:translateY(-50%);color:var(--text-tertiary);pointer-events:none}
+.search-box input{padding-left:34px}
+.toolbar select{width:auto}
+.form-grid{display:grid;gap:14px}
+.form-row{display:grid;gap:10px;grid-template-columns:1fr 1fr 1fr}
+.form-row.two{grid-template-columns:1fr 1fr}
+.form-group label{display:block;font-size:12px;font-weight:700;color:var(--text-secondary);margin-bottom:5px}
+.form-group .hint{font-size:11px;color:var(--text-tertiary);margin-top:4px}
+.req{color:var(--danger)}
+
+/* 任务状态卡 */
+.status-card{display:flex;align-items:flex-start;gap:12px;padding:15px 17px;margin-top:16px}
+.status-card .s-ic{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;flex:0 0 auto;background:var(--surface-nested);border:1px solid var(--border);color:var(--text-tertiary)}
+.status-card.running .s-ic{color:var(--module-3);border-color:var(--module-3)}
+.status-card.done .s-ic{color:var(--module-1);border-color:var(--module-1)}
+.status-card.error .s-ic{color:var(--danger);border-color:var(--danger)}
+.status-card .s-msg{font-size:13.5px;font-weight:700}
+.status-card .s-err{font-size:12px;color:var(--danger);white-space:pre-wrap;margin-top:5px;max-height:110px;overflow-y:auto;font-family:SFMono-Regular,Consolas,monospace}
+
+/* ── 采集中心两列 ── */
+.collect-cols{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start;margin-top:16px}
+.collect-cols .panel h3{font-size:15px;font-weight:800;display:flex;align-items:center;gap:9px;margin-bottom:4px}
+.collect-cols .panel h3 .cic{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;flex:0 0 auto}
+.collect-cols .panel .p-sub{font-size:12px;color:var(--text-secondary);margin-bottom:16px}
+.preview-box{background:var(--surface-nested);border:1px solid var(--border);border-radius:var(--radius-tile);padding:12px;max-height:210px;overflow-y:auto;font-size:12px;margin-bottom:10px}
+.preview-box .pv-head{color:var(--text-secondary);margin-bottom:8px}
+.preview-box .pv-row{display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--border)}
+.preview-box .pv-row:last-child{border-bottom:none}
+.preview-box .pv-idx{color:var(--text-tertiary);font-size:11px;min-width:22px}
+.preview-box .pv-url{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* ── 列表网格 ── */
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:13px;align-content:start;min-height:200px}
+.empty{text-align:center;color:var(--text-secondary);padding:56px 20px;grid-column:1/-1}
+.empty .e{display:inline-grid;place-items:center;width:56px;height:56px;border-radius:16px;background:var(--surface-card);border:1px solid var(--border);color:var(--text-tertiary);margin-bottom:12px}
+
+/* 视频库卡片（封面式，可选择） */
+.video-card{background:var(--surface-card);border:1px solid var(--border);border-radius:var(--radius-card);box-shadow:var(--shadow-card);cursor:pointer;transition:border .12s,transform .1s,box-shadow .15s;position:relative;overflow:hidden;display:flex;flex-direction:column}
+.video-card:hover{border-color:var(--border-input);transform:translateY(-2px);box-shadow:var(--shadow-overlay)}
+.video-card.selected{border-color:var(--module-2);box-shadow:0 0 0 2px color-mix(in srgb,var(--module-2) 30%,transparent)}
+.video-card.failed{border-color:color-mix(in srgb,var(--danger) 45%,var(--border))}
+.video-cover{position:relative;aspect-ratio:16/9;background:var(--surface-nested);overflow:hidden;flex:0 0 auto}
+.video-cover img{width:100%;height:100%;object-fit:cover;display:block;transition:transform .25s}
+.video-card:hover .video-cover img{transform:scale(1.04)}
+.video-cover .cover-ph{position:absolute;inset:0;display:none;place-items:center;color:var(--text-tertiary);background:repeating-linear-gradient(45deg,var(--surface-nested),var(--surface-nested) 12px,var(--surface-card) 12px,var(--surface-card) 24px)}
+.video-cover img[src=""],.video-cover img.error{display:none}
+.video-cover img.error+.cover-ph,.video-cover img[src=""]+.cover-ph{display:grid}
+.video-cover .cover-len{position:absolute;bottom:8px;right:8px;background:rgba(20,19,17,.72);color:#fff;border-radius:6px;padding:2px 8px;font-size:11px;font-weight:700;letter-spacing:.02em}
+.video-card .checkbox{position:absolute;top:10px;right:10px;width:22px;height:22px;border:1.6px solid rgba(255,255,255,.85);border-radius:7px;background:rgba(20,19,17,.35);backdrop-filter:blur(4px);cursor:pointer;transition:all .15s;display:grid;place-items:center;color:#fff;z-index:2}
+.video-card .v-del{position:absolute;top:10px;left:10px;width:22px;height:22px;border:none;border-radius:7px;background:rgba(20,19,17,.35);backdrop-filter:blur(4px);cursor:pointer;transition:all .15s;display:grid;place-items:center;color:#fff;opacity:.75;z-index:2}
+.video-card .v-del:hover{background:rgba(220,38,38,.88);opacity:1}
+.video-card.selected .checkbox{background:var(--module-2);border-color:var(--module-2)}
+.video-card .checkbox svg{opacity:0}
+.video-card.selected .checkbox svg{opacity:1}
+.video-body{padding:12px 14px 14px;display:flex;flex-direction:column;gap:7px;flex:1}
+.video-card .v-author{font-size:12px;color:var(--text-secondary);display:flex;align-items:center;gap:6px;min-width:0}
+.video-card .v-author .an{font-weight:700;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.video-card .v-title{font-size:14px;font-weight:700;line-height:1.45;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;letter-spacing:-.01em;min-height:40px}
+.video-card .v-meta{display:flex;gap:6px;margin-top:auto;padding-top:9px;border-top:1px solid var(--border);font-size:11px;color:var(--text-tertiary);flex-wrap:wrap;align-items:center}
+.video-card .v-meta .m{display:inline-flex;align-items:center;gap:4px;background:var(--surface-nested);padding:2.5px 9px;border-radius:6px;font-weight:600}
+.pill{display:inline-flex;align-items:center;gap:4px;border-radius:999px;padding:1px 9px;font-size:10.5px;font-weight:700;flex:0 0 auto}
+.pill.topic{background:color-mix(in srgb,var(--module-5) 14%,transparent);color:var(--module-5)}
+.pill.done{background:color-mix(in srgb,var(--module-1) 15%,transparent);color:var(--module-1)}
+.pill.pending{background:color-mix(in srgb,var(--module-3) 15%,transparent);color:var(--module-3)}
+.pill.cat{background:color-mix(in srgb,var(--module-2) 15%,transparent);color:var(--module-2);cursor:pointer}
+.pill.game{background:color-mix(in srgb,var(--module-5) 14%,transparent);color:var(--module-5);cursor:pointer}
+.pill.cat:hover{filter:brightness(.95)}
+.pill.rag{background:color-mix(in srgb,var(--module-4) 15%,transparent);color:var(--module-4)}
+.cat-pills{display:flex;align-items:center;gap:8px;margin:0 0 12px;flex-wrap:wrap}
+.cat-pill{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--border);background:var(--surface-card);border-radius:999px;padding:3px 12px;font-size:12px;font-weight:600;color:var(--text-secondary);cursor:pointer;transition:all .12s}
+.cat-pill:hover{border-color:var(--module-2);color:var(--module-2)}
+.cat-pill.active{background:var(--module-2);border-color:var(--module-2);color:#fff}
+.cat-pill .n{font-size:10.5px;opacity:.75;font-weight:700}
+.cat-menu{position:fixed;z-index:200;background:var(--surface-card);border:1px solid var(--border);border-radius:10px;box-shadow:var(--shadow-pop);padding:6px;display:flex;flex-direction:column;gap:2px;min-width:120px}
+.cat-menu div{padding:6px 12px;border-radius:7px;font-size:13px;cursor:pointer;font-weight:600;color:var(--text-secondary)}
+.cat-menu div:hover{background:var(--surface-nested);color:var(--text)}
+.pill.fail{background:color-mix(in srgb,var(--danger) 14%,transparent);color:var(--danger)}
+.pill.score-A{background:color-mix(in srgb,var(--module-1) 16%,transparent);color:var(--module-1)}
+.pill.score-B{background:color-mix(in srgb,var(--module-3) 16%,transparent);color:var(--module-3)}
+.pill.score-C{background:color-mix(in srgb,var(--text-tertiary) 14%,transparent);color:var(--text-tertiary)}
+.pill.published{background:color-mix(in srgb,var(--module-2) 14%,transparent);color:var(--module-2)}
+
+/* 素材工作台卡片 */
+.material-card{background:var(--surface-card);border:1px solid var(--border);border-radius:var(--radius-card);overflow:hidden;cursor:pointer;transition:border .12s,transform .1s,box-shadow .15s;box-shadow:var(--shadow-card)}
+.material-card:hover{border-color:var(--border-input);transform:translateY(-2px);box-shadow:var(--shadow-overlay)}
+.material-thumb{width:100%;aspect-ratio:16/9;background:var(--surface-nested);object-fit:cover;display:block}
+.material-body{padding:13px 15px}
+.material-title{font-size:14px;font-weight:700;margin-bottom:6px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;letter-spacing:-.01em}
+.material-desc{font-size:12px;color:var(--text-secondary);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-height:36px}
+.asset-strip{display:flex;gap:5px;flex-wrap:wrap;margin-top:10px}
+.asset-pill{font-size:10.5px;border-radius:6px;padding:2px 8px;background:var(--surface-nested);color:var(--text-secondary);font-weight:600}
+.asset-pill.ok{background:color-mix(in srgb,var(--module-1) 13%,transparent);color:var(--module-1)}
+.asset-pill.warn{background:color-mix(in srgb,var(--module-3) 14%,transparent);color:var(--module-3)}
+
+/* 整理稿卡片 */
+.summary-card{position:relative;background:var(--surface-card);border:1px solid var(--border);border-radius:var(--radius-card);box-shadow:var(--shadow-card);padding:15px 16px;cursor:pointer;transition:border .12s,transform .1s,box-shadow .15s}
+/* ── 选题雷达 ── */
+.radar-row{background:var(--surface-card);border:1px solid var(--border);border-radius:12px;padding:10px 14px;cursor:pointer;transition:border .12s,background .12s}
+.radar-row:hover{border-color:color-mix(in srgb,var(--module-2) 45%,var(--border))}
+.radar-top{border-color:color-mix(in srgb,var(--module-2) 35%,var(--border));background:color-mix(in srgb,var(--module-2) 4%,var(--surface-card))}
+.radar-main{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.radar-rank{font-size:12px;font-weight:800;color:var(--text-tertiary);width:22px;text-align:right;font-variant-numeric:tabular-nums}
+.radar-top .radar-rank{color:var(--module-2)}
+.radar-tag{font-size:13.5px;font-weight:700}
+.radar-rising{font-size:10.5px;font-weight:700;color:var(--module-3);background:color-mix(in srgb,var(--module-3) 14%,transparent);padding:1.5px 7px;border-radius:99px}
+.radar-meta{font-size:11.5px;color:var(--text-tertiary)}
+.radar-bar{flex:1;min-width:120px;height:6px;border-radius:99px;background:color-mix(in srgb,var(--text-tertiary) 12%,transparent);overflow:hidden}
+.radar-fill{height:100%;border-radius:99px;background:linear-gradient(90deg,color-mix(in srgb,var(--module-2) 65%,transparent),var(--module-2))}
+.radar-videos{margin-top:8px;border-top:1px dashed var(--border);padding-top:8px;display:grid;gap:5px}
+.radar-video{display:flex;align-items:center;gap:10px;font-size:12px;padding:5px 8px;border-radius:8px;cursor:pointer;transition:background .1s}
+.radar-video:hover{background:color-mix(in srgb,var(--text-tertiary) 8%,transparent)}
+.radar-video-date{color:var(--text-tertiary);font-variant-numeric:tabular-nums;flex-shrink:0}
+.radar-video-author{color:var(--module-2);font-weight:600;flex-shrink:0;max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.radar-video-title{color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.s-del{position:absolute;top:8px;right:8px;width:22px;height:22px;display:grid;place-items:center;border-radius:6px;color:var(--text-tertiary);opacity:.55;cursor:pointer;transition:all .12s}
+.summary-card:hover .s-del{opacity:1}
+.s-del:hover{background:color-mix(in srgb,var(--module-5) 12%,transparent);color:var(--module-5);opacity:1}
+.summary-card:hover{border-color:var(--border-input);transform:translateY(-1px);box-shadow:var(--shadow-overlay)}
+.summary-card .s-author{font-size:11.5px;color:var(--text-secondary);margin-bottom:5px;display:flex;align-items:center;gap:6px}
+.pill.guide{background:color-mix(in srgb,var(--module-3) 15%,transparent);color:var(--module-3)}
+.pill.article{background:color-mix(in srgb,var(--module-4) 15%,transparent);color:var(--module-4)}
+.pill.interview{background:color-mix(in srgb,var(--module-2) 14%,transparent);color:var(--module-2)}
+.pill.link{cursor:pointer}
+.pill.link:hover{filter:brightness(.92)}
+#modal-tags .ai-tag{background:color-mix(in srgb,var(--module-2) 10%,transparent);color:var(--module-2)}
+.summary-card .s-title{font-size:14px;font-weight:700;margin-bottom:6px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;letter-spacing:-.01em}
+.summary-card .s-desc{font-size:12px;color:var(--text-secondary);display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.summary-card .s-meta{display:flex;gap:6px;margin-top:10px;font-size:11px;color:var(--text-tertiary);flex-wrap:wrap}
+.summary-card .s-meta span{background:var(--surface-nested);padding:2px 8px;border-radius:6px}
+
+/* 面试题卡 */
+.question-card{background:var(--surface-card);border:1px solid var(--border);border-radius:var(--radius-card);box-shadow:var(--shadow-card);padding:15px 16px;cursor:pointer;transition:border .12s,transform .1s,box-shadow .15s}
+.question-card:hover{border-color:var(--border-input);transform:translateY(-1px);box-shadow:var(--shadow-overlay)}
+.question-card .q-tag{display:inline-block;background:color-mix(in srgb,var(--module-5) 13%,transparent);color:var(--module-5);border-radius:6px;padding:2px 9px;font-size:10.5px;font-weight:700;margin-bottom:9px}
+.question-card .q-text{font-size:14px;font-weight:700;margin-bottom:8px;letter-spacing:-.01em;line-height:1.55}
+.question-card .q-source{font-size:11.5px;color:var(--text-tertiary);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.question-card .q-meta{display:flex;gap:6px;margin-top:10px;font-size:11px;color:var(--text-secondary);flex-wrap:wrap}
+.question-card .q-meta span{background:var(--surface-nested);padding:2px 8px;border-radius:6px}
+
+/* ── 弹窗 ── */
+.modal-overlay{display:none;position:fixed;inset:0;background:color-mix(in srgb,var(--text) 44%,transparent);backdrop-filter:blur(3px);z-index:100;align-items:center;justify-content:center;animation:fade .16s ease}
 .modal-overlay.show{display:flex}
-.modal{background:var(--card);border:1px solid var(--border);border-radius:12px;width:90%;max-width:720px;max-height:85vh;overflow-y:auto;padding:24px;position:relative}
-.modal h2{font-size:18px;margin-bottom:6px;padding-right:36px}
-.modal .close-btn{position:absolute;top:16px;right:16px;background:none;border:none;color:var(--muted);font-size:24px;cursor:pointer;padding:4px;line-height:1}
-.modal .close-btn:hover{color:var(--text)}
-.modal .info-line{color:var(--muted);font-size:12px;margin-bottom:16px}
+@keyframes fade{from{opacity:0}}
+.modal{background:var(--surface-card);border-radius:20px;width:92%;max-width:720px;max-height:86vh;overflow-y:auto;padding:26px;position:relative;box-shadow:0 24px 60px color-mix(in srgb,var(--text) 26%,transparent);animation:pop .18s cubic-bezier(.2,.8,.3,1)}
+@keyframes pop{from{transform:translateY(10px) scale(.98);opacity:0}}
+.modal h2{font-size:19px;font-weight:800;letter-spacing:-.01em;margin-bottom:6px;padding-right:36px}
+.modal .close-btn{position:absolute;top:16px;right:16px;background:var(--surface-nested);border:1px solid var(--border);color:var(--text-secondary);border-radius:9px;width:30px;height:30px;cursor:pointer;display:grid;place-items:center}
+.modal .close-btn:hover{color:var(--text);border-color:var(--border-input)}
+.modal .info-line{color:var(--text-secondary);font-size:12.5px;margin-bottom:16px}
 .modal .section{margin-bottom:16px}
-.modal .section h3{font-size:13px;color:var(--muted);font-weight:600;margin-bottom:6px;text-transform:uppercase;letter-spacing:.4px}
-.modal .section .content{font-size:13px;line-height:1.7;background:rgba(0,0,0,.2);border-radius:8px;padding:12px;white-space:pre-wrap;max-height:300px;overflow-y:auto}
+.modal .section h3{font-size:12px;color:var(--text-secondary);font-weight:800;margin-bottom:7px;text-transform:uppercase;letter-spacing:.06em}
+.modal .section .content{font-size:13px;line-height:1.7;background:var(--surface-nested);border:1px solid var(--border);border-radius:var(--radius-tile);padding:13px;white-space:pre-wrap;max-height:300px;overflow-y:auto}
 .modal .tags{display:flex;gap:6px;flex-wrap:wrap}
-.modal .tags span{background:var(--accent);color:#fff;border-radius:4px;padding:2px 8px;font-size:11px}
-.modal .actions{display:flex;gap:8px;margin-top:20px;padding-top:12px;border-top:1px solid var(--border)}
-/* 链接按钮 */
-.copy-btn{cursor:pointer;color:var(--accent);font-size:12px;text-decoration:underline}
-/* 状态 badge */
-.badge-done{background:var(--success);color:#fff;border-radius:4px;padding:1px 6px;font-size:10px}
-.badge-pending{background:var(--warn);color:#000;border-radius:4px;padding:1px 6px;font-size:10px}
+.modal .tags span{background:var(--accent);color:var(--on-accent);border-radius:999px;padding:2px 11px;font-size:11px;font-weight:600}
+.modal .actions{display:flex;gap:8px;margin-top:20px;padding-top:14px;border-top:1px solid var(--border);flex-wrap:wrap}
+.question-options{display:grid;gap:8px}
+.question-option{background:var(--surface-nested);border:1px solid var(--border);border-radius:10px;padding:9px 12px;font-size:13px}
+.question-option.correct{border-color:var(--module-1);background:color-mix(in srgb,var(--module-1) 10%,var(--surface-card))}
+.keyframe-row{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px}
+.keyframe-row img{width:100%;border-radius:10px;border:1px solid var(--border)}
+.copy-link{cursor:pointer;color:var(--module-2);font-size:12px;text-decoration:underline}
 </style>
 </head>
 <body>
-<div class="app">
-  <!-- 左侧 -->
-  <div class="panel-left">
-    <h1>🎬 video2text</h1>
-    <div class="sub">抖音视频采集 & 内容管理</div>
+<div class="layout">
+  <!-- ════ 左侧栏 ════ -->
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="ava" id="brand-ava"></div>
+      <div>
+        <h1>video2text</h1>
+        <p>抖音采集 · 内容工作台</p>
+      </div>
+    </div>
+    <nav class="nav">
+      <div class="nav-sep">总览</div>
+      <div class="navi active" id="nav-dashboard" onclick="switchPage('dashboard')"><span class="nav-ic" data-icon="home"></span>工作台首页</div>
+      <div class="nav-sep">采集</div>
+      <div class="navi" id="nav-collect" onclick="switchPage('collect')"><span class="nav-ic" data-icon="camera"></span>采集中心<span class="cnt" id="nav-collect-dot" style="display:none">●</span></div>
+      <div class="nav-sep">内容</div>
+      <div class="navi" id="nav-materials" onclick="switchPage('materials')"><span class="nav-ic" data-icon="grid"></span>数据与同步</div>
+      <div class="navi" id="nav-radar" onclick="switchPage('radar')"><span class="nav-ic" data-icon="radar"></span>选题雷达</div>
+      <div class="navi" id="nav-videos" onclick="switchPage('videos')"><span class="nav-ic" data-icon="list"></span>视频库</div>
+      <div class="navi" id="nav-summaries" onclick="switchPage('summaries')"><span class="nav-ic" data-icon="book"></span>整理稿</div>
+      <div class="navi" id="nav-questions" onclick="switchPage('questions')"><span class="nav-ic" data-icon="target"></span>面试题库</div>
+      <div class="nav-sep">设置</div>
+      <div class="navi" id="nav-settings" onclick="switchPage('settings')"><span class="nav-ic" data-icon="settings"></span>AI 设置</div>
+    </nav>
+    <div class="foot">
+      <div><span class="task-dot" id="task-dot"></span><span id="task-text">空闲</span></div>
+    </div>
+  </aside>
 
-    <div class="section-label">添加新视频</div>
-    <div class="form-group">
-      <label>抖音链接 <span style="color:var(--danger)">*</span></label>
-      <textarea id="links" rows="3" placeholder="每行一个抖音链接&#10;例如: https://v.douyin.com/xxxx/"></textarea>
-      <div class="hint">支持短链接格式 v.douyin.com/xxx</div>
-    </div>
-    <div class="form-group">
-      <label>Cookie (sessionid) <span style="color:var(--danger)">*</span></label>
-      <input id="cookie" type="text" placeholder="sessionid=xxxxxxxxxxxx">
-      <div class="hint">抖音登录态，从浏览器 F12 → Application → Cookies 获取</div>
-    </div>
-    <div class="form-row">
-      <div class="form-group">
-        <label>ASR 模型</label>
-        <select id="asr-model" style="background:var(--card);border:1px solid var(--border);border-radius:8px;color:var(--text);padding:8px 12px;width:100%;font-size:13px">
-          <option value="tiny">Tiny（最快）</option>
-          <option value="base" selected>Base（推荐）</option>
-          <option value="small">Small（高精度）</option>
+  <!-- ════ 主区 ════ -->
+  <main class="main">
+
+    <!-- ── 首页 ── -->
+    <section id="page-dashboard" class="on">
+      <div class="header">
+        <h2>工作台首页</h2>
+        <div class="spacer"></div>
+        <span class="date-chip"><span data-icon="calendar" class="ic14"></span><span id="today-str"></span></span>
+      </div>
+
+      <div class="hero-banner">
+        <div class="hi" id="greet-hi">你好</div>
+        <div class="sub">抖音短视频素材采集 → ASR 转写 → AI 整理，一条链路管理你的内容选题。</div>
+        <div class="hstats">
+          <div class="hstat" onclick="switchPage('materials')"><span class="n" id="h-total">–</span><span class="t">素材总数</span></div>
+          <div class="hstat" onclick="switchPage('materials')"><span class="n" id="h-asr">–</span><span class="t">已有 ASR</span></div>
+          <div class="hstat" onclick="switchPage('summaries')"><span class="n" id="h-summaries">–</span><span class="t">整理稿</span></div>
+          <div class="hstat" onclick="switchPage('questions')"><span class="n" id="h-questions">–</span><span class="t">面试题</span></div>
+        </div>
+        <div class="htop">
+          <button class="btn sm" onclick="switchPage('collect')"><span data-icon="camera" class="ic14"></span>开始采集</button>
+          <button class="btn ghost sm" onclick="syncWorkbench()"><span data-icon="activity" class="ic14"></span>同步数据</button>
+        </div>
+      </div>
+
+      <div class="sec-title">内容概况</div>
+      <div class="stat-grid">
+        <div class="mini" onclick="switchPage('materials')">
+          <div class="mh"><span class="ic" style="background:color-mix(in srgb,var(--module-1) 14%,transparent);color:var(--module-1)" data-icon="grid"></span><span class="l">素材总数</span></div>
+          <div class="v" id="st-total">–</div><div class="d" id="st-total-d">来自 Excel 内容库</div>
+        </div>
+        <div class="mini" onclick="switchPage('materials')">
+          <div class="mh"><span class="ic" style="background:color-mix(in srgb,var(--module-2) 14%,transparent);color:var(--module-2)" data-icon="chart"></span><span class="l">ASR 覆盖率</span></div>
+          <div class="v" id="st-asr">–</div><div class="d" id="st-asr-d">–</div>
+        </div>
+        <div class="mini" onclick="switchPage('summaries')">
+          <div class="mh"><span class="ic" style="background:color-mix(in srgb,var(--module-3) 14%,transparent);color:var(--module-3)" data-icon="book"></span><span class="l">整理稿</span></div>
+          <div class="v" id="st-summaries">–</div><div class="d" id="st-summaries-d">–</div>
+        </div>
+        <div class="mini" onclick="switchPage('questions')">
+          <div class="mh"><span class="ic" style="background:color-mix(in srgb,var(--module-5) 14%,transparent);color:var(--module-5)" data-icon="target"></span><span class="l">面试题</span></div>
+          <div class="v" id="st-questions">–</div><div class="d" id="st-questions-d">结构化题卡</div>
+        </div>
+      </div>
+
+      <div class="sec-title">快捷入口</div>
+      <div class="modcard-grid">
+        <div class="modcard" onclick="switchPage('collect')">
+          <div class="mc-head">
+            <span class="mc-ic" style="background:color-mix(in srgb,var(--module-4) 14%,transparent);color:var(--module-4)" data-icon="camera"></span>
+            <div class="mc-tt"><div class="mc-name">采集中心</div><div class="mc-desc">链接批处理 / 用户主页批量抓取</div></div>
+            <span class="mc-arw" data-icon="chevron"></span>
+          </div>
+          <div class="mc-body"><span class="mc-main">一键采集</span><span class="mc-extra">支持短链 · 自动 ASR</span></div>
+        </div>
+        <div class="modcard" onclick="switchPage('materials')">
+          <div class="mc-head">
+            <span class="mc-ic" style="background:color-mix(in srgb,var(--module-1) 14%,transparent);color:var(--module-1)" data-icon="grid"></span>
+            <div class="mc-tt"><div class="mc-name">素材工作台</div><div class="mc-desc">封面 / 关键帧 / ASR 资产总览</div></div>
+            <span class="mc-arw" data-icon="chevron"></span>
+          </div>
+          <div class="mc-body"><span class="mc-main" id="mc-materials">–</span><span class="mc-extra" id="mc-materials-extra">条素材</span></div>
+        </div>
+        <div class="modcard" onclick="switchPage('videos')">
+          <div class="mc-head">
+            <span class="mc-ic" style="background:color-mix(in srgb,var(--module-2) 14%,transparent);color:var(--module-2)" data-icon="list"></span>
+            <div class="mc-tt"><div class="mc-name">视频库</div><div class="mc-desc">按选题等级筛选，勾选生成整理稿</div></div>
+            <span class="mc-arw" data-icon="chevron"></span>
+          </div>
+          <div class="mc-body"><span class="mc-main">选题 → 二创</span><span class="mc-extra">攻略 / 面试题</span></div>
+        </div>
+        <div class="modcard" onclick="switchPage('summaries')">
+          <div class="mc-head">
+            <span class="mc-ic" style="background:color-mix(in srgb,var(--module-3) 14%,transparent);color:var(--module-3)" data-icon="book"></span>
+            <div class="mc-tt"><div class="mc-name">整理稿</div><div class="mc-desc">AI 整理的游戏攻略与内容稿</div></div>
+            <span class="mc-arw" data-icon="chevron"></span>
+          </div>
+          <div class="mc-body"><span class="mc-main" id="mc-summaries">–</span><span class="mc-extra">篇草稿</span></div>
+        </div>
+        <div class="modcard" onclick="switchPage('questions')">
+          <div class="mc-head">
+            <span class="mc-ic" style="background:color-mix(in srgb,var(--module-5) 14%,transparent);color:var(--module-5)" data-icon="target"></span>
+            <div class="mc-tt"><div class="mc-name">面试题库</div><div class="mc-desc">结构化 AI 面试题 · 参考答案</div></div>
+            <span class="mc-arw" data-icon="chevron"></span>
+          </div>
+          <div class="mc-body"><span class="mc-main" id="mc-questions">–</span><span class="mc-extra">道题目</span></div>
+        </div>
+        <div class="modcard" onclick="syncWorkbench()">
+          <div class="mc-head">
+            <span class="mc-ic" style="background:color-mix(in srgb,var(--accent) 10%,transparent);color:var(--text-secondary)" data-icon="activity"></span>
+            <div class="mc-tt"><div class="mc-name">同步数据</div><div class="mc-desc">Excel → SQLite → AI 素材层</div></div>
+            <span class="mc-arw" data-icon="chevron"></span>
+          </div>
+          <div class="mc-body"><span class="mc-main">手动同步</span><span class="mc-extra">处理完成后建议执行</span></div>
+        </div>
+      </div>
+
+      <div class="sec-title">最近动态</div>
+      <div class="dash-cols">
+        <div class="panel">
+          <div style="display:flex;align-items:center;gap:8px;font-size:13.5px;font-weight:800;margin-bottom:6px"><span data-icon="list" style="color:var(--text-tertiary)"></span>最近素材</div>
+          <div class="recent-list" id="recent-videos"><div class="rm" style="padding:16px 4px;color:var(--text-tertiary)">加载中...</div></div>
+        </div>
+        <div class="panel">
+          <div style="display:flex;align-items:center;gap:8px;font-size:13.5px;font-weight:800;margin-bottom:6px"><span data-icon="book" style="color:var(--text-tertiary)"></span>最近整理稿</div>
+          <div class="recent-list" id="recent-summaries"><div class="rm" style="padding:16px 4px;color:var(--text-tertiary)">加载中...</div></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── 采集中心 ── -->
+    <section id="page-collect">
+      <div class="header">
+        <h2>采集中心</h2>
+        <div class="spacer"></div>
+        <span class="count">Cookie 仅保存在本机浏览器</span>
+      </div>
+      <p style="color:var(--text-secondary);font-size:13px;margin:6px 0 0">两种方式采集抖音视频：粘贴链接批处理，或输入用户主页一次抓取整个作者的作品列表。</p>
+
+      <div class="collect-cols">
+        <div class="panel">
+          <h3><span class="cic" style="background:color-mix(in srgb,var(--module-2) 14%,transparent);color:var(--module-2)" data-icon="plus"></span>链接采集</h3>
+          <div class="p-sub">粘贴一条或多条视频链接，自动解析元数据并 ASR 转写。</div>
+          <div class="form-grid">
+            <div class="form-group">
+              <label>抖音链接 <span class="req">*</span></label>
+              <textarea id="links" rows="3" placeholder="每行一个抖音链接&#10;例如: https://v.douyin.com/xxxx/"></textarea>
+              <div class="hint">支持短链接格式 v.douyin.com/xxx</div>
+            </div>
+            <div class="form-group">
+              <label>Cookie (sessionid) <span class="req">*</span></label>
+              <input id="cookie" type="text" placeholder="sessionid=xxxxxxxxxxxx">
+              <div class="hint">浏览器 F12 → Application → Cookies → douyin.com 获取</div>
+            </div>
+            <div class="form-group">
+              <label>ASR 模型</label>
+              <select id="asr-model">
+                <option value="tiny">Tiny（最快）</option>
+                <option value="base" selected>Base（推荐）</option>
+                <option value="small">Small（高精度）</option>
+              </select>
+            </div>
+            <button class="btn block" id="btn-submit" onclick="submitTask()"><span data-icon="bolt" class="ic14"></span>开始处理</button>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h3><span class="cic" style="background:color-mix(in srgb,var(--module-4) 14%,transparent);color:var(--module-4)" data-icon="camera"></span>用户主页批量采集</h3>
+          <div class="p-sub">输入主页链接或该作者任意视频链接，自动翻页抓取作品列表。</div>
+          <div class="form-grid">
+            <div class="form-group">
+              <label>用户主页 / 任意视频链接</label>
+              <input id="user-url" type="text" placeholder="https://www.douyin.com/user/MS4wLjAB...">
+              <div class="hint">自动识别作者主页，与已入库视频去重</div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label>最大页数</label>
+                <input id="max-pages" type="number" value="3" min="1" max="20">
+                <div class="hint">未填数量时生效</div>
+              </div>
+              <div class="form-group">
+                <label>最多视频数（优先）</label>
+                <input id="max-videos" type="number" value="10" min="1" max="500">
+                <div class="hint">填数量则按数量抓</div>
+              </div>
+            </div>
+            <button class="btn ghost block" id="btn-fetch-preview" onclick="previewUserVideos()"><span data-icon="search" class="ic14"></span>预览视频列表</button>
+            <button class="btn ghost block" style="margin-top:8px" onclick="subscribeAuthor()"><span data-icon="plus" class="ic14"></span>订阅该作者</button>
+          </div>
+          <div id="preview-area" style="display:none;margin-top:14px">
+            <div class="preview-box">
+              <div id="preview-list"></div>
+            </div>
+            <div style="display:flex;gap:8px">
+              <button class="btn block" onclick="fetchAndProcess()"><span data-icon="camera" class="ic14"></span>全部添加并处理</button>
+              <button class="btn ghost" onclick="togglePreview(false)">取消</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="status-card card" id="status-box">
+        <div class="s-ic" data-icon="activity"></div>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:11px;font-weight:800;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.06em;margin-bottom:2px">任务状态</div>
+          <div class="s-msg" id="status-msg">等待操作...</div>
+          <div class="s-err" id="status-error"></div>
+        </div>
+        <button class="btn ghost sm" onclick="refreshAll()">↻ 刷新</button>
+      </div>
+    </section>
+
+    <!-- ── 数据与同步 ── -->
+    <section id="page-materials">
+      <div class="header">
+        <h2>数据与同步</h2>
+        <div class="spacer"></div>
+        <span class="count" id="count-materials">0 条素材</span>
+      </div>
+
+      <div class="panel">
+        <h3 style="display:flex;align-items:center;gap:9px">
+          <span class="cic" style="background:color-mix(in srgb,var(--module-3) 14%,transparent);color:var(--module-3)" data-icon="activity"></span>我的订阅
+          <span class="count" id="count-subs" style="margin-left:auto">0 个</span>
+          <button class="btn ghost sm" onclick="openAuthorImport()"><span data-icon="plus" class="ic14"></span>导入视频库作者</button>
+          <button class="btn sm" id="btn-sync-all-subs" onclick="syncSubscriptions()"><span data-icon="bolt" class="ic14"></span>同步全部</button>
+        </h3>
+        <div class="p-sub">订阅的抖音主页/微信公众号，点「同步」自动拉取新内容（抖音 20 条视频+ASR 转写，微信 RSS 文章直接入库）。点作者名可改名，点分类徽章设置分类（新内容自动归类）。微信订阅需先部署 <a href="https://github.com/cooderl/wewe-rss" target="_blank" style="color:var(--module-2)">WeWe RSS</a> 服务。</div>
+        <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+          <input id="wechat-rss-url" class="page-search" style="flex:1;min-width:200px" placeholder="粘贴 WeWe RSS 订阅地址，如 http://localhost:4000/feed/xxx.xml">
+          <select id="wechat-sub-cat" style="width:auto">
+            <option value="">自动分类</option>
+            <option value="前端面试">前端面试</option>
+            <option value="AI技术">AI技术</option>
+            <option value="游戏攻略">游戏攻略</option>
+            <option value="编程开发">编程开发</option>
+            <option value="产品设计">产品设计</option>
+            <option value="数码评测">数码评测</option>
+            <option value="商业财经">商业财经</option>
+            <option value="职场成长">职场成长</option>
+            <option value="生活日常">生活日常</option>
+            <option value="其他">其他</option>
+          </select>
+          <button class="btn sm" onclick="addWechatSubscription()"><span data-icon="plus" class="ic14"></span>添加微信订阅</button>
+        </div>
+        <div id="sub-status" style="display:none;margin:10px 0 0;font-size:12.5px;color:var(--module-2);font-weight:600"></div>
+        <div id="sub-list" style="margin-top:10px"></div>
+      </div>
+
+      <div class="toolbar" style="margin-top:16px">
+        <div class="spacer"></div>
+        <button class="btn ghost sm" onclick="syncContentDb()">同步内容库</button>
+        <button class="btn sm" onclick="syncWorkbench()"><span data-icon="activity" class="ic14"></span>同步工作台</button>
+      </div>
+      <p style="font-size:12px;color:var(--text-tertiary);margin:0 0 12px">订阅同步时会自动执行数据同步，手动按钮仅作兜底。浏览素材与生成内容请使用「视频库」。缺 ASR 的视频无法生成整理稿或发布知识库。</p>
+      <div id="sync-stats" style="display:flex;gap:12px;flex-wrap:wrap">
+        <div class="empty" style="flex:1;padding:24px"><span class="e" data-icon="grid"></span>加载中...</div>
+      </div>
+    </section>
+
+    <!-- ── 选题雷达 ── -->
+    <section id="page-radar">
+      <div class="header">
+        <h2>选题雷达</h2>
+        <div class="spacer"></div>
+        <span class="count" id="radar-total">加载中</span>
+      </div>
+      <div class="toolbar">
+        <select id="radar-cat" onchange="loadRadar()">
+          <option value="">全部分类</option>
+          <option value="前端面试">前端面试</option>
+          <option value="AI技术">AI技术</option>
+          <option value="游戏攻略">游戏攻略</option>
+          <option value="编程开发">编程开发</option>
+          <option value="产品设计">产品设计</option>
+          <option value="数码评测">数码评测</option>
+          <option value="商业财经">商业财经</option>
+          <option value="职场成长">职场成长</option>
+          <option value="生活日常">生活日常</option>
+          <option value="其他">其他</option>
+        </select>
+        <select id="radar-game" onchange="loadRadar()" style="display:none"></select>
+        <select id="radar-author" onchange="loadRadar()">
+          <option value="">全部作者</option>
+        </select>
+        <div class="spacer"></div>
+        <button class="btn ghost sm" onclick="loadRadar()"><span data-icon="activity" class="ic14"></span>刷新</button>
+      </div>
+      <p style="font-size:12px;color:var(--text-tertiary);margin:0 0 14px">
+        聚合所选范围内视频的 AI 标签，按「热度」排序（热度 = 总频次 + 近期频次×2，近期窗口自动按数据跨度计算）。
+        高频标签 = 该领域创作者反复讲的热点；近期上升 = 正在升温的话题。点标签查看来源视频。
+      </p>
+      <div id="radar-list" style="display:grid;gap:8px"></div>
+    </section>
+
+    <!-- ── 视频库 ── -->
+    <section id="page-videos">
+      <div class="header">
+        <h2>视频库</h2>
+        <div class="spacer"></div>
+        <span class="count" id="count-videos">0 条</span>
+      </div>
+      <div class="toolbar">
+        <div class="search-box"><span data-icon="search" class="ic14"></span><input class="page-search" placeholder="搜索标题 / 作者 / 描述..." oninput="loadCurrentView()"></div>
+        <select id="topic-filter" onchange="loadVideos()">
+          <option value="">全部作者</option>
+        </select>
+        <div class="spacer"></div>
+        <button class="btn ghost sm" id="btn-classify" onclick="classifyVideos()"><span data-icon="bolt" class="ic14"></span>AI 分类</button>
+        <button class="btn ghost sm" id="btn-dify-publish" onclick="publishToDify()"><span data-icon="book" class="ic14"></span>发布到知识库</button>
+        <button class="btn ghost sm" id="btn-guide-article" onclick="generateGuideArticle()" title="全选当前列表的视频，逐个生成可发布的攻略文章"><span data-icon="edit" class="ic14"></span>一键攻略文章</button>
+        <select id="summary-type" onchange="updateOptimizeButton()">
+          <option value="game_guide">生成：游戏攻略</option>
+          <option value="guide_article">生成：攻略文章</option>
+          <option value="ai_interview">生成：AI面试题</option>
+        </select>
+        <select id="generate-mode" onchange="updateOptimizeButton()">
+          <option value="single">逐个生成</option>
+          <option value="combine">合并成一篇</option>
+        </select>
+        <button class="btn sm" id="btn-ai-optimize" onclick="generateSelectedContent()" style="display:none"><span data-icon="star" class="ic14"></span>生成整理稿</button>
+      </div>
+      <div class="cat-pills" id="category-pills"></div>
+      <div class="cat-pills" id="game-pills" style="display:none"></div>
+      <button class="btn ghost sm" id="btn-clear-selection" onclick="clearSelection()" style="display:none;margin:-6px 0 12px"><span data-icon="close" class="ic14"></span>清空选择</button>
+      <button class="btn ghost sm" id="btn-delete-videos" onclick="deleteVideosSelected()" style="display:none;margin:-6px 0 12px;color:var(--module-5)"><span data-icon="close" class="ic14"></span>删除选中</button>
+      <p style="font-size:12px;color:var(--text-tertiary);margin:0 0 12px">单击卡片选择（Shift+单击范围选择），双击查看详情；点击分类徽章可手动改分类。</p>
+      <div class="grid" id="grid-videos">
+        <div class="empty"><span class="e" data-icon="list"></span>加载中...</div>
+      </div>
+    </section>
+
+    <!-- ── 整理稿 ── -->
+    <section id="page-summaries">
+      <div class="header">
+        <h2>整理稿</h2>
+        <div class="spacer"></div>
+        <span class="count" id="count-summaries">0 篇</span>
+      </div>
+      <div class="toolbar">
+        <div class="search-box"><span data-icon="search" class="ic14"></span><input class="page-search" placeholder="搜索标题 / 正文..." oninput="loadCurrentView()"></div>
+        <select id="summary-type-filter" onchange="loadSummaries()">
+          <option value="">全部类型</option>
+          <option value="game_guide">游戏攻略</option>
+          <option value="guide_article">攻略文章</option>
+          <option value="ai_interview">AI面试题</option>
         </select>
       </div>
-    </div>
-    <button class="btn btn-primary" id="btn-submit" onclick="submitTask()" style="width:100%">🚀 开始处理</button>
+      <div class="grid" id="grid-summaries">
+        <div class="empty"><span class="e" data-icon="book"></span>加载中...</div>
+      </div>
+    </section>
 
-    <div class="section-label" style="margin-top:24px">📥 批量采集（用户主页）</div>
-    <div class="form-group">
-      <label>用户主页链接 / 任意视频链接</label>
-      <input id="user-url" type="text" placeholder="https://www.douyin.com/user/MS4wLjAB...">
-      <div class="hint">支持用户主页链接或该用户的任意视频链接，自动识别作者主页</div>
-    </div>
-    <div class="form-row">
-      <div class="form-group">
-        <label>最大页数</label>
-        <input id="max-pages" type="number" value="3" min="1" max="20">
+    <!-- ── 面试题库 ── -->
+    <section id="page-questions">
+      <div class="header">
+        <h2>面试题库</h2>
+        <div class="spacer"></div>
+        <span class="count" id="count-questions">0 题</span>
       </div>
-      <div class="form-group">
-        <label style="visibility:hidden">.</label>
-        <button class="btn btn-primary" id="btn-fetch-preview" onclick="previewUserVideos()" style="width:100%">🔍 预览</button>
+      <div class="toolbar">
+        <div class="search-box"><span data-icon="search" class="ic14"></span><input class="page-search" placeholder="搜索题目 / 知识点..." oninput="loadCurrentView()"></div>
       </div>
-    </div>
-    <div id="preview-area" style="display:none;margin-bottom:10px">
-      <div style="background:var(--card);border-radius:8px;padding:10px;max-height:200px;overflow-y:auto;font-size:12px">
-        <div id="preview-list"></div>
+      <div class="grid" id="grid-questions">
+        <div class="empty"><span class="e" data-icon="target"></span>加载中...</div>
       </div>
-      <div style="display:flex;gap:8px;margin-top:8px">
-        <button class="btn btn-success" onclick="fetchAndProcess()" style="flex:1">📥 全部添加并处理</button>
-        <button class="btn btn-ghost" onclick="togglePreview(false)" style="flex:1">取消</button>
-      </div>
-    </div>
+    </section>
 
-    <div class="status-box" id="status-box">
-      <div class="label">处理状态</div>
-      <div class="msg" id="status-msg">等待操作...</div>
-      <div id="status-error" class="error"></div>
-    </div>
-    <button class="btn btn-ghost btn-sm" onclick="location.reload()" style="margin-top:10px;width:100%">↻ 刷新列表</button>
-  </div>
-
-  <!-- 右侧 -->
-  <div class="panel-right">
-    <div class="toolbar">
-      <div class="view-tabs">
-        <button class="btn btn-ghost btn-sm active" id="tab-videos" onclick="switchView('videos')">视频库</button>
-        <button class="btn btn-ghost btn-sm" id="tab-summaries" onclick="switchView('summaries')">整理稿</button>
+    <!-- ── AI 设置 ── -->
+    <section id="page-settings">
+      <div class="header">
+        <h2>AI 设置</h2>
+        <div class="spacer"></div>
+        <span class="count">Key 仅保存在本机 config/config.env.local</span>
       </div>
-      <input id="search" type="text" placeholder="搜索标题 / 作者..." oninput="loadCurrentView()">
-      <select id="topic-filter" onchange="loadCurrentView()" style="display:none">
-        <option value="">全部作者</option>
-      </select>
-      <select id="summary-type-filter" onchange="loadSummaries()" style="display:none">
-        <option value="">全部类型</option>
-        <option value="game_guide">游戏攻略</option>
-        <option value="ai_interview">AI面试题</option>
-      </select>
-      <span class="count" id="video-count">0 条</span>
-      <select id="summary-type" onchange="updateOptimizeButton()" style="display:none">
-        <option value="game_guide">游戏攻略</option>
-        <option value="ai_interview">AI面试题</option>
-      </select>
-      <button class="btn btn-primary btn-sm" id="btn-ai-optimize" onclick="generateSelectedContent()" style="margin-left:8px;display:none">生成整理稿</button>
-      <button class="btn btn-ghost btn-sm" onclick="syncContentDb()">同步内容库</button>
-    </div>
-    <div class="video-grid" id="video-grid">
-      <div style="color:var(--muted);padding:40px;text-align:center">加载中...</div>
-    </div>
-  </div>
+      <p style="color:var(--text-secondary);font-size:13px;margin:6px 0 0">配置后，生成游戏攻略 / AI面试题由大模型完成；不配置则使用本地规则模板（草稿级质量）。</p>
+
+      <div class="panel" style="margin-top:16px;max-width:640px">
+        <h3 style="font-size:15px;font-weight:800;display:flex;align-items:center;gap:9px;margin-bottom:4px">
+          <span class="cic" style="width:30px;height:30px;border-radius:9px;display:grid;place-items:center;background:color-mix(in srgb,var(--module-3) 14%,transparent);color:var(--module-3)" data-icon="settings"></span>生成模型接入
+        </h3>
+        <div style="font-size:12px;color:var(--text-secondary);margin-bottom:16px">当前状态：<span id="ai-status" style="font-weight:700">加载中...</span></div>
+
+        <div class="form-grid">
+          <div class="form-group">
+            <label>AI 服务</label>
+            <select id="ai-method" onchange="updateAiPlaceholders()">
+              <option value="skip">不使用 AI（本地模板）</option>
+              <option value="deepseek">DeepSeek（推荐，便宜）</option>
+              <option value="openai">OpenAI / 兼容接口</option>
+            </select>
+            <div class="hint">DeepSeek 直接支持；其他厂商走 OpenAI 兼容协议</div>
+          </div>
+          <div class="form-group">
+            <label>API Key</label>
+            <input id="ai-key" type="password" autocomplete="off" placeholder="sk-...">
+            <div class="hint" id="ai-key-hint">尚未配置</div>
+          </div>
+          <div class="form-row two">
+            <div class="form-group">
+              <label>API Base（可选）</label>
+              <input id="ai-base" type="text" placeholder="">
+              <div class="hint">留空使用官方默认地址</div>
+            </div>
+            <div class="form-group">
+              <label>模型（可选）</label>
+              <input id="ai-model" type="text" placeholder="">
+              <div class="hint">留空使用默认模型</div>
+            </div>
+          </div>
+          <div style="display:flex;gap:10px;align-items:center">
+            <button class="btn" id="btn-ai-save" onclick="saveAiConfig()"><span data-icon="check" class="ic14"></span>保存配置</button>
+            <button class="btn ghost" id="btn-ai-test" onclick="testAiConfig()"><span data-icon="bolt" class="ic14"></span>测试连接</button>
+            <span id="ai-test-result" style="font-size:12.5px;font-weight:600"></span>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel" style="margin-top:16px;max-width:640px">
+        <h3 style="font-size:15px;font-weight:800;display:flex;align-items:center;gap:9px;margin-bottom:4px">
+          <span class="cic" style="width:30px;height:30px;border-radius:9px;display:grid;place-items:center;background:color-mix(in srgb,var(--module-4) 14%,transparent);color:var(--module-4)" data-icon="book"></span>RAG 知识库（Dify）
+        </h3>
+        <div style="font-size:12px;color:var(--text-secondary);margin-bottom:16px">配置后可在视频库一键把视频（口播原文 + 整理稿）发布到 Dify 知识库，用于检索问答。当前状态：<span id="dify-status" style="font-weight:700">未配置</span></div>
+
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Dify API 地址</label>
+            <input id="dify-base" type="text" placeholder="http://127.0.0.1">
+            <div class="hint">自部署填服务地址；云端填 https://api.dify.ai</div>
+          </div>
+          <div class="form-group">
+            <label>Knowledge API Key</label>
+            <input id="dify-key" type="password" autocomplete="off" placeholder="dataset-...">
+            <div class="hint" id="dify-key-hint">Dify 知识库页面左侧「API」处生成</div>
+          </div>
+          <div class="form-group">
+            <label>目标知识库</label>
+            <div style="display:flex;gap:8px">
+              <select id="dify-dataset" style="flex:1"></select>
+              <button class="btn ghost sm" style="flex:0 0 auto" onclick="loadDifyDatasets(true)"><span data-icon="activity" class="ic14"></span>刷新</button>
+            </div>
+            <div class="hint">填好 Key 后点刷新拉取知识库列表；也可 <a href="javascript:void(0)" onclick="createDifyDataset()" style="color:var(--module-4);font-weight:600">+ 新建知识库</a></div>
+          </div>
+          <div style="display:flex;gap:10px;align-items:center">
+            <button class="btn" id="btn-dify-save" onclick="saveDifyConfig()"><span data-icon="check" class="ic14"></span>保存配置</button>
+            <button class="btn ghost" id="btn-dify-test" onclick="testDifyConfig()"><span data-icon="bolt" class="ic14"></span>测试连接</button>
+            <span id="dify-test-result" style="font-size:12.5px;font-weight:600"></span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
 </div>
 
-<!-- 详情弹窗 -->
+<!-- ════ 详情弹窗 ════ -->
 <div class="modal-overlay" id="modal-overlay" onclick="closeModal(event)">
   <div class="modal" onclick="event.stopPropagation()">
-    <button class="close-btn" onclick="closeModal()">✕</button>
+    <button class="close-btn" onclick="closeModal()"><span data-icon="close" class="ic14"></span></button>
     <h2 id="modal-title"></h2>
     <div class="info-line" id="modal-info"></div>
     <div class="section">
-      <h3>📌 基本信息</h3>
-      <div class="content" id="modal-basic" style="max-height:80px"></div>
+      <h3>基本信息</h3>
+      <div class="content" id="modal-basic" style="max-height:100px"></div>
     </div>
-    <div class="section">
-      <h3>🏷️ 标签</h3>
+    <div class="section" id="modal-tags-section">
+      <h3>标签</h3>
       <div class="tags" id="modal-tags"></div>
     </div>
     <div class="section">
-      <h3>📝 口播原文（ASR）</h3>
+      <h3 id="modal-asr-title">口播原文（ASR）</h3>
       <div class="content" id="modal-asr"></div>
     </div>
     <div class="section">
-      <h3>🤖 AI 优化文案</h3>
+      <h3 id="modal-ai-title">AI 优化文案</h3>
       <div class="content" id="modal-ai-copy"></div>
     </div>
     <div class="actions" id="modal-actions"></div>
@@ -203,48 +802,165 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
 </div>
 
 <script>
+// ── 图标系统（Lucide 24×24, stroke 1.7）──
+const ICONS = {
+  home:'<path d="M4 11.5 12 5l8 6.5"/><path d="M6 10.5V19h12v-8.5"/>',
+  grid:'<rect x="4" y="4" width="7" height="7" rx="1.6"/><rect x="13" y="4" width="7" height="7" rx="1.6"/><rect x="4" y="13" width="7" height="7" rx="1.6"/><rect x="13" y="13" width="7" height="7" rx="1.6"/>',
+  chart:'<path d="M4 20V4"/><path d="M4 20h16"/><path d="M8 16v-4"/><path d="M12 16v-7"/><path d="M16 16v-2"/>',
+  plus:'<path d="M12 5v14"/><path d="M5 12h14"/>',
+  list:'<path d="M8.5 6h11"/><path d="M8.5 12h11"/><path d="M8.5 18h11"/><circle cx="4.5" cy="6" r=".9"/><circle cx="4.5" cy="12" r=".9"/><circle cx="4.5" cy="18" r=".9"/>',
+  book:'<path d="M5 5.5A2.5 2.5 0 0 1 7.5 3H19v14H7.5A2.5 2.5 0 0 0 5 19.5z"/><path d="M5 19.5A2.5 2.5 0 0 1 7.5 17H19v4H7.5A2.5 2.5 0 0 1 5 19.5z"/>',
+  activity:'<path d="M3 12h4l2.5 6L14 5l2.5 7H21"/>',
+  radar:'<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.5"/><path d="M12 12l6-4"/>',
+  camera:'<path d="M4 8.5h3l1.5-2h7L17 8.5h3v10H4z"/><circle cx="12" cy="13" r="3.2"/>',
+  target:'<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="4"/>',
+  star:'<path d="M12 3.6l2.6 5.3 5.8.85-4.2 4.1 1 5.8L12 16.9l-5.2 2.75 1-5.8-4.2-4.1 5.8-.85z"/>',
+  chevron:'<path d="M9 5l7 7-7 7"/>',
+  check:'<path d="M5 12.5 10 17 19 7"/>',
+  trash:'<path d="M4 7h16"/><path d="M9 7V4.5h6V7"/><path d="M6 7l1 13h10l1-13"/><path d="M10 11v6M14 11v6"/>',
+  close:'<path d="M6 6l12 12M18 6 6 18"/>',
+  search:'<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.5-4.5"/>',
+  bolt:'<path d="M13 3 5 13h5l-1 8 8-11h-5z"/>',
+  edit:'<path d="M17 3.5a2.1 2.1 0 0 1 3 3L8 18.5 4 19.5l1-4z"/>',
+  calendar:'<rect x="4" y="5" width="16" height="16" rx="2.5"/><path d="M4 9.5h16"/><path d="M8 3v4"/><path d="M16 3v4"/>',
+  film:'<rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M7 4v16M17 4v16M3 9h4M3 15h4M17 9h4M17 15h4"/>',
+  settings:'<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>',
+};
+function iconSvg(name, size=22){
+  const body = ICONS[name] || ICONS.grid;
+  return `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${body}</svg>`;
+}
+// 渲染所有静态图标占位
+document.querySelectorAll('[data-icon]').forEach(el=>{
+  el.innerHTML = iconSvg(el.dataset.icon, el.classList.contains('ic14') ? 15 : 20);
+  el.style.display = el.style.display || 'inline-flex';
+});
+document.getElementById('brand-ava').innerHTML = iconSvg('film', 22);
+
 // ── 全局状态 ──
 let POLLING = false;
-let currentView = 'videos';
+let currentView = 'dashboard';
+const PAGES = ['dashboard','collect','materials','radar','videos','summaries','questions','settings'];
+let selectedVideos = new Set();
+let window_lastSelected = null;
 
 // ── 初始化 ──
 async function init() {
-  // 恢复保存的 Cookie
+  const now = new Date();
+  const hour = now.getHours();
+  const greet = hour < 5 ? '夜深了' : hour < 11 ? '早上好' : hour < 14 ? '中午好' : hour < 18 ? '下午好' : '晚上好';
+  document.getElementById('greet-hi').textContent = greet + '，内容创作者';
+  document.getElementById('today-str').textContent = now.toLocaleDateString('zh-CN', {month:'long', day:'numeric', weekday:'long'});
+
   const savedCookie = localStorage.getItem('v2t_cookie');
   if (savedCookie) document.getElementById('cookie').value = savedCookie;
 
   await loadTopics();
   await loadCurrentView();
-  // 检查进行中的任务
   const st = await fetch('/api/status').then(r=>r.json());
-  if (st.running) { startPolling(); setStatus("running", st.progress); }
+  if (st.running) { startPolling(); setStatus('running', st.progress); }
+  updateSidebarStatus(st);
 }
 init();
 
-function switchView(view) {
-  currentView = view;
-  document.getElementById('tab-videos').classList.toggle('active', view === 'videos');
-  document.getElementById('tab-summaries').classList.toggle('active', view === 'summaries');
-  document.getElementById('topic-filter').style.display = view === 'videos' ? '' : 'none';
-  document.getElementById('summary-type').style.display = view === 'videos' ? '' : 'none';
-  document.getElementById('summary-type-filter').style.display = view === 'summaries' ? '' : 'none';
-  document.getElementById('btn-ai-optimize').style.display = view === 'videos' ? '' : 'none';
+// ── 页面切换 ──
+function switchPage(page) {
+  currentView = page;
+  PAGES.forEach(p => {
+    document.getElementById('page-'+p).classList.toggle('on', p===page);
+    const nav = document.getElementById('nav-'+p);
+    if (nav) nav.classList.toggle('active', p===page);
+  });
   selectedVideos.clear();
   updateOptimizeButton();
   loadCurrentView();
+  window.scrollTo(0, 0);
+}
+
+function getSearchValue() {
+  const el = document.querySelector(`#page-${currentView} .page-search`);
+  return el ? el.value.trim() : '';
 }
 
 async function loadCurrentView() {
+  if (currentView === 'dashboard') return loadDashboard();
+  if (currentView === 'collect') return;
+  if (currentView === 'materials') { loadSubscriptions(); return loadWorkbench(); }
+  if (currentView === 'radar') return loadRadar();
+  if (currentView === 'questions') return loadInterviewQuestions();
   if (currentView === 'summaries') return loadSummaries();
+  if (currentView === 'settings') { await loadAiConfig(); return loadDifyConfig(); }
   return loadVideos();
+}
+
+async function refreshAll() {
+  await loadTopics();
+  await loadCurrentView();
+}
+
+// ── 仪表盘 ──
+async function loadDashboard() {
+  let data;
+  try {
+    data = await fetch('/api/dashboard').then(r=>r.json());
+  } catch(e) { return; }
+  if (data.error) {
+    document.getElementById('recent-videos').innerHTML = `<div class="rm" style="padding:16px 4px;color:var(--danger)">${esc(data.error)}</div>`;
+    return;
+  }
+  const total = data.total || 0, withAsr = data.with_asr || 0;
+  const guide = (data.summaries||{}).game_guide || 0, interview = (data.summaries||{}).ai_interview || 0;
+  const article = (data.summaries||{}).guide_article || 0;
+
+  document.getElementById('h-total').textContent = total;
+  document.getElementById('h-asr').textContent = withAsr;
+  document.getElementById('h-summaries').textContent = guide + interview + article;
+  document.getElementById('h-questions').textContent = data.question_count || 0;
+
+  document.getElementById('st-total').textContent = total;
+  document.getElementById('st-asr').textContent = (data.asr_rate || 0) + '%';
+  document.getElementById('st-asr-d').textContent = `已转写 ${withAsr} · 缺失 ${data.missing_asr||0}`;
+  document.getElementById('st-summaries').textContent = guide + interview + article;
+  document.getElementById('st-summaries-d').textContent = `攻略稿 ${guide} · 文章 ${article} · 题稿 ${interview}`;
+  document.getElementById('st-questions').textContent = data.question_count || 0;
+
+  document.getElementById('mc-materials').textContent = total;
+  document.getElementById('mc-materials-extra').textContent = `ASR 覆盖 ${data.asr_rate||0}%`;
+  document.getElementById('mc-summaries').textContent = guide + interview + article;
+  document.getElementById('mc-questions').textContent = data.question_count || 0;
+
+  const rv = document.getElementById('recent-videos');
+  if ((data.recent_videos||[]).length) {
+    rv.innerHTML = data.recent_videos.map(v => `
+      <div class="recent-item" onclick="switchPage('materials')">
+        <span class="rdot" style="background:${v.status==='已完成'?'var(--module-1)':v.status==='失败'?'var(--danger)':'var(--module-3)'}"></span>
+        <span class="rt">${esc(v.title || '未命名素材')}</span>
+        <span class="rm">${esc(v.author||'')} · ${esc(String(v.updated_at||'').slice(5,16))}</span>
+      </div>`).join('');
+  } else {
+    rv.innerHTML = '<div class="rm" style="padding:16px 4px;color:var(--text-tertiary)">暂无素材，先去采集中心添加视频</div>';
+  }
+
+  const rs = document.getElementById('recent-summaries');
+  if ((data.recent_summaries||[]).length) {
+    rs.innerHTML = data.recent_summaries.map(s => `
+      <div class="recent-item" onclick="openSummary(${s.id})">
+        <span class="rdot" style="background:${s.summary_type==='ai_interview'?'var(--module-2)':s.summary_type==='guide_article'?'var(--module-4)':'var(--module-3)'}"></span>
+        <span class="rt">${esc(s.title || '未命名整理稿')}</span>
+        <span class="rm">${esc(String(s.updated_at||'').slice(5,16))}</span>
+      </div>`).join('');
+  } else {
+    rs.innerHTML = '<div class="rm" style="padding:16px 4px;color:var(--text-tertiary)">暂无整理稿，去视频库选择视频生成</div>';
+  }
+
+  updateSidebarStatus({running: data.running});
 }
 
 // ── 加载作者分类 ──
 async function loadTopics() {
   const st = await fetch('/api/stats').then(r=>r.json());
   const sel = document.getElementById('topic-filter');
-  // 清空旧选项（保留第一行"全部"）
-  sel.innerHTML = "<option value=\"\">全部作者</option>";
+  sel.innerHTML = '<option value="">全部作者</option>';
   for (const [author,count] of Object.entries(st.topics || {})) {
     const opt = document.createElement('option');
     opt.value = author; opt.textContent = `${author}（${count}）`;
@@ -253,53 +969,322 @@ async function loadTopics() {
 }
 
 // ── 加载列表 ──
+let _activeCategory = '';
+let _activeGame = '';
+const CATEGORY_ORDER = ['前端面试', 'AI技术', '游戏攻略', '编程开发', '产品设计', '数码评测', '商业财经', '职场成长', '生活日常', '其他'];
+const TYPE_LABELS = {game_guide: '游戏攻略', guide_article: '攻略文章', ai_interview: 'AI面试题'};
+let _lastVideoKeys = [];  // 当前视频列表的 keys，供「一键攻略文章」全选用
+
 async function loadVideos() {
-  const q = document.getElementById('search').value;
+  const q = getSearchValue();
   const topic = document.getElementById('topic-filter').value;
   const params = new URLSearchParams();
   if (q) params.set('q', q);
   if (topic) params.set('topic', topic);
-  const data = await fetch('/api/videos?' + params).then(r=>r.json());
+  if (_activeCategory) params.set('category', _activeCategory);
+  if (_activeGame) params.set('game', _activeGame);
+  const [data, cats] = await Promise.all([
+    fetch('/api/videos?' + params).then(r=>r.json()),
+    fetch('/api/categories').then(r=>r.json()).catch(()=>({categories:[], games:[]})),
+  ]);
+  renderCategoryPills(cats.categories || []);
+  renderGamePills(cats.games || []);
   renderVideos(data.videos || []);
-  document.getElementById('video-count').textContent = data.total + ' 条';
+  document.getElementById('count-videos').textContent = (data.total||0) + ' 条';
+}
+
+function renderCategoryPills(cats) {
+  const box = document.getElementById('category-pills');
+  if (!box) return;
+  const byName = {};
+  let total = 0;
+  cats.forEach(c => { byName[c.category] = c.count; total += c.count; });
+  const names = [...new Set([...CATEGORY_ORDER, ...Object.keys(byName)])].filter(n => byName[n] !== undefined || n === '未分类');
+  let html = `<span class="cat-pill ${!_activeCategory?'active':''}" onclick="setCategoryFilter('')"><span>全部</span><span class="n">${total}</span></span>`;
+  names.forEach(n => {
+    if (byName[n] === undefined) return;
+    html += `<span class="cat-pill ${_activeCategory===n?'active':''}" onclick="setCategoryFilter('${esc(n)}')"><span>${esc(n)}</span><span class="n">${byName[n]}</span></span>`;
+  });
+  box.innerHTML = html;
+}
+
+function setCategoryFilter(cat) {
+  _activeCategory = _activeCategory === cat ? '' : cat;
+  _activeGame = '';  // 切换分类时游戏筛选失效
+  selectedVideos.clear();  // 切换分类 = 重新选择，清空残留选中
+  window_lastSelected = null;
+  loadVideos();
+}
+
+// ── 游戏子筛选（仅游戏攻略分类显示） ──
+function renderGamePills(games) {
+  const box = document.getElementById('game-pills');
+  if (!box) return;
+  if (_activeCategory !== '游戏攻略' || !games.length) {
+    box.style.display = 'none';
+    box.innerHTML = '';
+    return;
+  }
+  box.style.display = 'flex';
+  let html = `<span class="cat-pill ${!_activeGame?'active':''}" onclick="setGameFilter('')"><span>全部游戏</span></span>`;
+  games.forEach(g => {
+    html += `<span class="cat-pill ${_activeGame===g.game?'active':''}" onclick="setGameFilter('${esc(g.game)}')"><span>${esc(g.game)}</span><span class="n">${g.count}</span></span>`;
+  });
+  box.innerHTML = html;
+}
+
+function setGameFilter(game) {
+  _activeGame = _activeGame === game ? '' : game;
+  selectedVideos.clear();
+  window_lastSelected = null;
+  loadVideos();
+}
+
+// ── AI 批量分类 ──
+async function classifyVideos() {
+  const btn = document.getElementById('btn-classify');
+  if (btn.disabled) return;
+  if (!confirm('用 AI 给视频批量分类打标？未分类的视频会优先处理。')) return;
+  btn.disabled = true;
+  const label = btn.innerHTML;
+  try {
+    const resp = await fetch('/api/videos/classify', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({force: false}),
+    }).then(r=>r.json());
+    if (resp.error) { setStatus('error', resp.error); btn.disabled = false; return; }
+    // 轮询进度
+    const timer = setInterval(async () => {
+      try {
+        const st = await fetch('/api/classify/status').then(r=>r.json());
+        btn.innerHTML = '<span data-icon="bolt" class="ic14"></span>' + (st.progress || '分类中...');
+        if (!st.running) {
+          clearInterval(timer);
+          btn.disabled = false;
+          btn.innerHTML = label;
+          if (st.error) setStatus('error', '分类失败: ' + st.error.split('\n')[0]);
+          else setStatus('done', '✅ ' + (st.progress || '分类完成'));
+          loadVideos();
+        }
+      } catch(e) { /* 网络抖动继续轮询 */ }
+    }, 1500);
+  } catch(e) {
+    btn.disabled = false;
+    setStatus('error', '启动分类失败: ' + e.message);
+  }
+}
+
+// ── 发布到 Dify 知识库 ──
+async function publishToDify() {
+  const btn = document.getElementById('btn-dify-publish');
+  if (btn.disabled) return;
+  const keys = [...selectedVideos];
+  const scope = keys.length
+    ? `选中的 ${keys.length} 条视频`
+    : '全部有转写的视频';
+  if (!confirm(`把${scope}发布到 Dify 知识库？已发布的会更新。`)) return;
+  btn.disabled = true;
+  const label = btn.innerHTML;
+  try {
+    const resp = await fetch('/api/dify/publish', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(keys.length ? {keys} : {}),
+    }).then(r=>r.json());
+    if (resp.error) { setStatus('error', resp.error); btn.disabled = false; return; }
+    const timer = setInterval(async () => {
+      try {
+        const st = await fetch('/api/dify/publish/status').then(r=>r.json());
+        btn.innerHTML = '<span data-icon="book" class="ic14"></span>' + (st.progress || '发布中...');
+        if (!st.running) {
+          clearInterval(timer);
+          btn.disabled = false;
+          btn.innerHTML = label;
+          if (st.error) setStatus('error', '发布失败: ' + st.error.split('\n')[0]);
+          else {
+            const r = st.result || {};
+            setStatus('done', `✅ 发布完成：成功 ${r.ok||0} / 失败 ${r.fail||0}`);
+            if (r.errors && r.errors.length) console.warn('发布失败详情:', r.errors);
+          }
+          loadVideos();
+        }
+      } catch(e) { /* 继续轮询 */ }
+    }, 1500);
+  } catch(e) {
+    btn.disabled = false;
+    setStatus('error', '启动发布失败: ' + e.message);
+  }
+}
+
+// ── 手动改分类（弹出菜单）──
+function openCategoryMenu(el, sheet, row, current) {
+  closeCategoryMenu();
+  const rect = el.getBoundingClientRect();
+  const menu = document.createElement('div');
+  menu.className = 'cat-menu';
+  menu.id = 'cat-menu-pop';
+  const cats = [...new Set([...CATEGORY_ORDER, ...((current && !CATEGORY_ORDER.includes(current)) ? [current] : [])])];
+  menu.innerHTML = cats.map(c =>
+    `<div onclick="applyCategory('${esc(sheet)}', ${row}, '${esc(c)}')">${esc(c)}${c===current?' ✓':''}</div>`
+  ).join('');
+  document.body.appendChild(menu);
+  const top = Math.min(rect.bottom + 6, window.innerHeight - menu.offsetHeight - 10);
+  menu.style.top = top + 'px';
+  menu.style.left = Math.min(rect.left, window.innerWidth - menu.offsetWidth - 10) + 'px';
+  setTimeout(() => document.addEventListener('click', closeCategoryMenu, {once: true}), 0);
+}
+
+function closeCategoryMenu() {
+  const m = document.getElementById('cat-menu-pop');
+  if (m) m.remove();
+}
+
+async function applyCategory(sheet, row, category) {
+  closeCategoryMenu();
+  try {
+    const resp = await fetch('/api/videos/category', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({sheet, row, category}),
+    }).then(r=>r.json());
+    if (resp.error) { setStatus('error', resp.error); return; }
+    if (category === '游戏攻略') {
+      const game = prompt('该视频讲的是哪款游戏？（留空则由 AI 分类时识别）', '');
+      if (game !== null) await saveGame(sheet, row, game.trim());
+      return;
+    }
+    loadVideos();
+  } catch(e) {
+    setStatus('error', '修改分类失败: ' + e.message);
+  }
+}
+
+// ── 修改游戏名 ──
+async function editGame(el, sheet, row, current) {
+  const game = prompt('修改游戏名（清空则移除）', current);
+  if (game === null) return;
+  await saveGame(sheet, row, game.trim());
+}
+
+async function saveGame(sheet, row, game) {
+  try {
+    const resp = await fetch('/api/videos/category', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({sheet, row, category: '游戏攻略', game}),
+    }).then(r=>r.json());
+    if (resp.error) { setStatus('error', resp.error); return; }
+    loadVideos();
+  } catch(e) {
+    setStatus('error', '修改游戏名失败: ' + e.message);
+  }
+}
+
+async function loadWorkbench() {
+  const q = getSearchValue();
+  const params = new URLSearchParams();
+  if (q) params.set('q', q);
+  const data = await fetch('/api/workbench?' + params).then(r=>r.json());
+  renderSyncStats(data.items || []);
+  document.getElementById('count-materials').textContent = (data.total||0) + ' 条素材';
+}
+
+function renderSyncStats(items) {
+  const box = document.getElementById('sync-stats');
+  const total = items.length;
+  const withAsr = items.filter(i => Number(i.transcript_length || 0) > 0).length;
+  const withCover = items.filter(i => i.has_local_cover).length;
+  const withKf = items.filter(i => i.has_keyframes).length;
+  const withContent = items.filter(i => (i.summaries || []).length > 0).length;
+  const cards = [
+    ['总素材', total, ''],
+    ['有 ASR', withAsr, withAsr < total ? '缺 ' + (total - withAsr) + ' 条' : '全部就绪'],
+    ['本地封面', withCover, ''],
+    ['关键帧', withKf, ''],
+    ['已生成内容', withContent, ''],
+  ];
+  box.innerHTML = cards.map(([label, val, note]) => `
+    <div style="flex:1;min-width:140px;padding:14px 16px;border:1px solid var(--border);border-radius:12px;background:var(--surface-card)">
+      <div style="font-size:12px;color:var(--text-tertiary)">${label}</div>
+      <div style="font-size:24px;font-weight:800;margin-top:4px">${val}</div>
+      ${note ? `<div style="font-size:11.5px;color:var(--text-tertiary);margin-top:2px">${note}</div>` : ''}
+    </div>`).join('');
 }
 
 async function loadSummaries() {
-  const q = document.getElementById('search').value;
+  const q = getSearchValue();
   const type = document.getElementById('summary-type-filter').value;
   const params = new URLSearchParams();
   if (q) params.set('q', q);
   if (type) params.set('type', type);
   const data = await fetch('/api/content/summaries?' + params).then(r=>r.json());
   renderSummaries(data.items || []);
-  document.getElementById('video-count').textContent = data.total + ' 篇';
+  document.getElementById('count-summaries').textContent = (data.total||0) + ' 篇';
+}
+
+async function loadInterviewQuestions() {
+  const q = getSearchValue();
+  const params = new URLSearchParams({type: 'ai_interview'});
+  if (q) params.set('q', q);
+  const data = await fetch('/api/content/summaries?' + params).then(r=>r.json());
+  const questions = [];
+  (data.items || []).forEach(item => {
+    let structured = {};
+    try { structured = JSON.parse(item.structured_data || '{}'); } catch(e) {}
+    const itemQuestions = structured.questions && structured.questions.length
+      ? structured.questions
+      : fallbackQuestionsFromSummary(item);
+    itemQuestions.forEach((question, idx) => {
+      questions.push({...question, summaryId: item.id, sourceTitle: item.title, sourceVideo: item.video_title, qIndex: idx + 1});
+    });
+  });
+  renderInterviewQuestions(questions);
+  document.getElementById('count-questions').textContent = questions.length + ' 题';
 }
 
 // ── 渲染卡片 ──
-let selectedVideos = new Set(); // 存储选中的视频ID
-
 function renderVideos(videos) {
-  const grid = document.getElementById('video-grid');
+  const grid = document.getElementById('grid-videos');
+  _lastVideoKeys = videos.map(v => `${v.sheet}:${v.row}`);
   if (!videos.length) {
-    grid.innerHTML = '<div style="color:var(--muted);padding:40px;text-align:center">暂无视频</div>';
+    grid.innerHTML = '<div class="empty"><span class="e">' + iconSvg('list') + '</span>暂无视频</div>';
     updateOptimizeButton();
     return;
   }
   grid.innerHTML = videos.map(v => {
     const status = v.status || '未开始';
-    const badge = status === '已完成' ? '<span class="badge-done">✓</span>' : '<span class="badge-pending">⏳</span>';
+    const isFail = status === '失败';
+    const statusBadge = status === '已完成'
+      ? '<span class="pill done">已完成</span>'
+      : `<span class="pill ${isFail ? 'fail' : 'pending'}">${esc(status)}</span>`;
     const videoKey = `${v.sheet}:${v.row}`;
     const isSelected = selectedVideos.has(videoKey);
-    return `<div class="video-card ${isSelected?'selected':''}" data-key="${videoKey}" onclick='toggleSelect(event,"${v.sheet}","${v.row}")' ondblclick='openDetail("${v.sheet}","${v.row}")'>
-      <div class="checkbox"></div>
-      <div class="author">${esc(v.author||'')} <span class="badge">${esc(v.topic||'')}</span></div>
-      <div class="title">${badge} ${esc(v.title||'')}</div>
-      <div class="desc">${esc(v.description||'')}</div>
-      <div class="meta">
-        <span>🕐 ${esc(v.create_time||'')}</span>
-        <span>📏 ${v.transcript_length||0}字</span>
-        <span>⭐ ${v.article_score||'-'}</span>
-        ${v.published ? '<span>📰 已发布</span>' : ''}
+    const score = v.article_score || '';
+    const scoreBadge = score
+      ? `<span class="pill ${/^[ABC]$/.test(score) ? 'score-' + score : 'score-C'}" ${/^[ABC]$/.test(score) ? '' : 'style="background:color-mix(in srgb,var(--module-5) 14%,transparent);color:var(--module-5)"'}>${esc(score)}</span>`
+      : '';
+    const len = v.transcript_length || 0;
+    const cover = v.cover_url || '';
+    const lenText = len ? `${len} 字` : '无转写';
+    return `<div class="video-card ${isSelected?'selected':''} ${isFail?'failed':''}" data-key="${videoKey}" onclick='toggleSelect(event,"${v.sheet}","${v.row}")' ondblclick='openDetail("${v.sheet}","${v.row}")'>
+      <div class="video-cover">
+        <img src="${esc(cover)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.classList.add('error')">
+        <div class="cover-ph">${iconSvg('film', 30)}</div>
+        <span class="cover-len">${lenText}</span>
+        <div class="v-del" title="删除视频" onclick='event.stopPropagation();deleteVideoOne("${escAttr(v.sheet)}", "${v.row}", "${escAttr((v.title||'').slice(0,40))}")'>${iconSvg('trash', 12)}</div>
+        <div class="checkbox">${iconSvg('check', 14)}</div>
+      </div>
+      <div class="video-body">
+        <div class="v-author">
+          <span class="an">${esc(v.author || '未知作者')}</span>
+          <span class="pill cat" title="点击修改分类" onclick='event.stopPropagation();openCategoryMenu(this, "${v.sheet}", ${v.row}, "${esc(v.category || "")}")'>${esc(v.category || '未分类')}</span>
+          ${v.game ? `<span class="pill game" title="点击修改游戏名" onclick='event.stopPropagation();editGame(this, "${v.sheet}", ${v.row}, "${esc(v.game)}")'>${esc(v.game)}</span>` : ''}
+          ${v.dify_synced_at ? '<span class="pill rag" title="已同步 Dify 知识库">RAG</span>' : ''}
+          ${v.published ? '<span class="pill published">已发布</span>' : ''}
+        </div>
+        <div class="v-title">${esc(v.title || '（无标题）')}</div>
+        <div class="v-meta">
+          ${statusBadge}
+          ${scoreBadge}
+          <span class="m">${esc((v.create_time || '').slice(0, 10))}</span>
+        </div>
       </div>
     </div>`;
   }).join('');
@@ -307,19 +1292,21 @@ function renderVideos(videos) {
 }
 
 function renderSummaries(items) {
-  const grid = document.getElementById('video-grid');
+  const grid = document.getElementById('grid-summaries');
   if (!items.length) {
-    grid.innerHTML = '<div style="color:var(--muted);padding:40px;text-align:center">暂无整理稿</div>';
+    grid.innerHTML = '<div class="empty"><span class="e">' + iconSvg('book') + '</span>暂无整理稿</div>';
     return;
   }
   grid.innerHTML = items.map(item => {
-    const typeLabel = item.summary_type === 'ai_interview' ? 'AI面试题' : '游戏攻略';
+    const typeClass = {ai_interview: 'interview', guide_article: 'article'}[item.summary_type] || 'guide';
+    const typeLabel = `<span class="pill ${typeClass}">${TYPE_LABELS[item.summary_type] || '整理稿'}</span>`;
     const snippet = item.content || item.outline || '';
     return `<div class="summary-card" onclick="openSummary(${item.id})">
-      <div class="author">${esc(item.author||'')} <span class="type-pill">${typeLabel}</span></div>
-      <div class="title">${esc(item.title||'')}</div>
-      <div class="desc">${esc(snippet).slice(0, 220)}</div>
-      <div class="meta">
+      <div class="s-del" title="删除" onclick="event.stopPropagation();deleteSummary(${item.id})">${iconSvg('close', 12)}</div>
+      <div class="s-author">${esc(item.author||'')} ${typeLabel}</div>
+      <div class="s-title">${esc(item.title||'')}</div>
+      <div class="s-desc">${esc(snippet).slice(0, 220)}</div>
+      <div class="s-meta">
         <span>${esc(item.status||'draft')}</span>
         <span>${esc(item.model||'')}</span>
         <span>${esc(item.updated_at||'')}</span>
@@ -328,16 +1315,55 @@ function renderSummaries(items) {
   }).join('');
 }
 
+function renderInterviewQuestions(questions) {
+  const grid = document.getElementById('grid-questions');
+  if (!questions.length) {
+    grid.innerHTML = '<div class="empty"><span class="e">' + iconSvg('target') + '</span>暂无面试题</div>';
+    return;
+  }
+  grid.innerHTML = questions.map((q, i) => `
+    <div class="question-card" onclick="openQuestion(${escAttr(JSON.stringify(q))})">
+      <span class="q-tag">${esc(q.knowledgeTag || '未分类')}</span>
+      <div class="q-text">Q${i + 1}. ${esc(q.text || '')}</div>
+      <div class="q-source">${esc(q.sourceTitle || q.sourceVideo || '')}</div>
+      <div class="q-meta">
+        <span>${esc(q.type || 'single')}</span>
+        <span>答案：${esc(formatAnswer(q.answer))}</span>
+      </div>
+    </div>
+  `).join('');
+}
+
+function fallbackQuestionsFromSummary(item) {
+  const text = item.content || item.title || '';
+  if (!text.trim()) return [];
+  const firstLine = text.split('\n').find(line => line.trim().length > 8) || item.title || '待结构化面试题';
+  return [{
+    id: `summary_${item.id}_legacy`,
+    type: 'single',
+    knowledgeTag: '待结构化',
+    text: firstLine.replace(/^#+\s*/, '').slice(0, 120),
+    options: [
+      {text: '这是旧格式整理稿，需要点击“重新生成”转成题库题卡', value: 'a'},
+      {text: '已是可直接答题的标准题卡', value: 'b'},
+      {text: '这是游戏攻略，不属于面试题', value: 'c'},
+      {text: '这是原始 ASR，不需要整理', value: 'd'}
+    ],
+    answer: 'a',
+    explain: '这条整理稿生成于题库结构上线之前，尚未保存 structured_data.questions。',
+    deeper: '打开对应整理稿，点击“重新生成”，即可转成题目、选项、答案解析、追问齐全的题卡。',
+  }];
+}
+
 // ── 选择切换 ──
 function toggleSelect(event, sheet, row) {
   event.stopPropagation();
   const key = `${sheet}:${row}`;
   const card = event.currentTarget;
-  
-  if (event.shiftKey && window.lastSelected) {
-    // Shift+点击：范围选择
-    const allCards = [...document.querySelectorAll('.video-card')];
-    const startIdx = allCards.findIndex(c => c.dataset.key === window.lastSelected);
+
+  if (event.shiftKey && window_lastSelected) {
+    const allCards = [...document.querySelectorAll('#grid-videos .video-card')];
+    const startIdx = allCards.findIndex(c => c.dataset.key === window_lastSelected);
     const endIdx = allCards.findIndex(c => c.dataset.key === key);
     if (startIdx >= 0 && endIdx >= 0) {
       const [min,max] = [Math.min(startIdx,endIdx), Math.max(startIdx,endIdx)];
@@ -347,7 +1373,6 @@ function toggleSelect(event, sheet, row) {
       }
     }
   } else {
-    // 普通点击：切换选中
     if (selectedVideos.has(key)) {
       selectedVideos.delete(key);
       card.classList.remove('selected');
@@ -356,22 +1381,43 @@ function toggleSelect(event, sheet, row) {
       card.classList.add('selected');
     }
   }
-  
-  window.lastSelected = key;
+
+  window_lastSelected = key;
   updateOptimizeButton();
 }
 
 function updateOptimizeButton() {
   const btn = document.getElementById('btn-ai-optimize');
-  const type = document.getElementById('summary-type').value === 'ai_interview' ? 'AI面试题' : '游戏攻略';
-  btn.style.display = currentView === 'videos' && selectedVideos.size > 0 ? 'inline-block' : 'none';
-  btn.textContent = selectedVideos.size > 0 ? `生成${type}(${selectedVideos.size})` : '生成整理稿';
+  if (!btn) return;
+  const type = TYPE_LABELS[document.getElementById('summary-type').value] || '整理稿';
+  const mode = document.getElementById('generate-mode').value === 'combine' ? '合并' : '生成';
+  btn.style.display = currentView === 'videos' && selectedVideos.size > 0 ? 'inline-flex' : 'none';
+  btn.innerHTML = iconSvg('star', 14) + ` ${mode}${type}(${selectedVideos.size})`;
+  const clearBtn = document.getElementById('btn-clear-selection');
+  if (clearBtn) clearBtn.style.display = currentView === 'videos' && selectedVideos.size > 0 ? 'inline-flex' : 'none';
+  const delBtn = document.getElementById('btn-delete-videos');
+  if (delBtn) delBtn.style.display = currentView === 'videos' && selectedVideos.size > 0 ? 'inline-flex' : 'none';
 }
 
 // ── 打开详情 ──
+function showModal() {
+  document.getElementById('modal-overlay').classList.add('show');
+  document.body.style.overflow = 'hidden';
+}
+function resetModal() {
+  document.getElementById('modal-tags-section').style.display = '';
+  document.getElementById('modal-asr-title').textContent = '口播原文（ASR）';
+  document.getElementById('modal-ai-title').textContent = 'AI 优化文案';
+  document.getElementById('modal-asr-title').parentElement.style.display = '';
+  document.getElementById('modal-ai-title').parentElement.style.display = '';
+  document.getElementById('modal-tags').innerHTML = '';
+  document.getElementById('modal-basic').style.maxHeight = '';
+  document.getElementById('modal-basic').style.overflowY = '';
+}
+
 async function openDetail(sheet, row) {
-  const overlay = document.getElementById('modal-overlay');
-  overlay.classList.add('show');
+  resetModal();
+  showModal();
   document.getElementById('modal-title').textContent = '加载中...';
   document.getElementById('modal-asr').textContent = '';
   document.getElementById('modal-ai-copy').textContent = '';
@@ -379,12 +1425,12 @@ async function openDetail(sheet, row) {
   const data = await fetch(`/api/videos/${sheet}/${row}`).then(r=>r.json());
   if (data.error) { document.getElementById('modal-title').textContent = '❌ '+data.error; return; }
 
-  document.getElementById('modal-title').textContent = esc(data.title||'');
+  document.getElementById('modal-title').textContent = data.title||'';
   document.getElementById('modal-info').innerHTML =
     `👤 ${esc(data.author)}　🕐 ${data.pub_time||'-'}　🆔 ${data.id||'-'}　📄 ${sheet} R${row}`;
   document.getElementById('modal-basic').innerHTML =
-    `<b>状态：</b>${esc(data.status)}<br><b>链接：</b><a href="${esc(data.video_url)}" target="_blank" style="color:var(--accent)">${esc(data.link||'')}</a>` +
-    (data.cover ? `<br><b>封面：</b><a href="${esc(data.cover)}" target="_blank" style="color:var(--accent)">查看封面</a>` : '');
+    `<b>状态：</b>${esc(data.status)}<br><b>链接：</b><a href="${esc(data.video_url)}" target="_blank" style="color:var(--module-2)">${esc(data.link||'')}</a>` +
+    (data.cover ? `<br><b>封面：</b><a href="${esc(data.cover)}" target="_blank" style="color:var(--module-2)">查看封面</a>` : '');
 
   document.getElementById('modal-tags').innerHTML =
     (data.tags||'').split(/[,，\s]+/).filter(Boolean).map(t => `<span>${esc(t)}</span>`).join('');
@@ -392,26 +1438,24 @@ async function openDetail(sheet, row) {
   document.getElementById('modal-asr').textContent = data.raw_transcript || data.asr || '（无 ASR 数据）';
   document.getElementById('modal-ai-copy').textContent = data.ai_copy || '（未优化）';
 
-  const actions = document.getElementById('modal-actions');
-  actions.innerHTML = `
-    <a href="${esc(data.video_url||'#')}" target="_blank"><button class="btn btn-primary btn-sm">▶ 观看原视频</button></a>
-    <button class="btn btn-ghost btn-sm" onclick="copyText('${esc(data.raw_transcript||data.asr||'')}')">📋 复制口播</button>
+  document.getElementById('modal-actions').innerHTML = `
+    <a href="${esc(data.video_url||'#')}" target="_blank"><button class="btn sm">▶ 观看原视频</button></a>
+    <button class="btn ghost sm" onclick="copyText(\`${escBacktick(data.raw_transcript||data.asr||'')}\`)">📋 复制口播</button>
+    <button class="btn ghost sm" style="color:var(--module-5)" onclick="deleteVideoOne('${escAttr(sheet)}', ${row}, '${escAttr((data.title||'').slice(0,40))}')">🗑 删除视频</button>
   `;
-  document.body.style.overflow = 'hidden';
 }
 
 async function openSummary(id) {
-  const overlay = document.getElementById('modal-overlay');
-  overlay.classList.add('show');
+  resetModal();
+  showModal();
   document.getElementById('modal-title').textContent = '加载中...';
-  document.getElementById('modal-tags').innerHTML = '';
   document.getElementById('modal-asr').textContent = '';
   document.getElementById('modal-ai-copy').textContent = '';
 
   const data = await fetch(`/api/content/summaries/${id}`).then(r=>r.json());
   if (data.error) { document.getElementById('modal-title').textContent = '❌ '+data.error; return; }
 
-  const typeLabel = data.summary_type === 'ai_interview' ? 'AI面试题' : '游戏攻略';
+  const typeLabel = TYPE_LABELS[data.summary_type] || '整理稿';
   document.getElementById('modal-title').textContent = data.title || '';
   document.getElementById('modal-info').innerHTML =
     `${typeLabel}　👤 ${esc(data.author||'')}　📄 ${esc(data.source_sheet||'')} R${data.source_row||''}`;
@@ -423,15 +1467,49 @@ async function openSummary(id) {
   } catch(e) {
     document.getElementById('modal-tags').innerHTML = esc(data.keywords || '');
   }
+  document.getElementById('modal-asr-title').textContent = '原视频口播（ASR）';
   document.getElementById('modal-asr').textContent = data.transcript || '（无 ASR 数据）';
+  document.getElementById('modal-ai-title').textContent = '整理稿正文';
   document.getElementById('modal-ai-copy').textContent = data.content || '';
+  window.currentSummaryStructuredData = data.structured_data || '';
   document.getElementById('modal-actions').innerHTML = `
-    <a href="${esc(data.video_url||'#')}" target="_blank"><button class="btn btn-primary btn-sm">▶ 观看原视频</button></a>
-    <button class="btn btn-ghost btn-sm" onclick="regenerateSummary(${id})">🔄 重新生成</button>
-    <button class="btn btn-ghost btn-sm" onclick="deleteSummary(${id})">🗑 删除</button>
-    <button class="btn btn-ghost btn-sm" onclick="copyText(\`${escBacktick(data.content||'')}\`)">复制整理稿</button>
+    <a href="${esc(data.video_url||'#')}" target="_blank"><button class="btn sm">▶ 观看原视频</button></a>
+    <button class="btn ghost sm" onclick="regenerateSummary(${id})">🔄 重新生成</button>
+    <button class="btn ghost sm" onclick="deleteSummary(${id})">🗑 删除</button>
+    ${data.summary_type === 'ai_interview' ? '<button class="btn ghost sm" onclick="copyQuestionBankJSON()">复制题库JSON</button>' : ''}
+    <button class="btn ghost sm" onclick="copyText(\`${escBacktick(data.content||'')}\`)">复制整理稿</button>
   `;
-  document.body.style.overflow = 'hidden';
+}
+
+function openQuestion(question) {
+  resetModal();
+  showModal();
+  document.getElementById('modal-title').textContent = question.text || '';
+  document.getElementById('modal-info').innerHTML =
+    `AI面试题　📚 ${esc(question.knowledgeTag || '')}　📄 ${esc(question.sourceTitle || '')}`;
+  document.getElementById('modal-basic').innerHTML =
+    `<b>题型：</b>${esc(question.type || 'single')}<br><b>正确答案：</b>${esc(formatAnswer(question.answer))}`;
+  document.getElementById('modal-tags').innerHTML =
+    question.knowledgeTag ? `<span>${esc(question.knowledgeTag)}</span>` : '';
+
+  document.getElementById('modal-asr-title').textContent = '选项';
+  const options = question.options || [];
+  document.getElementById('modal-asr').innerHTML = options.length
+    ? `<div class="question-options">${options.map(opt => {
+        const isCorrect = isAnswerValue(question.answer, opt.value);
+        return `<div class="question-option ${isCorrect ? 'correct' : ''}">
+          <b>${esc(opt.value)}.</b> ${esc(opt.text)}
+        </div>`;
+      }).join('')}</div>`
+    : `<div class="question-option correct"><b>关键词答案：</b>${esc(formatAnswer(question.answer)) || '见参考回答'}</div>`;
+  document.getElementById('modal-ai-title').textContent = '参考回答 / 解析';
+  document.getElementById('modal-ai-copy').textContent =
+    `参考回答：\n${question.referenceAnswer || question.reference_answer || ''}\n\n答案解析：\n${question.explain || ''}\n\n追问：\n${question.deeper || ''}`;
+  document.getElementById('modal-actions').innerHTML = `
+    <button class="btn ghost sm" onclick="copyText(\`${escBacktick(JSON.stringify(question, null, 2))}\`)">复制本题JSON</button>
+    <button class="btn ghost sm" onclick="openSummary(${Number(question.summaryId) || 0})">查看整理稿</button>
+    <button class="btn ghost sm" style="color:var(--module-5)" onclick='deleteQuestion(${escAttr(JSON.stringify(question))})'>🗑 删除本题</button>
+  `;
 }
 
 function closeModal(e) {
@@ -449,11 +1527,10 @@ async function submitTask() {
   if (!links) return alert('请输入抖音链接');
   if (!cookie) return alert('请输入 Cookie');
 
-  // 保存成功后的 Cookie
   localStorage.setItem('v2t_cookie', cookie);
 
   document.getElementById('btn-submit').disabled = true;
-  setStatus("running", "提交中...");
+  setStatus('running', '提交中...');
 
   const resp = await fetch('/api/process', {
     method:'POST',
@@ -461,33 +1538,82 @@ async function submitTask() {
     body: JSON.stringify({links, cookie, asr_model: asrModel})
   }).then(r=>r.json());
 
-  if (resp.error) { setStatus("error", resp.error); document.getElementById('btn-submit').disabled = false; return; }
+  if (resp.error) { setStatus('error', resp.error); document.getElementById('btn-submit').disabled = false; return; }
   startPolling();
 }
 
 // ── 轮询状态 ──
+function updateSidebarStatus(st) {
+  const dot = document.getElementById('task-dot');
+  const text = document.getElementById('task-text');
+  if (!dot) return;
+  dot.className = 'task-dot';
+  if (st && st.running) { dot.classList.add('running'); text.textContent = '任务运行中'; document.getElementById('nav-collect-dot').style.display = ''; }
+  else if (st && st.error) { dot.classList.add('error'); text.textContent = '上次任务出错'; document.getElementById('nav-collect-dot').style.display = 'none'; }
+  else { text.textContent = '空闲'; document.getElementById('nav-collect-dot').style.display = 'none'; }
+}
+
+let _pollGen = 0;  // 轮询代数：每次 startPolling 递增，旧循环自动失效
 function startPolling() {
-  if (POLLING) return;
+  _pollGen++;
+  const gen = _pollGen;
   POLLING = true;
   document.getElementById('btn-submit').disabled = true;
 
+  let failCount = 0;  // 连续失败计数
   const poll = async () => {
-    const st = await fetch('/api/status').then(r=>r.json());
+    // 已有新一轮轮询启动，本循环退出
+    if (gen !== _pollGen) return;
+    let st;
+    try {
+      const resp = await fetch('/api/status', {cache: 'no-store'});
+      st = await resp.json();
+      failCount = 0;
+    } catch (e) {
+      // 请求异常不放弃：连续失败 5 次才判定轮询死亡
+      failCount++;
+      if (failCount >= 5) {
+        setStatus('error', '状态轮询中断（网络异常），任务可能仍在后台运行', String(e));
+        POLLING = false;
+        document.getElementById('btn-submit').disabled = false;
+        return;
+      }
+      setTimeout(poll, 3000);
+      return;
+    }
+    if (gen !== _pollGen) return;
+    updateSidebarStatus(st);
     if (st.error) {
-      setStatus("error", st.progress, st.error);
-      // Cookie 相关错误：清除保存的 Cookie，提示重新填写
-      if (st.error && /cookie|登录|过期|无效|认证/i.test(st.error)) {
+      setStatus('error', st.progress, st.error);
+      // 精确判断是否为 Cookie 相关错误：必须匹配 cookie/session/登录 等关键词，
+      // 且排除模块缺失、目录不存在等明显非 Cookie 错误
+      const errMsg = (st.error || '').toLowerCase();
+      const isCookieError = (
+        /cookie|sessionid|not.?login|need.?login|登录.*过期|登录.*失效|未登录/i.test(errMsg)
+        && !/no module named|目录不存在|import error|modulenotfound/i.test(errMsg)
+      );
+      if (isCookieError) {
         localStorage.removeItem('v2t_cookie');
         document.getElementById('cookie').value = '';
-        alert('Cookie 可能已过期或无效，请重新填写。');
+        setTimeout(() => alert('Cookie 已失效，请重新填写后再试。\n\n错误详情：' + (st.progress || st.error)), 300);
+      } else {
+        // 非 Cookie 错误，直接在状态框显示完整错误
+        console.error('任务错误:', st.progress, st.error);
       }
-    } else if (st.done) {
-      setStatus(st.error ? "error" : "done", st.progress, st.error);
       POLLING = false;
       document.getElementById('btn-submit').disabled = false;
-      await loadCurrentView();  // 刷新列表
+    } else if (st.done) {
+      setStatus(st.error ? 'error' : 'done', st.progress, st.error);
+      POLLING = false;
+      document.getElementById('btn-submit').disabled = false;
+      await refreshAll();
     } else {
-      setStatus("running", st.progress);
+      // 任务进行中：带上进度计数和时间戳，让用户确认 UI 没有卡死
+      const counter = st.total ? `（${st.current || 0}/${st.total}）` : '';
+      const ts = new Date().toLocaleTimeString('zh-CN', {hour12: false});
+      setStatus('running', `${st.progress || '处理中...'}${counter}`);
+      const errBox = document.getElementById('status-error');
+      errBox.textContent = `最近刷新 ${ts}`;
       setTimeout(poll, 2000);
     }
   };
@@ -497,51 +1623,64 @@ function startPolling() {
 // ── 状态显示 ──
 function setStatus(type, msg, err) {
   const box = document.getElementById('status-box');
-  box.className = 'status-box';
-  if (type === 'running') box.classList.add('status-running');
-  else if (type === 'done') box.classList.add('status-done');
-  else if (type === 'error') box.classList.add('status-error');
+  box.className = 'status-card card';
+  if (type === 'running') box.classList.add('running');
+  else if (type === 'done') box.classList.add('done');
+  else if (type === 'error') box.classList.add('error');
   document.getElementById('status-msg').textContent = msg || '';
   document.getElementById('status-error').textContent = err || '';
 }
 
 // ── 批量采集 ──
+function readPositiveNumber(id, fallback) {
+  const raw = document.getElementById(id).value.trim();
+  if (!raw) return fallback;
+  const value = Number(raw);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
 async function previewUserVideos() {
   const url = document.getElementById('user-url').value.trim();
   const cookie = document.getElementById('cookie').value.trim();
-  const maxPages = document.getElementById('max-pages').value || 3;
+  const maxPages = readPositiveNumber('max-pages', 3);
+  const maxVideos = readPositiveNumber('max-videos', 0);
   if (!url) return alert('请输入链接');
   if (!cookie) return alert('请输入 Cookie');
 
   localStorage.setItem('v2t_cookie', cookie);
 
   const btn = document.getElementById('btn-fetch-preview');
-  btn.disabled = true; btn.textContent = '🔍 获取中...';
+  btn.disabled = true; btn.innerHTML = iconSvg('search', 14) + ' 获取中...';
 
   try {
     const mode = url.includes('/user/') ? 'user_url' : 'video_url';
     const resp = await fetch('/api/preview_user_videos', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({user_url: mode==='user_url'?url:'', video_url: mode==='video_url'?url:'', cookie, max_pages: maxPages})
+      body: JSON.stringify({user_url: mode==='user_url'?url:'', video_url: mode==='video_url'?url:'', cookie, max_pages: maxPages, max_videos: maxVideos})
     }).then(r=>r.json());
 
     if (resp.error) { alert(resp.error); return; }
     renderPreview(resp);
   } catch(e) { alert('请求失败: '+e.message); }
-  finally { btn.disabled = false; btn.textContent = '🔍 预览'; }
+  finally { btn.disabled = false; btn.innerHTML = iconSvg('search', 14) + ' 预览视频列表'; }
 }
 
 function renderPreview(data) {
   const area = document.getElementById('preview-area');
   const list = document.getElementById('preview-list');
   area.style.display = 'block';
+  // 缓存预览结果，供「全部添加并处理」复用，避免后端重复抓取
+  window._previewVideos = data.videos || [];
 
-  let html = `<div style="color:var(--muted);margin-bottom:8px">找到 <b>${data.total}</b> 条视频 · 主页: ${data.user_url||'-'}</div>`;
+  const limitText = data.requested_max_videos > 0
+    ? `按最多 ${data.requested_max_videos} 条视频 · 实际请求 ${data.effective_max_pages || '-'} 页`
+    : `按最多 ${data.requested_max_pages || '-'} 页`;
+  let html = `<div class="pv-head">找到 <b>${data.total}</b> 条视频 · ${limitText}${data.warning ? ` · <span style="color:var(--module-3)">${esc(data.warning)}</span>` : ''}</div>`;
   (data.videos||[]).forEach((v,i) => {
-    html += `<div style="padding:3px 0;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px">
-      <span style="color:var(--muted);font-size:11px;min-width:24px">${i+1}.</span>
-      <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(v.url)}">${v.aweme_id||v.url}</span>
+    html += `<div class="pv-row">
+      <span class="pv-idx">${i+1}.</span>
+      <span class="pv-url" title="${esc(v.url)}">${esc(v.aweme_id||v.url)}</span>
     </div>`;
   });
   list.innerHTML = html;
@@ -550,39 +1689,51 @@ function renderPreview(data) {
 async function fetchAndProcess() {
   const url = document.getElementById('user-url').value.trim();
   const cookie = document.getElementById('cookie').value.trim();
-  const maxPages = document.getElementById('max-pages').value || 3;
+  const maxPages = readPositiveNumber('max-pages', 3);
+  const maxVideos = readPositiveNumber('max-videos', 0);
   if (!cookie) return alert('请输入 Cookie');
+
+  // 防重复提交：任务运行中禁止再次发起
+  const cur = await fetch('/api/status', {cache: 'no-store'}).then(r=>r.json()).catch(()=>({}));
+  if (cur.running) return alert('已有任务正在运行，请等待完成后再操作。');
 
   localStorage.setItem('v2t_cookie', cookie);
 
-  const resp = await fetch('/api/fetch_user_videos', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({
-      user_url: url.includes('/user/') ? url : '',
-      video_url: url.includes('/user/') ? '' : url,
-      cookie, max_pages: maxPages
-    })
-  }).then(r=>r.json());
+  // 已有预览列表则直接复用，避免后端重复抓取
+  let videos = window._previewVideos || null;
+  let resp;
+  if (!videos) {
+    resp = await fetch('/api/fetch_user_videos', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        user_url: url.includes('/user/') ? url : '',
+        video_url: url.includes('/user/') ? '' : url,
+        cookie, max_pages: maxPages, max_videos: maxVideos
+      })
+    }).then(r=>r.json());
 
-  if (resp.error) { alert(resp.error); return; }
+    if (resp.error) { alert(resp.error); return; }
+    videos = resp.videos || [];
+  }
 
-  const total = resp.total || 0;
+  const total = videos.length;
   if (total === 0) { alert('没有找到视频'); return; }
 
   if (!confirm(`将获取 ${total} 条视频并自动进行 ASR 处理（无需再点「开始处理」）。\n确定继续吗？`)) return;
 
   togglePreview(false);
-  setStatus('running', `📥 正在获取并处理 ${total} 条视频...`);
+  window._previewVideos = null;
+  setStatus('running', `📥 提交 ${total} 条视频处理任务...`);
 
-  // 调用全自动流水线 API
   const procResp = await fetch('/api/fetch_and_process', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({
       user_url: url.includes('/user/') ? url : '',
       video_url: url.includes('/user/') ? '' : url,
-      cookie, max_pages: maxPages
+      cookie, max_pages: maxPages, max_videos: maxVideos,
+      videos  // 复用预览列表，后端跳过重复抓取
     })
   }).then(r=>r.json());
 
@@ -591,7 +1742,6 @@ async function fetchAndProcess() {
     return;
   }
 
-  // 后台已启动，轮询状态
   startPolling();
 }
 
@@ -608,44 +1758,110 @@ async function syncContentDb() {
       return;
     }
     setStatus('done', `内容库已同步：${resp.upserted || 0} 条`);
-    await loadCurrentView();
+    await refreshAll();
+  } catch (e) {
+    setStatus('error', '同步失败: ' + e.message);
+  }
+}
+
+async function syncWorkbench() {
+  setStatus('running', '正在同步素材工作台...');
+  try {
+    const resp = await fetch('/api/workbench/sync', {method:'POST'}).then(r=>r.json());
+    if (resp.error) {
+      setStatus('error', resp.error);
+      return;
+    }
+    setStatus('done', `工作台已同步：${resp.total || 0} 条，ASR ${resp.with_asr || 0} 条`);
+    await refreshAll();
   } catch (e) {
     setStatus('error', '同步失败: ' + e.message);
   }
 }
 
 async function generateSelectedContent() {
-  if (selectedVideos.size === 0) return alert('请先选择要整理的视频');
+  if (selectedVideos.size === 0) { alert('请先选择要整理的视频'); return false; }
   const keys = [...selectedVideos];
   const summaryType = document.getElementById('summary-type').value;
-  const label = summaryType === 'ai_interview' ? 'AI面试题' : '游戏攻略';
-  if (!confirm(`将对 ${keys.length} 个视频生成${label}整理稿，确定继续吗？`)) return;
+  const combine = document.getElementById('generate-mode').value === 'combine';
+  const label = TYPE_LABELS[summaryType] || '整理稿';
+  const modeText = combine ? '合并生成 1 篇' : `逐个生成 ${keys.length} 篇`;
+  if (!confirm(`将把 ${keys.length} 个视频${modeText}${label}，确定继续吗？`)) return false;
 
-  setStatus('running', `正在生成 ${keys.length} 条${label}...`);
+  setStatus('running', combine ? `正在合并生成${label}...` : `正在生成 ${keys.length} 条${label}...`);
   try {
     const resp = await fetch('/api/content/generate', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({videos: keys, summary_type: summaryType})
+      body: JSON.stringify({videos: keys, summary_type: summaryType, combine})
     }).then(r=>r.json());
     if (resp.error) {
       setStatus('error', resp.error);
-      return;
+      return false;
     }
     pollContentStatus();
+    return true;
   } catch (e) {
     setStatus('error', '请求失败: ' + e.message);
+    return false;
   }
 }
 
+// ── 一键攻略文章：全选当前列表，逐个生成攻略文章 ──
+async function generateGuideArticle() {
+  if (!_lastVideoKeys.length) return alert('当前列表没有视频');
+  const prev = new Set(selectedVideos);  // 记录原选中，取消时恢复
+  _lastVideoKeys.forEach(k => selectedVideos.add(k));
+  syncCardSelection();
+  updateOptimizeButton();
+  document.getElementById('summary-type').value = 'guide_article';
+  document.getElementById('generate-mode').value = 'single';
+  const started = await generateSelectedContent();
+  if (!started) {
+    selectedVideos.clear();
+    prev.forEach(k => selectedVideos.add(k));
+    syncCardSelection();
+    updateOptimizeButton();
+  }
+}
+
+// ── 选择状态 ──
+function syncCardSelection() {
+  document.querySelectorAll('#grid-videos .video-card').forEach(c => {
+    c.classList.toggle('selected', selectedVideos.has(c.dataset.key));
+  });
+}
+
+function clearSelection() {
+  selectedVideos.clear();
+  window_lastSelected = null;
+  syncCardSelection();
+  updateOptimizeButton();
+}
+
 function pollContentStatus() {
+  let failCount = 0;  // 连续失败计数，防止一次网络抖动打断轮询链
   const poll = async () => {
-    const st = await fetch('/api/status').then(r=>r.json());
+    let st;
+    try {
+      const resp = await fetch('/api/status', {cache: 'no-store'});
+      st = await resp.json();
+      failCount = 0;
+    } catch (e) {
+      failCount++;
+      if (failCount >= 5) {
+        setStatus('error', '状态轮询中断（网络异常），任务可能仍在后台运行', String(e));
+        return;
+      }
+      setTimeout(poll, 3000);
+      return;
+    }
+    updateSidebarStatus(st);
     if (st.done) {
       setStatus(st.error ? 'error' : 'done', st.progress || `已生成 ${st.success || 0} 条整理稿`, st.error);
       selectedVideos.clear();
       updateOptimizeButton();
-      switchView('summaries');
+      switchPage('summaries');
     } else {
       setStatus('running', st.progress);
       setTimeout(poll, 1500);
@@ -654,52 +1870,237 @@ function pollContentStatus() {
   setTimeout(poll, 1000);
 }
 
-// ── AI优化选中视频 ──
-async function optimizeSelected() {
-  if (selectedVideos.size === 0) return alert('请先选择要优化的视频');
-  
-  const keys = [...selectedVideos];
-  if (!confirm(`将对 ${keys.length} 个视频进行AI优化，确定继续吗？`)) return;
-  
-  setStatus('running', `🤖 正在优化 ${keys.length} 个视频...`);
-  
+// ── AI 设置 ──
+async function loadAiConfig() {
+  let c;
   try {
-    const resp = await fetch('/api/optimize_batch', {
+    c = await fetch('/api/ai/config').then(r=>r.json());
+  } catch(e) {
+    document.getElementById('ai-status').textContent = '读取失败';
+    return;
+  }
+  document.getElementById('ai-method').value = c.method || 'skip';
+  const keyInput = document.getElementById('ai-key');
+  keyInput.value = '';
+  keyInput.placeholder = c.has_key ? '已保存，留空则不修改' : 'sk-...';
+  document.getElementById('ai-key-hint').textContent = c.has_key ? '已保存 Key：' + c.api_key_masked : '尚未配置';
+  document.getElementById('ai-base').value = c.api_base || '';
+  document.getElementById('ai-model').value = c.model || '';
+  const labels = {skip:'未接入 AI，生成走本地模板', deepseek:'已接入 DeepSeek', openai:'已接入 OpenAI 兼容接口'};
+  const st = document.getElementById('ai-status');
+  st.textContent = labels[c.method] || labels.skip;
+  st.style.color = (c.method !== 'skip' && c.has_key) ? 'var(--module-1)' : 'var(--text-secondary)';
+  if (c.method !== 'skip' && !c.has_key) {
+    st.textContent += '（缺少 API Key，实际走本地模板）';
+    st.style.color = 'var(--danger)';
+  }
+  updateAiPlaceholders();
+}
+
+function updateAiPlaceholders() {
+  const method = document.getElementById('ai-method').value;
+  const keyInput = document.getElementById('ai-key');
+  const baseInput = document.getElementById('ai-base');
+  const modelInput = document.getElementById('ai-model');
+  const disabled = method === 'skip';
+  [keyInput, baseInput, modelInput].forEach(el => { el.disabled = disabled; });
+  if (disabled) {
+    baseInput.placeholder = ''; modelInput.placeholder = '';
+    return;
+  }
+  const conf = method === 'deepseek'
+    ? {base:'https://api.deepseek.com', model:'deepseek-chat'}
+    : {base:'https://api.openai.com/v1', model:'gpt-4o-mini'};
+  baseInput.placeholder = conf.base;
+  modelInput.placeholder = conf.model;
+  keyInput.placeholder = keyInput.placeholder.includes('已保存') ? keyInput.placeholder : 'sk-...';
+}
+
+function aiConfigBody() {
+  return {
+    method: document.getElementById('ai-method').value,
+    api_key: document.getElementById('ai-key').value.trim(),
+    api_base: document.getElementById('ai-base').value.trim(),
+    model: document.getElementById('ai-model').value.trim(),
+  };
+}
+
+async function saveAiConfig() {
+  const btn = document.getElementById('btn-ai-save');
+  btn.disabled = true;
+  document.getElementById('ai-test-result').textContent = '';
+  try {
+    const resp = await fetch('/api/ai/config', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({videos: keys})
+      body: JSON.stringify(aiConfigBody())
     }).then(r=>r.json());
-    
-    if (resp.error) {
-      setStatus('error', resp.error);
-      return;
-    }
-    
-    // 启动后台任务后，轮询状态
-    pollOptimizeStatus();
-  } catch (e) {
-    setStatus('error', '请求失败: ' + e.message);
+    if (resp.error) { setStatus('error', resp.error); return; }
+    setStatus('done', '✅ AI 配置已保存，生成内容时立即生效');
+    await loadAiConfig();
+  } catch(e) {
+    setStatus('error', '保存失败: ' + e.message);
+  } finally {
+    btn.disabled = false;
   }
 }
 
-// ── 轮询AI优化状态 ──
-function pollOptimizeStatus() {
-  const poll = async () => {
-    const st = await fetch('/api/status').then(r=>r.json());
-    if (st.error) {
-      setStatus('error', st.progress, st.error);
-    } else if (st.done) {
-      setStatus(st.error ? 'error' : 'done', `✅ 已优化 ${st.success || 0} 个视频`, st.error);
-      selectedVideos.clear();
-      document.querySelectorAll('.video-card.selected').forEach(c => c.classList.remove('selected'));
-      updateOptimizeButton();
-      await loadCurrentView();
+async function testAiConfig() {
+  const btn = document.getElementById('btn-ai-test');
+  const result = document.getElementById('ai-test-result');
+  btn.disabled = true;
+  result.textContent = '测试中...';
+  result.style.color = 'var(--text-secondary)';
+  try {
+    const resp = await fetch('/api/ai/test', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(aiConfigBody())
+    }).then(r=>r.json());
+    if (resp.success) {
+      result.textContent = `✅ 连接成功（${resp.model} 回复: ${resp.reply || 'OK'}）`;
+      result.style.color = 'var(--module-1)';
     } else {
-      setStatus('running', st.progress);
-      setTimeout(poll, 1500);
+      result.textContent = '❌ ' + (resp.error || '连接失败');
+      result.style.color = 'var(--danger)';
     }
-  };
-  setTimeout(poll, 1000);
+  } catch(e) {
+    result.textContent = '❌ 请求失败: ' + e.message;
+    result.style.color = 'var(--danger)';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// ── Dify 设置 ──
+async function loadDifyConfig() {
+  let c;
+  try {
+    c = await fetch('/api/dify/config').then(r=>r.json());
+  } catch(e) {
+    document.getElementById('dify-status').textContent = '读取失败';
+    return;
+  }
+  document.getElementById('dify-base').value = c.api_base || '';
+  const keyInput = document.getElementById('dify-key');
+  keyInput.value = '';
+  keyInput.placeholder = c.has_key ? '已保存，留空则不修改' : 'dataset-...';
+  document.getElementById('dify-key-hint').textContent = c.has_key
+    ? '已保存 Key：' + c.api_key_masked
+    : 'Dify 知识库页面左侧「API」处生成';
+  const st = document.getElementById('dify-status');
+  if (c.has_key && c.dataset_id) {
+    st.textContent = '已配置'; st.style.color = 'var(--module-1)';
+    loadDifyDatasets(false, c.dataset_id);
+  } else if (c.has_key) {
+    st.textContent = '已配置 Key，未选择知识库'; st.style.color = 'var(--danger)';
+    loadDifyDatasets(false, '');
+  } else {
+    st.textContent = '未配置'; st.style.color = 'var(--text-secondary)';
+    const sel = document.getElementById('dify-dataset');
+    sel.innerHTML = '<option value="">请先填写 API Key</option>';
+  }
+}
+
+async function loadDifyDatasets(manual, presetId) {
+  const sel = document.getElementById('dify-dataset');
+  sel.innerHTML = '<option value="">加载中...</option>';
+  try {
+    const resp = await fetch('/api/dify/datasets').then(r=>r.json());
+    if (resp.error) {
+      sel.innerHTML = `<option value="">${resp.error.slice(0, 40)}</option>`;
+      if (manual) setStatus('error', resp.error);
+      return;
+    }
+    const datasets = resp.datasets || [];
+    if (!datasets.length) {
+      sel.innerHTML = '<option value="">（无知识库，点下方新建）</option>';
+      return;
+    }
+    sel.innerHTML = datasets.map(d =>
+      `<option value="${d.id}">${esc(d.name)}（${d.doc_count||0} 文档）</option>`
+    ).join('');
+    const target = presetId || document.getElementById('dify-dataset').value;
+    if (presetId) {
+      const found = datasets.find(d => d.id === presetId);
+      if (found) sel.value = presetId;
+    }
+  } catch(e) {
+    sel.innerHTML = `<option value="">请求失败: ${e.message.slice(0, 30)}</option>`;
+  }
+}
+
+async function createDifyDataset() {
+  const name = prompt('新知识库名称：', '视频知识库');
+  if (!name) return;
+  try {
+    const resp = await fetch('/api/dify/datasets/create', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name}),
+    }).then(r=>r.json());
+    if (resp.error) { setStatus('error', resp.error); return; }
+    setStatus('done', `✅ 知识库「${resp.name}」已创建并设为默认`);
+    await loadDifyConfig();
+  } catch(e) {
+    setStatus('error', '创建失败: ' + e.message);
+  }
+}
+
+async function saveDifyConfig() {
+  const btn = document.getElementById('btn-dify-save');
+  btn.disabled = true;
+  document.getElementById('dify-test-result').textContent = '';
+  try {
+    const resp = await fetch('/api/dify/config', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        api_base: document.getElementById('dify-base').value.trim(),
+        api_key: document.getElementById('dify-key').value.trim(),
+        dataset_id: document.getElementById('dify-dataset').value,
+      }),
+    }).then(r=>r.json());
+    if (resp.error) { setStatus('error', resp.error); return; }
+    setStatus('done', '✅ Dify 配置已保存');
+    await loadDifyConfig();
+  } catch(e) {
+    setStatus('error', '保存失败: ' + e.message);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function testDifyConfig() {
+  const btn = document.getElementById('btn-dify-test');
+  const result = document.getElementById('dify-test-result');
+  btn.disabled = true;
+  result.textContent = '测试中...';
+  result.style.color = 'var(--text-secondary)';
+  try {
+    // 先保存再测试，保证测试的是当前表单值
+    await fetch('/api/dify/config', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        api_base: document.getElementById('dify-base').value.trim(),
+        api_key: document.getElementById('dify-key').value.trim(),
+        dataset_id: document.getElementById('dify-dataset').value,
+      }),
+    });
+    const resp = await fetch('/api/dify/datasets').then(r=>r.json());
+    if (resp.error) {
+      result.textContent = '❌ ' + resp.error;
+      result.style.color = 'var(--danger)';
+    } else {
+      const n = (resp.datasets || []).length;
+      result.textContent = `✅ 连接成功，可见 ${n} 个知识库`;
+      result.style.color = 'var(--module-1)';
+      await loadDifyConfig();
+    }
+  } catch(e) {
+    result.textContent = '❌ 请求失败: ' + e.message;
+    result.style.color = 'var(--danger)';
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 // ── 整理稿：重新生成 ──
@@ -711,7 +2112,7 @@ async function regenerateSummary(id) {
     const resp = await fetch(`/api/content/summaries/${id}/regenerate`, {method:'POST'}).then(r=>r.json());
     if (resp.error) { setStatus('error', resp.error); return; }
     setStatus('done', '✅ 重新生成完成');
-    if (currentView === 'summaries') await loadSummaries();
+    await loadCurrentView();
   } catch(e) {
     setStatus('error', '失败: ' + e.message);
   }
@@ -725,16 +2126,429 @@ async function deleteSummary(id) {
     const resp = await fetch(`/api/content/summaries/${id}`, {method:'DELETE'}).then(r=>r.json());
     if (resp.error) { alert('删除失败: ' + resp.error); return; }
     setStatus('done', '✅ 整理稿已删除');
-    if (currentView === 'summaries') await loadSummaries();
+    await loadCurrentView();
   } catch(e) {
     alert('删除失败: ' + e.message);
   }
 }
 
+// ════════════════════════════════════════════════════════════════
+// 订阅（作者主页增量同步）
+// ════════════════════════════════════════════════════════════════
+let _subPollTimer = null;
+
+async function loadSubscriptions() {
+  try {
+    const data = await fetch('/api/subscriptions').then(r=>r.json());
+    renderSubscriptions(data.items || []);
+    // 同步进行中则持续轮询
+    const st = await fetch('/api/subscriptions/sync/status').then(r=>r.json());
+    if (st.running) startSubPolling(); else showSubStatus(st);
+  } catch(e) { /* 静默 */ }
+}
+
+function renderSubscriptions(items) {
+  const box = document.getElementById('sub-list');
+  if (!box) return;
+  document.getElementById('count-subs').textContent = items.length + ' 个';
+  if (!items.length) {
+    box.innerHTML = '<div style="font-size:12.5px;color:var(--text-tertiary);padding:10px 0">暂无订阅。点「导入视频库作者」一键订阅已采集的作者，或在采集中心输入主页链接点「订阅该作者」。</div>';
+    return;
+  }
+  box.innerHTML = items.map(s => {
+    const isWechat = s.platform === 'wechat';
+    const platformBadge = isWechat
+      ? '<span class="pill" style="background:color-mix(in srgb,#07c160 12%,transparent);color:#07c160;font-size:10px">微信</span>'
+      : '<span class="pill" style="background:color-mix(in srgb,var(--module-2) 12%,transparent);color:var(--module-2);font-size:10px">抖音</span>';
+    const linkText = isWechat ? 'RSS ↗' : '主页 ↗';
+    return `
+    <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--border);border-radius:12px;margin-bottom:8px;background:var(--surface-card)">
+      <div style="flex:1;min-width:0">
+        <div style="font-weight:700;font-size:13.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+          ${platformBadge}
+          <span title="点击修改作者名" style="cursor:pointer;text-decoration:underline dotted 1px;text-underline-offset:3px" onclick='event.stopPropagation();editSubAuthor(${s.id}, "${escAttr(s.author||"")}")'>${esc(s.author || '未知作者')}</span>
+          <span class="pill cat" title="点击设置分类（同步的新内容会自动打上）" onclick='event.stopPropagation();openSubCatMenu(this, ${s.id}, "${esc(s.category||"")}", "${esc(s.game||"")}")'>${esc(s.category || '未设分类')}</span>
+          ${s.game ? `<span class="pill game">${esc(s.game)}</span>` : ''}
+          <a href="${esc(s.user_url)}" target="_blank" style="color:var(--module-2);font-weight:600;font-size:11.5px;text-decoration:none">${linkText}</a>
+        </div>
+        <div style="font-size:11.5px;color:var(--text-tertiary);margin-top:2px">
+          ${s.last_synced_at ? `上次同步 ${esc(s.last_synced_at.slice(0,16))} · ${esc(s.last_sync_note||'')}` : '尚未同步过（点「同步」后会自动带出作者名）'}
+        </div>
+      </div>
+      <button class="btn ghost sm" onclick="syncSubscriptions(${s.id})" ${_subSyncRunning?'disabled':''}>同步</button>
+      <button class="btn ghost sm" style="color:var(--module-5)" onclick="deleteSubscriptionItem(${s.id})">取消订阅</button>
+    </div>`;
+  }).join('');
+}
+
+async function editSubAuthor(subId, current) {
+  const name = prompt('修改作者显示名：', current);
+  if (name === null || !name.trim()) return;
+  try {
+    const resp = await fetch(`/api/subscriptions/${subId}/author`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({author: name.trim()}),
+    }).then(r=>r.json());
+    if (resp.error) { setStatus('error', resp.error); return; }
+    loadSubscriptions();
+  } catch(e) {
+    setStatus('error', '改名失败: ' + e.message);
+  }
+}
+
+// ── 导入视频库作者为订阅 ──
+async function openAuthorImport() {
+  let authors;
+  try {
+    const resp = await fetch('/api/authors').then(r=>r.json());
+    if (resp.error) { setStatus('error', resp.error); return; }
+    authors = resp.authors || [];
+  } catch(e) { setStatus('error', '加载作者失败: ' + e.message); return; }
+  if (!authors.length) { setStatus('error', '视频库暂无作者数据'); return; }
+
+  resetModal();
+  showModal();
+  document.getElementById('modal-title').textContent = '导入视频库作者为订阅';
+  document.getElementById('modal-info').textContent = '点击作者名即建立订阅（自动解析其主页）';
+  document.getElementById('modal-basic').innerHTML = authors.map(a => {
+    const done = a.subscribed ? '已订阅' : '+ 订阅';
+    const btnCls = a.subscribed ? '' : 'style="background:color-mix(in srgb,var(--module-2) 12%,transparent);color:var(--module-2)"';
+    return `<div style="display:flex;align-items:center;gap:8px;padding:7px 10px;border:1px solid var(--border);border-radius:10px;margin-bottom:6px">
+      <span style="flex:1;font-size:13px;font-weight:600">${esc(a.author)}</span>
+      <span style="font-size:11.5px;color:var(--text-tertiary)">${a.count} 条视频</span>
+      <button class="btn ghost sm" ${a.subscribed ? 'disabled' : `onclick="importAuthor('${escAttr(a.author)}')" ${btnCls}`}>${done}</button>
+    </div>`;
+  }).join('');
+  document.getElementById('modal-basic').style.maxHeight = '50vh';
+  document.getElementById('modal-basic').style.overflowY = 'auto';
+  document.getElementById('modal-asr-title').parentElement.style.display = 'none';
+  document.getElementById('modal-ai-title').parentElement.style.display = 'none';
+  document.getElementById('modal-tags').innerHTML = '';
+  document.getElementById('modal-asr').innerHTML = '';
+  document.getElementById('modal-ai-copy').innerHTML = '';
+  document.getElementById('modal-actions').innerHTML = '<button class="btn ghost sm" onclick="closeModal()">关闭</button>';
+}
+
+async function importAuthor(author) {
+  setStatus('error', '');
+  try {
+    const resp = await fetch('/api/subscriptions/import', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({author}),
+    }).then(r=>r.json());
+    if (resp.error) { setStatus('error', `「${author}」导入失败: ${resp.error}`); return; }
+    setStatus('done', `✅ 已订阅「${author}」`);
+    closeModal();
+    loadSubscriptions();
+  } catch(e) {
+    setStatus('error', '导入失败: ' + e.message);
+  }
+}
+
+// ── 选题雷达 ──
+let _radarData = null;
+
+async function loadRadar() {
+  const cat = document.getElementById('radar-cat').value;
+  const gameSel = document.getElementById('radar-game');
+  const authorSel = document.getElementById('radar-author');
+  // 作者下拉：首次加载时填充（从 /api/authors）
+  if (authorSel.options.length <= 1) {
+    try {
+      const resp = await fetch('/api/authors').then(r=>r.json());
+      const authors = (resp.authors || []).filter(a => a.count > 0);
+      authorSel.innerHTML = '<option value="">全部作者</option>' +
+        authors.map(a => `<option value="${esc(a.author)}">${esc(a.author)} (${a.count})</option>`).join('');
+    } catch(e) { /* 忽略 */ }
+  }
+  // 游戏下拉：选了游戏攻略分类才显示（用 /api/categories 的 games 数据）
+  if (cat === '游戏攻略' && gameSel.style.display === 'none') {
+    try {
+      const resp = await fetch('/api/categories').then(r=>r.json());
+      gameSel.innerHTML = '<option value="">全部游戏</option>' +
+        (resp.games||[]).map(g => `<option value="${esc(g.game)}">${esc(g.game)} (${g.count})</option>`).join('');
+      gameSel.style.display = '';
+    } catch(e) { /* 忽略，下拉保持隐藏 */ }
+  } else if (cat !== '游戏攻略') {
+    gameSel.style.display = 'none';
+  }
+  const game = gameSel.style.display === 'none' ? '' : gameSel.value;
+  const author = authorSel.value;
+
+  const box = document.getElementById('radar-list');
+  const total = document.getElementById('radar-total');
+  box.innerHTML = '<div class="empty" style="padding:40px">加载中...</div>';
+  try {
+    const q = new URLSearchParams();
+    if (cat) q.set('category', cat);
+    if (game) q.set('game', game);
+    if (author) q.set('author', author);
+    const resp = await fetch('/api/topics/radar?' + q.toString()).then(r=>r.json());
+    if (resp.error) { box.innerHTML = `<div class="empty">${esc(resp.error)}</div>`; return; }
+    _radarData = resp;
+    total.textContent = `${resp.topics.length} 个话题 · ${resp.total_videos} 条视频 · 近期窗口 ${resp.window_days} 天`;
+    renderRadar();
+  } catch(e) {
+    box.innerHTML = `<div class="empty">加载失败: ${esc(e.message)}</div>`;
+  }
+}
+
+function renderRadar() {
+  const box = document.getElementById('radar-list');
+  if (!_radarData || !_radarData.topics.length) {
+    box.innerHTML = '<div class="empty" style="padding:40px">暂无标签数据——先在视频库跑一次「AI 分类」</div>';
+    return;
+  }
+  const topics = _radarData.topics;
+  const maxHeat = topics[0].heat || 1;
+  box.innerHTML = topics.slice(0, 50).map((t, i) => {
+    const pct = Math.max(4, Math.round(t.heat / maxHeat * 100));
+    const rising = t.recent_count > 0 && t.recent_count >= t.count * 0.4;
+    const rankCls = i < 3 ? 'radar-top' : '';
+    return `<div class="radar-row ${rankCls}" onclick="toggleRadarVideos(${i})">
+      <div class="radar-main">
+        <span class="radar-rank">${i+1}</span>
+        <span class="radar-tag">${esc(t.tag)}</span>
+        ${rising ? '<span class="radar-rising" title="近期占比高，话题升温中">↑升温</span>' : ''}
+        <span class="radar-meta">${t.count} 次提及${t.recent_count ? ` · 近期 ${t.recent_count}` : ''}</span>
+        <div class="radar-bar"><div class="radar-fill" style="width:${pct}%"></div></div>
+      </div>
+      <div class="radar-videos" id="radar-videos-${i}" style="display:none">
+        ${t.videos.map(v => `<div class="radar-video" onclick='event.stopPropagation();openDetail("${escAttr(v.sheet)}", "${v.row}")'>
+          <span class="radar-video-date">${esc(v.published_at || '无日期')}</span>
+          <span class="radar-video-author">${esc(v.author || '未知')}</span>
+          <span class="radar-video-title">${esc(v.title || '无标题')}</span>
+        </div>`).join('')}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function toggleRadarVideos(i) {
+  const el = document.getElementById(`radar-videos-${i}`);
+  if (el) el.style.display = el.style.display === 'none' ? '' : 'none';
+}
+
+// ── 订阅作者分类 ──
+function openSubCatMenu(el, subId, currentCat, currentGame) {
+  closeCategoryMenu();
+  const rect = el.getBoundingClientRect();
+  const menu = document.createElement('div');
+  menu.className = 'cat-menu';
+  menu.id = 'cat-menu-pop';
+  const cats = [...new Set([...CATEGORY_ORDER, ...((currentCat && !CATEGORY_ORDER.includes(currentCat)) ? [currentCat] : [])])];
+  menu.innerHTML = cats.map(c =>
+    `<div onclick="applySubCategory(${subId}, '${esc(c)}', '${esc(currentGame)}')">${esc(c)}${c===currentCat?' ✓':''}</div>`
+  ).join('');
+  document.body.appendChild(menu);
+  const top = Math.min(rect.bottom + 6, window.innerHeight - menu.offsetHeight - 10);
+  menu.style.top = top + 'px';
+  menu.style.left = Math.min(rect.left, window.innerWidth - menu.offsetWidth - 10) + 'px';
+  setTimeout(() => document.addEventListener('click', closeCategoryMenu, {once: true}), 0);
+}
+
+async function applySubCategory(subId, category, currentGame) {
+  closeCategoryMenu();
+  let game = currentGame || '';
+  if (category === '游戏攻略') {
+    const input = prompt('该作者主要讲哪款游戏？（可留空，同步时由 AI 识别）', game);
+    if (input === null) return;
+    game = input.trim();
+  }
+  try {
+    const resp = await fetch(`/api/subscriptions/${subId}/category`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({category, game}),
+    }).then(r=>r.json());
+    if (resp.error) { setStatus('error', resp.error); return; }
+    setStatus('done', `✅ 订阅分类已设为「${category}」，同步的新视频会自动打上`);
+    loadSubscriptions();
+  } catch(e) {
+    setStatus('error', '设置分类失败: ' + e.message);
+  }
+}
+
+async function subscribeAuthor() {
+  const url = document.getElementById('user-url').value.trim();
+  if (!url) { alert('请先在上方输入用户主页链接'); return; }
+  try {
+    const resp = await fetch('/api/subscriptions', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({url}),
+    }).then(r=>r.json());
+    if (resp.error) { setStatus('error', resp.error); return; }
+    const sub = resp.subscription;
+    setStatus('done', '✅ 已订阅。订阅管理在「数据与同步」页，同步一次后会自动带出作者名');
+    if (currentView === 'materials') loadSubscriptions();
+  } catch(e) {
+    setStatus('error', '订阅失败: ' + e.message);
+  }
+}
+
+async function addWechatSubscription() {
+  const url = document.getElementById('wechat-rss-url').value.trim();
+  const cat = document.getElementById('wechat-sub-cat').value;
+  if (!url) { alert('请输入 WeWe RSS 订阅地址'); return; }
+  let game = '';
+  if (cat === '游戏攻略') {
+    game = prompt('该公众号主要讲哪款游戏？（可留空）', '') || '';
+  }
+  try {
+    const resp = await fetch('/api/subscriptions', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({url, platform: 'wechat', category: cat, game}),
+    }).then(r=>r.json());
+    if (resp.error) { alert(resp.error); return; }
+    document.getElementById('wechat-rss-url').value = '';
+    loadSubscriptions();
+    // 新订阅自动弹出分类选择
+    const sub = resp.subscription;
+    if (sub && !cat) {
+      const pill = document.querySelector(`#sub-list [onclick*="${sub.id}"]`);
+      if (pill) pill.click();
+    }
+  } catch(e) {
+    alert('订阅失败: ' + e.message);
+  }
+}
+
+let _subSyncRunning = false;
+
+async function syncSubscriptions(id) {
+  try {
+    const resp = await fetch('/api/subscriptions/sync', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(id ? {id} : {}),
+    }).then(r=>r.json());
+    if (resp.error) { setStatus('error', resp.error); return; }
+    startSubPolling();
+  } catch(e) {
+    setStatus('error', '同步启动失败: ' + e.message);
+  }
+}
+
+function startSubPolling() {
+  _subSyncRunning = true;
+  const btn = document.getElementById('btn-sync-all-subs');
+  if (btn) btn.disabled = true;
+  if (_subPollTimer) clearInterval(_subPollTimer);
+  _subPollTimer = setInterval(async () => {
+    try {
+      const st = await fetch('/api/subscriptions/sync/status').then(r=>r.json());
+      showSubStatus(st);
+      if (!st.running) {
+        clearInterval(_subPollTimer);
+        _subPollTimer = null;
+        _subSyncRunning = false;
+        if (btn) btn.disabled = false;
+        loadSubscriptions();
+        refreshAll();
+      }
+    } catch(e) { /* 网络错误继续轮询 */ }
+  }, 3000);
+}
+
+function showSubStatus(st) {
+  const box = document.getElementById('sub-status');
+  if (!box) return;
+  if (st.running || st.progress || st.error) {
+    box.style.display = 'block';
+    box.textContent = st.error ? '❌ ' + st.error : (st.progress || '');
+    box.style.color = st.error ? 'var(--module-5)' : 'var(--module-2)';
+  } else {
+    box.style.display = 'none';
+  }
+}
+
+async function deleteSubscriptionItem(id) {
+  if (!confirm('确定取消订阅吗？（只取消订阅，不删除已采集的视频）')) return;
+  try {
+    const resp = await fetch(`/api/subscriptions/${id}`, {method:'DELETE'}).then(r=>r.json());
+    if (resp.error) { alert('删除失败: ' + resp.error); return; }
+    loadSubscriptions();
+  } catch(e) {
+    alert('删除失败: ' + e.message);
+  }
+}
+
+// ════════════════════════════════════════════════════════════════
+// 删除：视频 / 面试题
+// ════════════════════════════════════════════════════════════════
+async function deleteVideosSelected() {
+  if (!selectedVideos.size) return;
+  const items = [...selectedVideos].map(k => {
+    const [sheet, row] = k.split(':');
+    return {sheet, row: Number(row)};
+  });
+  if (!confirm(`确定删除选中的 ${items.length} 条视频吗？\n将同时删除其整理稿/面试题，Excel 行会被清空（不可撤销）。`)) return;
+  try {
+    const resp = await fetch('/api/videos/delete', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({items}),
+    }).then(r=>r.json());
+    if (resp.error) { setStatus('error', resp.error); return; }
+    selectedVideos.clear();
+    window_lastSelected = null;
+    setStatus('done', `✅ 已删除 ${resp.deleted} 条视频`);
+    await refreshAll();
+  } catch(e) {
+    setStatus('error', '删除失败: ' + e.message);
+  }
+}
+
+async function deleteVideoOne(sheet, row, title) {
+  if (!confirm(`确定删除视频「${title || ''}」吗？\n将同时删除其整理稿/面试题（不可撤销）。`)) return;
+  closeModal();
+  try {
+    const resp = await fetch('/api/videos/delete', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({items: [{sheet, row}]}),
+    }).then(r=>r.json());
+    if (resp.error) { setStatus('error', resp.error); return; }
+    selectedVideos.delete(`${sheet}:${row}`);
+    updateOptimizeButton();
+    setStatus('done', '✅ 视频已删除');
+    await refreshAll();
+  } catch(e) {
+    setStatus('error', '删除失败: ' + e.message);
+  }
+}
+
+async function deleteQuestion(question) {
+  if (!confirm('确定删除这道面试题吗？')) return;
+  closeModal();
+  try {
+    const resp = await fetch('/api/content/questions/delete', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({summary_id: Number(question.summaryId), q_index: question.qIndex - 1}),
+    }).then(r=>r.json());
+    if (resp.error) { setStatus('error', resp.error); return; }
+    setStatus('done', resp.remaining > 0 ? `✅ 已删除，该套还剩 ${resp.remaining} 题` : '✅ 已删除（整套删完，整理稿一并移除）');
+    await loadCurrentView();
+  } catch(e) {
+    setStatus('error', '删除失败: ' + e.message);
+  }
+}
+
 // ── 工具 ──
 function esc(s) { if (!s) return ''; return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function escAttr(s) { return esc(s).replace(/'/g,'&#39;'); }
 function escBacktick(s) { return esc(s).replace(/`/g,'\\`').replace(/\$/g,'\\$'); }
 function copyText(t) { navigator.clipboard.writeText(t||'').then(()=>alert('已复制')); }
+function formatAnswer(answer) {
+  return Array.isArray(answer) ? answer.join('、') : String(answer || '');
+}
+function isAnswerValue(answer, value) {
+  return Array.isArray(answer) ? answer.includes(value) : String(answer || '') === String(value || '');
+}
+function copyQuestionBankJSON() {
+  let payload = window.currentSummaryStructuredData || '{}';
+  try {
+    const parsed = typeof payload === 'string' ? JSON.parse(payload) : payload;
+    payload = JSON.stringify(parsed.questions || parsed, null, 2);
+  } catch(e) {}
+  copyText(payload);
+}
 </script>
 </body>
 </html>
