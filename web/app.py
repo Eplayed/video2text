@@ -158,6 +158,11 @@ def api_videos():
         videos = [v for v in videos if q in v.get("title", "").lower()
                    or q in v.get("author", "").lower()
                    or q in v.get("description", "").lower()]
+    # 按时间最新在前（发布时间优先，其次创建时间；空值垫底）
+    videos.sort(
+        key=lambda v: (v.get("published_at") or v.get("create_time") or v.get("pub_time") or ""),
+        reverse=True,
+    )
     return jsonify({"videos": videos, "total": len(videos)})
 
 

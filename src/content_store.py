@@ -1381,7 +1381,8 @@ def get_topic_radar(
             params.append(author)
         rows = conn.execute(
             f"SELECT ai_tags, title, author, published_at, source_sheet, source_row "
-            f"FROM videos WHERE {' AND '.join(where)}",
+            f"FROM videos WHERE {' AND '.join(where)} "
+            f"ORDER BY COALESCE(published_at, '') DESC, id DESC",
             params,
         ).fetchall()
     finally:
