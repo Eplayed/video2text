@@ -259,6 +259,9 @@ textarea{resize:vertical;min-height:84px}
 .radar-video-date{color:var(--text-tertiary);font-variant-numeric:tabular-nums;flex-shrink:0}
 .radar-video-author{color:var(--module-2);font-weight:600;flex-shrink:0;max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .radar-video-title{color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.radar-badge{font-size:10.5px;font-weight:700;padding:1.5px 7px;border-radius:99px;flex-shrink:0}
+.radar-badge-guide{color:#1a7f37;background:color-mix(in srgb,#1a7f37 12%,transparent)}
+.radar-badge-news{color:#9a6700;background:color-mix(in srgb,#9a6700 14%,transparent)}
 .s-del{position:absolute;top:8px;right:8px;width:22px;height:22px;display:grid;place-items:center;border-radius:6px;color:var(--text-tertiary);opacity:.55;cursor:pointer;transition:all .12s}
 .summary-card:hover .s-del{opacity:1}
 .s-del:hover{background:color-mix(in srgb,var(--module-5) 12%,transparent);color:var(--module-5);opacity:1}
@@ -566,6 +569,13 @@ textarea{resize:vertical;min-height:84px}
           <button class="btn sm" onclick="addWechatSubscription()"><span data-icon="plus" class="ic14"></span>添加微信订阅</button>
         </div>
         <div id="sub-status" style="display:none;margin:10px 0 0;font-size:12.5px;color:var(--module-2);font-weight:600"></div>
+        <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;align-items:stretch">
+          <select id="sub-cat-filter" class="page-search" style="width:auto;flex:0 0 auto" onchange="renderSubscriptions(window._subItems||[])">
+            <option value="">全部分类</option>
+          </select>
+          <button class="btn ghost sm" id="btn-sub-check-all" onclick="document.getElementById('sub-check-all').click()" style="display:flex;align-items:center;gap:6px;flex:0 0 auto"><input type="checkbox" id="sub-check-all" style="width:14px;height:14px;margin:0" onchange="syncSubCheckAll(this)">全选</button>
+          <button class="btn sm" id="btn-sync-checked" onclick="syncCheckedSubscriptions()" style="flex:0 0 auto"><span data-icon="bolt" class="ic14"></span>同步勾选（0）</button>
+        </div>
         <div id="sub-list" style="margin-top:10px"></div>
       </div>
 
@@ -588,6 +598,12 @@ textarea{resize:vertical;min-height:84px}
         <span class="count" id="radar-total">加载中</span>
       </div>
       <div class="toolbar">
+        <select id="radar-channel" onchange="loadRadar()">
+          <option value="">不限渠道</option>
+          <option value="toutiao">头条号策略</option>
+          <option value="wechat">公众号策略</option>
+          <option value="xhs">小红书策略</option>
+        </select>
         <select id="radar-cat" onchange="loadRadar()">
           <option value="">全部分类</option>
           <option value="前端面试">前端面试</option>
@@ -608,11 +624,14 @@ textarea{resize:vertical;min-height:84px}
         <div class="spacer"></div>
         <button class="btn ghost sm" onclick="loadRadar()"><span data-icon="activity" class="ic14"></span>刷新</button>
       </div>
-      <p style="font-size:12px;color:var(--text-tertiary);margin:0 0 14px">
-        聚合所选范围内视频的 AI 标签，按「热度」排序（热度 = 总频次 + 近期频次×2，近期窗口自动按数据跨度计算）。
-        高频标签 = 该领域创作者反复讲的热点；近期上升 = 正在升温的话题。点标签查看来源视频。
+      <p style="font-size:12px;color:var(--text-tertiary);margin:0 0 14px" id="radar-desc">
+        聚合所选范围内视频的 AI 标签，默认显示热度 Top10（热度 = 总频次 + 近期频次×2，近期窗口自动按数据跨度计算）。
+        点「展开全部」切换为按最新时间排序查看全部话题。高频标签 = 该领域创作者反复讲的热点；近期上升 = 正在升温的话题。点标签查看来源视频。
       </p>
       <div id="radar-list" style="display:grid;gap:8px"></div>
+      <div style="display:flex;justify-content:center;margin-top:12px">
+        <button class="btn ghost sm" id="radar-toggle" style="display:none" onclick="toggleRadarAll()"></button>
+      </div>
     </section>
 
     <!-- ── 视频库 ── -->
@@ -630,10 +649,9 @@ textarea{resize:vertical;min-height:84px}
         <div class="spacer"></div>
         <button class="btn ghost sm" id="btn-classify" onclick="classifyVideos()"><span data-icon="bolt" class="ic14"></span>AI 分类</button>
         <button class="btn ghost sm" id="btn-dify-publish" onclick="publishToDify()"><span data-icon="book" class="ic14"></span>发布到知识库</button>
-        <button class="btn ghost sm" id="btn-guide-article" onclick="generateGuideArticle()" title="全选当前列表的视频，逐个生成可发布的攻略文章"><span data-icon="edit" class="ic14"></span>一键攻略文章</button>
         <select id="summary-type" onchange="updateOptimizeButton()">
           <option value="game_guide">生成：游戏攻略</option>
-          <option value="guide_article">生成：攻略文章</option>
+          <option value="wechat_material">生成：公众号文章素材</option>
           <option value="ai_interview">生成：AI面试题</option>
         </select>
         <select id="generate-mode" onchange="updateOptimizeButton()">
@@ -664,7 +682,7 @@ textarea{resize:vertical;min-height:84px}
         <select id="summary-type-filter" onchange="loadSummaries()">
           <option value="">全部类型</option>
           <option value="game_guide">游戏攻略</option>
-          <option value="guide_article">攻略文章</option>
+          <option value="wechat_material">公众号素材</option>
           <option value="ai_interview">AI面试题</option>
         </select>
       </div>
@@ -909,24 +927,23 @@ async function loadDashboard() {
     return;
   }
   const total = data.total || 0, withAsr = data.with_asr || 0;
-  const guide = (data.summaries||{}).game_guide || 0, interview = (data.summaries||{}).ai_interview || 0;
-  const article = (data.summaries||{}).guide_article || 0;
+  const guide = (data.summaries||{}).game_guide || 0, interview = (data.summaries||{}).ai_interview || 0, wechat = (data.summaries||{}).wechat_material || 0;
 
   document.getElementById('h-total').textContent = total;
   document.getElementById('h-asr').textContent = withAsr;
-  document.getElementById('h-summaries').textContent = guide + interview + article;
+  document.getElementById('h-summaries').textContent = guide + interview + wechat;
   document.getElementById('h-questions').textContent = data.question_count || 0;
 
   document.getElementById('st-total').textContent = total;
   document.getElementById('st-asr').textContent = (data.asr_rate || 0) + '%';
   document.getElementById('st-asr-d').textContent = `已转写 ${withAsr} · 缺失 ${data.missing_asr||0}`;
-  document.getElementById('st-summaries').textContent = guide + interview + article;
-  document.getElementById('st-summaries-d').textContent = `攻略稿 ${guide} · 文章 ${article} · 题稿 ${interview}`;
+  document.getElementById('st-summaries').textContent = guide + interview + wechat;
+  document.getElementById('st-summaries-d').textContent = `攻略稿 ${guide} · 公众号素材 ${wechat} · 题稿 ${interview}`;
   document.getElementById('st-questions').textContent = data.question_count || 0;
 
   document.getElementById('mc-materials').textContent = total;
   document.getElementById('mc-materials-extra').textContent = `ASR 覆盖 ${data.asr_rate||0}%`;
-  document.getElementById('mc-summaries').textContent = guide + interview + article;
+  document.getElementById('mc-summaries').textContent = guide + interview + wechat;
   document.getElementById('mc-questions').textContent = data.question_count || 0;
 
   const rv = document.getElementById('recent-videos');
@@ -945,7 +962,7 @@ async function loadDashboard() {
   if ((data.recent_summaries||[]).length) {
     rs.innerHTML = data.recent_summaries.map(s => `
       <div class="recent-item" onclick="openSummary(${s.id})">
-        <span class="rdot" style="background:${s.summary_type==='ai_interview'?'var(--module-2)':s.summary_type==='guide_article'?'var(--module-4)':'var(--module-3)'}"></span>
+        <span class="rdot" style="background:${s.summary_type==='ai_interview'?'var(--module-2)':s.summary_type==='guide_article'?'var(--module-4)':s.summary_type==='wechat_material'?'var(--module-5)':'var(--module-3)'}"></span>
         <span class="rt">${esc(s.title || '未命名整理稿')}</span>
         <span class="rm">${esc(String(s.updated_at||'').slice(5,16))}</span>
       </div>`).join('');
@@ -972,8 +989,7 @@ async function loadTopics() {
 let _activeCategory = '';
 let _activeGame = '';
 const CATEGORY_ORDER = ['前端面试', 'AI技术', '游戏攻略', '编程开发', '产品设计', '数码评测', '商业财经', '职场成长', '生活日常', '其他'];
-const TYPE_LABELS = {game_guide: '游戏攻略', guide_article: '攻略文章', ai_interview: 'AI面试题'};
-let _lastVideoKeys = [];  // 当前视频列表的 keys，供「一键攻略文章」全选用
+const TYPE_LABELS = {game_guide: '游戏攻略', wechat_material: '公众号素材', guide_article: '攻略文章（已废弃）', ai_interview: 'AI面试题'};
 
 async function loadVideos() {
   const q = getSearchValue();
@@ -1242,7 +1258,6 @@ async function loadInterviewQuestions() {
 // ── 渲染卡片 ──
 function renderVideos(videos) {
   const grid = document.getElementById('grid-videos');
-  _lastVideoKeys = videos.map(v => `${v.sheet}:${v.row}`);
   if (!videos.length) {
     grid.innerHTML = '<div class="empty"><span class="e">' + iconSvg('list') + '</span>暂无视频</div>';
     updateOptimizeButton();
@@ -1298,7 +1313,7 @@ function renderSummaries(items) {
     return;
   }
   grid.innerHTML = items.map(item => {
-    const typeClass = {ai_interview: 'interview', guide_article: 'article'}[item.summary_type] || 'guide';
+    const typeClass = {ai_interview: 'interview', guide_article: 'article', wechat_material: 'article'}[item.summary_type] || 'guide';
     const typeLabel = `<span class="pill ${typeClass}">${TYPE_LABELS[item.summary_type] || '整理稿'}</span>`;
     const snippet = item.content || item.outline || '';
     return `<div class="summary-card" onclick="openSummary(${item.id})">
@@ -1445,6 +1460,15 @@ async function openDetail(sheet, row) {
   `;
 }
 
+// 整理稿正文渲染：先整体转义，再把本地关键帧的 Markdown 图片语法转成 <img>（仅放行 /media/ 路径）
+function renderSummaryContent(text) {
+  const escaped = esc(text).replace(/\n/g, '<br>');
+  return escaped.replace(
+    /!\[([^\]]*)\]\((\/media\/[a-zA-Z0-9_\-./]+)\)/g,
+    '<img src="$2" alt="$1" style="max-width:100%;border-radius:8px;margin:6px 0;display:block" loading="lazy">'
+  );
+}
+
 async function openSummary(id) {
   resetModal();
   showModal();
@@ -1470,7 +1494,7 @@ async function openSummary(id) {
   document.getElementById('modal-asr-title').textContent = '原视频口播（ASR）';
   document.getElementById('modal-asr').textContent = data.transcript || '（无 ASR 数据）';
   document.getElementById('modal-ai-title').textContent = '整理稿正文';
-  document.getElementById('modal-ai-copy').textContent = data.content || '';
+  document.getElementById('modal-ai-copy').innerHTML = renderSummaryContent(data.content || '');
   window.currentSummaryStructuredData = data.structured_data || '';
   document.getElementById('modal-actions').innerHTML = `
     <a href="${esc(data.video_url||'#')}" target="_blank"><button class="btn sm">▶ 观看原视频</button></a>
@@ -1807,24 +1831,6 @@ async function generateSelectedContent() {
   }
 }
 
-// ── 一键攻略文章：全选当前列表，逐个生成攻略文章 ──
-async function generateGuideArticle() {
-  if (!_lastVideoKeys.length) return alert('当前列表没有视频');
-  const prev = new Set(selectedVideos);  // 记录原选中，取消时恢复
-  _lastVideoKeys.forEach(k => selectedVideos.add(k));
-  syncCardSelection();
-  updateOptimizeButton();
-  document.getElementById('summary-type').value = 'guide_article';
-  document.getElementById('generate-mode').value = 'single';
-  const started = await generateSelectedContent();
-  if (!started) {
-    selectedVideos.clear();
-    prev.forEach(k => selectedVideos.add(k));
-    syncCardSelection();
-    updateOptimizeButton();
-  }
-}
-
 // ── 选择状态 ──
 function syncCardSelection() {
   document.querySelectorAll('#grid-videos .video-card').forEach(c => {
@@ -2147,23 +2153,99 @@ async function loadSubscriptions() {
   } catch(e) { /* 静默 */ }
 }
 
+// ── 订阅列表：分类筛选 + 勾选批量同步 ──
+window._subItems = [];
+window._subChecked = new Set();
+
+function updateSubCatFilterOptions(items) {
+  const sel = document.getElementById('sub-cat-filter');
+  if (!sel) return;
+  const current = sel.value;
+  const cats = [...new Set(items.map(s => s.category || '未设分类'))].sort();
+  sel.innerHTML = '<option value="">全部分类</option>' + cats.map(c => `<option value="${escAttr(c)}">${esc(c)}</option>`).join('');
+  sel.value = cats.includes(current) ? current : '';
+}
+
+function updateSyncCheckedBtn() {
+  const btn = document.getElementById('btn-sync-checked');
+  if (btn) {
+    btn.textContent = '';
+    btn.innerHTML = `<span data-icon="bolt" class="ic14"></span>同步勾选（${window._subChecked.size}）`;
+    btn.disabled = !window._subChecked.size || _subSyncRunning;
+  }
+  const all = document.getElementById('sub-check-all');
+  if (all) {
+    const visible = (window._subItems || []).filter(s => {
+      const f = (document.getElementById('sub-cat-filter') || {}).value || '';
+      return !f || (s.category || '未设分类') === f;
+    });
+    all.checked = visible.length > 0 && visible.every(s => window._subChecked.has(s.id));
+  }
+}
+
+function onSubCheckChange(id, checked) {
+  if (checked) window._subChecked.add(id);
+  else window._subChecked.delete(id);
+  updateSyncCheckedBtn();
+}
+
+function syncSubCheckAll(master) {
+  const f = (document.getElementById('sub-cat-filter') || {}).value || '';
+  (window._subItems || []).forEach(s => {
+    if (!f || (s.category || '未设分类') === f) {
+      if (master.checked) window._subChecked.add(s.id);
+      else window._subChecked.delete(s.id);
+      const cb = document.querySelector(`#sub-list input[data-sub-id="${s.id}"]`);
+      if (cb) cb.checked = master.checked;
+    }
+  });
+  updateSyncCheckedBtn();
+}
+
+async function syncCheckedSubscriptions() {
+  const ids = [...window._subChecked];
+  if (!ids.length) { setStatus('error', '请先勾选要同步的订阅'); return; }
+  try {
+    const resp = await fetch('/api/subscriptions/sync', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ids}),
+    }).then(r=>r.json());
+    if (resp.error) { setStatus('error', resp.error); return; }
+    setStatus('done', `已开始同步勾选的 ${ids.length} 个订阅`);
+    startSubPolling();
+  } catch(e) {
+    setStatus('error', '批量同步失败: ' + e.message);
+  }
+}
+
 function renderSubscriptions(items) {
   const box = document.getElementById('sub-list');
   if (!box) return;
+  window._subItems = items;
   document.getElementById('count-subs').textContent = items.length + ' 个';
+  updateSubCatFilterOptions(items);
   if (!items.length) {
     box.innerHTML = '<div style="font-size:12.5px;color:var(--text-tertiary);padding:10px 0">暂无订阅。点「导入视频库作者」一键订阅已采集的作者，或在采集中心输入主页链接点「订阅该作者」。</div>';
+    updateSyncCheckedBtn();
     return;
   }
-  box.innerHTML = items.map(s => {
+  const filter = (document.getElementById('sub-cat-filter') || {}).value || '';
+  const shown = filter ? items.filter(s => (s.category || '未设分类') === filter) : items;
+  if (!shown.length) {
+    box.innerHTML = `<div style="font-size:12.5px;color:var(--text-tertiary);padding:10px 0">分类「${esc(filter)}」下暂无订阅。</div>`;
+    updateSyncCheckedBtn();
+    return;
+  }
+  box.innerHTML = shown.map(s => {
     const isWechat = s.platform === 'wechat';
     const platformBadge = isWechat
       ? '<span class="pill" style="background:color-mix(in srgb,#07c160 12%,transparent);color:#07c160;font-size:10px">微信</span>'
       : '<span class="pill" style="background:color-mix(in srgb,var(--module-2) 12%,transparent);color:var(--module-2);font-size:10px">抖音</span>';
     const linkText = isWechat ? 'RSS ↗' : '主页 ↗';
     return `
-    <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--border);border-radius:12px;margin-bottom:8px;background:var(--surface-card)">
-      <div style="flex:1;min-width:0">
+    <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--border);border-radius:12px;margin-bottom:8px;background:var(--surface-card);flex-wrap:nowrap">
+      <input type="checkbox" data-sub-id="${s.id}" ${window._subChecked.has(s.id)?'checked':''} onchange="onSubCheckChange(${s.id}, this.checked)" style="flex:0 0 16px;width:16px;height:16px" title="勾选后批量同步">
+      <div style="flex:1 1 160px;min-width:0;overflow:hidden">
         <div style="font-weight:700;font-size:13.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
           ${platformBadge}
           <span title="点击修改作者名" style="cursor:pointer;text-decoration:underline dotted 1px;text-underline-offset:3px" onclick='event.stopPropagation();editSubAuthor(${s.id}, "${escAttr(s.author||"")}")'>${esc(s.author || '未知作者')}</span>
@@ -2171,14 +2253,15 @@ function renderSubscriptions(items) {
           ${s.game ? `<span class="pill game">${esc(s.game)}</span>` : ''}
           <a href="${esc(s.user_url)}" target="_blank" style="color:var(--module-2);font-weight:600;font-size:11.5px;text-decoration:none">${linkText}</a>
         </div>
-        <div style="font-size:11.5px;color:var(--text-tertiary);margin-top:2px">
+        <div style="font-size:11.5px;color:var(--text-tertiary);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
           ${s.last_synced_at ? `上次同步 ${esc(s.last_synced_at.slice(0,16))} · ${esc(s.last_sync_note||'')}` : '尚未同步过（点「同步」后会自动带出作者名）'}
         </div>
       </div>
-      <button class="btn ghost sm" onclick="syncSubscriptions(${s.id})" ${_subSyncRunning?'disabled':''}>同步</button>
-      <button class="btn ghost sm" style="color:var(--module-5)" onclick="deleteSubscriptionItem(${s.id})">取消订阅</button>
+      <button class="btn ghost sm" onclick="syncSubscriptions(${s.id})" ${_subSyncRunning?'disabled':''} style="flex:0 0 auto">同步</button>
+      <button class="btn ghost sm" style="color:var(--module-5);flex:0 0 auto" onclick="deleteSubscriptionItem(${s.id})">取消订阅</button>
     </div>`;
   }).join('');
+  updateSyncCheckedBtn();
 }
 
 async function editSubAuthor(subId, current) {
@@ -2274,6 +2357,7 @@ async function loadRadar() {
   }
   const game = gameSel.style.display === 'none' ? '' : gameSel.value;
   const author = authorSel.value;
+  const channel = document.getElementById('radar-channel').value;
 
   const box = document.getElementById('radar-list');
   const total = document.getElementById('radar-total');
@@ -2283,38 +2367,92 @@ async function loadRadar() {
     if (cat) q.set('category', cat);
     if (game) q.set('game', game);
     if (author) q.set('author', author);
+    if (channel) q.set('channel', channel);
     const resp = await fetch('/api/topics/radar?' + q.toString()).then(r=>r.json());
     if (resp.error) { box.innerHTML = `<div class="empty">${esc(resp.error)}</div>`; return; }
     _radarData = resp;
-    total.textContent = `${resp.topics.length} 个话题 · ${resp.total_videos} 条视频 · 近期窗口 ${resp.window_days} 天`;
+    _radarExpanded = false; // 换筛选条件后回到默认 Top10 视图
+    // 说明文案：渠道模式展示后端返回的渠道策略，否则用默认说明
+    const descEl = document.getElementById('radar-desc');
+    if (descEl) {
+      if (channel && resp.channel_info && resp.channel_info.desc) {
+        const sMap = { toutiao: '攻略型选题排前面（√攻略徽标），资讯型降权（资讯徽标），止损分类与AI/面试类已剔除（归公众号策略）',
+                       wechat: '知识类标签排前面（知识徽标），已有公众号素材稿的选题加权',
+                       xhs: '近期话题排前面，生活/攻略类标签加权' };
+        descEl.textContent = `【${resp.channel_info.label}策略】${resp.channel_info.desc}。${sMap[channel] || ''}。其余同默认：热度 Top10，展开按最新时间。`;
+      } else {
+        descEl.textContent = '聚合所选范围内视频的 AI 标签，默认显示热度 Top10（热度 = 总频次 + 近期频次×2，近期窗口自动按数据跨度计算）。点「展开全部」切换为按最新时间排序查看全部话题。高频标签 = 该领域创作者反复讲的热点；近期上升 = 正在升温的话题。点标签查看来源视频。';
+      }
+    }
+    total.textContent = `${resp.topics.length} 个话题 · ${resp.total_videos} 条视频 · 近期窗口 ${resp.window_days} 天${channel && resp.channel_info ? ' · ' + resp.channel_info.label + '策略' : ''}`;
     renderRadar();
   } catch(e) {
     box.innerHTML = `<div class="empty">加载失败: ${esc(e.message)}</div>`;
   }
 }
 
+let _radarExpanded = false;
+const RADAR_TOP_N = 10;
+
+function toggleRadarAll() {
+  _radarExpanded = !_radarExpanded;
+  renderRadar();
+}
+
+// 话题最新时间：该话题下所有视频发布时间的最大值
+function radarTopicLatest(t) {
+  return (t.videos || []).reduce((acc, v) => {
+    const d = String(v.published_at || '');
+    return d > acc ? d : acc;
+  }, '');
+}
+
 function renderRadar() {
   const box = document.getElementById('radar-list');
+  const toggleBtn = document.getElementById('radar-toggle');
   if (!_radarData || !_radarData.topics.length) {
     box.innerHTML = '<div class="empty" style="padding:40px">暂无标签数据——先在视频库跑一次「AI 分类」</div>';
+    if (toggleBtn) toggleBtn.style.display = 'none';
     return;
   }
-  const topics = _radarData.topics;
-  const maxHeat = topics[0].heat || 1;
-  box.innerHTML = topics.slice(0, 50).map((t, i) => {
+  const allTopics = _radarData.topics;
+  // 默认只显示热度 Top10（保持热度排序）；展开后显示全部并改为按最新时间倒序
+  let topics;
+  if (_radarExpanded) {
+    topics = [...allTopics].sort((a, b) => String(radarTopicLatest(b)).localeCompare(String(radarTopicLatest(a))));
+  } else {
+    topics = allTopics.slice(0, RADAR_TOP_N);
+  }
+  const maxHeat = Math.max(1, ...allTopics.map(t => t.heat || 0));
+  const channel = document.getElementById('radar-channel') ? document.getElementById('radar-channel').value : '';
+  // 渠道策略徽标：头条号√攻略/资讯，公众号知识，小红书轻量
+  const strategyBadge = (t) => {
+    if (!channel) return '';
+    const st = t.strategy || '';
+    if (channel === 'toutiao' && st === 'guide') return '<span class="radar-badge radar-badge-guide" title="攻略型选题：标题含攻略特征词，符合7:2:1主轨">√攻略</span>';
+    if (channel === 'toutiao' && st === 'news') return '<span class="radar-badge radar-badge-news" title="资讯型选题：时效窗口短，慎发">资讯</span>';
+    if (channel === 'wechat' && st === 'knowledge') return '<span class="radar-badge radar-badge-guide" title="知识类标签：适合公众号沉淀">知识</span>';
+    if (channel === 'xhs' && st === 'light') return '<span class="radar-badge radar-badge-guide" title="轻量类标签：适合小红书">轻量</span>';
+    return '';
+  };
+  box.innerHTML = topics.map((t, idx) => {
+    // i 用主题在完整热度榜单里的位置，保证排名编号与热度一致
+    const i = allTopics.indexOf(t);
     const pct = Math.max(4, Math.round(t.heat / maxHeat * 100));
     const rising = t.recent_count > 0 && t.recent_count >= t.count * 0.4;
     const rankCls = i < 3 ? 'radar-top' : '';
+    const latest = radarTopicLatest(t);
     return `<div class="radar-row ${rankCls}" onclick="toggleRadarVideos(${i})">
       <div class="radar-main">
         <span class="radar-rank">${i+1}</span>
         <span class="radar-tag">${esc(t.tag)}</span>
+        ${strategyBadge(t)}
         ${rising ? '<span class="radar-rising" title="近期占比高，话题升温中">↑升温</span>' : ''}
-        <span class="radar-meta">${t.count} 次提及${t.recent_count ? ` · 近期 ${t.recent_count}` : ''}</span>
+        <span class="radar-meta">${t.count} 次提及${t.recent_count ? ` · 近期 ${t.recent_count}` : ''}${latest ? ` · 最新 ${esc(latest.slice(0,10))}` : ''}</span>
         <div class="radar-bar"><div class="radar-fill" style="width:${pct}%"></div></div>
       </div>
       <div class="radar-videos" id="radar-videos-${i}" style="display:none">
-        ${t.videos.map(v => `<div class="radar-video" onclick='event.stopPropagation();openDetail("${escAttr(v.sheet)}", "${v.row}")'>
+        ${[...(t.videos || [])].sort((a, b) => String(b.published_at || '').localeCompare(String(a.published_at || ''))).map(v => `<div class="radar-video" onclick='event.stopPropagation();openDetail("${escAttr(v.sheet)}", "${v.row}")'>
           <span class="radar-video-date">${esc(v.published_at || '无日期')}</span>
           <span class="radar-video-author">${esc(v.author || '未知')}</span>
           <span class="radar-video-title">${esc(v.title || '无标题')}</span>
@@ -2322,6 +2460,14 @@ function renderRadar() {
       </div>
     </div>`;
   }).join('');
+  // 展开按钮：超过 Top10 才显示
+  if (toggleBtn) {
+    const needToggle = allTopics.length > RADAR_TOP_N;
+    toggleBtn.style.display = needToggle ? '' : 'none';
+    toggleBtn.innerHTML = _radarExpanded
+      ? '<span data-icon="chevron-up" class="ic14"></span>收起（回到热度 Top10）'
+      : `<span data-icon="chevron-down" class="ic14"></span>展开全部 ${allTopics.length} 个话题（按最新时间排序）`;
+  }
 }
 
 function toggleRadarVideos(i) {

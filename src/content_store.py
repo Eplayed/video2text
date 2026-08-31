@@ -736,6 +736,17 @@ def _parse_llm_json(text: Any) -> dict[str, Any]:
     return {}
 
 
+# AI 面试/技术类场景：公众号素材档案按面试题解析文风组织（区别于游戏攻略文风）
+INTERVIEW_CATEGORIES = {"前端面试", "AI技术", "编程开发"}
+
+
+def _is_interview_scene(video: dict[str, Any]) -> bool:
+    """判断视频是否属于 AI 面试场景：AI面试工作表来源，或分类为技术/面试类。"""
+    if (video.get("source_sheet") or "").strip() == "AI面试":
+        return True
+    return (video.get("category") or "").strip() in INTERVIEW_CATEGORIES
+
+
 def _generate_local(video: dict[str, Any], summary_type: str) -> dict[str, Any]:
     title = video.get("title") or "未命名视频"
     transcript = (video.get("transcript") or "").strip()
@@ -767,20 +778,51 @@ def _generate_local(video: dict[str, Any], summary_type: str) -> dict[str, Any]:
             source_lines=[f"{title}（{author}）"],
             note="规则版草稿基于 ASR 自动抽题，入库前建议人工核对术语、选项和答案。"
         )
+    elif summary_type == "wechat_material":
+        # 公众号素材档案（规则版草稿）：固定【标签】分节，下游 Dify 按节解析
+        out_title = f"公众号素材：{title[:36]}"
+        outline = ["【标题候选】", "【导语】", "【核心论点】", "【关键数据】", "【正文骨架】", "【金句摘录】", "【风险核查】"]
+        data_lines = [s for s in sentences if re.search(r"\d+(\.\d+)?%|\d{2,}", s)][:5]
+        if _is_interview_scene(video):
+            # AI 面试场景：核心论点/正文骨架按面试题解析组织，并抽技术概念做关键词
+            concepts = _interview_concepts(title, tags, transcript)
+            if concepts:
+                keywords = concepts
+                arguments = [
+                    f"{c}：{_evidence_around(transcript, c)[:50]}"
+                    for c in concepts[:3]
+                ]
+            else:
+                arguments = [s[:50] for s in sentences[:3]]
+            skeleton = "## 问题背景\n## 核心原理\n## 工程实践\n## 考察点与追问"
+        else:
+            arguments = [s[:50] for s in sentences[:3]]
+            skeleton = "## 事件背景\n## 关键细节\n## 玩家影响"
+        content = (
+            f"来源作者：{author}\n来源视频：{title}\n\n"
+            "【标题候选】\n"
+            f"1. {title[:40]}（配置 AI 后自动生成 3 个候选标题）\n\n"
+            "【导语】\n"
+            f"{(sentences[0] or title)[:40]}\n\n"
+            "【核心论点】\n"
+            + "\n".join(f"- {a}" for a in arguments)
+            + "\n\n【关键数据】\n"
+            + (("\n".join(f"- {s[:60]}" for s in data_lines) + "\n") if data_lines else "无\n")
+            + "\n\n【正文骨架】\n" + skeleton + "\n\n"
+            + "【金句摘录】\n"
+            f"- {(sentences[1] if len(sentences) > 1 else '待补充')[:60]}（原话）\n\n"
+            "【风险核查】\n"
+            "- 规则版草稿未做事实核对，发布前核查所有数值/版本/时间线。\n\n"
+            "> 规则版素材档案仅提供骨架；配置 AI 后重新生成可获得完整素材档案。"
+        )
     elif summary_type == "guide_article":
+        # 已废弃：成品文章由自媒体工作台生成，存量数据仅保留可读
         out_title = title[:40]
-        outline = ["## 机制讲解", "## 操作步骤", "## 配装/构筑推荐", "## 避坑提醒"]
+        outline = ["已废弃"]
         content = (
             f"来源作者：{author}\n\n"
-            "## 机制讲解\n"
-            + "\n".join(f"- {point}" for point in key_points[:3])
-            + "\n\n## 操作步骤\n"
-            + "\n".join(f"- {point}" for point in key_points[3:5])
-            + "\n\n## 配装/构筑推荐\n"
-            + (f"- {key_points[5]}" if len(key_points) > 5 else "- 待补全")
-            + "\n\n## 避坑提醒\n"
-            "发布前核查版本号、数值、装备名，补全避坑要点。\n\n"
-            "> 规则版草稿仅提供文章骨架，配置 AI 后重新生成可获得成稿级攻略文章。"
+            "> 该类型已废弃（成品文章由自媒体工作台生成）。存量草稿仅作参考，"
+            "请改用「公众号文章素材」生成结构化素材档案。"
         )
     else:
         out_title = title[:40]
@@ -852,9 +894,57 @@ def _generate_collection_local(
             source_lines=source_titles,
             note="合并题库草稿已按题目结构生成，入库前建议人工去重并校准答案。"
         )
+    elif summary_type == "wechat_material":
+        # 公众号素材档案（规则版草稿）：固定【标签】分节，下游 Dify 按节解析
+        title = f"公众号素材：{keywords[0] if keywords else '短视频整理'}"
+        outline = ["【标题候选】", "【导语】", "【核心论点】", "【关键数据】", "【正文骨架】", "【金句摘录】", "【风险核查】"]
+        sentences = []
+        for video in videos:
+            sentences.extend(_sentences(video.get("transcript") or "")[:2])
+        # 关键数据行：从口播里粗抽数字/百分比的句子
+        data_lines = [s for s in sentences if re.search(r"\d+(\.\d+)?%|\d{2,}", s)][:5]
+        if any(_is_interview_scene(v) for v in videos):
+            # AI 面试场景：跨视频抽技术概念去重，论点/骨架按面试题解析组织
+            concept_keywords = []
+            arguments = []
+            for video in videos:
+                for concept in _interview_concepts(
+                    video.get("title") or "", video.get("tags") or "", video.get("transcript") or ""
+                ):
+                    if concept not in concept_keywords and len(arguments) < 3:
+                        concept_keywords.append(concept)
+                        arguments.append(
+                            f"{concept}：{_evidence_around(video.get('transcript') or '', concept)[:50]}"
+                        )
+            if not arguments:
+                arguments = [s[:50] for s in sentences[:3]]
+            if concept_keywords:
+                keywords = concept_keywords + [k for k in keywords if k not in concept_keywords][:5]
+            skeleton = "## 问题背景\n## 核心原理\n## 工程实践\n## 考察点与追问"
+        else:
+            arguments = [s[:50] for s in sentences[:3]]
+            skeleton = "## 事件背景\n## 关键细节\n## 玩家影响"
+        content = (
+            f"来源视频：\n{source_lines}\n\n"
+            "【标题候选】\n"
+            f"1. {keywords[0] if keywords else '待定选题'}（配置 AI 后自动生成 3 个候选标题）\n\n"
+            "【导语】\n"
+            f"{sentences[0][:40] if sentences else '待补充'}\n\n"
+            "【核心论点】\n"
+            + "\n".join(f"- {a}" for a in arguments)
+            + "\n\n【关键数据】\n"
+            + (("\n".join(f"- {s[:60]}" for s in data_lines) + "\n") if data_lines else "无\n")
+            + "\n\n【正文骨架】\n" + skeleton + "\n\n"
+            + "【金句摘录】\n"
+            f"- {sentences[1][:60] if len(sentences) > 1 else '待补充'}（原话）\n\n"
+            "【风险核查】\n"
+            "- 规则版草稿未做事实核对，发布前核查所有数值/版本/时间线。\n\n"
+            "> 规则版素材档案仅提供骨架；配置 AI 后重新生成可获得完整素材档案。"
+        )
     elif summary_type == "guide_article":
-        title = f"攻略长文合集：{keywords[0] if keywords else '短视频整理'}"
-        outline = ["## 机制讲解", "## 操作步骤", "## 配装/构筑推荐", "## 避坑提醒"]
+        # 已废弃：成品文章由自媒体工作台生成，存量数据仅保留可读
+        title = f"（已废弃）攻略长文合集：{keywords[0] if keywords else '短视频整理'}"
+        outline = ["已废弃"]
         key_points = []
         for video in videos:
             sentences = _sentences(video.get("transcript") or "")
@@ -863,13 +953,8 @@ def _generate_collection_local(
         content = (
             f"来源作者：{'、'.join(author_names)}\n\n"
             f"来源视频：\n{source_lines}\n\n"
-            "## 机制讲解\n"
-            + "\n".join(f"- {point}" for point in key_points[:6])
-            + "\n\n## 操作步骤\n"
-            + "\n".join(f"- {point}" for point in key_points[6:10])
-            + "\n\n## 避坑提醒\n"
-            "发布前核查版本号、数值、装备名，去重合并要点。\n\n"
-            "> 规则版草稿仅提供长文骨架，配置 AI 后重新生成可获得成稿级攻略长文。"
+            "> 该类型已废弃（成品文章由自媒体工作台生成）。存量草稿仅作参考，"
+            "请改用「公众号文章素材」生成结构化素材档案。"
         )
     else:
         title = f"游戏攻略合集：{keywords[0] if keywords else '短视频整理'}"
@@ -913,19 +998,35 @@ def _prompt(video: dict[str, Any], summary_type: str) -> str:
       "deeper": "追问或工程实践延伸"
     }
   ]"""
-    elif summary_type == "guide_article":
+    elif summary_type == "wechat_material":
         task = (
-            "整理成一篇可直接发布到头条号/公众号的游戏攻略文章。要求："
-            "开头一两句话点出读者痛点或收益，抓住注意力；"
-            "正文按「机制讲解 → 操作步骤 → 配装/构筑推荐 → 避坑提醒」用 ## 小标题组织；"
-            "多用短句和列表，关键数值、装备名、技能名用 **加粗**；"
-            "结尾自然引导读者评论互动。语言口语化但信息密度高，不堆砌形容词，不做标题党。"
+            "把口播整理成「公众号图文素材档案」——不是成品文章，是给下游 AI 写稿引擎消费的结构化素材。"
+            "正文必须严格按以下【固定标签】分节，标签原样输出、顺序不变，方便下游按节解析：\n"
+            "【标题候选】3 个公众号风格标题，15 字内，具体+数字+结果导向，不用惊叹号堆砌；\n"
+            "【导语】一句话（30 字内）点出读者收益或痛点；\n"
+            "【核心论点】最多 3 条，每条一句话，信息密度优先；\n"
+            "【关键数据】把口播出现的数值/版本/日期/装备/技能名整理成 markdown 表格（表头：项目|数值|口径），口播没有的数据写“无”，严禁编造；\n"
+            "【正文骨架】3-5 个 ## 小标题，按公众号阅读节奏组织（不写正文内容，只给骨架）；\n"
+            "【金句摘录】直接引用口播原话 1-3 句，标注“（原话）”，保留口语感；\n"
+            "【风险核查】发布前必须人工核对的强结论/数值清单，没有写“无强结论”。"
         )
         if video.get("game"):
-            task += f"标题和正文都要点明游戏《{video['game']}》，方便同游戏读者检索。"
-        schema = """"outline": ["## 小标题1", "## 小标题2"],
-  "content": "完整文章正文，使用 Markdown，小标题用 ##，关键数值用 **加粗**",
+            task += f"标题候选和正文骨架都要能看出游戏《{video['game']}》。"
+        if _is_interview_scene(video):
+            task += (
+                "这是 AI 面试/技术类内容，素材档案按面试题解析文组织："
+                "标题候选带「面试」「八股」「高频题」等场景词并点出具体技术点；"
+                "【核心论点】按「问题→结论」组织，每条对应一个技术考点；"
+                "【关键数据】优先整理技术栈/版本/性能指标/兼容性结论；"
+                "【正文骨架】按「问题背景 → 核心原理 → 代码或工程实践 → 考察点与追问」组织；"
+                "【风险核查】重点核对技术版本、性能数值、兼容性结论是否为口播原意。"
+            )
+        schema = """"outline": ["【标题候选】", "【导语】", "【核心论点】", "【关键数据】", "【正文骨架】", "【金句摘录】", "【风险核查】"],
+  "content": "完整素材档案，按上述【固定标签】分节，markdown 表格用标准语法",
   "keywords": ["关键词1", "关键词2"]"""
+    elif summary_type == "guide_article":
+        # 已废弃：成品文章由自媒体工作台生成（API 层白名单已拦截，这里兜底）
+        raise ValueError("guide_article 已废弃：成品文章由自媒体工作台生成，请使用 wechat_material 公众号素材档案")
     else:
         task = "整理成游戏攻略草稿，包含适用场景、步骤、机制解释、避坑提醒、事实核查清单。"
         schema = """"outline": ["一级要点1", "一级要点2"],
@@ -966,17 +1067,32 @@ def _collection_prompt(videos: list[dict[str, Any]], summary_type: str) -> str:
       "deeper": "追问或工程实践延伸"
     }
   ]"""
-    elif summary_type == "guide_article":
+    elif summary_type == "wechat_material":
         task = (
-            "把多条视频合并整理成一篇可直接发布到头条号/公众号的游戏攻略长文，去重相似内容。要求："
-            "开头一两句话点出读者痛点或收益；"
-            "正文按「机制讲解 → 操作步骤 → 配装/构筑推荐 → 避坑提醒」用 ## 小标题组织；"
-            "多用短句和列表，关键数值、装备名、技能名用 **加粗**；"
-            "结尾自然引导读者评论互动。语言口语化但信息密度高，不做标题党。"
+            "把多条视频合并成一份「公众号图文素材档案」——不是成品文章，是给下游 AI 写稿引擎消费的结构化素材，去重相似内容。"
+            "正文必须严格按以下【固定标签】分节，标签原样输出、顺序不变：\n"
+            "【标题候选】3 个公众号风格标题，15 字内，具体+数字+结果导向；\n"
+            "【导语】一句话（30 字内）点出读者收益；\n"
+            "【核心论点】最多 3 条（跨视频去重合并）；\n"
+            "【关键数据】markdown 表格（项目|数值|口径|来源视频编号），口播没有写“无”，严禁编造；\n"
+            "【正文骨架】3-5 个 ## 小标题；\n"
+            "【金句摘录】引用口播原话 1-3 句，标注“（原话）”；\n"
+            "【风险核查】发布前必查的强结论/数值清单（标注来自哪条视频）。"
         )
-        schema = """"outline": ["## 小标题1", "## 小标题2"],
-  "content": "完整文章正文，使用 Markdown，小标题用 ##，关键数值用 **加粗**",
+        if any(_is_interview_scene(v) for v in videos):
+            task += (
+                "这批是 AI 面试/技术类内容，素材档案按面试题解析文组织："
+                "标题候选带「面试」「八股」「高频题」等场景词并点出具体技术点；"
+                "【核心论点】按「问题→结论」组织，每条对应一个技术考点；"
+                "【关键数据】优先整理技术栈/版本/性能指标/兼容性结论；"
+                "【正文骨架】按「问题背景 → 核心原理 → 代码或工程实践 → 考察点与追问」组织。"
+            )
+        schema = """"outline": ["【标题候选】", "【导语】", "【核心论点】", "【关键数据】", "【正文骨架】", "【金句摘录】", "【风险核查】"],
+  "content": "完整素材档案，按【固定标签】分节，markdown 表格用标准语法",
   "keywords": ["关键词1", "关键词2"]"""
+    elif summary_type == "guide_article":
+        # 已废弃：成品文章由自媒体工作台生成（API 层白名单已拦截，这里兜底）
+        raise ValueError("guide_article 已废弃：成品文章由自媒体工作台生成，请使用 wechat_material 公众号素材档案")
     else:
         task = "把多条视频合并整理成一篇游戏攻略合集，去重相似内容，输出适用场景、步骤、机制解释、避坑提醒和事实核查清单。"
         schema = """"outline": ["一级要点1", "一级要点2"],
@@ -1352,20 +1468,115 @@ def get_category_stats(db_path: str | Path) -> list[dict[str, Any]]:
         conn.close()
 
 
+# 渠道选题策略（与自媒体工作台 app.js 口径一致，集中管理便于后续调整）
+# 头条号：7:2:1（攻略:资讯:试错），攻略特征词加权、资讯特征词降权、止损分类直接排除
+# 公众号：知识沉淀渠道，AI/前端/编程等知识类标签优先，公众号素材稿权重更高
+# 小红书：轻量话题渠道，近期热度权重放大，生活/攻略类标签优先
+RADAR_CHANNEL_STRATEGY: dict[str, dict[str, Any]] = {
+    "toutiao": {
+        "label": "头条号",
+        "desc": "7:2:1 策略 · 攻略标签加权 · 资讯标签降权 · 止损分类与AI/面试类内容排除",
+        "guide_kw": ["指南", "一览", "盘点", "怎么", "怎么选", "别乱", "别扔", "别急", "路线",
+                      "攻略", "必看", "先看", "算清", "速通", "排行", "清单", "合集", "天价",
+                      "底材", "掉落", "配装", "毕业", "流程", "对比", "避坑", "注意", "设置",
+                      "帧数", "插件"],
+        "news_kw": ["定档", "要开", "要来", "来了", "跳票", "更新", "补丁", "版本", "开服",
+                     "上架", "发布", "免费", "上线", "解禁", "开启", "改了", "被砍", "加强",
+                     "削弱", "预警", "风险", "紧急", "官宣", "泄露", "爆料", "开测", "停服",
+                     "复刻"],
+        # 历史CTR<1%止损分类 + AI/面试类分类（归公众号渠道，不进头条号选题）
+        "excluded_categories": ["数码评测", "AI技术", "前端面试"],
+        # AI/面试关键词：标题或标签命中即剔除（游戏类豁免，防误伤"AI代打""AI BD"等游戏语境）
+        "exclude_kw": [
+            "AI", "人工智能", "大模型", "智能体", "机器学习", "深度学习", "神经网络",
+            "多模态", "微调", "提示词", "AIGC", "生成式", "幻觉",
+            "llm", "gpt", "claude", "deepseek", "rag", "mcp", "agentic", "agent",
+            "embedding", "diffusion", "webllm", "onnx", "codex", "dify",
+            "langchain", "langgraph", "lang", "copilot", "midjourney", "vibe coding",
+            "面试", "八股", "秋招", "春招", "简历", "求职", "leetcode", "刷题",
+            "算法题", "offer",
+            # 汽车/数码/硬件类：流量跑偏来源（2nm芯片/车展/路虎/NVIDIA驱动等阅读几乎为0），归数码渠道不进头条号
+            "芯片", "2nm", "手机", "汽车", "车展", "路虎", "智驾", "预售",
+            "nvidia", "显卡", "处理器", "小米18", "激光雷达",
+        ],
+        "exclude_kw_exempt_categories": ["游戏攻略", "生活日常"],
+    },
+    "wechat": {
+        "label": "公众号",
+        "desc": "知识沉淀优先 · AI/前端/编程类标签加权 · 公众号素材稿加权",
+        # 粗分类（视频库 category）+ 细分类关键词（video_index 选题 topic，如「AI技术教程」），
+        # 下游引擎用子串匹配打通两套口径
+        "knowledge_categories": ["AI技术", "前端面试", "编程开发", "产品设计", "前端", "编程"],
+        "summary_bonus_type": "wechat_material",
+    },
+    "xhs": {
+        "label": "小红书",
+        "desc": "近期话题优先 · 近期热度权重×3 · 生活/攻略类标签加权",
+        # 同上：粗分类 + 细分类关键词（「流放2攻略」「暗黑4攻略」等）
+        "light_categories": ["生活日常", "游戏攻略", "攻略", "生活"],
+    },
+}
+
+# 全局策略阈值（所有渠道共享）：止损线、发布结构目标、结构提示统计窗口
+CHANNEL_STRATEGY_GLOBAL: dict[str, Any] = {
+    "lowCtrLine": 0.01,       # 止损线：同类已发≥2篇且均CTR低于该值的分类建议停更
+    "mixTarget": [7, 2, 1],   # 头条号发布结构目标（攻略:资讯:其他）
+    "mixRecentCount": 10,     # 结构提示统计的近期发布篇数
+    "minStatCount": 2,        # 分类止损判定的最小样本数
+}
+
+
+def get_channel_strategy_config() -> dict[str, Any]:
+    """渠道策略配置下发：video2text 是策略唯一权威源。
+
+    自媒体工作台通过 /api/strategy/channels 拉取本配置驱动前端策略引擎，
+    避免策略口径在两个项目各存一份拷贝（调整只改此处，全局生效）。
+    """
+    return {
+        "global": dict(CHANNEL_STRATEGY_GLOBAL),
+        "channels": {
+            key: {k: (list(v) if isinstance(v, list) else v) for k, v in cfg.items()}
+            for key, cfg in RADAR_CHANNEL_STRATEGY.items()
+        },
+    }
+
+
+def _radar_kw_hit(text: str, kws: list[str]) -> bool:
+    """关键词命中：中文/长英文词用子串；短词 "ai" 要求前后非英字母，
+    兼容「AI开发」「本地化AI」等中英混排，同时防误伤 raid/chain 等。"""
+    lower = (text or "").lower()
+    if not lower:
+        return False
+    for kw in kws:
+        k = kw.lower()
+        if k == "ai":
+            if re.search(r"(?<![a-z])ai(?![a-z])", lower):
+                return True
+        elif k and k in lower:
+            return True
+    return False
+
+
 def get_topic_radar(
     db_path: str | Path,
     category: str = "",
     game: str = "",
     author: str = "",
     months: int = 6,
+    channel: str = "",
 ) -> dict[str, Any]:
     """选题雷达：聚合某分类/游戏/作者下 ai_tags 的出现频次、近期热度、来源视频。
+
+    channel 为空时不区分渠道（保持原行为）；否则按 RADAR_CHANNEL_STRATEGY
+    调整聚合过滤与排序策略。
 
     返回：
       topics: 按热度排序的标签列表，每个含 count / recent_count / videos（前5条）
       total_videos: 该范围内视频总数
       window_days: 近期窗口
+      channel_info: 当前渠道策略说明（channel 非空时）
     """
+    strategy = RADAR_CHANNEL_STRATEGY.get(channel) or None
     conn = connect(db_path)
     try:
         where = ["COALESCE(ai_tags, '') != ''"]
@@ -1380,11 +1591,58 @@ def get_topic_radar(
             where.append("COALESCE(author, '') = ?")
             params.append(author)
         rows = conn.execute(
-            f"SELECT ai_tags, title, author, published_at, source_sheet, source_row "
+            f"SELECT id, ai_tags, title, author, published_at, source_sheet, source_row, category "
             f"FROM videos WHERE {' AND '.join(where)} "
             f"ORDER BY COALESCE(published_at, '') DESC, id DESC",
             params,
         ).fetchall()
+        # 渠道策略：排除止损分类（如头条号历史CTR<1%的分类）
+        if strategy and strategy.get("excluded_categories"):
+            bad = set(strategy["excluded_categories"])
+            rows = [r for r in rows if (r["category"] or "") not in bad]
+        # 头条号策略：AI/面试类内容归公众号渠道，标题/标签命中关键词即剔除（游戏类豁免）
+        if strategy and strategy.get("exclude_kw"):
+            exempt = set(strategy.get("exclude_kw_exempt_categories") or [])
+            kws = strategy["exclude_kw"]
+            rows = [
+                r for r in rows
+                if (r["category"] or "") in exempt
+                or not (
+                    _radar_kw_hit(r["title"] or "", kws)
+                    or _radar_kw_hit(r["ai_tags"] or "", kws)
+                )
+            ]
+        # 整理稿感知：视频维度取最新一条 ai_summaries（类型/标题/时间），供选题雷达标注与排序
+        summary_map: dict[int, dict[str, str]] = {}
+        try:
+            srows = conn.execute(
+                "SELECT video_id, summary_type, title, updated_at FROM ai_summaries "
+                "WHERE status != 'failed' "
+                "ORDER BY COALESCE(updated_at, '') DESC, id DESC"
+            ).fetchall()
+            for s in srows:
+                summary_map.setdefault(
+                    int(s["video_id"]),
+                    {
+                        "summary_type": s["summary_type"] or "",
+                        "summary_title": s["title"] or "",
+                        "summary_at": (s["updated_at"] or "")[:16],
+                    },
+                )
+        except Exception:
+            summary_map = {}
+        # 公众号渠道：已有公众号素材稿的视频单列计数（供加权）
+        wechat_material_ids: set[int] = set()
+        if strategy and strategy.get("summary_bonus_type"):  # noqa: SIM102
+            try:
+                mrows = conn.execute(
+                    "SELECT DISTINCT video_id FROM ai_summaries "
+                    "WHERE summary_type = ? AND status != 'failed'",
+                    (strategy["summary_bonus_type"],),
+                ).fetchall()
+                wechat_material_ids = {int(m["video_id"]) for m in mrows}
+            except Exception:
+                wechat_material_ids = set()
     finally:
         conn.close()
 
@@ -1434,6 +1692,26 @@ def get_topic_radar(
                 is_recent = (datetime.now() - d).days <= window_days
             except ValueError:
                 pass
+        vid_summary = summary_map.get(int(r["id"])) if r["id"] is not None else None
+        # 渠道策略：视频维度判定
+        vcat = r["category"] or ""
+        title_text = (r["title"] or "")
+        v_strategy = ""  # ""中性 / "guide"攻略 / "news"资讯
+        guide_kw = (strategy or {}).get("guide_kw") or []
+        news_kw = (strategy or {}).get("news_kw") or []
+        for kw in guide_kw:
+            if kw in title_text:
+                v_strategy = "guide"
+                break
+        if not v_strategy:
+            for kw in news_kw:
+                if kw in title_text:
+                    v_strategy = "news"
+                    break
+        # 公众号知识类 / 小红书轻量类判定
+        is_knowledge = bool(strategy) and vcat in ((strategy or {}).get("knowledge_categories") or [])
+        is_light = bool(strategy) and vcat in ((strategy or {}).get("light_categories") or [])
+        has_material = (r["id"] is not None and int(r["id"]) in wechat_material_ids) if strategy else False
         for tag in tags[:8]:  # 每条视频最多贡献 8 个标签，防止长尾噪声
             if tag.isdigit() or tag.lower() in noise or len(tag) < 2:
                 continue
@@ -1445,24 +1723,111 @@ def get_topic_radar(
             entry["count"] += 1
             if is_recent:
                 entry["recent_count"] += 1
+            # 渠道策略计数（供加权与前端徽标）
+            if v_strategy == "guide":
+                entry["guide_count"] = entry.get("guide_count", 0) + 1
+            elif v_strategy == "news":
+                entry["news_count"] = entry.get("news_count", 0) + 1
+            if is_knowledge:
+                entry["knowledge_count"] = entry.get("knowledge_count", 0) + 1
+            if is_light:
+                entry["light_count"] = entry.get("light_count", 0) + 1
+            if has_material:
+                entry["material_count"] = entry.get("material_count", 0) + 1
+            if vid_summary:
+                # 选题级整理稿聚合：数量 + 最新整理时间（不受 videos 前 5 条上限影响）
+                entry["summary_count"] = entry.get("summary_count", 0) + 1
+                if vid_summary["summary_at"] > entry.get("latest_summary_at", ""):
+                    entry["latest_summary_at"] = vid_summary["summary_at"]
             if len(entry["videos"]) < 5:
-                entry["videos"].append({
+                vinfo = {
                     "title": (r["title"] or "")[:40],
                     "author": r["author"] or "",
                     "published_at": (r["published_at"] or "")[:10],
                     "sheet": r["source_sheet"],
                     "row": r["source_row"],
-                })
+                }
+                if vid_summary:
+                    vinfo.update(vid_summary)
+                entry["videos"].append(vinfo)
 
     topics = sorted(topic_map.values(), key=lambda x: (-x["count"], -x["recent_count"]))
     # 热度分 = 总频次 + 近期频次×2（近期内容权重更高）
     for t in topics:
         t["heat"] = t["count"] + t["recent_count"] * 2
-    topics.sort(key=lambda x: -x["heat"])
+        # 选题内视频按最新整理稿时间倒序（已整理的排前面，方便直接取材）
+        t["videos"].sort(key=lambda v: v.get("summary_at", ""), reverse=True)
+
+    if not strategy:
+        # 不限渠道：保持原排序（最新整理稿优先，热度垫底）
+        topics.sort(
+            key=lambda x: (x.get("latest_summary_at") or "", x["heat"]),
+            reverse=True,
+        )
+        return {
+            "topics": topics,
+            "total_videos": len(rows),
+            "window_days": window_days,
+        }
+
+    # ── 渠道策略排序 ──
+    if channel == "toutiao":
+        # 头条号 7:2:1：攻略标签加权、资讯标签降权，攻略型选题排前面
+        for t in topics:
+            t["heat"] = (
+                t["count"]
+                + t["recent_count"] * 2
+                + t.get("guide_count", 0) * 2
+                - t.get("news_count", 0)
+            )
+            gc, nc = t.get("guide_count", 0), t.get("news_count", 0)
+            if gc > 0 and gc >= nc:
+                t["strategy"] = "guide"
+            elif nc > 0:
+                t["strategy"] = "news"
+            else:
+                t["strategy"] = ""
+        topics.sort(key=lambda x: (x["strategy"] == "guide", x["heat"]), reverse=True)
+    elif channel == "wechat":
+        # 公众号：知识类标签优先，已有公众号素材稿的选题加权
+        for t in topics:
+            t["heat"] = (
+                t["count"]
+                + t["recent_count"]
+                + t.get("knowledge_count", 0) * 2
+                + t.get("material_count", 0) * 3
+            )
+            if t.get("knowledge_count", 0) > 0:
+                t["strategy"] = "knowledge"
+            else:
+                t["strategy"] = ""
+        topics.sort(
+            key=lambda x: (x["strategy"] == "knowledge", x.get("material_count", 0), x["heat"]),
+            reverse=True,
+        )
+    elif channel == "xhs":
+        # 小红书：近期话题优先（近期权重×3），生活/攻略类标签加权
+        for t in topics:
+            t["heat"] = (
+                t["count"]
+                + t["recent_count"] * 3
+                + t.get("light_count", 0) * 2
+            )
+            if t.get("light_count", 0) > 0:
+                t["strategy"] = "light"
+            else:
+                t["strategy"] = ""
+        topics.sort(key=lambda x: (x.get("recent_count", 0), x["heat"]), reverse=True)
+
     return {
         "topics": topics,
         "total_videos": len(rows),
         "window_days": window_days,
+        "channel_info": {
+            "channel": channel,
+            "label": strategy.get("label", ""),
+            "desc": strategy.get("desc", ""),
+        },
     }
 
 
@@ -1559,7 +1924,11 @@ def classify_videos(
     """批量分类：优先 LLM，失败批次降级规则分类。progress_cb(done, total, note)。"""
     conn = connect(db_path)
     try:
-        where = "" if force else "WHERE COALESCE(category, '') = ''"
+        # 订阅同步入库的视频自带 category（继承订阅分类），但仍缺 ai_tags（选题雷达依赖）。
+        # 因此只要 category 或 ai_tags 任一为空就补分类，而不是仅看 category。
+        where = "" if force else (
+            "WHERE COALESCE(category, '') = '' OR COALESCE(ai_tags, '') = ''"
+        )
         rows = conn.execute(
             f"SELECT id, source_sheet, source_row, author, title, tags, transcript "
             f"FROM videos {where} ORDER BY id"

@@ -1,5 +1,5 @@
 """video2text Web 管理界面 - Flask Backend"""
-import json, os, sys, sqlite3, threading, traceback, hashlib
+import json, os, sys, sqlite3, threading, time, traceback, hashlib
 from pathlib import Path
 from datetime import datetime
 
@@ -155,9 +155,19 @@ def api_videos():
         want_game = "" if game == "未识别游戏" else game
         videos = [v for v in videos if (v.get("game") or "") == want_game]
     if q:
-        videos = [v for v in videos if q in v.get("title", "").lower()
-                   or q in v.get("author", "").lower()
-                   or q in v.get("description", "").lower()]
+        # 按空白分词、逐词 AND 匹配（标题/作者/描述/分类/标签/游戏/工作表/行号）。
+        # 整串关键词或粘贴整行卡片（如"…送英雄装 游戏攻略 泰莉亚子 抖音视频数据 R404"）都能命中；
+        # 纯符号/emoji 词直接忽略，R404 / 404 均可命中行号。
+        import re as _re
+        tokens = [t.lower() for t in q.split() if _re.search(r"\w", t)]
+        if tokens:
+            def _haystack(v):
+                return " ".join([
+                    v.get("title", ""), v.get("author", ""), v.get("description", ""),
+                    v.get("category", ""), v.get("game", ""), v.get("ai_tags", ""),
+                    v.get("sheet", ""), f"R{v.get('row', '')}", str(v.get("row", "")),
+                ]).lower()
+            videos = [v for v in videos if all(t in _haystack(v) for t in tokens)]
     # 按时间最新在前（发布时间优先，其次创建时间；空值垫底）
     videos.sort(
         key=lambda v: (v.get("published_at") or v.get("create_time") or v.get("pub_time") or ""),
@@ -210,18 +220,30 @@ def api_categories():
 # ── API: 选题雷达 ──
 @app.route("/api/topics/radar")
 def api_topic_radar():
-    """选题雷达：标签热度聚合。category/game/author 可选筛选。"""
+    """选题雷达：标签热度聚合。category/game/author 可选筛选，channel 切换渠道策略。"""
     category = (request.args.get("category") or "").strip()
     game = (request.args.get("game") or "").strip()
     author = (request.args.get("author") or "").strip()
+    channel = (request.args.get("channel") or "").strip()
+    if channel and channel not in content_store.RADAR_CHANNEL_STRATEGY:
+        channel = ""
     if not DB_PATH.exists():
         return jsonify({"topics": [], "total_videos": 0, "window_days": 90})
     try:
         with _db_lock:
-            data = content_store.get_topic_radar(DB_PATH, category, game, author)
+            data = content_store.get_topic_radar(
+                DB_PATH, category, game, author, channel=channel
+            )
         return jsonify(data)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+# ── API: 渠道策略配置下发（自媒体工作台策略引擎的单一权威源） ──
+@app.route("/api/strategy/channels")
+def api_strategy_channels():
+    """工作台前端策略引擎（channel-strategy.js）从这里拉取策略口径。"""
+    return jsonify(content_store.get_channel_strategy_config())
 
 
 # ── API: AI 批量分类 ──
@@ -301,6 +323,32 @@ def api_video_detail(sheet, row):
     detail["sheet"] = sheet
     detail["row"] = row
     wb.close()
+    # 已抽取的关键帧（生成攻略文章时落盘），供自媒体工作台取材配图
+    try:
+        aweme_id = material_store.extract_aweme_id(detail.get("link") or detail.get("video_url") or "")
+        frame_paths = [p for p in material_store.local_keyframe_paths(aweme_id) if not p.endswith("sheet.jpg")]
+        detail["keyframes"] = [f"/media/{p}" for p in frame_paths]
+    except Exception:
+        detail["keyframes"] = []
+    # 该视频最新的公众号素材档案（wechat_material 整理稿），供工作台取材时优先于原始转写
+    try:
+        if DB_PATH.exists():
+            video = content_store.get_video_by_source(DB_PATH, sheet, row)
+            if video:
+                with _db_lock:
+                    conn = content_store.connect(DB_PATH)
+                    summary_row = conn.execute(
+                        "SELECT id, title, content FROM ai_summaries "
+                        "WHERE video_id = ? AND summary_type = 'wechat_material' "
+                        "ORDER BY id DESC LIMIT 1",
+                        (video["id"],),
+                    ).fetchone()
+                    conn.close()
+                if summary_row:
+                    detail["wechat_material"] = summary_row["content"] or ""
+                    detail["wechat_material_title"] = summary_row["title"] or ""
+    except Exception:
+        detail["wechat_material"] = ""
     return jsonify(detail)
 
 
@@ -405,7 +453,7 @@ def api_dashboard():
             "summaries": {
                 "game_guide": summaries.get("game_guide", 0),
                 "ai_interview": summaries.get("ai_interview", 0),
-                "guide_article": summaries.get("guide_article", 0),
+                "wechat_material": summaries.get("wechat_material", 0),
             },
             "question_count": question_count,
             "recent_videos": [dict(r) for r in recent_videos],
@@ -781,8 +829,8 @@ def api_content_generate():
     videos = data.get("videos", [])
     summary_type = data.get("summary_type", "game_guide")
     combine = bool(data.get("combine", False))
-    if summary_type not in ("game_guide", "ai_interview", "guide_article"):
-        return jsonify({"error": "summary_type 只能是 game_guide / ai_interview / guide_article"}), 400
+    if summary_type not in ("game_guide", "ai_interview", "wechat_material"):
+        return jsonify({"error": "summary_type 只能是 game_guide / ai_interview / wechat_material（攻略成品文章走自媒体工作台生成）"}), 400
     if not videos:
         return jsonify({"error": "请选择要整理的视频"}), 400
 
@@ -832,6 +880,10 @@ def api_content_generate():
                 result, model, status = content_store.generate_collection_summary(
                     selected_videos, summary_type, config
                 )
+                if summary_type in GUIDE_SUMMARY_TYPES:
+                    # 攻略类：抽关键帧做配图，嵌入整理稿尾部
+                    _task_status["progress"] = "抽取视频关键帧配图..."
+                    result["content"] = (result.get("content") or "") + _video_keyframe_markdown(selected_videos)
                 source_ids = [int(v["id"]) for v in selected_videos]
                 with _db_lock:
                     summary_id = content_store.save_summary(
@@ -852,6 +904,10 @@ def api_content_generate():
                     result, model, status = content_store.generate_summary(
                         video, summary_type, config
                     )
+                    if summary_type in GUIDE_SUMMARY_TYPES:
+                        # 攻略类：抽关键帧做配图，嵌入整理稿尾部
+                        _task_status["progress"] = f"抽取关键帧配图 [{i+1}/{len(selected_videos)}] 第{video['source_row']}行..."
+                        result["content"] = (result.get("content") or "") + _video_keyframe_markdown([video])
                     with _db_lock:
                         summary_id = content_store.save_summary(
                             DB_PATH,
@@ -878,6 +934,119 @@ def api_content_generate():
 
     threading.Thread(target=run, daemon=True).start()
     return jsonify({"status": "started", "total": len(videos), "summary_type": summary_type, "combine": combine})
+
+
+# ── 攻略整理稿配图：抽取视频关键帧并生成 Markdown 图片段 ──
+# 成品文章在自媒体工作台生成；这里只给资料整理稿（game_guide / wechat_material 公众号素材档案）配图，供工作台取材时引用
+GUIDE_SUMMARY_TYPES = ("game_guide", "wechat_material")
+
+_extractor = None
+_extractor_lock = threading.Lock()
+
+
+def _load_cached_nwm_url(aweme_id: str) -> str:
+    """读采集时缓存的原始解析结果（output/raw/douyin/<id>.json），免网络请求。"""
+    import json as _json
+    path = material_store.RAW_DIR / f"{material_store.safe_id(aweme_id)}.json"
+    try:
+        if path.exists():
+            raw = _json.loads(path.read_text(encoding="utf-8"))
+            return (raw.get("nwm_url") or raw.get("download_url") or "").strip()
+    except Exception:
+        pass
+    return ""
+
+
+def _resolve_download_url(video: dict, retries: int = 4, backoff: float = 15.0) -> str:
+    """解析视频真实无水印直链：本地 raw 缓存优先，其次 douyin_video_parser 在线解析。
+
+    Excel 里的 video_url 是抖音网页地址，curl 下载只会拿到 HTML；必须解析出
+    nwm 直链 ffmpeg 才能抽帧。注意：
+    1) parser 构造时按相对路径读 douyin_cookie.txt（依赖 cwd），需显式 set_cookie 注入
+    2) 抖音接口有间歇性反爬限流，失败需带退避重试
+    解析失败返回空串，由调用方兜底原地址。
+    """
+    aweme_id = (video.get("aweme_id") or "").strip()
+    if not aweme_id:
+        return ""
+    cached = _load_cached_nwm_url(aweme_id)
+    if cached:
+        return cached
+    global _extractor
+    with _extractor_lock:
+        if _extractor is None:
+            try:
+                from src.video_extractor import VideoExtractor
+                _extractor = VideoExtractor()
+                cookie = get_cookie_path().read_text(encoding="utf-8").strip()
+                if cookie:
+                    _extractor.parser.set_cookie(cookie)
+            except Exception:
+                traceback.print_exc()
+                return ""
+        for attempt in range(retries):
+            try:
+                # parse_video 的 get_video_id 只认 URL 形态，裸 aweme_id 会直接返回 None
+                url = (video.get("source_url") or "").strip() or (video.get("video_url") or "").strip()
+                if "douyin.com" not in url:
+                    url = f"https://www.douyin.com/video/{aweme_id}"
+                info = _extractor.parser.parse_video(url)
+                nwm = (info.get("nwm_url") or "").strip() if info else ""
+                if nwm:
+                    # 解析成功即落 raw 缓存：抖音接口有短窗限流，缓存后不再走网络
+                    try:
+                        material_store.save_raw(aweme_id, {"nwm_url": nwm})
+                    except Exception:
+                        pass
+                    return nwm
+            except Exception:
+                pass
+            if attempt < retries - 1:
+                time.sleep(backoff * (attempt + 1))
+    return ""
+
+
+def _video_keyframe_markdown(videos: list, max_frames: int = 5, per_video: int = 2) -> str:
+    """对攻略类整理稿的视频抽关键帧（ffmpeg，已有帧则直接复用），返回 Markdown 配图段。
+
+    单视频模式取最多 max_frames=5 张；合并模式每视频最多 per_video=2 张、总数截到 max_frames。
+    抽帧失败（无视频地址/下载失败）时返回空串，不影响整理稿本身。
+    """
+    single = len(videos) <= 1
+    collected: list[str] = []
+    for video in videos:
+        if len(collected) >= max_frames:
+            break
+        aweme_id = (video.get("aweme_id") or "").strip() or material_store.extract_aweme_id(
+            video.get("source_url") or video.get("video_url") or ""
+        )
+        if not aweme_id:
+            continue
+        # 已有帧直接复用，跳过解析下载
+        if not material_store.local_keyframe_paths(aweme_id):
+            video_url = (video.get("video_url") or "").strip()
+            nwm_url = _resolve_download_url(video)
+            if nwm_url:
+                material_store.extract_keyframes(aweme_id, nwm_url, max_frames=max_frames)
+            elif video_url:
+                material_store.extract_keyframes(aweme_id, video_url, max_frames=max_frames)
+        frame_limit = per_video if not single else max_frames
+        for rel in material_store.local_keyframe_paths(aweme_id):
+            if rel.endswith("sheet.jpg"):
+                continue
+            if len(collected) >= max_frames or frame_limit <= 0:
+                break
+            collected.append(rel)
+            frame_limit -= 1
+        if single:
+            break
+    if not collected:
+        return ""
+    lines = ["", "## 配图素材（视频关键帧）", ""]
+    for idx, rel in enumerate(collected, 1):
+        lines.append(f"![关键帧{idx}](/media/{rel})")
+    lines.append("")
+    return "\n".join(lines)
 
 
 # ── AI 配置管理 ──
@@ -1331,11 +1500,12 @@ def api_subscriptions_delete(sub_id):
 
 @app.route("/api/subscriptions/sync", methods=["POST"])
 def api_subscriptions_sync():
-    """同步订阅（全部或单个）。抖音：拉主页新视频→ASR。微信：拉 RSS 新文章。"""
+    """同步订阅（全部/单个/多个勾选）。抖音：拉主页新视频→ASR。微信：拉 RSS 新文章。"""
     if _sub_status.get("running"):
         return jsonify({"error": "订阅同步进行中，请稍候"}), 409
     data = request.get_json(force=True, silent=True) or {}
     sub_id = data.get("id")  # None = 全部
+    sub_ids = data.get("ids") or []  # 勾选批量：[1, 3, 7]；空 = 不启用批量过滤
     cookie = (data.get("cookie") or "").strip() or _read_cookie_from_file()
 
     def run():
@@ -1346,6 +1516,9 @@ def api_subscriptions_sync():
                 subs = content_store.list_subscriptions(DB_PATH)
             if sub_id:
                 subs = [s for s in subs if s["id"] == sub_id]
+            elif sub_ids:
+                wanted = {int(i) for i in sub_ids if str(i).isdigit() or isinstance(i, int)}
+                subs = [s for s in subs if s["id"] in wanted]
             if not subs:
                 _sub_status["error"] = "没有可同步的订阅"
                 return

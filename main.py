@@ -483,9 +483,36 @@ def update_video_index(excel_path: str):
     追加模式：新视频追加，已有的（相同 sheet+row）则覆盖。
     """
     import re, json
+    import sqlite3
     from pathlib import Path
 
     INDEX_PATH = Path(__file__).parent / "video_index.json"
+    # 内容库 SQLite（与 web 端同一路径），用于关联整理稿状态
+    DB_PATH = Path(__file__).parent / "output" / "video2text.db"
+
+    # 整理稿聚合：aweme_id → 最新整理稿（类型/标题/时间），供索引条目标注「已整理」
+    summary_by_aweme: dict[str, dict] = {}
+    if DB_PATH.exists():
+        try:
+            conn = sqlite3.connect(str(DB_PATH))
+            conn.row_factory = sqlite3.Row
+            srows = conn.execute(
+                "SELECT v.aweme_id, s.summary_type, s.title, s.updated_at "
+                "FROM ai_summaries s JOIN videos v ON s.video_id = v.id "
+                "WHERE s.status != 'failed' "
+                "ORDER BY COALESCE(s.updated_at, '') DESC, s.id DESC"
+            ).fetchall()
+            conn.close()
+            for s in srows:
+                aweme = str(s["aweme_id"] or "")
+                if aweme and aweme not in summary_by_aweme:
+                    summary_by_aweme[aweme] = {
+                        "summary_type": s["summary_type"] or "",
+                        "summary_title": (s["title"] or "")[:60],
+                        "summary_at": (s["updated_at"] or "")[:16],
+                    }
+        except Exception as e:
+            print(f"   ⚠️ 读取内容库整理稿失败（跳过）：{e}")
 
     # 读取现有索引（用于去重，以视频ID为主key）
     existing = {}       # sheet:row → video dict
@@ -595,6 +622,9 @@ def update_video_index(excel_path: str):
             article_score = str(cell_value(ws, r, "选题等级", headers) or infer_article_score(title, tags, asr, status))
 
             key = f"{ws.title}:{r}"
+            # 旧条目（按视频 ID 匹配）：保留工作台回写的 published/performance，
+            # Excel「是否已发布」列为空时不能把回写状态冲掉
+            old = existing_by_id.get(vid) if vid else None
             existing[key] = {
                 "id": str(vid),
                 "sheet": ws.title,
@@ -619,6 +649,15 @@ def update_video_index(excel_path: str):
                 "transcript_length": len(asr),
                 "transcript_snippet": asr[:800],
             }
+            if old:
+                if old.get("published") and not existing[key]["published"]:
+                    existing[key]["published"] = str(old["published"])
+                if old.get("performance"):
+                    existing[key]["performance"] = old["performance"]
+            # 整理稿状态（来自内容库 SQLite）：标注该视频已生成过哪种整理稿
+            summary_info = summary_by_aweme.get(vid)
+            if summary_info:
+                existing[key]["summary"] = summary_info
             updated_count += 1
 
     # 启发式描述生成（LLM 提炼前先用规则顶一下）
@@ -657,6 +696,7 @@ def update_video_index(excel_path: str):
             "topic": "粗分类，如流放2攻略、暗黑4攻略、AI技术教程。",
             "fact_risk": "事实风险提示。用于提醒写稿前必须联网核查或人工确认。",
             "word_doc_path": "已经转成文章后的 Word 文档路径，可由人工或后续脚本回填。",
+            "summary": "最新整理稿状态（summary_type/summary_title/summary_at），来自内容库 ai_summaries。wechat_material=公众号素材已就绪。",
         },
         "videos": sorted(videos, key=lambda x: (x.get("sheet", ""), x.get("row", 0))),
     }
