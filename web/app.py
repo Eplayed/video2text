@@ -247,6 +247,26 @@ def api_strategy_channels():
 
 
 # ── API: AI 批量分类 ──
+def _auto_classify_after_sync() -> dict:
+    """同步入库后的增量自动打标：只补 category/ai_tags 任一为空的视频。
+
+    - AI 未配置（method=skip 或无 key）时静默返回空结果，不阻塞采集主流程；
+    - 沿用 classify_videos 的 LLM 优先、失败降级规则分类；
+    - 调用方在采集线程里，此函数同步执行（单条链接量小可接受）。
+      持锁口径与 /api/videos/classify 一致。
+    """
+    try:
+        cfg = _ai_config()
+        if cfg.get("method") == "skip" or not cfg.get("api_key"):
+            return {"total": 0, "classified": 0, "llm_batches": 0, "skipped": "ai_not_configured"}
+        with _db_lock:
+            return content_store.classify_videos(DB_PATH, cfg, force=False)
+    except Exception as e:
+        # 打标失败不算采集失败：记日志，返回空结果让主流程继续
+        print(f"[auto-classify] 增量打标失败（不影响采集）: {e}", flush=True)
+        return {"total": 0, "classified": 0, "llm_batches": 0, "error": str(e)}
+
+
 @app.route("/api/videos/classify", methods=["POST"])
 def api_classify_videos():
     if _classify_status.get("running"):
