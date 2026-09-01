@@ -1472,6 +1472,9 @@ def get_category_stats(db_path: str | Path) -> list[dict[str, Any]]:
 # 头条号：7:2:1（攻略:资讯:试错），攻略特征词加权、资讯特征词降权、止损分类直接排除
 # 公众号：知识沉淀渠道，AI/前端/编程等知识类标签优先，公众号素材稿权重更高
 # 小红书：轻量话题渠道，近期热度权重放大，生活/攻略类标签优先
+# 渠道策略版本：调整任何渠道的词表/分类/权重后 +1（media-workbench 兜底快照同步对齐）
+CHANNEL_STRATEGY_VERSION = 2
+
 RADAR_CHANNEL_STRATEGY: dict[str, dict[str, Any]] = {
     "toutiao": {
         "label": "头条号",
@@ -1485,7 +1488,7 @@ RADAR_CHANNEL_STRATEGY: dict[str, dict[str, Any]] = {
                      "削弱", "预警", "风险", "紧急", "官宣", "泄露", "爆料", "开测", "停服",
                      "复刻"],
         # 历史CTR<1%止损分类 + AI/面试类分类（归公众号渠道，不进头条号选题）
-        "excluded_categories": ["数码评测", "AI技术", "前端面试"],
+        "excluded_categories": ["数码评测", "汽车资讯", "AI技术", "前端面试"],
         # AI/面试关键词：标题或标签命中即剔除（游戏类豁免，防误伤"AI代打""AI BD"等游戏语境）
         "exclude_kw": [
             "AI", "人工智能", "大模型", "智能体", "机器学习", "深度学习", "神经网络",
@@ -1533,6 +1536,9 @@ def get_channel_strategy_config() -> dict[str, Any]:
     避免策略口径在两个项目各存一份拷贝（调整只改此处，全局生效）。
     """
     return {
+        # 版本号：权威源调整策略口径时递增；media-workbench 兜底快照对齐此版本，
+        # 不一致时前端控制台 warn（漂移可自动发现，不再依赖人肉同步）
+        "version": CHANNEL_STRATEGY_VERSION,
         "global": dict(CHANNEL_STRATEGY_GLOBAL),
         "channels": {
             key: {k: (list(v) if isinstance(v, list) else v) for k, v in cfg.items()}
