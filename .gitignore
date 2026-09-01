@@ -12,6 +12,8 @@ config/config.env.local
 
 # 生成的索引数据
 *.json
+# 索引原子写入产生的本地备份（仅本地安全副本，非代码/数据，勿入库）
+*.json.bak
 
 # 日志
 logs/
