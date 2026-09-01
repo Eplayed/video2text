@@ -701,8 +701,21 @@ def update_video_index(excel_path: str):
         "videos": sorted(videos, key=lambda x: (x.get("sheet", ""), x.get("row", 0))),
     }
 
-    with open(INDEX_PATH, "w", encoding="utf-8") as f:
+    # 备份上一代索引（video_index.json 事故教训：写坏/截断后 published/performance
+    # 只有索引这一份，.bak 保留上一代给恢复留后路；备份失败不阻塞主写入）
+    import shutil
+    try:
+        if INDEX_PATH.exists() and INDEX_PATH.stat().st_size > 0:
+            shutil.copy2(str(INDEX_PATH), str(INDEX_PATH) + ".bak")
+    except Exception as e:
+        print(f"   ⚠️ 备份旧索引失败（继续写入）：{e}")
+
+    # 原子写入：先写临时文件再替换，避免进程中断留下半个 JSON
+    tmp_path = str(INDEX_PATH) + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump(new_index, f, ensure_ascii=False, indent=2)
+    import os
+    os.replace(tmp_path, str(INDEX_PATH))
 
     print(f"\n📋 索引已更新：{updated_count} 条视频 → {INDEX_PATH}")
     print(f"   共 {len(videos)} 条。描述为初版，后续对话中可让 AI 优化。")
