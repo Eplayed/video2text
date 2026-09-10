@@ -1,6 +1,6 @@
 # video2text 项目现状（给 AI / Agent 的快照）
 
-更新时间：2026-09-01
+更新时间：2026-09-10
 阅读顺序：本文件（现状快照）→ `README.md`（基础用法）→ `CHANGELOG_FOR_AI.md`（2026-06 历史改动与写稿流程约定）。
 双机协作/换机流程见 media-workbench 仓库 `docs/DEV-SYNC.md`（跨三仓库的权威文档）。
 
@@ -48,6 +48,12 @@ vendor/douyin_parse      内置解析器（免依赖 /tmp）
 - 2026-08-26：采集入库后自动增量 AI 打标（a90ada1）
 - 2026-08-31（86cb727~f8100f5）：公众号素材接入（wechat_material 生成 + 关键帧配图）、Dify 知识库同步、素材导出、订阅按 ids 批量同步 + 分类筛选、选题雷达 Top10/展开收起/时间排序、**渠道策略权威源**（RADAR_CHANNEL_STRATEGY + /api/strategy/channels 下发）、AI 批量分类筛选修复（category 或 ai_tags 任一为空即补）
 - 2026-09-01（9fa078d~faa7be7）：修复链接采集 NameError（_auto_classify_after_sync 函数本体补齐：AI 未配置静默跳过、失败不阻塞采集）；索引安全加固（update_video_index 备份 .bak + 原子写入）；删除废文件；删除零引用死代码三件套；本文档同步真实化
+- 2026-09-02（def1e7c 等）：头条策略排除分类补「汽车资讯」（10→11 类）+ 策略下发版本号 v2；「数据与同步」页重构——移除 grid-materials 卡片网格，改为 订阅管理 → 同步按钮 → 5 统计卡片（总素材/有ASR/本地封面/关键帧/已生成内容），loadWorkbench 精简
+- 2026-09-10：项目整体接入周一体检自动化（media-workbench 定时任务，只读检查本仓库 15801 端口服务与 git 状态）
+
+## 运营协作现状（2026-09）
+
+本仓库是三仓库自媒体产线的**素材层**，生产层见 `自媒体/_content_factory`，运营层见 `media-workbench`。当前公众号走「老张码上记」AI 科技赛道（周二更：周一科普/周四战地日记），头条处于修复期（3天×2篇），选题雷达支持 channel 参数按渠道出题。
 
 ## 数据与配置
 
