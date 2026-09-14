@@ -1,0 +1,16 @@
+---
+description: Python/Flask 后端改动守则(仅当 AI 触碰 .py 文件时加载)
+alwaysApply: false
+paths:
+  - '**/*.py'
+---
+# Python/Flask 后端守则
+
+以下约束来自本项目长期沉淀,触碰任何 `.py` 文件时必须遵守:
+
+- 所有中间件必须使用 async/await;中间件重构期间不得修改路由文件。
+- SQLite 删除视频时,必须级联删除关联 ai_summaries,并清理合并摘要的 source_video_ids 引用。
+- Excel 删除视频时只清空行内容、不删除行,保持行号稳定。
+- 分类流程非强制模式下,只处理 category 为空的记录。
+- 订阅分类设置优先于 AI 分类;非游戏攻略类订阅强制 game 字段为空。
+- 改完 Python 代码用 `python3 -m py_compile <file>` 做语法自检。

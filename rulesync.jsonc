@@ -1,0 +1,10 @@
+{
+  "$schema": "https://github.com/dyoshikawa/rulesync/releases/latest/download/config-schema.json",
+  // 生成哪些工具的配置(样例先覆盖:AGENTS.md 标准 / Claude 系 / CodeBuddy 系 / Cursor)
+  // Codex CLI 直接读 agentsmd 产出的 AGENTS.md,无需单独 target
+  "targets": ["agentsmd", "claudecode", "codebuddy", "cursor"],
+  // 样例只演示 rules 功能;后续可加 "mcp","commands","subagents","skills"
+  "features": ["rules"],
+  // 所有工具的根规范文件末尾自动追加"始终用简体中文回答"
+  "language": "zh-CN"
+}
