@@ -1,6 +1,6 @@
 # video2text 项目现状（给 AI / Agent 的快照）
 
-更新时间：2026-09-10
+更新时间：2026-09-14
 阅读顺序：本文件（现状快照）→ `README.md`（基础用法）→ `CHANGELOG_FOR_AI.md`（2026-06 历史改动与写稿流程约定）。
 双机协作/换机流程见 media-workbench 仓库 `docs/DEV-SYNC.md`（跨三仓库的权威文档）。
 
@@ -50,6 +50,7 @@ vendor/douyin_parse      内置解析器（免依赖 /tmp）
 - 2026-09-01（9fa078d~faa7be7）：修复链接采集 NameError（_auto_classify_after_sync 函数本体补齐：AI 未配置静默跳过、失败不阻塞采集）；索引安全加固（update_video_index 备份 .bak + 原子写入）；删除废文件；删除零引用死代码三件套；本文档同步真实化
 - 2026-09-02（def1e7c 等）：头条策略排除分类补「汽车资讯」（10→11 类）+ 策略下发版本号 v2；「数据与同步」页重构——移除 grid-materials 卡片网格，改为 订阅管理 → 同步按钮 → 5 统计卡片（总素材/有ASR/本地封面/关键帧/已生成内容），loadWorkbench 精简
 - 2026-09-10：项目整体接入周一体检自动化（media-workbench 定时任务，只读检查本仓库 15801 端口服务与 git 状态）
+- 2026-09-14：**SQLite 权威源第一步（实体标识）**——videos 表新增 `author_sec_uid`/`source` 列（Excel 重同步不覆盖）：订阅同步按行号回写 sec_uid，启动时按订阅作者名幂等回填存量（737 条）；订阅导入改 SQLite 直查 sec_uid（URL 反查降为兜底）。**索引实体键重构**——video_index 以 aweme_id 为实体键（缺 id 旧条目退回 sheet:row），重建只保留本次扫描到的实体，Excel 清行（删除视频）自动出索引，published/performance 按实体键继承。**采集链修复**——resolve_url 由 HEAD 改 GET(stream)（抖音 CDN 对 HEAD 返回 404/超时导致短链解析失败，Row 834 实测），parser 自带重定向解析作双保险；采集失败原因从 Excel 备注列带回前端
 
 ## 运营协作现状（2026-09）
 
@@ -57,9 +58,9 @@ vendor/douyin_parse      内置解析器（免依赖 /tmp）
 
 ## 数据与配置
 
-- SQLite 表：`videos`（含 transcript、ai_copy、keywords、分类 category/ai_tags、Dify 同步状态）、`ai_summaries`、`subscriptions`
-- `video_index.json`：文章素材索引（v1.1，含 topic/article_score/fact_risk/summary/published/performance/resultScore）。**已被 gitignore（`*.json`），换机迁移见 DEV-SYNC.md 数据清单**；update_video_index 每次写入前自动备份 `.bak`
-- Excel（output/抖音视频信息.xlsx）是采集数据的真相源，含"是否已发布/处理状态"列供回写
+- SQLite 表：`videos`（含 transcript、ai_copy、keywords、分类 category/ai_tags、Dify 同步状态、实体标识 author_sec_uid/source）、`ai_summaries`、`subscriptions`
+- `video_index.json`：文章素材索引（v1.1，含 topic/article_score/fact_risk/summary/published/performance/resultScore）。**实体键口径（2026-09-14 起）**：aweme_id 为主键（缺 id 旧条目退回 sheet:row），重建只保留本次扫描到的实体，Excel 清行自动出索引。**已被 gitignore（`*.json`），换机迁移见 DEV-SYNC.md 数据清单**；update_video_index 每次写入前自动备份 `.bak`
+- Excel（output/抖音视频信息.xlsx）是采集数据的真相源，含"是否已发布/处理状态"列供回写；`author_sec_uid`/`source` 为 SQLite 专属字段，Excel 重同步不覆盖
 - 敏感配置在 `config/config.env.local`（已 gitignore）：DOUYIN_SESSIONID、AI key、Dify key
 - 写稿筛选约定见 `CHANGELOG_FOR_AI.md`：优先 article_score A/B、fact_risk 非空必须联网核查
 
