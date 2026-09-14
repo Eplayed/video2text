@@ -95,17 +95,35 @@ def get_douyin_parser(parser_dir: str):
 
 # ── 链接解析 ─────────────────────────────────────────────────────
 def resolve_url(url: str) -> str:
-    """跟随重定向，返回真实视频URL"""
+    """跟随重定向，返回真实视频URL。
+
+    用 GET(stream) 而非 HEAD：抖音 CDN 对 HEAD 常返回 404/超时（2026-09-14 实测，
+    Row 834 短链即因此解析失败）。stream=True 不下载 body，开销与 HEAD 相当。
+    """
     if not url or not isinstance(url, str):
         return ""
     url = url.strip()
     if not url:
         return ""
+    import requests
     try:
-        import requests
-        r = requests.head(url, timeout=10, allow_redirects=True,
-                          headers={"User-Agent": "Mozilla/5.0"})
-        return r.url
+        r = requests.get(
+            url,
+            timeout=15,
+            stream=True,
+            allow_redirects=True,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/126.0.0.0 Safari/537.36"
+                ),
+                "Referer": "https://www.douyin.com/",
+            },
+        )
+        final_url = r.url
+        r.close()
+        return final_url
     except Exception:
         return url
 
@@ -300,19 +318,22 @@ def process_row(ws, row_idx: int, cookie: str,
     ws.cell(row_idx, COL["状态"], STATUS["处理中"])
     print(f"[Row {row_idx}] 处理中: {url[:60]}")
 
-    # 1. 解析真实URL
+    # 1. 解析真实URL；resolve 失败不立即放弃——parser 的 get_video_id
+    # 自带 GET 重定向解析，可直连短链（双保险，防 resolve_url 抖动）
     real_url = resolve_url(url)
     aweme_id = extract_aweme_id(real_url)
-    if not aweme_id:
+    info = {}
+    if aweme_id:
+        info = fetch_video_info(real_url, parser)
+    else:
+        info = fetch_video_info(url, parser)  # 原始短链直接交 parser
+        if not info.get("error"):
+            aweme_id = str(info.get("aweme_id") or "")
+            real_url = info.get("real_url") or url
+    if not aweme_id or info.get("error"):
         ws.cell(row_idx, COL["状态"], STATUS["失败"])
-        ws.cell(row_idx, COL["备注"], f"无法提取视频ID: {real_url}")
-        return False
-
-    # 2. 获取元数据（传完整URL而不是纯ID）
-    info = fetch_video_info(real_url, parser)
-    if info.get("error"):
-        ws.cell(row_idx, COL["状态"], STATUS["失败"])
-        ws.cell(row_idx, COL["备注"], info["error"])
+        reason = info.get("error") or f"无法提取视频ID: {real_url}"
+        ws.cell(row_idx, COL["备注"], reason)
         return False
 
     # 写入元数据列
@@ -514,18 +535,17 @@ def update_video_index(excel_path: str):
         except Exception as e:
             print(f"   ⚠️ 读取内容库整理稿失败（跳过）：{e}")
 
-    # 读取现有索引（用于去重，以视频ID为主key）
-    existing = {}       # sheet:row → video dict
-    existing_by_id = {}  # aweme_id → video dict（真正去重）
+    # 读取现有索引（实体键口径：aweme_id 为主键，缺失 id 的旧条目退回 sheet:row）
+    # 2026-09-14 起索引改为「只保留本次 Excel 扫描到的实体」——行被清空（删除视频）
+    # 的条目自动出索引，不再需要删除入口显式过滤；published/performance 等回写
+    # 字段按实体键从旧索引继承。
+    existing = {}  # 实体键(aweme_id 或 sheet:row) → video dict
     if INDEX_PATH.exists():
         with open(INDEX_PATH, encoding="utf-8") as f:
             old = json.load(f)
         for v in old.get("videos", []):
-            key = f"{v.get('sheet')}:{v.get('row')}"
+            key = str(v.get("id") or "") or f"{v.get('sheet')}:{v.get('row')}"
             existing[key] = v
-            vid = v.get("id", "") or ""
-            if vid:
-                existing_by_id[vid] = v
 
     wb = openpyxl.load_workbook(excel_path)
     updated_count = 0
@@ -596,6 +616,7 @@ def update_video_index(excel_path: str):
             risks.append("选题等级标记需核查")
         return "；".join(risks)
 
+    scanned_keys = set()  # 本次扫描到的实体键（索引只保留扫描到的实体）
     for ws in wb.worksheets:
         headers = header_map(ws)
         for r in range(2, ws.max_row + 1):
@@ -621,11 +642,11 @@ def update_video_index(excel_path: str):
             topic = infer_topic(title, tags, asr, author)
             article_score = str(cell_value(ws, r, "选题等级", headers) or infer_article_score(title, tags, asr, status))
 
-            key = f"{ws.title}:{r}"
-            # 旧条目（按视频 ID 匹配）：保留工作台回写的 published/performance，
-            # Excel「是否已发布」列为空时不能把回写状态冲掉
-            old = existing_by_id.get(vid) if vid else None
-            existing[key] = {
+            # 实体键：aweme_id 优先，旧数据缺 id 时退回 sheet:row（同一实体键
+            # 天然去重；同 id 出现在两行时后扫的行覆盖，与旧行为一致取最新）
+            key = str(vid) or f"{ws.title}:{r}"
+            old = existing.get(key)
+            entry = {
                 "id": str(vid),
                 "sheet": ws.title,
                 "row": r,
@@ -649,15 +670,19 @@ def update_video_index(excel_path: str):
                 "transcript_length": len(asr),
                 "transcript_snippet": asr[:800],
             }
+            # 旧条目（按实体键匹配）：保留工作台回写的 published/performance，
+            # Excel「是否已发布」列为空时不能把回写状态冲掉
             if old:
-                if old.get("published") and not existing[key]["published"]:
-                    existing[key]["published"] = str(old["published"])
+                if old.get("published") and not entry["published"]:
+                    entry["published"] = str(old["published"])
                 if old.get("performance"):
-                    existing[key]["performance"] = old["performance"]
+                    entry["performance"] = old["performance"]
             # 整理稿状态（来自内容库 SQLite）：标注该视频已生成过哪种整理稿
             summary_info = summary_by_aweme.get(vid)
             if summary_info:
-                existing[key]["summary"] = summary_info
+                entry["summary"] = summary_info
+            existing[key] = entry
+            scanned_keys.add(key)
             updated_count += 1
 
     # 启发式描述生成（LLM 提炼前先用规则顶一下）
@@ -670,18 +695,10 @@ def update_video_index(excel_path: str):
         snippet = sents[0][:70].strip() if sents else asr[:70].strip()
         return f"【{cat}】{snippet}"
 
-    videos = list(existing.values())
-    # 按视频ID去重（保留最新的一行）
-    seen_ids = set()
-    unique_videos = []
-    for v in videos:
-        vid = v.get("id", "")
-        if vid and vid in seen_ids:
-            continue
-        if vid:
-            seen_ids.add(vid)
-        unique_videos.append(v)
-    videos = unique_videos
+    # 只保留本次扫描到的实体（实体键天然去重：同 id 多行取最后扫描的行）；
+    # Excel 清行（删除视频）的旧条目自动出索引，published/performance 已按
+    # 实体键继承进 entry，不需要旧的去重块
+    videos = [existing[k] for k in scanned_keys]
     for v in videos:
         v["description"] = _make_desc(v)
 

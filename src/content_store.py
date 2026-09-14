@@ -95,6 +95,10 @@ def init_db(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "videos", "game", "TEXT")
     _ensure_column(conn, "videos", "dify_document_id", "TEXT")
     _ensure_column(conn, "videos", "dify_synced_at", "TEXT")
+    # 实体标识与来源（SQLite 权威源第一步：author_sec_uid 直查替代 URL 反查；
+    # source 区分 single_link/subscription 入口。Excel 重同步同样不覆盖这两列）
+    _ensure_column(conn, "videos", "author_sec_uid", "TEXT DEFAULT ''")
+    _ensure_column(conn, "videos", "source", "TEXT DEFAULT ''")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS subscriptions (
@@ -192,6 +196,91 @@ def sync_excel_to_db(excel_path: str | Path, db_path: str | Path) -> dict[str, i
         wb.close()
 
     return {"upserted": upserted, "skipped": skipped}
+
+
+def backfill_author_sec_uid_from_subscriptions(db_path: str | Path) -> int:
+    """幂等回填：按作者名把订阅的 sec_uid 写进 videos.author_sec_uid。
+
+    只填空值（COALESCE 语义：显式标记过的不动），历史数据由此摆脱
+    "author↔sec_uid 靠视频 URL 反查"（慢且依赖 cookie/链接有效性）。
+    能对上抖音订阅的存量视频同时标记 source='subscription'。
+    每次订阅同步后调用也安全。
+    """
+    conn = connect(db_path)
+    try:
+        cur = conn.execute(
+            """
+            UPDATE videos SET
+                author_sec_uid = (SELECT s.sec_uid FROM subscriptions s
+                    WHERE s.author = videos.author
+                      AND COALESCE(s.platform, 'douyin') = 'douyin'
+                    LIMIT 1),
+                source = 'subscription'
+            WHERE COALESCE(author_sec_uid, '') = ''
+              AND COALESCE(source, '') = ''
+              AND COALESCE(source_sheet, '') != '微信文章'
+              AND EXISTS (SELECT 1 FROM subscriptions s
+                    WHERE s.author = videos.author
+                      AND COALESCE(s.platform, 'douyin') = 'douyin')
+            """
+        )
+        conn.commit()
+        return cur.rowcount or 0
+    finally:
+        conn.close()
+
+
+def mark_video_source(
+    db_path: str | Path,
+    sheet: str,
+    rows: list[int],
+    source: str,
+    author_sec_uid: str = "",
+) -> int:
+    """写入口按行号标记视频来源（single_link / subscription），可顺带回填作者 sec_uid。
+
+    在 sync_excel_to_db 之后调用（SQLite 已有该 sheet+row 的行）。
+    """
+    if not rows:
+        return 0
+    conn = connect(db_path)
+    try:
+        n = 0
+        for row in rows:
+            if author_sec_uid:
+                cur = conn.execute(
+                    "UPDATE videos SET source = ?, author_sec_uid = ? "
+                    "WHERE source_sheet = ? AND source_row = ?",
+                    (source, author_sec_uid, sheet, int(row)),
+                )
+            else:
+                cur = conn.execute(
+                    "UPDATE videos SET source = ? "
+                    "WHERE source_sheet = ? AND source_row = ?",
+                    (source, sheet, int(row)),
+                )
+            n += cur.rowcount or 0
+        conn.commit()
+        return n
+    finally:
+        conn.close()
+
+
+def get_author_sec_uid(db_path: str | Path, author: str) -> str:
+    """从 videos 表直查作者 sec_uid（回填后替代 URL 反查），查不到返回空串。"""
+    if not author:
+        return ""
+    conn = connect(db_path)
+    try:
+        row = conn.execute(
+            "SELECT author_sec_uid FROM videos "
+            "WHERE author = ? AND COALESCE(author_sec_uid, '') != '' "
+            "ORDER BY id DESC LIMIT 1",
+            (author,),
+        ).fetchone()
+        return (row["author_sec_uid"] or "") if row else ""
+    finally:
+        conn.close()
 
 
 def list_summaries(

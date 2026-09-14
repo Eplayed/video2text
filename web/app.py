@@ -541,7 +541,15 @@ def api_process():
                 wb.close()
 
                 if not ok:
-                    _task_status["error"] += f"Row {row}: 处理失败\n"
+                    # 失败原因写在 Excel 备注列，带回前端（不再只报“处理失败”）
+                    reason = ""
+                    try:
+                        wb2 = openpyxl.load_workbook(str(EXCEL_PATH), read_only=True)
+                        reason = (wb2["抖音视频数据"].cell(row, 15).value or "").strip()
+                        wb2.close()
+                    except Exception:
+                        pass
+                    _task_status["error"] += f"Row {row}: 处理失败（{reason or '无备注'}）\n"
 
                 if i < len(link_list) - 1:
                     import time
@@ -551,6 +559,13 @@ def api_process():
             _task_status["progress"] = "更新索引..."
             collector.update_video_index(str(EXCEL_PATH))
             _sync_content_db()
+            # 5. 标记来源：采集中心单链接入库的行（source=source_single_link）
+            with _db_lock:
+                content_store.mark_video_source(
+                    DB_PATH, "抖音视频数据",
+                    list(range(int(next_row), int(next_row) + len(link_list))),
+                    "single_link",
+                )
 
             _task_status["progress"] = "AI 自动打标..."
             _cls = _auto_classify_after_sync()
@@ -728,7 +743,15 @@ def api_fetch_and_process():
                 wb.close()
 
                 if not ok:
-                    _task_status["error"] += f"Row {row}: 处理失败\n"
+                    # 失败原因写在 Excel 备注列，带回前端（不再只报“处理失败”）
+                    reason = ""
+                    try:
+                        wb2 = openpyxl.load_workbook(str(EXCEL_PATH), read_only=True)
+                        reason = (wb2["抖音视频数据"].cell(row, 15).value or "").strip()
+                        wb2.close()
+                    except Exception:
+                        pass
+                    _task_status["error"] += f"Row {row}: 处理失败（{reason or '无备注'}）\n"
 
                 if i < len(videos) - 1:
                     time.sleep(5)
@@ -737,6 +760,13 @@ def api_fetch_and_process():
             _task_status["progress"] = "更新索引..."
             collector.update_video_index(str(EXCEL_PATH))
             _sync_content_db()
+            # 6. 标记来源：采集中心主页批量抓取（手动入口）
+            with _db_lock:
+                content_store.mark_video_source(
+                    DB_PATH, "抖音视频数据",
+                    list(range(int(next_row), int(next_row) + len(videos))),
+                    "single_link",
+                )
 
             _task_status["progress"] = "AI 自动打标..."
             _cls = _auto_classify_after_sync()
@@ -1429,11 +1459,26 @@ def api_authors():
 
 @app.route("/api/subscriptions/import", methods=["POST"])
 def api_subscriptions_import():
-    """从视频库作者导入订阅：拿该作者一条视频链接反查 sec_uid。"""
+    """从视频库作者导入订阅：优先 SQLite 直查 sec_uid（videos.author_sec_uid，
+    2026-09-14 起回填），查不到再走视频链接反查主页的旧路径。"""
     data = request.get_json(force=True)
     author = (data.get("author") or "").strip()
     if not author:
         return jsonify({"error": "缺少作者名"}), 400
+
+    # 路径 1：SQLite 直查（快且不依赖 cookie/链接有效性）
+    try:
+        with _db_lock:
+            sec_uid = content_store.get_author_sec_uid(DB_PATH, author)
+    except Exception:
+        sec_uid = ""
+    if sec_uid:
+        home = f"https://www.douyin.com/user/{sec_uid}"
+        with _db_lock:
+            sub = content_store.add_subscription(DB_PATH, sec_uid, home, author)
+        return jsonify({"success": True, "subscription": sub})
+
+    # 路径 2（兜底）：拿该作者一条已完成视频的链接反查主页
     cookie = _read_cookie_from_file()
     if not cookie:
         return jsonify({"error": "未找到 Cookie，请先在采集中心完成一次采集"}), 400
@@ -1656,6 +1701,14 @@ def api_subscriptions_sync():
                         # 更新索引 + 内容库 + 订阅状态
                         collector.update_video_index(str(EXCEL_PATH))
                         _sync_content_db()
+                        # 标记来源 + 回填作者 sec_uid（订阅入口，按行号精确标记）
+                        with _db_lock:
+                            content_store.mark_video_source(
+                                DB_PATH, "抖音视频数据",
+                                [next_row + i for i in range(len(videos))],
+                                "subscription",
+                                author_sec_uid=sub["sec_uid"],
+                            )
                         # 订阅设了分类 → 新视频自动打上（AI 分类只补 category 为空的，不会覆盖）
                         cat_note = ""
                         if sub.get("category"):
@@ -1811,4 +1864,12 @@ if __name__ == "__main__":
     print(f"🎬 video2text Web 面板")
     print(f"   Excel: {EXCEL_PATH}")
     print(f"   启动: http://127.0.0.1:15801")
+    # 启动时幂等回填 author_sec_uid（按订阅作者名匹配存量视频；已填的不动）
+    try:
+        if DB_PATH.exists():
+            _n = content_store.backfill_author_sec_uid_from_subscriptions(DB_PATH)
+            if _n:
+                print(f"   [启动] 回填 author_sec_uid/source：{_n} 条")
+    except Exception as _e:
+        print(f"   [启动] author_sec_uid 回填失败（不影响启动）：{_e}")
     app.run(host="127.0.0.1", port=15801, debug=False)
