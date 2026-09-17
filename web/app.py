@@ -189,19 +189,38 @@ def _load_video_extras() -> dict:
                 rows = conn.execute(
                     "SELECT id, source_sheet, source_row, category, ai_tags, game, dify_synced_at FROM videos"
                 ).fetchall()
-                # 每个视频最新一条整理稿的类型（id 倒序第一个出现的即最新），供列表标注「已整理」
+                # 每条整理稿的类型（含合集稿的全部源视频）：id 倒序第一个出现的即最新，供列表标注「已整理」
                 summary_rows = conn.execute(
-                    "SELECT v.source_sheet, v.source_row, s.summary_type "
-                    "FROM ai_summaries s JOIN videos v ON v.id = s.video_id "
-                    "ORDER BY s.id DESC"
+                    "SELECT video_id, source_video_ids, summary_type FROM ai_summaries "
+                    "WHERE summary_type IN ('wechat_material', 'game_guide', 'ai_interview', 'guide_article') "
+                    "ORDER BY id DESC"
                 ).fetchall()
+                involved_ids = set()
+                parsed = []
+                for r in summary_rows:
+                    ids = {int(r["video_id"])}
+                    try:
+                        ids.update(int(x) for x in json.loads(r["source_video_ids"] or "[]"))
+                    except (ValueError, TypeError):
+                        pass
+                    parsed.append((ids, r["summary_type"]))
+                    involved_ids.update(ids)
+                id_key_map = {}
+                if involved_ids:
+                    placeholders = ",".join("?" * len(involved_ids))
+                    id_rows = conn.execute(
+                        f"SELECT id, source_sheet, source_row FROM videos WHERE id IN ({placeholders})",
+                        tuple(involved_ids),
+                    ).fetchall()
+                    id_key_map = {r["id"]: (r["source_sheet"], r["source_row"]) for r in id_rows}
             finally:
                 conn.close()
         latest_summary = {}
-        for r in summary_rows:
-            key = (r["source_sheet"], r["source_row"])
-            if key not in latest_summary:
-                latest_summary[key] = r["summary_type"]
+        for ids, summary_type in parsed:
+            for vid in ids:  # 合集稿的每个源视频都标注（否则第二篇视频显示无整理稿，取材时踩空）
+                key = id_key_map.get(vid)
+                if key and key not in latest_summary:
+                    latest_summary[key] = summary_type
         return {
             (r["source_sheet"], r["source_row"]): {
                 "id": r["id"],
@@ -364,7 +383,8 @@ def api_video_detail(sheet, row):
         detail["keyframes"] = [f"/media/{p}" for p in frame_paths]
     except Exception:
         detail["keyframes"] = []
-    # 该视频最新的整理稿（wechat_material/game_guide/ai_interview），供工作台取材时优先于原始转写。
+    # 该视频相关的最新整理稿（wechat_material/game_guide/ai_interview），供工作台取材时优先于原始转写。
+    # 含两种挂载：本视频直接挂的稿 + 本视频作为源视频之一的合集稿（source_video_ids）。
     # 整理稿是素材底稿不是成品文章：工作台取材后仍需生成+人工润色才能发布
     try:
         if DB_PATH.exists():
@@ -373,15 +393,26 @@ def api_video_detail(sheet, row):
                 with _db_lock:
                     conn = content_store.connect(DB_PATH)
                     summary_rows = conn.execute(
-                        "SELECT summary_type, title, content FROM ai_summaries "
-                        "WHERE video_id = ? "
-                        "AND summary_type IN ('wechat_material', 'game_guide', 'ai_interview') "
-                        "ORDER BY id DESC",
-                        (video["id"],),
+                        "SELECT video_id, source_video_ids, summary_type, title, content "
+                        "FROM ai_summaries "
+                        "WHERE summary_type IN ('wechat_material', 'game_guide', 'ai_interview', 'guide_article') "
+                        "ORDER BY id DESC"
                     ).fetchall()
                     conn.close()
+                vid = video["id"]
+                related = []
+                for summary_row in summary_rows:
+                    if summary_row["video_id"] == vid:
+                        related.append(summary_row)
+                        continue
+                    try:
+                        source_ids = json.loads(summary_row["source_video_ids"] or "[]")
+                    except (ValueError, TypeError):
+                        source_ids = []
+                    if vid in source_ids:  # 合集稿的源视频之一 → 同样可用该合集稿取材
+                        related.append(summary_row)
                 latest = {}
-                for summary_row in summary_rows:  # id 倒序 → 每类只留最新一条
+                for summary_row in related:  # id 倒序 → 每类只留最新一条
                     if summary_row["summary_type"] not in latest:
                         latest[summary_row["summary_type"]] = summary_row
                 for summary_type in ("wechat_material", "game_guide", "ai_interview"):
