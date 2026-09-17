@@ -110,11 +110,13 @@ def api_videos():
             v["ai_tags"] = info["ai_tags"]
             v["game"] = info["game"]
             v["dify_synced_at"] = info["dify_synced_at"]
+            v["summary_type"] = info.get("summary_type", "")
         else:
             v.setdefault("category", "")
             v.setdefault("ai_tags", "")
             v.setdefault("game", "")
             v.setdefault("dify_synced_at", "")
+            v.setdefault("summary_type", "")
 
     # 追加 SQLite 中的微信文章（不经过 video_index.json）
     if DB_PATH.exists():
@@ -177,7 +179,7 @@ def api_videos():
 
 
 def _load_video_extras() -> dict:
-    """从 SQLite 取分类/Dify 字段，键为 (sheet, row)。"""
+    """从 SQLite 取分类/Dify 字段与最新整理稿类型，键为 (sheet, row)。"""
     if not DB_PATH.exists():
         return {}
     try:
@@ -187,8 +189,19 @@ def _load_video_extras() -> dict:
                 rows = conn.execute(
                     "SELECT id, source_sheet, source_row, category, ai_tags, game, dify_synced_at FROM videos"
                 ).fetchall()
+                # 每个视频最新一条整理稿的类型（id 倒序第一个出现的即最新），供列表标注「已整理」
+                summary_rows = conn.execute(
+                    "SELECT v.source_sheet, v.source_row, s.summary_type "
+                    "FROM ai_summaries s JOIN videos v ON v.id = s.video_id "
+                    "ORDER BY s.id DESC"
+                ).fetchall()
             finally:
                 conn.close()
+        latest_summary = {}
+        for r in summary_rows:
+            key = (r["source_sheet"], r["source_row"])
+            if key not in latest_summary:
+                latest_summary[key] = r["summary_type"]
         return {
             (r["source_sheet"], r["source_row"]): {
                 "id": r["id"],
@@ -196,6 +209,7 @@ def _load_video_extras() -> dict:
                 "ai_tags": r["ai_tags"] or "",
                 "game": r["game"] or "",
                 "dify_synced_at": r["dify_synced_at"] or "",
+                "summary_type": latest_summary.get((r["source_sheet"], r["source_row"]), ""),
             }
             for r in rows
         }
@@ -350,23 +364,37 @@ def api_video_detail(sheet, row):
         detail["keyframes"] = [f"/media/{p}" for p in frame_paths]
     except Exception:
         detail["keyframes"] = []
-    # 该视频最新的公众号素材档案（wechat_material 整理稿），供工作台取材时优先于原始转写
+    # 该视频最新的整理稿（wechat_material/game_guide/ai_interview），供工作台取材时优先于原始转写。
+    # 整理稿是素材底稿不是成品文章：工作台取材后仍需生成+人工润色才能发布
     try:
         if DB_PATH.exists():
             video = content_store.get_video_by_source(DB_PATH, sheet, row)
             if video:
                 with _db_lock:
                     conn = content_store.connect(DB_PATH)
-                    summary_row = conn.execute(
-                        "SELECT id, title, content FROM ai_summaries "
-                        "WHERE video_id = ? AND summary_type = 'wechat_material' "
-                        "ORDER BY id DESC LIMIT 1",
+                    summary_rows = conn.execute(
+                        "SELECT summary_type, title, content FROM ai_summaries "
+                        "WHERE video_id = ? "
+                        "AND summary_type IN ('wechat_material', 'game_guide', 'ai_interview') "
+                        "ORDER BY id DESC",
                         (video["id"],),
-                    ).fetchone()
+                    ).fetchall()
                     conn.close()
-                if summary_row:
-                    detail["wechat_material"] = summary_row["content"] or ""
-                    detail["wechat_material_title"] = summary_row["title"] or ""
+                latest = {}
+                for summary_row in summary_rows:  # id 倒序 → 每类只留最新一条
+                    if summary_row["summary_type"] not in latest:
+                        latest[summary_row["summary_type"]] = summary_row
+                for summary_type in ("wechat_material", "game_guide", "ai_interview"):
+                    summary_row = latest.get(summary_type)
+                    if summary_row:
+                        detail[summary_type] = summary_row["content"] or ""
+                        detail[summary_type + "_title"] = summary_row["title"] or ""
+                # summary_type/summary_title：按取材优先级（素材档案 > 攻略整理 > 面试题）给首选整理稿
+                for summary_type in ("wechat_material", "game_guide", "ai_interview"):
+                    if detail.get(summary_type):
+                        detail["summary_type"] = summary_type
+                        detail["summary_title"] = detail[summary_type + "_title"]
+                        break
     except Exception:
         detail["wechat_material"] = ""
     return jsonify(detail)
