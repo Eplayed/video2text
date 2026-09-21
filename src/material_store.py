@@ -12,6 +12,7 @@ import re
 import shutil
 import sqlite3
 import subprocess
+import sys
 import tempfile
 from datetime import datetime
 from pathlib import Path
@@ -29,6 +30,18 @@ RAW_DIR = OUTPUT_DIR / "raw" / "douyin"
 ASSETS_DIR = OUTPUT_DIR / "assets"
 COVERS_DIR = ASSETS_DIR / "covers"
 KEYFRAMES_DIR = ASSETS_DIR / "keyframes"
+
+# 2026-09-21 修复：ffmpeg/ffprobe 按 PATH → /usr/local/bin 兜底解析绝对路径。
+# 服务进程 PATH 不含 /usr/local/bin 时（如从 WorkBuddy/launchd 等精简环境启动），
+# 裸命令名会 FileNotFoundError → 抽帧静默失败 → 关键帧目录为空、取材无「发稿配图」段。
+FFMPEG_BIN = shutil.which("ffmpeg") or "/usr/local/bin/ffmpeg"
+FFPROBE_BIN = shutil.which("ffprobe") or "/usr/local/bin/ffprobe"
+
+
+def _warn(msg: str) -> None:
+    """抽帧等资产操作的失败日志（原为静默吞掉，2026-09-21 起可见）。"""
+    print("[material_store] %s %s" % (datetime.now().strftime("%H:%M:%S"), msg),
+          file=sys.stderr, flush=True)
 
 
 HEADER_ALIASES = {
@@ -349,16 +362,18 @@ def extract_keyframes(aweme_id: str, video_url: str, max_frames: int = 4) -> boo
     video_path = tmpdir / "video.mp4"
     try:
         if not download_video(video_url, video_path):
+            _warn("视频下载失败，跳过抽帧 aweme_id=%s url=%s" % (aweme_id, str(video_url)[:80]))
             return False
         duration = probe_duration(video_path)
         if duration <= 0:
+            _warn("视频时长探测失败（文件损坏或 ffprobe 异常），跳过抽帧 aweme_id=%s" % aweme_id)
             return False
         times = frame_times(duration, max_frames)
         frames = []
         for idx, ts in enumerate(times, 1):
             out = target_dir / f"{idx:02d}.jpg"
             cmd = [
-                "ffmpeg",
+                FFMPEG_BIN,
                 "-y",
                 "-ss",
                 f"{ts:.2f}",
@@ -376,10 +391,12 @@ def extract_keyframes(aweme_id: str, video_url: str, max_frames: int = 4) -> boo
         if frames:
             make_contact_sheet(frames, sheet)
             return True
-    except Exception:
+    except Exception as e:
+        _warn("抽帧异常 aweme_id=%s：%s" % (aweme_id, str(e)[:160]))
         return False
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
+    _warn("抽帧未产出任何帧 aweme_id=%s（视频源不可用或帧文件过小）" % aweme_id)
     return False
 
 
@@ -412,7 +429,7 @@ def probe_duration(video_path: Path) -> float:
     try:
         result = subprocess.run(
             [
-                "ffprobe",
+                FFPROBE_BIN,
                 "-v",
                 "error",
                 "-show_entries",
@@ -426,7 +443,8 @@ def probe_duration(video_path: Path) -> float:
             timeout=20,
         )
         return float((result.stdout or "0").strip() or 0)
-    except Exception:
+    except Exception as e:
+        _warn("ffprobe 异常：%s" % str(e)[:120])
         return 0.0
 
 
