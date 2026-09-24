@@ -52,6 +52,8 @@ vendor/douyin_parse      内置解析器（免依赖 /tmp）
 - 2026-09-10：项目整体接入周一体检自动化（media-workbench 定时任务，只读检查本仓库 15801 端口服务与 git 状态）
 - 2026-09-14：**SQLite 权威源第一步（实体标识）**——videos 表新增 `author_sec_uid`/`source` 列（Excel 重同步不覆盖）：订阅同步按行号回写 sec_uid，启动时按订阅作者名幂等回填存量（737 条）；订阅导入改 SQLite 直查 sec_uid（URL 反查降为兜底）。**索引实体键重构**——video_index 以 aweme_id 为实体键（缺 id 旧条目退回 sheet:row），重建只保留本次扫描到的实体，Excel 清行（删除视频）自动出索引，published/performance 按实体键继承。**采集链修复**——resolve_url 由 HEAD 改 GET(stream)（抖音 CDN 对 HEAD 返回 404/超时导致短链解析失败，Row 834 实测），parser 自带重定向解析作双保险；采集失败原因从 Excel 备注列带回前端
 
+- 2026-09-21~24：**头条图文生成链路**——①采集兜底：抖音 Argus 风控拦截纯 API 签名，parser 解析不到 aweme_id 时改用真实 Chromium 打开视频页抓 detail（src/browser_fetch.py + tools/douyin_browser_fetch.js），视频下载 curl 加 --fail/UA 防空文件；②整合稿：content_store 新增 toutiao_mix 类型（单视频/多视频决策化整合，【标题候选/时间线/变化对比/对你的影响/行动建议/风险核查】固定标签六节结构）；③出图：src/toutiao_graphics.py v3——LLM 卡片化整合稿 → playwright 渲染 9:16（1080×1920）竖版信息图 4 张 + 微头条文案，版式参照 2026-09-24 参考图（金渐变衬线大标题/插画主视觉底缘渐隐/圆环图标三面板/双金边横幅，无页码无来源行）；题材+皮双选择：题材决定 LLM 文案点明的游戏与插画素材文件夹（output/toutiao/<题材>图片素材/，更新素材下次生成即生效），皮决定整套调色板与背景（wow 蓝黑金/d4 烬红/poe 青铜/poe2 墨玉绿/自定义 _assets/<名称>_bg.jpg），插画封面取竖构图、内容页取横构图按页轮换，LLM 不可用走本地模板兜底；④前端：生成弹框新增标题输入框（自动代入整理稿标题，可改可留空），超 12 字标题自动降字号防截断
+
 ## 运营协作现状（2026-09）
 
 本仓库是三仓库自媒体产线的**素材层**，生产层见 `自媒体/_content_factory`，运营层见 `media-workbench`。当前公众号走「老张码上记」AI 科技赛道（周二更：周一科普/周四战地日记），头条处于修复期（3天×2篇），选题雷达支持 channel 参数按渠道出题。

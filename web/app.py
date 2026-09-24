@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 import main as collector  # main.py
-from src import content_store, material_store
+from src import content_store, material_store, toutiao_graphics
 from src.dify_client import DifyKBClient, DifyKBError
 from src.path_config import find_parser_dir, ensure_parser_on_path, get_cookie_path
 
@@ -37,6 +37,26 @@ def _setup_parser_and_cookie(cookie_str: str):
     # 自动加上 sessionid= 前缀
     if cookie_str and "sessionid=" not in cookie_str:
         cookie_str = f"sessionid={cookie_str}"
+
+    # ── Cookie 合并保护（2026-09-21）：短 cookie（纯 sessionid）不覆盖完整 Cookie ──
+    # 抖音 Argus 风控要求完整安全 Cookie（UIFID/ttwid/msToken 等），前端 localStorage
+    # 里可能仍存着旧的纯 sessionid，直接写入会把完整串冲掉，导致同步全部返回空。
+    try:
+        cookie_path = get_cookie_path()
+        if cookie_str and len(cookie_str) < 200 and cookie_path.exists():
+            existing = cookie_path.read_text(encoding="utf-8").strip()
+            if len(existing) > len(cookie_str) and "uifid=" in existing.lower():
+                import re as _re
+                m_new = _re.search(r"sessionid=([^;]+)", cookie_str)
+                m_old = _re.search(r"sessionid=([^;]+)", existing)
+                if m_new and m_old and m_new.group(1) != m_old.group(1):
+                    # sessionid 变了（重新登录）：只更新完整串里的 sessionid 值
+                    existing = _re.sub(
+                        r"sessionid=[^;]*", "sessionid=" + m_new.group(1), existing, count=1
+                    )
+                cookie_str = existing
+    except Exception:
+        pass
 
     parser_dir = str(PARSER_DIR)
     if not os.path.isdir(parser_dir):
@@ -192,7 +212,7 @@ def _load_video_extras() -> dict:
                 # 每条整理稿的类型（含合集稿的全部源视频）：id 倒序第一个出现的即最新，供列表标注「已整理」
                 summary_rows = conn.execute(
                     "SELECT video_id, source_video_ids, summary_type FROM ai_summaries "
-                    "WHERE summary_type IN ('wechat_material', 'game_guide', 'ai_interview', 'guide_article') "
+                    "WHERE summary_type IN ('wechat_material', 'game_guide', 'ai_interview', 'guide_article', 'toutiao_mix') "
                     "ORDER BY id DESC"
                 ).fetchall()
                 involved_ids = set()
@@ -395,7 +415,7 @@ def api_video_detail(sheet, row):
                     summary_rows = conn.execute(
                         "SELECT video_id, source_video_ids, summary_type, title, content "
                         "FROM ai_summaries "
-                        "WHERE summary_type IN ('wechat_material', 'game_guide', 'ai_interview', 'guide_article') "
+                        "WHERE summary_type IN ('wechat_material', 'game_guide', 'ai_interview', 'guide_article', 'toutiao_mix') "
                         "ORDER BY id DESC"
                     ).fetchall()
                     conn.close()
@@ -415,13 +435,13 @@ def api_video_detail(sheet, row):
                 for summary_row in related:  # id 倒序 → 每类只留最新一条
                     if summary_row["summary_type"] not in latest:
                         latest[summary_row["summary_type"]] = summary_row
-                for summary_type in ("wechat_material", "game_guide", "ai_interview"):
+                for summary_type in ("wechat_material", "game_guide", "ai_interview", "toutiao_mix"):
                     summary_row = latest.get(summary_type)
                     if summary_row:
                         detail[summary_type] = summary_row["content"] or ""
                         detail[summary_type + "_title"] = summary_row["title"] or ""
-                # summary_type/summary_title：按取材优先级（素材档案 > 攻略整理 > 面试题）给首选整理稿
-                for summary_type in ("wechat_material", "game_guide", "ai_interview"):
+                # summary_type/summary_title：按取材优先级（素材档案 > 攻略整理 > 面试题 > 头条整合）给首选整理稿
+                for summary_type in ("wechat_material", "game_guide", "ai_interview", "toutiao_mix"):
                     if detail.get(summary_type):
                         detail["summary_type"] = summary_type
                         detail["summary_title"] = detail[summary_type + "_title"]
@@ -451,6 +471,17 @@ def api_workbench():
     except Exception as e:
         return jsonify({"items": [], "total": 0, "error": str(e)}), 500
 
+
+@app.route("/api/rebuild-index", methods=["POST"])
+def api_rebuild_index():
+    """手动重建 video_index.json（读取 Excel + SQLite 全量数据）"""
+    try:
+        collector.update_video_index(str(EXCEL_PATH))
+        _sync_content_db()
+        count = len(json.load(open(INDEX_PATH, encoding="utf-8"))) if INDEX_PATH.exists() else 0
+        return jsonify({"success": True, "message": f"索引已重建，共 {count} 条", "count": count})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
 
 @app.route("/api/workbench/sync", methods=["POST"])
 def api_workbench_sync():
@@ -705,9 +736,34 @@ def api_preview_user_videos():
             # 检查是否是去重导致的
             if result.get('filtered'):
                 result['warning'] = f"所有视频已存在（去重 {result.get('filtered')} 条）"
+            elif mode == "user_url":
+                # ── 浏览器兜底（2026-09-21）：抖音 Argus 拦截纯 API 签名，
+                # 旧路径拉空时改用真实 Chromium 打开主页抓取 ──
+                try:
+                    from src.browser_fetch import browser_fetch_user_videos
+                    from src.fetch_user_videos import load_existing_aweme_ids
+                    ids = browser_fetch_user_videos(url, max_videos=max_videos or 20)
+                    if ids:
+                        existing = load_existing_aweme_ids(str(EXCEL_PATH))
+                        vids = [i for i in ids if i not in existing]
+                        result['videos'] = [
+                            {"aweme_id": i, "url": "https://www.douyin.com/video/" + i}
+                            for i in vids
+                        ]
+                        result['total'] = len(vids)
+                        result['user_url'] = url
+                        result['success'] = True
+                        if not vids:
+                            result['warning'] = f"浏览器拉到 {len(ids)} 条，但全部已存在（去重过滤）"
+                    else:
+                        result['warning'] = "视频数为0（浏览器兜底也未拉到），请检查链接或稍后重试"
+                except Exception:
+                    result['warning'] = "视频数为0，请检查Cookie是否有效或已过期"
+                if not result.get('videos'):
+                    return jsonify(result)
             else:
                 result['warning'] = "视频数为0，请检查Cookie是否有效或已过期"
-        return jsonify(result)
+                return jsonify(result)
     except Exception as e:
         import traceback
         traceback.print_exc()
@@ -938,8 +994,8 @@ def api_content_generate():
     videos = data.get("videos", [])
     summary_type = data.get("summary_type", "game_guide")
     combine = bool(data.get("combine", False))
-    if summary_type not in ("game_guide", "ai_interview", "wechat_material"):
-        return jsonify({"error": "summary_type 只能是 game_guide / ai_interview / wechat_material（攻略成品文章走自媒体工作台生成）"}), 400
+    if summary_type not in ("game_guide", "ai_interview", "wechat_material", "toutiao_mix"):
+        return jsonify({"error": "summary_type 只能是 game_guide / ai_interview / wechat_material / toutiao_mix（攻略成品文章走自媒体工作台生成）"}), 400
     if not videos:
         return jsonify({"error": "请选择要整理的视频"}), 400
 
@@ -1156,6 +1212,106 @@ def _video_keyframe_markdown(videos: list, max_frames: int = 5, per_video: int =
         lines.append(f"![关键帧{idx}](/media/{rel})")
     lines.append("")
     return "\n".join(lines)
+
+
+# ── 头条图文：整合稿 → 信息图 + 微头条文案（复制发布保持手动，合规红线） ──
+# 独立任务状态：不与 /api/content/generate 共用 _task_status，避免两条产线互相打断
+_tt_task_status = {"running": False, "done": True, "progress": "", "error": "", "package": None}
+
+
+@app.route("/api/toutiao/generate", methods=["POST"])
+def api_toutiao_generate():
+    """从 toutiao_mix 整理稿生成头条图文（4 张信息图 + 微头条文案）。"""
+    data = request.get_json(force=True)
+    summary_id = data.get("summary_id")
+    theme = str(data.get("theme") or "").strip()[:30]   # 图文卡片化题材（进 LLM prompt）
+    skin = str(data.get("skin") or "wow").strip()[:30]  # 图的皮（背景资产）
+    title = str(data.get("title") or "").strip()[:60]  # 图文标题（弹框可改，空则用整理稿标题）
+    if not summary_id:
+        return jsonify({"error": "缺少 summary_id"}), 400
+    if _tt_task_status.get("running"):
+        return jsonify({"error": "已有头条图文生成任务正在运行"}), 400
+
+    with _db_lock:
+        summary = content_store.get_summary(DB_PATH, int(summary_id))
+    if not summary:
+        return jsonify({"error": "整理稿不存在"}), 404
+    if summary.get("summary_type") != "toutiao_mix":
+        return jsonify({"error": "只支持头条整合稿（toutiao_mix）生成图文，请先生成整合稿"}), 400
+
+    _tt_task_status.update({
+        "running": True, "done": False, "progress": "准备生成头条图文...", "error": "", "package": None,
+    })
+
+    def run():
+        try:
+            def cb(msg):
+                _tt_task_status["progress"] = msg
+            _tt_task_status["progress"] = "LLM 卡片化整合稿..."
+            package = toutiao_graphics.generate_graphics(summary, _ai_config(), progress_cb=cb,
+                                                          theme=theme, skin=skin, title=title)
+            _tt_task_status["package"] = {"id": package["id"], "title": package["title"], "images": len(package["images"])}
+            _tt_task_status["progress"] = "✅ 已生成 %d 张信息图，可复制文案发布" % len(package["images"])
+        except Exception:
+            _tt_task_status["error"] = traceback.format_exc()
+            _tt_task_status["progress"] = "生成失败"
+        finally:
+            _tt_task_status["done"] = True
+            _tt_task_status["running"] = False
+
+    threading.Thread(target=run, daemon=True).start()
+    return jsonify({"status": "started", "summary_id": summary_id})
+
+
+@app.route("/api/toutiao/status")
+def api_toutiao_status():
+    return jsonify(_tt_task_status)
+
+
+@app.route("/api/toutiao/list")
+def api_toutiao_list():
+    try:
+        items = toutiao_graphics.list_packages()
+        return jsonify({"items": items, "total": len(items)})
+    except Exception as e:
+        return jsonify({"error": str(e), "items": [], "total": 0}), 500
+
+
+@app.route("/api/toutiao/<int:summary_id>")
+def api_toutiao_detail(summary_id):
+    package = toutiao_graphics.get_package(summary_id)
+    if not package:
+        return jsonify({"error": "头条图文不存在"}), 404
+    return jsonify(package)
+
+
+@app.route("/api/toutiao/<int:summary_id>/reveal", methods=["POST"])
+def api_toutiao_reveal(summary_id):
+    """在 Finder 中打开该组信息图所在文件夹（macOS open / Win explorer）。"""
+    import subprocess
+
+    folder = toutiao_graphics.OUTPUT_DIR / str(summary_id)
+    if not folder.exists():
+        return jsonify({"error": "文件夹不存在"}), 404
+    try:
+        if sys.platform == "darwin":
+            subprocess.Popen(["open", str(folder)])
+        elif os.name == "nt":
+            subprocess.Popen(["explorer", str(folder)])
+        else:
+            subprocess.Popen(["xdg-open", str(folder)])
+        return jsonify({"success": True, "folder": str(folder)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/toutiao/<int:summary_id>", methods=["DELETE"])
+def api_toutiao_delete(summary_id):
+    try:
+        ok = toutiao_graphics.delete_package(summary_id)
+        return jsonify({"success": bool(ok)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 # ── AI 配置管理 ──
@@ -1709,13 +1865,30 @@ def api_subscriptions_sync():
                     name = sub["author"] or sub["sec_uid"][:12]
                     _sub_status["progress"] = f"[抖音 {si}/{len(douyin_subs)}] {name}: 拉取主页..."
                     try:
-                        from src.fetch_user_videos import fetch_user_videos
-                        result = fetch_user_videos(
-                            url=sub["user_url"], cookie=cookie,
-                            max_pages=1, max_videos=20, mode="user_url",
-                            exclude_excel=str(EXCEL_PATH),
-                        )
-                        videos = result.get("videos") or []
+                        from src.fetch_user_videos import fetch_user_videos, load_existing_aweme_ids
+                        # ── 浏览器优先（2026-09-21）：抖音 Argus 风控拦截纯 API 签名，
+                        # 旧 API 路径挂起 30s+ 后才返回空，直接走真实 Chromium 抓取 ──
+                        videos = []
+                        try:
+                            from src.browser_fetch import browser_fetch_user_videos
+                            _sub_status["progress"] = f"[抖音 {si}/{len(douyin_subs)}] {name}: 浏览器路径拉取..."
+                            ids = browser_fetch_user_videos(sub["user_url"], max_videos=20)
+                            if ids:
+                                existing = load_existing_aweme_ids(str(EXCEL_PATH))
+                                videos = [
+                                    {"aweme_id": i, "url": "https://www.douyin.com/video/" + i}
+                                    for i in ids if i not in existing
+                                ]
+                        except Exception as be:
+                            summary.append(f"{name}: 浏览器兜底异常 ({be})")
+                        if not videos:
+                            # 浏览器路径失败时退回旧 API
+                            result = fetch_user_videos(
+                                url=sub["user_url"], cookie=cookie,
+                                max_pages=1, max_videos=20, mode="user_url",
+                                exclude_excel=str(EXCEL_PATH),
+                            )
+                            videos = result.get("videos") or []
                         new_author = ""
                         if not videos:
                             with _db_lock:

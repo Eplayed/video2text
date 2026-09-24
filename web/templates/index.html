@@ -265,9 +265,46 @@ textarea{resize:vertical;min-height:84px}
 .s-del{position:absolute;top:8px;right:8px;width:22px;height:22px;display:grid;place-items:center;border-radius:6px;color:var(--text-tertiary);opacity:.55;cursor:pointer;transition:all .12s}
 .summary-card:hover .s-del{opacity:1}
 .s-del:hover{background:color-mix(in srgb,var(--module-5) 12%,transparent);color:var(--module-5);opacity:1}
+.s-tt{margin-top:10px;display:flex;align-items:center;justify-content:center;gap:6px;font-size:12.5px;font-weight:800;color:var(--module-3);background:color-mix(in srgb,var(--module-3) 9%,transparent);border:1px solid color-mix(in srgb,var(--module-3) 32%,transparent);border-radius:8px;padding:8px 10px;cursor:pointer;transition:all .12s}
+.s-tt:hover{background:var(--module-3);color:#fff}
+
+/* ── 头条图文页 ── */
+.tt-layout{display:flex;gap:18px;align-items:flex-start;margin-top:16px}
+.tt-left{flex:0 0 300px}
+.tt-right{flex:1;min-width:0}
+.tt-imgpanel{padding:14px}
+.img-stack{display:flex;flex-direction:column;gap:10px;max-height:600px;overflow-y:auto;padding-right:4px}
+.img-stack::-webkit-scrollbar{width:5px}
+.img-stack::-webkit-scrollbar-thumb{background:var(--border-input);border-radius:5px}
+.tt-img{position:relative;border-radius:10px;overflow:hidden;border:2px solid transparent;transition:border .12s}
+.tt-img img{display:block;width:100%;height:auto}
+.tt-img .lb{position:absolute;top:8px;left:8px;background:rgba(35,34,32,.78);color:#fff;font-size:10.5px;font-weight:700;border-radius:5px;padding:3px 8px}
+.tt-img:hover{border-color:var(--module-3)}
+.tt-copy-area{width:100%;min-height:260px;border:1px solid var(--border-input);border-radius:var(--radius-control);background:var(--surface-nested);padding:14px;font-family:var(--font);font-size:13px;line-height:1.7;color:var(--text);resize:vertical}
+.tt-cl{display:flex;align-items:flex-start;gap:10px;padding:8px 10px;border-radius:8px;font-size:13px;cursor:pointer;transition:background .12s;color:var(--text)}
+.tt-cl:hover{background:var(--surface-nested)}
+.tt-cl input{margin-top:2px;accent-color:var(--module-3)}
+.tt-cl.done{color:var(--text-tertiary);text-decoration:line-through}
+.tt-tips{margin-top:14px;background:color-mix(in srgb,var(--module-5) 7%,transparent);border:1px solid color-mix(in srgb,var(--module-5) 22%,transparent);border-radius:var(--radius-control);padding:12px 14px;font-size:12.5px;line-height:1.7;color:var(--text-secondary)}
+.tt-tips b{color:var(--module-5)}
+
+/* ── 头条图文生成配置弹窗 ── */
+#tt-gen-overlay .modal-box{position:relative;background:var(--surface-card);border-radius:var(--radius-sheet);box-shadow:var(--shadow-overlay);width:460px;max-width:92vw;padding:24px 26px}
+#tt-gen-overlay .close-btn{position:absolute;top:14px;right:14px}
+.tt-gen-title{font-size:17px;font-weight:800}
+.tt-gen-sub{font-size:12.5px;color:var(--text-secondary);margin:4px 0 16px}
+.tt-gen-field{margin-bottom:14px}
+.tt-gen-field label{display:block;font-size:13px;font-weight:700;margin-bottom:7px}
+.tt-gen-field label small{color:var(--text-tertiary);font-weight:400}
+.tt-gen-field select{width:100%;border:1px solid var(--border-input);border-radius:var(--radius-control);padding:9px 12px;font-size:13.5px;background:var(--surface-card);margin-bottom:8px}
+.tt-gen-field input{width:100%;border:1px solid var(--border-input);border-radius:var(--radius-control);padding:9px 12px;font-size:13px}
+.tt-gen-field input:focus,.tt-gen-field select:focus{outline:none;border-color:var(--accent)}
+.tt-card{cursor:pointer}
+.tt-card .s-meta .tt-imgs{color:var(--module-3);font-weight:700}
 .summary-card:hover{border-color:var(--border-input);transform:translateY(-1px);box-shadow:var(--shadow-overlay)}
 .summary-card .s-author{font-size:11.5px;color:var(--text-secondary);margin-bottom:5px;display:flex;align-items:center;gap:6px}
 .pill.guide{background:color-mix(in srgb,var(--module-3) 15%,transparent);color:var(--module-3)}
+.pill.tt{background:color-mix(in srgb,var(--module-3) 18%,transparent);color:var(--module-3);font-weight:800}
 .pill.article{background:color-mix(in srgb,var(--module-4) 15%,transparent);color:var(--module-4)}
 .pill.interview{background:color-mix(in srgb,var(--module-2) 14%,transparent);color:var(--module-2)}
 .pill.link{cursor:pointer}
@@ -332,6 +369,7 @@ textarea{resize:vertical;min-height:84px}
       <div class="navi" id="nav-radar" onclick="switchPage('radar')"><span class="nav-ic" data-icon="radar"></span>选题雷达</div>
       <div class="navi" id="nav-videos" onclick="switchPage('videos')"><span class="nav-ic" data-icon="list"></span>视频库</div>
       <div class="navi" id="nav-summaries" onclick="switchPage('summaries')"><span class="nav-ic" data-icon="book"></span>整理稿</div>
+      <div class="navi" id="nav-toutiao" onclick="switchPage('toutiao')"><span class="nav-ic" data-icon="flame"></span>头条图文</div>
       <div class="navi" id="nav-questions" onclick="switchPage('questions')"><span class="nav-ic" data-icon="target"></span>面试题库</div>
       <div class="nav-sep">设置</div>
       <div class="navi" id="nav-settings" onclick="switchPage('settings')"><span class="nav-ic" data-icon="settings"></span>AI 设置</div>
@@ -652,6 +690,7 @@ textarea{resize:vertical;min-height:84px}
         <select id="summary-type" onchange="updateOptimizeButton()">
           <option value="game_guide">生成：游戏攻略</option>
           <option value="wechat_material">生成：公众号文章素材</option>
+          <option value="toutiao_mix">生成：头条整合稿</option>
           <option value="ai_interview">生成：AI面试题</option>
         </select>
         <select id="generate-mode" onchange="updateOptimizeButton()">
@@ -683,6 +722,7 @@ textarea{resize:vertical;min-height:84px}
           <option value="">全部类型</option>
           <option value="game_guide">游戏攻略</option>
           <option value="wechat_material">公众号素材</option>
+          <option value="toutiao_mix">头条整合稿</option>
           <option value="ai_interview">AI面试题</option>
         </select>
       </div>
@@ -690,6 +730,95 @@ textarea{resize:vertical;min-height:84px}
         <div class="empty"><span class="e" data-icon="book"></span>加载中...</div>
       </div>
     </section>
+
+    <!-- ── 头条图文 ── -->
+    <section id="page-toutiao">
+      <!-- 列表视图 -->
+      <div id="tt-list-view">
+        <div class="header">
+          <h2>头条图文</h2>
+          <div class="spacer"></div>
+          <span class="count" id="count-toutiao">0 组</span>
+        </div>
+        <p style="font-size:12px;color:var(--text-tertiary);margin:0 0 12px">链路：视频库勾选素材 → 生成「头条整合稿」→ 整理稿点「生成头条图文」→ 这里复制文案+下载图片 → <b>手动</b>发布头条号（勾选 AI 辅助声明）。</p>
+        <div class="grid" id="grid-toutiao">
+          <div class="empty"><span class="e" data-icon="flame"></span>加载中...</div>
+        </div>
+      </div>
+      <!-- 详情视图：左图右文 -->
+      <div id="tt-detail-view" style="display:none">
+        <div class="header">
+          <h2 id="tt-detail-title">头条图文</h2>
+          <div class="spacer"></div>
+          <button class="btn ghost sm" onclick="showToutiaoList()">← 返回列表</button>
+        </div>
+        <div class="tt-layout">
+          <div class="tt-left">
+            <div class="panel tt-imgpanel" style="margin-top:0">
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+                <b style="font-size:13.5px" id="tt-img-count">配图</b>
+                <button class="btn ghost sm" onclick="revealToutiaoFolder()"><span data-icon="grid" class="ic14"></span>打开图片所在文件夹</button>
+              </div>
+              <div class="img-stack" id="tt-img-stack"></div>
+            </div>
+          </div>
+          <div class="tt-right">
+            <div class="panel" style="margin-top:0">
+              <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+                <b style="font-size:14.5px">📝 微头条文案</b>
+                <div style="flex:1"></div>
+                <button class="btn sm" style="background:var(--module-3);border-color:var(--module-3);color:#fff" onclick="copyToutiaoText()">📋 复制文案</button>
+              </div>
+              <textarea class="tt-copy-area" id="tt-copy-area" spellcheck="false"></textarea>
+              <div style="font-size:13px;font-weight:800;margin:16px 0 8px">✅ 发布检查清单</div>
+              <div id="tt-checklist"></div>
+              <div class="tt-tips"><b>合规提示：</b>发布时勾选「内容包含AI生成」声明；发布动作保持手动，不走任何自动发布通道。试跑纪律：连续 2 条阅读 &lt;100 停下复盘形态。</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 头条图文生成配置弹窗 -->
+    <div class="modal-overlay" id="tt-gen-overlay" onclick="closeToutiaoGenDialog(event)">
+      <div class="modal-box" onclick="event.stopPropagation()">
+        <button class="close-btn" onclick="closeToutiaoGenDialog()"><span data-icon="close" class="ic14"></span></button>
+        <div class="tt-gen-title">🔥 生成头条图文</div>
+        <div class="tt-gen-sub">整合稿 #<span id="tt-gen-id"></span> · 生成前先定标题、题材和皮</div>
+        <div class="tt-gen-field">
+          <label>图文标题 <small>（已代入整理稿标题，可自行修改；决定封面主标题）</small></label>
+          <input id="tt-gen-title" placeholder="图文标题（留空则按整合稿标题自动生成）">
+        </div>
+        <div class="tt-gen-field">
+          <label>图文卡片化题材 <small>（决定卡片标题与文案点明什么游戏）</small></label>
+          <select id="tt-gen-theme">
+            <option value="">自动（按整合稿内容判断）</option>
+            <option value="魔兽世界-正式服">魔兽世界-正式服</option>
+            <option value="魔兽世界-无限">魔兽世界-无限</option>
+            <option value="魔兽世界-怀旧服">魔兽世界-怀旧服</option>
+            <option value="暗黑4">暗黑4</option>
+            <option value="流放之路">流放之路</option>
+            <option value="流放之路2">流放之路2</option>
+          </select>
+          <input id="tt-gen-theme-custom" placeholder="自定义题材（填了优先于上面的选项）">
+        </div>
+        <div class="tt-gen-field">
+          <label>图的皮 <small>（决定配色/背景图/插画素材，无对应图时回退通用皮）</small></label>
+          <select id="tt-gen-skin">
+            <option value="wow">魔兽世界-正式服</option>
+            <option value="wow">魔兽世界-无限</option>
+            <option value="d4">暗黑4</option>
+            <option value="poe">流放之路</option>
+            <option value="poe2">流放之路2</option>
+          </select>
+          <input id="tt-gen-skin-custom" placeholder="自定义皮（填了优先；需在素材库有 <名称>_bg.jpg）">
+        </div>
+        <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:18px">
+          <button class="btn ghost sm" onclick="closeToutiaoGenDialog()">取消</button>
+          <button class="btn sm" style="background:var(--module-3);border-color:var(--module-3);color:#fff" onclick="confirmToutiaoGen()">🔥 开始生成</button>
+        </div>
+      </div>
+    </div>
 
     <!-- ── 面试题库 ── -->
     <section id="page-questions">
@@ -830,6 +959,7 @@ const ICONS = {
   book:'<path d="M5 5.5A2.5 2.5 0 0 1 7.5 3H19v14H7.5A2.5 2.5 0 0 0 5 19.5z"/><path d="M5 19.5A2.5 2.5 0 0 1 7.5 17H19v4H7.5A2.5 2.5 0 0 1 5 19.5z"/>',
   activity:'<path d="M3 12h4l2.5 6L14 5l2.5 7H21"/>',
   radar:'<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.5"/><path d="M12 12l6-4"/>',
+  flame:'<path d="M12 3s1 2.5-1 5c-1.2 1.5-2.5 2.6-2.5 4.5a1 1 0 0 0 2 0c0-.8.6-1.2 1.2-1.2.7 0 1.3.5 1.3 1.4 0 1.8-1.4 3.3-3.2 3.3A3.6 3.6 0 0 1 6 12.4C6 8.8 9.2 7.6 9.2 5c0 0 2.8 1.3 2.8 4.2 0 0 2-1.2 2-3.7 0 0 .5.9.5 2 0 .8-.3 1.6-.3 1.6s1.8-1.2 1.8-3.9C16 5.2 14 3.6 12 3z"/><path d="M8.5 21h7"/>',
   camera:'<path d="M4 8.5h3l1.5-2h7L17 8.5h3v10H4z"/><circle cx="12" cy="13" r="3.2"/>',
   target:'<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="4"/>',
   star:'<path d="M12 3.6l2.6 5.3 5.8.85-4.2 4.1 1 5.8L12 16.9l-5.2 2.75 1-5.8-4.2-4.1 5.8-.85z"/>',
@@ -858,7 +988,7 @@ document.getElementById('brand-ava').innerHTML = iconSvg('film', 22);
 // ── 全局状态 ──
 let POLLING = false;
 let currentView = 'dashboard';
-const PAGES = ['dashboard','collect','materials','radar','videos','summaries','questions','settings'];
+const PAGES = ['dashboard','collect','materials','radar','videos','summaries','toutiao','questions','settings'];
 let selectedVideos = new Set();
 let window_lastSelected = null;
 
@@ -907,6 +1037,7 @@ async function loadCurrentView() {
   if (currentView === 'radar') return loadRadar();
   if (currentView === 'questions') return loadInterviewQuestions();
   if (currentView === 'summaries') return loadSummaries();
+  if (currentView === 'toutiao') return loadToutiaoList();
   if (currentView === 'settings') { await loadAiConfig(); return loadDifyConfig(); }
   return loadVideos();
 }
@@ -989,7 +1120,7 @@ async function loadTopics() {
 let _activeCategory = '';
 let _activeGame = '';
 const CATEGORY_ORDER = ['前端面试', 'AI技术', '游戏攻略', '编程开发', '产品设计', '数码评测', '商业财经', '职场成长', '生活日常', '其他'];
-const TYPE_LABELS = {game_guide: '游戏攻略', wechat_material: '公众号素材', guide_article: '攻略文章（已废弃）', ai_interview: 'AI面试题'};
+const TYPE_LABELS = {game_guide: '游戏攻略', wechat_material: '公众号素材', toutiao_mix: '头条整合稿', guide_article: '攻略文章（已废弃）', ai_interview: 'AI面试题'};
 
 async function loadVideos() {
   const q = getSearchValue();
@@ -1235,6 +1366,164 @@ async function loadSummaries() {
   document.getElementById('count-summaries').textContent = (data.total||0) + ' 篇';
 }
 
+// ── 头条图文 ──
+async function loadToutiaoList() {
+  const grid = document.getElementById('grid-toutiao');
+  try {
+    const data = await fetch('/api/toutiao/list').then(r=>r.json());
+    const items = data.items || [];
+    document.getElementById('count-toutiao').textContent = (data.total||0) + ' 组';
+    if (!items.length) {
+      grid.innerHTML = '<div class="empty"><span class="e">' + iconSvg('flame') + '</span>还没有头条图文<br><small>视频库勾选素材 → 生成「头条整合稿」→ 整理稿页点「生成头条图文」</small></div>';
+      return;
+    }
+    grid.innerHTML = items.map(p => `
+      <div class="summary-card tt-card" onclick="openToutiaoDetail(${p.id})">
+        <div class="s-del" title="删除" onclick="event.stopPropagation();deleteToutiaoPackage(${p.id})">${iconSvg('trash', 12)}</div>
+        <div class="s-author"><span class="pill tt">头条图文</span> <span>${esc(p.model||'')}</span></div>
+        <div class="s-title">${esc(p.title||'')}</div>
+        <div class="s-desc">源自整合稿 #${p.summary_id} · ${esc((p.copy_text||'').slice(0,120))}...</div>
+        <div class="s-meta">
+          <span class="tt-imgs">🖼 ${(p.images||[]).length} 张</span>
+          <span>${esc(p.created_at||'')}</span>
+        </div>
+      </div>`).join('');
+  } catch (e) {
+    grid.innerHTML = '<div class="empty"><span class="e">' + iconSvg('flame') + '</span>加载失败: ' + esc(e.message) + '</div>';
+  }
+}
+
+async function openToutiaoDetail(id) {
+  document.getElementById('tt-list-view').style.display = 'none';
+  document.getElementById('tt-detail-view').style.display = '';
+  document.getElementById('tt-img-stack').innerHTML = '<div style="padding:20px;color:var(--text-tertiary);font-size:13px">加载中...</div>';
+  document.getElementById('tt-copy-area').value = '';
+  try {
+    const p = await fetch('/api/toutiao/' + id).then(r=>r.json());
+    if (p.error) { alert(p.error); return showToutiaoList(); }
+    document.getElementById('tt-detail-title').textContent = p.title || '头条图文';
+    document.getElementById('tt-img-count').textContent = '配图 · ' + (p.images||[]).length + ' 张（点击图片可放大）';
+    document.getElementById('tt-img-stack').innerHTML = (p.images||[]).map((im,i) => `
+      <div class="tt-img"><span class="lb">图${i+1}</span><img src="${esc(im.url)}" alt="${esc(im.label||'')}" loading="lazy" onclick="window.open('${esc(im.url)}','_blank')"></div>`).join('');
+    document.getElementById('tt-copy-area').value = p.copy_text || '';
+    const checks = [
+      '配图顺序：图1封面在前，按序上传',
+      '发布时勾选「内容包含AI生成」声明（头条AI标注要求）',
+      '手动发布，不走任何自动发布通道（合规红线）',
+      '发布后把阅读/互动数据记入试跑观察表（3-5条后评估形态）'
+    ];
+    document.getElementById('tt-checklist').innerHTML = checks.map(c =>
+      `<label class="tt-cl"><input type="checkbox" onchange="this.closest('.tt-cl').classList.toggle('done',this.checked)"><span>${esc(c)}</span></label>`).join('');
+    window._ttPackage = p;
+  } catch (e) {
+    alert('加载失败: ' + e.message);
+    showToutiaoList();
+  }
+}
+
+function showToutiaoList() {
+  document.getElementById('tt-list-view').style.display = '';
+  document.getElementById('tt-detail-view').style.display = 'none';
+  loadToutiaoList();
+}
+
+async function revealToutiaoFolder() {
+  const p = window._ttPackage;
+  if (!p || !p.id) { setStatus('error', '请先打开一组头条图文'); return; }
+  try {
+    const resp = await fetch('/api/toutiao/' + p.id + '/reveal', {method: 'POST'}).then(r=>r.json());
+    if (resp.error) { setStatus('error', resp.error); return; }
+    setStatus('done', '✅ 已在访达中打开文件夹');
+  } catch (e) { setStatus('error', '打开失败: ' + e.message); }
+}
+
+let _ttGenTargetId = null;
+function openToutiaoGenDialog(id) {
+  _ttGenTargetId = id;
+  document.getElementById('tt-gen-id').textContent = id;
+  const tEl = document.getElementById('tt-gen-title');
+  tEl.value = '';
+  fetch('/api/content/summaries/' + id).then(r => r.json()).then(d => {
+    if (_ttGenTargetId === id && d && d.title) tEl.value = d.title;
+  }).catch(() => {});
+  document.getElementById('tt-gen-theme').value = '';
+  document.getElementById('tt-gen-theme-custom').value = '';
+  document.getElementById('tt-gen-skin').value = 'wow';
+  document.getElementById('tt-gen-skin-custom').value = '';
+  document.getElementById('tt-gen-overlay').classList.add('show');
+}
+function closeToutiaoGenDialog(e) {
+  if (e && e.target !== e.currentTarget) return;
+  document.getElementById('tt-gen-overlay').classList.remove('show');
+}
+async function confirmToutiaoGen() {
+  const id = _ttGenTargetId;
+  if (!id) return;
+  const theme = document.getElementById('tt-gen-theme-custom').value.trim() || document.getElementById('tt-gen-theme').value;
+  const skin = document.getElementById('tt-gen-skin-custom').value.trim() || document.getElementById('tt-gen-skin').value || 'wow';
+  const title = document.getElementById('tt-gen-title').value.trim();
+  closeToutiaoGenDialog();
+  if (!confirm(`生成头条图文？\n标题：${title || '（按整合稿标题）'}\n题材：${theme || '自动'}\n皮的资产名：${skin}\n已有产物会被覆盖。`)) return;
+  setStatus('running', '正在生成头条图文...');
+  try {
+    const resp = await fetch('/api/toutiao/generate', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({summary_id: id, theme, skin, title})
+    }).then(r=>r.json());
+    if (resp.error) { setStatus('error', resp.error); return; }
+    pollToutiaoStatus(id);
+  } catch (e) {
+    setStatus('error', '请求失败: ' + e.message);
+  }
+}
+
+async function generateToutiaoGraphics(summaryId) {
+  if (!confirm('从整合稿生成头条图文（信息图 + 微头条文案）？已有产物会被覆盖。')) return;
+  setStatus('running', '正在生成头条图文...');
+  try {
+    const resp = await fetch('/api/toutiao/generate', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({summary_id: summaryId})
+    }).then(r=>r.json());
+    if (resp.error) { setStatus('error', resp.error); return; }
+    pollToutiaoStatus(summaryId);
+  } catch (e) {
+    setStatus('error', '请求失败: ' + e.message);
+  }
+}
+
+function pollToutiaoStatus(summaryId) {
+  const poll = async () => {
+    let st;
+    try { st = await fetch('/api/toutiao/status').then(r=>r.json()); }
+    catch (e) { setTimeout(poll, 3000); return; }
+    if (st.running) { setStatus('running', st.progress || '生成中...'); setTimeout(poll, 1500); return; }
+    if (st.error) { setStatus('error', '生成失败: ' + String(st.error).split('\n')[0], st.error); return; }
+    setStatus('done', st.progress || '已生成');
+    if (currentView !== 'toutiao') switchPage('toutiao');
+    if (st.package && st.package.id) openToutiaoDetail(st.package.id);
+    else loadToutiaoList();
+  };
+  setTimeout(poll, 1000);
+}
+
+function copyToutiaoText() {
+  const ta = document.getElementById('tt-copy-area');
+  ta.select();
+  let ok = false;
+  try { ok = document.execCommand('copy'); } catch (e) {}
+  if (!ok && navigator.clipboard) navigator.clipboard.writeText(ta.value).catch(()=>{});
+  setStatus('done', '✅ 文案已复制，去头条号粘贴发布');
+}
+
+async function deleteToutiaoPackage(id) {
+  if (!confirm('删除这组头条图文（信息图与文案，不影响整合稿本身）？')) return;
+  try {
+    await fetch('/api/toutiao/' + id, {method: 'DELETE'});
+    loadToutiaoList();
+  } catch (e) { alert('删除失败: ' + e.message); }
+}
+
 async function loadInterviewQuestions() {
   const q = getSearchValue();
   const params = new URLSearchParams({type: 'ai_interview'});
@@ -1313,9 +1602,11 @@ function renderSummaries(items) {
     return;
   }
   grid.innerHTML = items.map(item => {
-    const typeClass = {ai_interview: 'interview', guide_article: 'article', wechat_material: 'article'}[item.summary_type] || 'guide';
+    const typeClass = {ai_interview: 'interview', guide_article: 'article', wechat_material: 'article', toutiao_mix: 'tt'}[item.summary_type] || 'guide';
     const typeLabel = `<span class="pill ${typeClass}">${TYPE_LABELS[item.summary_type] || '整理稿'}</span>`;
     const snippet = item.content || item.outline || '';
+    const ttBtn = item.summary_type === 'toutiao_mix'
+      ? `<div class="s-tt" onclick="event.stopPropagation();openToutiaoGenDialog(${item.id})">🔥 生成头条图文</div>` : '';
     return `<div class="summary-card" onclick="openSummary(${item.id})">
       <div class="s-del" title="删除" onclick="event.stopPropagation();deleteSummary(${item.id})">${iconSvg('close', 12)}</div>
       <div class="s-author">${esc(item.author||'')} ${typeLabel}</div>
@@ -1326,6 +1617,7 @@ function renderSummaries(items) {
         <span>${esc(item.model||'')}</span>
         <span>${esc(item.updated_at||'')}</span>
       </div>
+      ${ttBtn}
     </div>`;
   }).join('');
 }
@@ -1498,6 +1790,7 @@ async function openSummary(id) {
   window.currentSummaryStructuredData = data.structured_data || '';
   document.getElementById('modal-actions').innerHTML = `
     <a href="${esc(data.video_url||'#')}" target="_blank"><button class="btn sm">▶ 观看原视频</button></a>
+    ${data.summary_type === 'toutiao_mix' ? `<button class="btn sm" style="background:var(--module-3);border-color:var(--module-3);color:#fff" onclick="closeModal();openToutiaoGenDialog(${id})">🔥 生成头条图文</button>` : ''}
     <button class="btn ghost sm" onclick="regenerateSummary(${id})">🔄 重新生成</button>
     <button class="btn ghost sm" onclick="deleteSummary(${id})">🗑 删除</button>
     ${data.summary_type === 'ai_interview' ? '<button class="btn ghost sm" onclick="copyQuestionBankJSON()">复制题库JSON</button>' : ''}

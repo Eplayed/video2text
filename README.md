@@ -114,6 +114,15 @@ python scripts/list_candidates.py --topic "流放2攻略"
 
 所有输出文件（处理完成的 Excel、生成的报告 Word 等）统一放在 `output/` 目录，不提交 Git。
 
+## 头条图文生成
+
+整合稿（toutiao_mix）→ 整理稿页「🔥 生成头条图文」→ 4 张 9:16 竖版卡片信息图 + 微头条文案，产物落 `output/toutiao/<summary_id>/`（不提交 Git），前端经 `/api/toutiao/*` 轮询与取图。
+
+- 版式：金渐变衬线大标题 + 插画主视觉（底缘渐隐）+ 圆环图标三面板 + 双金边横幅，无页码无来源行（参照 2026-09-24 参考图）
+- 题材与皮双选择：题材决定 LLM 卡片文案点明的游戏，并映射插画素材文件夹 `output/toutiao/<题材>图片素材/`（封面自动取竖构图、内容页取横构图轮换，素材更新后下次生成即生效）；皮决定整套配色与背景——wow 蓝黑金 / d4 烬红 / poe 青铜 / poe2 墨玉绿 / 自定义（素材库放 `<名称>_bg.jpg`）
+- 生成弹框可编辑标题：自动代入整理稿标题，留空则按整合稿自动生成
+- LLM 卡片化失败时本地模板兜底出图（固定标签解析），保证始终有产物
+
 ## 项目结构
 
 ```text
@@ -125,7 +134,9 @@ video2text/
 │   ├── link_resolver.py  # 抖音短链接解析
 │   ├── video_extractor.py # 视频信息提取
 │   ├── asr.py            # ASR 转写
-│   └── ai_optimizer.py   # AI 文案优化
+│   ├── ai_optimizer.py   # AI 文案优化
+│   ├── browser_fetch.py  # 抖音风控兜底（Chromium 抓视频详情）
+│   └── toutiao_graphics.py # 头条图文生成（9:16 卡片式信息图）
 ├── config/
 │   └── config.env        # 配置模板
 ├── logs/                 # 日志（已 gitignore）
