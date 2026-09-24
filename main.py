@@ -4,6 +4,15 @@
 用法：
   python main.py --excel /path/to/抖音视频信息.xlsx --cookie "sessionid=xxx"
   python main.py --excel /path/to/抖音视频信息.xlsx --cookie-file /path/to/cookie.txt
+
+运行环境要求（本机实测，两个反复踩的坑）：
+  1. 必须用系统 Python 3.9：/usr/local/bin/python3.9
+     依赖（openpyxl / faster-whisper / requests）都装在这里；AI 工具沙箱
+     自带的 python3 是精简版，依赖全缺，会误报成"没装 openpyxl"。
+  2. 从 AI 工具（TRAE SOLO 等）里调用时，前置清掉注入的 PYTHONHOME/PYTHONPATH，
+     否则解释器初始化阶段即崩（Fatal Python error: init_fs_encoding ...
+     No module named 'encodings'）：
+       env -u PYTHONHOME -u PYTHONPATH /usr/local/bin/python3.9 main.py ...
 """
 
 import argparse
@@ -17,11 +26,33 @@ import subprocess
 from datetime import datetime
 from pathlib import Path
 
+# ffmpeg 探测：不能只信 shutil.which()。
+#   坑 1  WorkBuddy 沙盒 bash 的 PATH 不含 /usr/local/bin → which() 返回 None
+#   坑 2  TRAE SOLO 沙箱 PATH 里的 ffmpeg 是坏的 → which() 命中，但执行报
+#         "[Errno 8] Exec format error"（2026-09-24 实测，比找不到更难查）
+# 所以逐个候选真跑一次 -version 校验。详见 src/ffmpeg_probe.py。
+# 找不到时为 None，asr_transcribe 会返回明确报错而不是 TypeError。
+try:
+    from src.ffmpeg_probe import find_ffmpeg
+except ImportError:  # 从其他目录以脚本方式启动时，src 包还不在 sys.path
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from src.ffmpeg_probe import find_ffmpeg
+
+FFMPEG_BIN = find_ffmpeg()
+
 # 第三方库
 try:
     import openpyxl
 except ImportError:
-    print("需要 openpyxl: pip install openpyxl")
+    print(
+        "缺少 openpyxl —— 但更可能是跑错了解释器。\n"
+        "本工具依赖装在系统 Python 3.9，AI 工具沙箱自带的 python3 依赖全缺。\n"
+        "  当前解释器: %s\n"
+        "  正确用法  : env -u PYTHONHOME -u PYTHONPATH "
+        "/usr/local/bin/python3.9 %s ...\n"
+        "  确需安装  : %s -m pip install openpyxl --break-system-packages"
+        % (sys.executable, os.path.basename(__file__), sys.executable)
+    )
     sys.exit(1)
 
 # faster-whisper（需 KMP_DUPLICATE_LIB_OK=TRUE）
@@ -199,6 +230,12 @@ def _get_asr_model(model_size: str):
 def asr_transcribe(video_url: str, model_size: str = "base",
                     language: str = "zh") -> str:
     """下载视频 → 提取音频 → faster-whisper 转写"""
+    # 先确认 ffmpeg 可用：否则白下一遍视频才失败，且临时文件已落盘
+    if not FFMPEG_BIN:
+        return ("[音频提取失败] 未找到可用的 ffmpeg：PATH 与 /usr/local/bin 下"
+                "均无可执行二进制。安装：brew install ffmpeg；"
+                "或显式指定：FFMPEG_BIN=/abs/path/to/ffmpeg")
+
     tmp_dir = tempfile.mkdtemp(prefix="dy_")
     video_path = os.path.join(tmp_dir, "video.mp4")
     audio_path = os.path.join(tmp_dir, "audio.wav")
@@ -220,14 +257,20 @@ def asr_transcribe(video_url: str, model_size: str = "base",
     # 提取音频
     try:
         subprocess.run(
-            ["ffmpeg", "-i", video_path,
+            [FFMPEG_BIN, "-i", video_path,
              "-vn", "-acodec", "pcm_s16le",
              "-ar", "16000", "-ac", "1",
              "-y", audio_path],
             capture_output=True, check=True, timeout=60
         )
     except Exception as e:
-        return f"[音频提取失败] {e}"
+        # check=True 抛的是 CalledProcessError，真实原因在 stderr 里。不透出的话，
+        # 沙箱坏二进制只会显示成一行没有信息量的 CalledProcessError（实测踩过）。
+        detail = getattr(e, "stderr", b"") or b""
+        if isinstance(detail, bytes):
+            detail = detail.decode("utf-8", "replace")
+        detail = detail.strip()[:500]
+        return f"[音频提取失败] {e}" + (f"\nffmpeg stderr: {detail}" if detail else "")
 
     if not os.path.exists(audio_path):
         return "[音频提取失败] 文件不存在"

@@ -31,11 +31,19 @@ ASSETS_DIR = OUTPUT_DIR / "assets"
 COVERS_DIR = ASSETS_DIR / "covers"
 KEYFRAMES_DIR = ASSETS_DIR / "keyframes"
 
-# 2026-09-21 修复：ffmpeg/ffprobe 按 PATH → /usr/local/bin 兜底解析绝对路径。
-# 服务进程 PATH 不含 /usr/local/bin 时（如从 WorkBuddy/launchd 等精简环境启动），
-# 裸命令名会 FileNotFoundError → 抽帧静默失败 → 关键帧目录为空、取材无「发稿配图」段。
-FFMPEG_BIN = shutil.which("ffmpeg") or "/usr/local/bin/ffmpeg"
-FFPROBE_BIN = shutil.which("ffprobe") or "/usr/local/bin/ffprobe"
+# 2026-09-21 修复：ffmpeg/ffprobe 解析绝对路径。服务进程 PATH 不含 /usr/local/bin
+# 时（从 WorkBuddy/launchd 等精简环境启动），裸命令名会 FileNotFoundError
+# → 抽帧静默失败 → 关键帧目录为空、取材无「发稿配图」段。
+# 2026-09-24 加固：改为「真跑一次 -version」校验。原因：AI 工具沙箱（TRAE SOLO）
+# PATH 里的 ffmpeg 是坏二进制，which() 命中但执行报 Exec format error，
+# 光靠路径兜底挡不住。详见 src/ffmpeg_probe.py。
+try:
+    from src.ffmpeg_probe import find_ffmpeg, find_ffprobe
+except ImportError:  # 作为顶层模块被直接导入时（src 不在 sys.path）
+    from ffmpeg_probe import find_ffmpeg, find_ffprobe
+
+FFMPEG_BIN = find_ffmpeg()      # 找不到为 None，调用处会 _warn 出明确原因
+FFPROBE_BIN = find_ffprobe()
 
 
 def _warn(msg: str) -> None:
@@ -357,6 +365,14 @@ def extract_keyframes(aweme_id: str, video_url: str, max_frames: int = 4) -> boo
     sheet = target_dir / "sheet.jpg"
     if sheet.exists() and sheet.stat().st_size > 4096:
         return True
+    # 放在 sheet 复用检查之后：已有帧时不必依赖 ffmpeg。
+    # 不检查的话 FFMPEG_BIN 为 None 会退化成 TypeError，被下面的 except 吞成
+    # 一行「抽帧异常」，看不出是二进制缺失/损坏。
+    if not FFMPEG_BIN or not FFPROBE_BIN:
+        _warn("ffmpeg/ffprobe 不可用，跳过抽帧 aweme_id=%s（ffmpeg=%s ffprobe=%s）；"
+              "安装 brew install ffmpeg，或设 FFMPEG_BIN/FFPROBE_BIN 指向可用二进制"
+              % (aweme_id, FFMPEG_BIN, FFPROBE_BIN))
+        return False
     target_dir.mkdir(parents=True, exist_ok=True)
     tmpdir = Path(tempfile.mkdtemp(prefix="v2t_frames_"))
     video_path = tmpdir / "video.mp4"
