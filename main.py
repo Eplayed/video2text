@@ -21,6 +21,7 @@ import sys
 import re
 import time
 import json
+import shutil
 import tempfile
 import subprocess
 from datetime import datetime
@@ -173,6 +174,14 @@ def fetch_video_info(url_or_id: str, parser) -> dict:
     try:
         raw = parser.parse_video(url_or_id)
         raw = raw or {}
+        if not raw.get("aweme_id"):
+            # ── 浏览器兜底（2026-09-21）：抖音 Argus 风控拦截纯 API 签名，
+            # parser 解析不到时改用真实 Chromium 打开视频页抓 detail ──
+            try:
+                from src.browser_fetch import browser_fetch_video_detail
+            except ImportError:
+                from browser_fetch import browser_fetch_video_detail
+            raw = browser_fetch_video_detail(url_or_id) or raw
         desc = raw.get("desc", "") or ""
         hashtags = []
         if "#" in desc:
@@ -240,11 +249,12 @@ def asr_transcribe(video_url: str, model_size: str = "base",
     video_path = os.path.join(tmp_dir, "video.mp4")
     audio_path = os.path.join(tmp_dir, "audio.wav")
 
-    # 下载视频
+    # 下载视频（--fail：CDN 返回 403/空响应时立即失败，避免写出空文件）
     try:
         subprocess.run(
-            ["curl", "-L", "-o", video_path,
+            ["curl", "-sSL", "--fail", "-o", video_path,
              "-H", "Referer: https://www.douyin.com/",
+             "-A", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36",
              video_url],
             capture_output=True, check=True, timeout=120
         )
