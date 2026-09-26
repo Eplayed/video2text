@@ -1,5 +1,5 @@
 """video2text Web 管理界面 - Flask Backend"""
-import json, os, sys, sqlite3, threading, time, traceback, hashlib
+import json, os, re, sys, sqlite3, threading, time, traceback, hashlib, uuid
 from pathlib import Path
 from datetime import datetime
 
@@ -1219,6 +1219,27 @@ def _video_keyframe_markdown(videos: list, max_frames: int = 5, per_video: int =
 _tt_task_status = {"running": False, "done": True, "progress": "", "error": "", "package": None}
 
 
+@app.route("/api/toutiao/guide-upload", methods=["POST"])
+def api_toutiao_guide_upload():
+    """攻略图解模板：上传攻略图（最多 10 张），存 _uploads/<token>/，返回 token 供生成时引用。"""
+    files = request.files.getlist("files")
+    if not files:
+        return jsonify({"error": "未选择图片"}), 400
+    if len(files) > 10:
+        return jsonify({"error": "一次最多上传 10 张攻略图"}), 400
+    ok_ext = {".jpg", ".jpeg", ".png", ".webp", ".avif"}
+    for f in files:
+        ext = os.path.splitext(f.filename or "")[1].lower()
+        if ext not in ok_ext:
+            return jsonify({"error": "仅支持 jpg/png/webp/avif：%s" % (f.filename or "?")}), 400
+    token = uuid.uuid4().hex[:12]
+    d = OUTPUT_DIR / "toutiao" / "_uploads" / token
+    d.mkdir(parents=True, exist_ok=True)
+    for i, f in enumerate(files, 1):
+        f.save(d / ("%02d%s" % (i, os.path.splitext(f.filename)[1].lower())))
+    return jsonify({"token": token, "count": len(files)})
+
+
 @app.route("/api/toutiao/generate", methods=["POST"])
 def api_toutiao_generate():
     """从 toutiao_mix 整理稿生成头条图文（4 张信息图 + 微头条文案）。"""
@@ -1227,6 +1248,14 @@ def api_toutiao_generate():
     theme = str(data.get("theme") or "").strip()[:30]   # 图文卡片化题材（进 LLM prompt）
     skin = str(data.get("skin") or "wow").strip()[:30]  # 图的皮（背景资产）
     title = str(data.get("title") or "").strip()[:60]  # 图文标题（弹框可改，空则用整理稿标题）
+    template = str(data.get("template") or "classic").strip()[:20]  # 图文模板（版式/字体风格）
+    guide_imgs = []  # 攻略图解模板：弹窗上传的攻略图（优先于素材文件夹）
+    guide_token = str(data.get("guide_token") or "").strip()
+    if guide_token and re.fullmatch(r"[0-9a-f]{12}", guide_token):
+        up = OUTPUT_DIR / "toutiao" / "_uploads" / guide_token
+        if up.is_dir():
+            exts = {".jpg", ".jpeg", ".png", ".webp", ".avif"}
+            guide_imgs = sorted(p for p in up.iterdir() if p.is_file() and p.suffix.lower() in exts)
     if not summary_id:
         return jsonify({"error": "缺少 summary_id"}), 400
     if _tt_task_status.get("running"):
@@ -1249,7 +1278,8 @@ def api_toutiao_generate():
                 _tt_task_status["progress"] = msg
             _tt_task_status["progress"] = "LLM 卡片化整合稿..."
             package = toutiao_graphics.generate_graphics(summary, _ai_config(), progress_cb=cb,
-                                                          theme=theme, skin=skin, title=title)
+                                                          theme=theme, skin=skin, title=title,
+                                                          template=template, guide_images=guide_imgs)
             _tt_task_status["package"] = {"id": package["id"], "title": package["title"], "images": len(package["images"])}
             _tt_task_status["progress"] = "✅ 已生成 %d 张信息图，可复制文案发布" % len(package["images"])
         except Exception:

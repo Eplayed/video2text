@@ -289,7 +289,7 @@ textarea{resize:vertical;min-height:84px}
 .tt-tips b{color:var(--module-5)}
 
 /* ── 头条图文生成配置弹窗 ── */
-#tt-gen-overlay .modal-box{position:relative;background:var(--surface-card);border-radius:var(--radius-sheet);box-shadow:var(--shadow-overlay);width:460px;max-width:92vw;padding:24px 26px}
+#tt-gen-overlay .modal-box{position:relative;background:var(--surface-card);border-radius:var(--radius-sheet);box-shadow:var(--shadow-overlay);width:460px;max-width:92vw;max-height:92vh;overflow-y:auto;padding:24px 26px}
 #tt-gen-overlay .close-btn{position:absolute;top:14px;right:14px}
 .tt-gen-title{font-size:17px;font-weight:800}
 .tt-gen-sub{font-size:12.5px;color:var(--text-secondary);margin:4px 0 16px}
@@ -299,6 +299,25 @@ textarea{resize:vertical;min-height:84px}
 .tt-gen-field select{width:100%;border:1px solid var(--border-input);border-radius:var(--radius-control);padding:9px 12px;font-size:13.5px;background:var(--surface-card);margin-bottom:8px}
 .tt-gen-field input{width:100%;border:1px solid var(--border-input);border-radius:var(--radius-control);padding:9px 12px;font-size:13px}
 .tt-gen-field input:focus,.tt-gen-field select:focus{outline:none;border-color:var(--accent)}
+.tt-tpl-preview{display:flex;gap:12px;margin-top:4px;padding:10px;border:1px solid var(--border);border-radius:var(--radius-control);background:var(--surface-nested);cursor:pointer;transition:border-color .15s}
+.tt-tpl-preview:hover{border-color:var(--accent)}
+.tt-guide-drop{border:1.5px dashed var(--border-input);border-radius:var(--radius-control);padding:14px;text-align:center;font-size:13px;color:var(--text-secondary);cursor:pointer;transition:border-color .15s,color .15s}
+.tt-guide-drop:hover{border-color:var(--accent);color:var(--text)}
+.tt-guide-thumbs{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.tt-guide-thumb img{width:72px;height:96px;object-fit:cover;border-radius:6px;border:1px solid var(--border);display:block;background:#000}
+.tt-guide-thumb .tg-ops{display:flex;justify-content:center;gap:3px;margin-top:3px}
+.tt-guide-thumb .tg-ops button{width:22px;height:18px;border:1px solid var(--border);border-radius:4px;background:var(--surface-nested);color:var(--text-secondary);font-size:10px;line-height:1;cursor:pointer;padding:0}
+.tt-guide-thumb .tg-ops button:hover{color:var(--text);border-color:var(--accent)}
+.tt-tpl-preview-thumb{position:relative;flex:0 0 92px;border-radius:6px;overflow:hidden;border:1px solid var(--border);box-shadow:0 4px 12px rgba(0,0,0,.35);align-self:flex-start}
+.tt-tpl-preview-thumb img{display:block;width:92px;height:164px;object-fit:cover;background:#000}
+.tt-tpl-preview-zoom{position:absolute;left:0;right:0;bottom:0;background:rgba(0,0,0,.66);color:#fff;font-size:11px;text-align:center;padding:3px 0;letter-spacing:1px}
+.tt-tpl-preview-info{flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center}
+.tt-tpl-preview-name{font-size:13.5px;font-weight:800;margin-bottom:5px}
+.tt-tpl-preview-hint{font-size:12px;line-height:1.65;color:var(--text-secondary)}
+#tt-tpl-pages-overlay .modal-box{width:auto;max-width:94vw;max-height:92vh;overflow:auto}
+.tt-tpl-pages-row{display:flex;gap:14px;margin-top:14px;justify-content:center;flex-wrap:nowrap;padding-bottom:4px}
+.tt-tpl-pages-row img{height:min(62vh,620px);width:auto;border-radius:8px;border:1px solid var(--border);box-shadow:0 8px 24px rgba(0,0,0,.4);cursor:zoom-in;background:#000}
+
 .tt-card{cursor:pointer}
 .tt-card .s-meta .tt-imgs{color:var(--module-3);font-weight:700}
 .summary-card:hover{border-color:var(--border-input);transform:translateY(-1px);box-shadow:var(--shadow-overlay)}
@@ -784,10 +803,38 @@ textarea{resize:vertical;min-height:84px}
       <div class="modal-box" onclick="event.stopPropagation()">
         <button class="close-btn" onclick="closeToutiaoGenDialog()"><span data-icon="close" class="ic14"></span></button>
         <div class="tt-gen-title">🔥 生成头条图文</div>
-        <div class="tt-gen-sub">整合稿 #<span id="tt-gen-id"></span> · 生成前先定标题、题材和皮</div>
+        <div class="tt-gen-sub">整合稿 #<span id="tt-gen-id"></span> · 生成前先定标题、模板、题材和皮</div>
         <div class="tt-gen-field">
           <label>图文标题 <small>（已代入整理稿标题，可自行修改；决定封面主标题）</small></label>
           <input id="tt-gen-title" placeholder="图文标题（留空则按整合稿标题自动生成）">
+        </div>
+        <div class="tt-gen-field">
+          <label>图文模板 <small>（整体版式：背景、布局、文字大小样式；「攻略图解」可直接上传攻略图）</small></label>
+          <select id="tt-gen-tpl">
+            <option value="classic" selected>经典卡片 · 鎏金插画风（默认）</option>
+            <option value="magazine">杂志大片 · 暗色编辑排版</option>
+            <option value="minimal">极简清单 · 浅色知识卡</option>
+            <option value="bold">大字报 · 高对比冲击</option>
+            <option value="guide">攻略图解 · 攻略图融合（羊皮纸路线）</option>
+            <option value="tier">梯度榜 · 梯队排行对比</option>
+            <option value="quest">任务面板 · 魔兽任务UI风（步骤流程）</option>
+          </select>
+          <div class="tt-tpl-preview" id="tt-tpl-preview" onclick="openTplPages()" title="点击查看 4 页示例">
+            <div class="tt-tpl-preview-thumb">
+              <img id="tt-tpl-preview-img" alt="模板封面预览">
+              <span class="tt-tpl-preview-zoom">🔍 4 页示例</span>
+            </div>
+            <div class="tt-tpl-preview-info">
+              <div class="tt-tpl-preview-name" id="tt-tpl-preview-name"></div>
+              <div class="tt-tpl-preview-hint" id="tt-tpl-preview-hint"></div>
+            </div>
+          </div>
+        </div>
+        <div class="tt-gen-field" id="tt-guide-upload-field" style="display:none">
+          <label>攻略图上传 <small>（第 1 张做封面，其余按顺序进内页；不上传则读 output/toutiao/&lt;题材&gt;攻略图/ 文件夹）</small></label>
+          <div class="tt-guide-drop" onclick="document.getElementById('tt-guide-files').click()">📎 点击选择攻略图（最多 10 张 · jpg / png / webp）</div>
+          <input type="file" id="tt-guide-files" accept=".jpg,.jpeg,.png,.webp,.avif" multiple hidden>
+          <div class="tt-guide-thumbs" id="tt-guide-thumbs"></div>
         </div>
         <div class="tt-gen-field">
           <label>图文卡片化题材 <small>（决定卡片标题与文案点明什么游戏）</small></label>
@@ -817,6 +864,16 @@ textarea{resize:vertical;min-height:84px}
           <button class="btn ghost sm" onclick="closeToutiaoGenDialog()">取消</button>
           <button class="btn sm" style="background:var(--module-3);border-color:var(--module-3);color:#fff" onclick="confirmToutiaoGen()">🔥 开始生成</button>
         </div>
+      </div>
+    </div>
+
+    <!-- 模板预览大图弹窗 -->
+    <div class="modal-overlay" id="tt-tpl-pages-overlay" onclick="closeTplPages(event)">
+      <div class="modal-box" onclick="event.stopPropagation()">
+        <button class="close-btn" onclick="closeTplPages()"><span data-icon="close" class="ic14"></span></button>
+        <div class="tt-gen-title" id="tt-tpl-pages-title">🖼 模板示例</div>
+        <div class="tt-gen-sub">示例为演示数据生成，实际以你的整合稿内容为准 · 点击单张可看原图</div>
+        <div class="tt-tpl-pages-row" id="tt-tpl-pages-row"></div>
       </div>
     </div>
 
@@ -1450,25 +1507,118 @@ function openToutiaoGenDialog(id) {
   document.getElementById('tt-gen-theme-custom').value = '';
   document.getElementById('tt-gen-skin').value = 'wow';
   document.getElementById('tt-gen-skin-custom').value = '';
+  _ttGuideFiles = [];
+  _ttGuideRender();
+  updateTplPreview();
   document.getElementById('tt-gen-overlay').classList.add('show');
 }
 function closeToutiaoGenDialog(e) {
   if (e && e.target !== e.currentTarget) return;
   document.getElementById('tt-gen-overlay').classList.remove('show');
 }
+// ── 图文模板预览 ──
+const TT_TPL_PREVIEW = {
+  classic:  {label: '经典卡片 · 鎏金插画风', hint: '金渐变标题 + 插画主视觉 + 圆环图标三面板，通用性最强的默认选择。'},
+  magazine: {label: '杂志大片 · 暗色编辑排版', hint: '大图打底、留白克制的杂志编辑风，适合单话题深挖、观感高级。'},
+  minimal:  {label: '极简清单 · 浅色知识卡', hint: '白底清单式知识卡，信息干净清爽，适合多要点罗列、干货整理。'},
+  bold:     {label: '大字报 · 高对比冲击', hint: '超大字号、高对比冲击力，标题多用数字反差（如「122 对 300」）。'},
+  guide:    {label: '攻略图解 · 攻略图融合', hint: '图为主角：直接在下方上传攻略图/截图/地图（≤10 张，第 1 张做封面）作主视觉，配羊皮纸路线轨，适合升级路线、跑图任务；不上传则读素材文件夹。'},
+  tier:     {label: '梯度榜 · 梯队排行对比', hint: '红/金/紫立体梯队大字 + 双列条目卡，适合职业强度、装备推荐、对比排行。'},
+  quest:    {label: '任务面板 · 魔兽任务UI风', hint: '盾形门槛标签 + 图标徽章摘要 + 火焰步骤轨 + 操作链，适合步骤流程、任务条件、新手引导。'}
+};
+function ttTplPreviewData() {
+  const key = document.getElementById('tt-gen-tpl').value;
+  const m = TT_TPL_PREVIEW[key] || {};
+  return {key, label: m.label || key, hint: m.hint || '',
+          cover: `/static/assets/tpl_previews/${key}/img1.jpg`,
+          pages: [1, 2, 3, 4].map(i => `/static/assets/tpl_previews/${key}/img${i}.jpg`)};
+}
+function updateTplPreview() {
+  const d = ttTplPreviewData();
+  document.getElementById('tt-tpl-preview-img').src = d.cover;
+  document.getElementById('tt-tpl-preview-name').textContent = d.label;
+  document.getElementById('tt-tpl-preview-hint').textContent = d.hint;
+  _ttGuideToggle();
+}
+function openTplPages() {
+  const d = ttTplPreviewData();
+  document.getElementById('tt-tpl-pages-title').textContent = `🖼 ${d.label} · 4 页示例`;
+  document.getElementById('tt-tpl-pages-row').innerHTML =
+    d.pages.map(u => `<img src="${u}" onclick="window.open('${u}','_blank')" title="点击看原图">`).join('');
+  document.getElementById('tt-tpl-pages-overlay').classList.add('show');
+}
+function closeTplPages(e) {
+  if (e && e.target !== e.currentTarget) return;
+  document.getElementById('tt-tpl-pages-overlay').classList.remove('show');
+}
+document.getElementById('tt-gen-tpl').addEventListener('change', updateTplPreview);
+
+// ── 攻略图上传（攻略图解模板） ──
+let _ttGuideFiles = [];
+function _ttGuideToggle() {
+  const isGuide = document.getElementById('tt-gen-tpl').value === 'guide';
+  document.getElementById('tt-guide-upload-field').style.display = isGuide ? '' : 'none';
+}
+function _ttGuideRender() {
+  const box = document.getElementById('tt-guide-thumbs');
+  box.innerHTML = _ttGuideFiles.map((f, i) => `
+    <div class="tt-guide-thumb">
+      <img src="${URL.createObjectURL(f)}">
+      <div class="tg-ops">
+        <button title="前移" onclick="ttGuideMove(${i},-1)">◀</button>
+        <button title="移除" onclick="ttGuideRemove(${i})">✕</button>
+        <button title="后移" onclick="ttGuideMove(${i},1)">▶</button>
+      </div>
+    </div>`).join('');
+}
+function ttGuidePick(input) {
+  const ok = [...input.files].filter(f => /\.(jpe?g|png|webp|avif)$/i.test(f.name));
+  if (ok.length < input.files.length) alert('已跳过非图片文件（仅支持 jpg/png/webp/avif）');
+  for (const f of ok) {
+    if (_ttGuideFiles.length >= 10) { alert('最多上传 10 张攻略图'); break; }
+    _ttGuideFiles.push(f);
+  }
+  input.value = '';
+  _ttGuideRender();
+}
+function ttGuideRemove(i) { _ttGuideFiles.splice(i, 1); _ttGuideRender(); }
+function ttGuideMove(i, d) {
+  const j = i + d;
+  if (j < 0 || j >= _ttGuideFiles.length) return;
+  [_ttGuideFiles[i], _ttGuideFiles[j]] = [_ttGuideFiles[j], _ttGuideFiles[i]];
+  _ttGuideRender();
+}
+async function ttGuideUpload() {
+  const fd = new FormData();
+  _ttGuideFiles.forEach(f => fd.append('files', f));
+  const resp = await fetch('/api/toutiao/guide-upload', {method: 'POST', body: fd}).then(r => r.json());
+  if (resp.error) throw new Error(resp.error);
+  return resp.token;
+}
+document.getElementById('tt-guide-files').addEventListener('change', e => ttGuidePick(e.target));
+
 async function confirmToutiaoGen() {
   const id = _ttGenTargetId;
   if (!id) return;
   const theme = document.getElementById('tt-gen-theme-custom').value.trim() || document.getElementById('tt-gen-theme').value;
   const skin = document.getElementById('tt-gen-skin-custom').value.trim() || document.getElementById('tt-gen-skin').value || 'wow';
   const title = document.getElementById('tt-gen-title').value.trim();
+  const tplEl = document.getElementById('tt-gen-tpl');
+  const tpl = tplEl.value;
+  const tplLabel = tplEl.selectedOptions[0].textContent.split(' ')[0];
+  let guideToken = null;
+  if (tpl === 'guide' && _ttGuideFiles.length) {
+    try { guideToken = await ttGuideUpload(); }
+    catch (e) { setStatus('error', '攻略图上传失败: ' + e.message); return; }
+  }
   closeToutiaoGenDialog();
-  if (!confirm(`生成头条图文？\n标题：${title || '（按整合稿标题）'}\n题材：${theme || '自动'}\n皮的资产名：${skin}\n已有产物会被覆盖。`)) return;
+  const guideLine = guideToken ? `\n攻略图：${_ttGuideFiles.length} 张（已上传）` : '';
+  if (!confirm(`生成头条图文？\n标题：${title || '（按整合稿标题）'}\n模板：${tplLabel}\n题材：${theme || '自动'}\n皮的资产名：${skin}${guideLine}\n已有产物会被覆盖。`)) return;
   setStatus('running', '正在生成头条图文...');
   try {
     const resp = await fetch('/api/toutiao/generate', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({summary_id: id, theme, skin, title})
+      body: JSON.stringify({summary_id: id, theme, skin, title, template: tpl, guide_token: guideToken})
     }).then(r=>r.json());
     if (resp.error) { setStatus('error', resp.error); return; }
     pollToutiaoStatus(id);
