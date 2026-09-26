@@ -38,13 +38,14 @@ AUTHOR_DRAFT_MIN = 300                     # 作者真实底稿建议字数
 # 合规尾注（迁移方案 §5.4-3，替代头条版措辞）
 _COMPLIANCE_NOTE = "本文由 AI 辅助创作，实测由 AI 真机执行、全程截图留档，结果经作者复核确认。"
 
-# 微信版发布检查清单（迁移方案 §5.4-6）
+# 微信版发布检查清单（迁移方案 §5.4-6；2026-09-26 按平台官方口径校正合规两条）
 _CHECKLIST = [
     "120 字摘要段（digest）在位且不超字",
-    "创作来源选「AI 辅助」",
+    "「文章设置」勾选「内容由 AI 生成」（2025-09-01 起强制，平台不自动标注）",
+    "图片消息无「声明原创」入口（平台未开放图片原创），别找该按钮、勿群发后补标",
     "文末声明使用合规尾注措辞（copy_text 已内置，勿删）",
     "「进化论XX」关键词自动回复已配置",
-    "图片已上传微信素材库，正文禁外链",
+    "图片已上传微信素材库（单图 ≤10MB，图片/图文各 10 万条上限），正文禁外链",
     "5180 登记 + 发布后 72 小时回填数据提醒",
 ]
 
@@ -372,6 +373,7 @@ def generate_graphics(summary, ai_config, author_draft="", progress_cb=None,
         "template": tpl_key,
         "canvas": "%dx%d" % (CANVAS_W, CANVAS_H),
         "summary_type": summary.get("summary_type", ""),
+        "checklist": list(_CHECKLIST),
         "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
     manifest["lint"] = lint_package(manifest, OUTPUT_DIR)

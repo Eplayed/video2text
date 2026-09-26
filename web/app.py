@@ -11,6 +11,7 @@ sys.path.insert(0, str(ROOT))
 
 import main as collector  # main.py
 from src import content_store, material_store, toutiao_graphics
+from src.graphics.channels import wechat as wechat_graphics
 from src.dify_client import DifyKBClient, DifyKBError
 from src.path_config import find_parser_dir, ensure_parser_on_path, get_cookie_path
 
@@ -1339,6 +1340,139 @@ def api_toutiao_reveal(summary_id):
 def api_toutiao_delete(summary_id):
     try:
         ok = toutiao_graphics.delete_package(summary_id)
+        return jsonify({"success": bool(ok)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ── 公众号图文：wechat_material 整合稿 + 作者真实底稿 → 3:4 卡片 + 配文/摘要/关键词回复 ──
+# 独立任务状态：与 _task_status / _tt_task_status 三者刻意分离，产线互不打断（迁移方案 §5.5）
+_wx_task_status = {"running": False, "done": True, "progress": "", "error": "", "package": None}
+
+
+@app.route("/api/wechat/shot-upload", methods=["POST"])
+def api_wechat_shot_upload():
+    """真实截图上传（铁律 ≥2 张，lint 核验），存 output/wechat/_uploads/<token>/，返回 token。"""
+    files = request.files.getlist("files")
+    if not files:
+        return jsonify({"error": "未选择图片"}), 400
+    if len(files) > 10:
+        return jsonify({"error": "一次最多上传 10 张截图"}), 400
+    ok_ext = {".jpg", ".jpeg", ".png", ".webp"}
+    for f in files:
+        ext = os.path.splitext(f.filename or "")[1].lower()
+        if ext not in ok_ext:
+            return jsonify({"error": "仅支持 jpg/png/webp：%s" % (f.filename or "?")}), 400
+    token = uuid.uuid4().hex[:12]
+    d = OUTPUT_DIR / "wechat" / "_uploads" / token
+    d.mkdir(parents=True, exist_ok=True)
+    for i, f in enumerate(files, 1):
+        f.save(d / ("%02d%s" % (i, os.path.splitext(f.filename)[1].lower())))
+    return jsonify({"token": token, "count": len(files)})
+
+
+@app.route("/api/wechat/generate", methods=["POST"])
+def api_wechat_generate():
+    """从 wechat_material 整合稿生成公众号图片消息卡片包。作者真实底稿必填（迁移方案 §6）。"""
+    data = request.get_json(force=True)
+    summary_id = data.get("summary_id")
+    author_draft = str(data.get("author_draft") or "").strip()
+    theme = str(data.get("theme") or "").strip()[:30]    # 题材（进 LLM prompt，如「AI工具实测」）
+    title = str(data.get("title") or "").strip()[:60]    # 图文标题（空则用整合稿标题）
+    template = str(data.get("template") or "classic").strip()[:20]  # 限白名单，越界适配器内回落 classic
+    shots = []  # 真实截图（弹窗上传，复制进包并标 source=real_screenshot）
+    shot_token = str(data.get("shot_token") or "").strip()
+    if shot_token and re.fullmatch(r"[0-9a-f]{12}", shot_token):
+        up = OUTPUT_DIR / "wechat" / "_uploads" / shot_token
+        if up.is_dir():
+            exts = {".jpg", ".jpeg", ".png", ".webp"}
+            shots = sorted(p for p in up.iterdir() if p.is_file() and p.suffix.lower() in exts)
+    if not summary_id:
+        return jsonify({"error": "缺少 summary_id"}), 400
+    if not author_draft:
+        return jsonify({"error": "作者真实底稿必填：写清你真跑了什么、看到什么数字、踩了什么坑（≥300字为佳）"}), 400
+    if _wx_task_status.get("running"):
+        return jsonify({"error": "已有公众号图文生成任务正在运行"}), 400
+
+    with _db_lock:
+        summary = content_store.get_summary(DB_PATH, int(summary_id))
+    if not summary:
+        return jsonify({"error": "整合稿不存在"}), 404
+    if summary.get("summary_type") != "wechat_material":
+        return jsonify({"error": "只支持公众号整合稿（wechat_material）生成图文，请先生成整合稿"}), 400
+
+    _wx_task_status.update({
+        "running": True, "done": False, "progress": "准备生成公众号图文...", "error": "", "package": None,
+    })
+
+    def run():
+        try:
+            def cb(msg):
+                _wx_task_status["progress"] = msg
+            package = wechat_graphics.generate_graphics(summary, _ai_config(), author_draft=author_draft,
+                                                        progress_cb=cb, theme=theme, title=title,
+                                                        template=template, real_screenshots=shots)
+            _wx_task_status["package"] = {"id": package["id"], "title": package["title"], "images": len(package["images"])}
+            errs = [i for i in (package.get("lint") or []) if i.startswith("error")]
+            suffix = "，⚠️ lint 有 %d 条 error 需处理" % len(errs) if errs else ""
+            _wx_task_status["progress"] = "✅ 已生成 %d 张卡片，可复制文案人工发布%s" % (len(package["images"]), suffix)
+        except Exception:
+            _wx_task_status["error"] = traceback.format_exc()
+            _wx_task_status["progress"] = "生成失败"
+        finally:
+            _wx_task_status["done"] = True
+            _wx_task_status["running"] = False
+
+    threading.Thread(target=run, daemon=True).start()
+    return jsonify({"status": "started", "summary_id": summary_id})
+
+
+@app.route("/api/wechat/status")
+def api_wechat_status():
+    return jsonify(_wx_task_status)
+
+
+@app.route("/api/wechat/list")
+def api_wechat_list():
+    try:
+        items = wechat_graphics.list_packages()
+        return jsonify({"items": items, "total": len(items)})
+    except Exception as e:
+        return jsonify({"error": str(e), "items": [], "total": 0}), 500
+
+
+@app.route("/api/wechat/<int:summary_id>")
+def api_wechat_detail(summary_id):
+    package = wechat_graphics.get_package(summary_id)
+    if not package:
+        return jsonify({"error": "公众号图文不存在"}), 404
+    return jsonify(package)
+
+
+@app.route("/api/wechat/<int:summary_id>/reveal", methods=["POST"])
+def api_wechat_reveal(summary_id):
+    """在 Finder 中打开该组卡片所在文件夹（人工上传微信素材库时直接取图）。"""
+    import subprocess
+
+    folder = wechat_graphics.OUTPUT_DIR / str(summary_id)
+    if not folder.exists():
+        return jsonify({"error": "文件夹不存在"}), 404
+    try:
+        if sys.platform == "darwin":
+            subprocess.Popen(["open", str(folder)])
+        elif os.name == "nt":
+            subprocess.Popen(["explorer", str(folder)])
+        else:
+            subprocess.Popen(["xdg-open", str(folder)])
+        return jsonify({"success": True, "folder": str(folder)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/wechat/<int:summary_id>", methods=["DELETE"])
+def api_wechat_delete(summary_id):
+    try:
+        ok = wechat_graphics.delete_package(summary_id)
         return jsonify({"success": bool(ok)})
     except Exception as e:
         return jsonify({"error": str(e)}), 500

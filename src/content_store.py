@@ -1594,7 +1594,7 @@ def get_category_stats(db_path: str | Path) -> list[dict[str, Any]]:
 # 公众号：知识沉淀渠道，AI/前端/编程等知识类标签优先，公众号素材稿权重更高
 # 小红书：轻量话题渠道，近期热度权重放大，生活/攻略类标签优先
 # 渠道策略版本：调整任何渠道的词表/分类/权重后 +1（media-workbench 兜底快照同步对齐）
-CHANNEL_STRATEGY_VERSION = 2
+CHANNEL_STRATEGY_VERSION = 3
 
 RADAR_CHANNEL_STRATEGY: dict[str, dict[str, Any]] = {
     "toutiao": {
@@ -1627,11 +1627,18 @@ RADAR_CHANNEL_STRATEGY: dict[str, dict[str, Any]] = {
     },
     "wechat": {
         "label": "公众号",
-        "desc": "知识沉淀优先 · AI/前端/编程类标签加权 · 公众号素材稿加权",
+        "desc": "知识沉淀优先 · AI/前端/编程类标签加权 · 公众号素材稿加权 · 图片消息图文模式（3:4）",
         # 粗分类（视频库 category）+ 细分类关键词（video_index 选题 topic，如「AI技术教程」），
         # 下游引擎用子串匹配打通两套口径
         "knowledge_categories": ["AI技术", "前端面试", "编程开发", "产品设计", "前端", "编程"],
         "summary_bonus_type": "wechat_material",
+        # 图文模式（迁移方案 §5.4-8，v3 新增）：公众号走图片消息 newspic，工作台据此展示入口
+        "graphics_mode": "newspic",
+        "graphics_canvas": "1080x1440",
+        "graphics_templates": ["classic", "minimal", "magazine"],
+        "graphics_max_images": 20,
+        "author_draft_min": 300,       # 作者真实底稿最低字数（§6 强制机制，生成时必填）
+        "real_screenshots_min": 2,     # 真实截图铁律下限（lint 核验）
     },
     "xhs": {
         "label": "小红书",
