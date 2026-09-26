@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>video2text · 头条图文工作台（重设计原型）</title>
+<style>
+/* ============================================================
+   复用 video2text 现有设计 TOKENS（墨色中性）——原型与真实工作台同语言
+   ============================================================ */
+:root{
+  --page-bg:#f4f3f0; --surface-card:#fcfbf8; --surface-nested:#f7f6f1;
+  --border:#ecebe5; --border-input:#e0ded6;
+  --text:#232220; --text-secondary:#8f8a80; --text-tertiary:#b6b1a6;
+  --accent:#2f2e2b; --accent-muted:#efeee8; --on-accent:#f4f3f0;
+  --module-1:#6f8f6a; --module-2:#5f7a99; --module-3:#bd8a4e;
+  --module-4:#b5715a; --module-5:#7d7195;
+  --danger:#c25d4f; --danger-muted:#f6ece9;
+  --drawer-bg:#232220; --drawer-bg-top:#2d2c29; --drawer-text:#f4f3f0;
+  --drawer-text-mute:rgba(244,243,240,.55); --drawer-hover:rgba(244,243,240,.08);
+  --drawer-active:rgba(244,243,240,.12);
+  --radius-control:8px; --radius-tile:12px; --radius-card:16px; --radius-sheet:22px;
+  --shadow-card:0 1px 2px rgba(35,34,32,.04),0 4px 16px rgba(35,34,32,.05);
+  --shadow-overlay:0 10px 28px rgba(35,34,32,.12);
+  --font:-apple-system,"PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+  --sidebar-w:236px;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--page-bg);color:var(--text);font-family:var(--font);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased;min-height:100vh}
+button{font-family:var(--font)}
+.layout{min-height:100vh}
+
+/* ── 侧栏 ── */
+.sidebar{background:linear-gradient(180deg,var(--drawer-bg-top),var(--drawer-bg));color:var(--drawer-text);display:flex;flex-direction:column;position:fixed;top:0;left:0;width:var(--sidebar-w);height:100vh;z-index:30}
+.sidebar .brand{padding:24px 20px 16px;display:flex;align-items:center;gap:12px}
+.sidebar .brand .ava{width:44px;height:44px;border-radius:13px;background:var(--drawer-hover);display:grid;place-items:center;color:var(--drawer-text);font-weight:800}
+.sidebar .brand h1{font-size:16.5px;font-weight:800;letter-spacing:-.01em}
+.sidebar .brand p{font-size:11px;opacity:.5;margin-top:3px}
+.sidebar .nav{flex:1;overflow-y:auto;padding:4px 12px 12px}
+.nav-sep{font-size:10.5px;opacity:.42;padding:14px 14px 6px;letter-spacing:.1em}
+.navi{display:flex;align-items:center;gap:12px;padding:10px 14px;border-radius:11px;cursor:pointer;font-size:13.5px;font-weight:500;color:color-mix(in srgb,var(--drawer-text) 82%,transparent);transition:background .15s;margin-bottom:2px}
+.navi:hover{background:var(--drawer-hover)}
+.navi.active{background:var(--drawer-active);color:var(--drawer-text);font-weight:700}
+.navi .cnt{margin-left:auto;font-size:11px;opacity:.55;font-weight:600}
+.navi .new{margin-left:auto;font-size:10px;font-weight:800;background:var(--module-3);color:#fff;border-radius:5px;padding:2px 7px;letter-spacing:.05em}
+.sidebar .foot{padding:14px 16px;font-size:11px;opacity:.5;border-top:1px solid var(--drawer-hover)}
+
+/* ── 主区 ── */
+.main{margin-left:var(--sidebar-w);padding:26px 34px 56px}
+.main>section{max-width:1180px;display:none}
+.main>section.on{display:block}
+.header{display:flex;align-items:flex-end;gap:14px;margin-bottom:6px}
+.header h2{font-size:26px;font-weight:800;letter-spacing:-.03em}
+.header p{color:var(--text-secondary);font-size:13px;margin-top:5px}
+.header .spacer{flex:1}
+.header .count{font-size:12.5px;color:var(--text-secondary);font-weight:700;background:var(--surface-card);border:1px solid var(--border);border-radius:999px;padding:7px 14px;box-shadow:var(--shadow-card)}
+.prototype-tag{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:700;color:var(--module-3);background:color-mix(in srgb,var(--module-3) 10%,transparent);border:1px solid color-mix(in srgb,var(--module-3) 30%,transparent);border-radius:999px;padding:5px 12px}
+.prototype-tag .dot{width:7px;height:7px;border-radius:50%;background:var(--module-3);animation:pulse 1.4s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+
+/* ── 链路步骤条 ── */
+.flow-bar{display:flex;align-items:center;gap:10px;margin:18px 0 22px;flex-wrap:wrap}
+.flow-step{display:inline-flex;align-items:center;gap:8px;background:var(--surface-card);border:1px solid var(--border);border-radius:999px;padding:8px 16px;font-size:13px;font-weight:600;cursor:pointer;box-shadow:var(--shadow-card);transition:all .15s;color:var(--text-secondary)}
+.flow-step .fn{width:20px;height:20px;border-radius:50%;background:var(--accent-muted);color:var(--accent);display:grid;place-items:center;font-size:11px;font-weight:800}
+.flow-step:hover{border-color:var(--border-input)}
+.flow-step.on{border-color:var(--accent);color:var(--text);font-weight:700}
+.flow-step.on .fn{background:var(--accent);color:var(--on-accent)}
+.flow-step .st-tt{color:var(--module-1);font-size:11px;font-weight:700}
+.flow-arrow{color:var(--text-tertiary);font-size:15px}
+
+/* ── 面板/卡片 ── */
+.panel{background:var(--surface-card);border:1px solid var(--border);border-radius:var(--radius-card);padding:18px;box-shadow:var(--shadow-card);margin-top:16px}
+.panel .mh{display:flex;align-items:center;gap:10px;margin-bottom:14px}
+.panel .mh .l{font-size:15px;font-weight:800}
+.panel .mh .d{font-size:12px;color:var(--text-secondary)}
+.btn{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--border-input);background:var(--surface-card);color:var(--text);border-radius:var(--radius-control);padding:9px 16px;font-size:13px;font-weight:600;cursor:pointer;transition:all .15s}
+.btn:hover{border-color:var(--accent)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+.btn.primary:hover{opacity:.88}
+.btn.gold{background:var(--module-3);border-color:var(--module-3);color:#fff}
+.btn.gold:hover{opacity:.9}
+.btn.sm{padding:6px 12px;font-size:12px;border-radius:7px}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.btn .bic{font-size:14px}
+
+/* ── 视频库表 ── */
+.vtoolbar{display:flex;align-items:center;gap:10px;padding:12px 16px;background:var(--surface-nested);border:1px solid var(--border);border-radius:var(--radius-control);margin-bottom:14px;flex-wrap:wrap}
+.vtoolbar .selinfo{font-size:13px;font-weight:700}
+.vtoolbar .selinfo em{font-style:normal;color:var(--module-3)}
+.vtoolbar .spacer{flex:1}
+.vtable{width:100%;border-collapse:collapse}
+.vtable th{text-align:left;font-size:11px;color:var(--text-tertiary);font-weight:700;letter-spacing:.06em;padding:8px 10px;border-bottom:1px solid var(--border)}
+.vtable td{padding:11px 10px;border-bottom:1px solid var(--border);font-size:13px;vertical-align:middle}
+.vtable tr:hover td{background:var(--surface-nested)}
+.vtable tr.checked td{background:color-mix(in srgb,var(--module-3) 6%,transparent)}
+.ck{width:16px;height:16px;accent-color:var(--module-3);cursor:pointer}
+.vt-title{font-weight:600;max-width:420px}
+.vt-title .sub{font-size:11.5px;color:var(--text-tertiary);font-weight:400;margin-top:2px}
+.tag{display:inline-block;font-size:11px;font-weight:700;border-radius:5px;padding:3px 8px}
+.tag.guide{background:color-mix(in srgb,var(--module-1) 12%,transparent);color:var(--module-1)}
+.tag.tt{background:color-mix(in srgb,var(--module-3) 13%,transparent);color:var(--module-3)}
+.tag.mat{background:color-mix(in srgb,var(--module-2) 12%,transparent);color:var(--module-2)}
+.tag.none{background:var(--accent-muted);color:var(--text-tertiary)}
+.lvl{font-size:11px;font-weight:700;border-radius:4px;padding:2px 6px}
+.lvl.s{background:color-mix(in srgb,var(--module-4) 14%,transparent);color:var(--module-4)}
+.lvl.a{background:color-mix(in srgb,var(--module-3) 14%,transparent);color:var(--module-3)}
+.lvl.b{background:var(--accent-muted);color:var(--text-secondary)}
+
+/* ── 整理稿列表 ── */
+.sum-grid{display:flex;flex-direction:column;gap:12px}
+.sum-card{display:flex;align-items:center;gap:16px;background:var(--surface-card);border:1px solid var(--border);border-radius:var(--radius-tile);padding:16px 18px;box-shadow:var(--shadow-card);transition:all .15s}
+.sum-card:hover{border-color:var(--border-input)}
+.sum-ic{width:44px;height:44px;border-radius:12px;display:grid;place-items:center;font-size:19px;flex-shrink:0}
+.sum-body{flex:1;min-width:0}
+.sum-body .t{font-size:14.5px;font-weight:700;margin-bottom:4px}
+.sum-body .m{font-size:12px;color:var(--text-secondary);display:flex;gap:12px;flex-wrap:wrap}
+.sum-body .m .src{color:var(--text-tertiary)}
+.sum-acts{display:flex;gap:8px;flex-shrink:0}
+
+/* ── 头条图文详情 ── */
+.tt-layout{display:flex;gap:20px;align-items:flex-start;margin-top:16px}
+.tt-left{flex:0 0 300px}
+.tt-right{flex:1;min-width:0}
+.img-rail{background:var(--surface-card);border:1px solid var(--border);border-radius:var(--radius-card);padding:14px;box-shadow:var(--shadow-card)}
+.img-rail .mh{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
+.img-rail .mh .l{font-size:13.5px;font-weight:800}
+.img-stack{display:flex;flex-direction:column;gap:10px;max-height:560px;overflow-y:auto;padding-right:4px}
+.img-stack::-webkit-scrollbar{width:5px}
+.img-stack::-webkit-scrollbar-thumb{background:var(--border-input);border-radius:5px}
+.img-item{position:relative;border-radius:10px;overflow:hidden;cursor:pointer;border:2px solid transparent;transition:border .15s}
+.img-item img{display:block;width:100%;height:auto}
+.img-item.on{border-color:var(--module-3)}
+.img-item .lb{position:absolute;top:8px;left:8px;background:rgba(35,34,32,.78);color:#fff;font-size:10.5px;font-weight:700;border-radius:5px;padding:3px 8px}
+.copy-box{background:var(--surface-card);border:1px solid var(--border);border-radius:var(--radius-card);padding:18px;box-shadow:var(--shadow-card)}
+.copy-box .mh{display:flex;align-items:center;gap:10px;margin-bottom:12px}
+.copy-box .mh .l{font-size:14.5px;font-weight:800}
+.copy-area{width:100%;min-height:250px;border:1px solid var(--border-input);border-radius:var(--radius-control);background:var(--surface-nested);padding:14px;font-family:var(--font);font-size:13px;line-height:1.7;color:var(--text);resize:vertical}
+.checklist{margin-top:16px}
+.checklist .cl-t{font-size:13px;font-weight:800;margin-bottom:10px;display:flex;align-items:center;gap:8px}
+.cl-item{display:flex;align-items:flex-start;gap:10px;padding:9px 12px;border-radius:8px;font-size:13px;cursor:pointer;transition:background .15s;color:var(--text)}
+.cl-item:hover{background:var(--surface-nested)}
+.cl-item .ck{margin-top:2px}
+.cl-item.done{color:var(--text-tertiary);text-decoration:line-through}
+.tips{margin-top:14px;background:color-mix(in srgb,var(--module-5) 7%,transparent);border:1px solid color-mix(in srgb,var(--module-5) 22%,transparent);border-radius:var(--radius-control);padding:12px 14px;font-size:12.5px;line-height:1.7;color:var(--text-secondary)}
+.tips b{color:var(--module-5)}
+
+/* ── 生成中弹层 ── */
+.modal-mask{position:fixed;inset:0;background:rgba(35,34,32,.42);z-index:60;display:none;align-items:center;justify-content:center}
+.modal-mask.on{display:flex}
+.modal{background:var(--surface-card);border-radius:var(--radius-sheet);box-shadow:var(--shadow-overlay);width:520px;padding:26px 28px}
+.modal .mt{font-size:17px;font-weight:800;margin-bottom:6px}
+.modal .md{font-size:13px;color:var(--text-secondary);margin-bottom:18px;line-height:1.7}
+.gen-steps{display:flex;flex-direction:column;gap:0;margin-bottom:20px}
+.gs{display:flex;gap:12px;padding:9px 0}
+.gs .gn{width:22px;height:22px;border-radius:50%;background:var(--accent-muted);color:var(--text-secondary);display:grid;place-items:center;font-size:11px;font-weight:800;flex-shrink:0;margin-top:1px}
+.gs.run .gn{background:var(--module-3);color:#fff;animation:pulse 1.2s infinite}
+.gs.ok .gn{background:var(--module-1);color:#fff}
+.gs .gt{font-size:13.5px;font-weight:600}
+.gs .gt small{display:block;font-size:11.5px;color:var(--text-tertiary);font-weight:400;margin-top:2px}
+.toast{position:fixed;top:22px;left:50%;transform:translateX(-50%) translateY(-70px);background:var(--accent);color:var(--on-accent);font-size:13px;font-weight:700;border-radius:999px;padding:10px 22px;box-shadow:var(--shadow-overlay);z-index:80;transition:transform .25s}
+.toast.on{transform:translateX(-50%) translateY(0)}
+</style>
+</head>
+<body>
+<div class="layout">
+
+  <!-- ══ 侧栏（与现有工作台一致，新增「头条图文」入口） ══ -->
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="ava">V2</div>
+      <div><h1>video2text</h1><p>我的内容工作台</p></div>
+    </div>
+    <nav class="nav">
+      <div class="nav-sep">总览</div>
+      <div class="navi" onclick="alert('原型演示：此页为现有功能，未改动')">🏠 工作台首页</div>
+      <div class="nav-sep">采集</div>
+      <div class="navi" onclick="alert('原型演示：此页为现有功能，未改动')">📷 采集中心</div>
+      <div class="nav-sep">内容</div>
+      <div class="navi" onclick="alert('原型演示：此页为现有功能，未改动')">🗃 数据与同步</div>
+      <div class="navi" onclick="alert('原型演示：此页为现有功能，未改动')">📡 选题雷达</div>
+      <div class="navi" data-nav="library" onclick="go('library')">📚 视频库 <span class="cnt">1032</span></div>
+      <div class="navi" data-nav="summaries" onclick="go('summaries')">📖 整理稿 <span class="cnt">38</span></div>
+      <div class="navi" data-nav="toutiao" onclick="go('toutiao')">🔥 头条图文 <span class="new">NEW</span></div>
+      <div class="navi" onclick="alert('原型演示：此页为现有功能，未改动')">🎯 面试题库</div>
+      <div class="nav-sep">设置</div>
+      <div class="navi" onclick="alert('原型演示：此页为现有功能，未改动')">⚙️ AI 设置</div>
+    </nav>
+    <div class="foot"><span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--module-1);margin-right:6px;vertical-align:1px"></span>空闲</div>
+  </aside>
+
+  <main class="main">
+
+    <!-- ════════ 视图 1：视频库（链路起点） ════════ -->
+    <section id="view-library" class="on">
+      <div class="header">
+        <h2>视频库</h2>
+        <span class="prototype-tag"><span class="dot"></span>重设计原型 · 数据为示例</span>
+        <div class="spacer"></div>
+        <span class="count">魔兽无限 · 9 条</span>
+      </div>
+      <p style="color:var(--text-secondary);font-size:13px;margin-top:5px">勾选单条或多条同话题素材 → 生成整理稿。整合稿会以「变化对比 + 对你的影响 + 行动建议」三件套加工，不是简单拼接。</p>
+
+      <!-- 新增：链路步骤条（全链路导航） -->
+      <div class="flow-bar">
+        <div class="flow-step on" data-flow="library" onclick="go('library')"><span class="fn">1</span>勾选素材</div>
+        <span class="flow-arrow">→</span>
+        <div class="flow-step" data-flow="summaries" onclick="go('summaries')"><span class="fn">2</span>生成整理稿</div>
+        <span class="flow-arrow">→</span>
+        <div class="flow-step" data-flow="toutiao" onclick="go('toutiao')"><span class="fn">3</span>生成头条图文</div>
+        <span class="flow-arrow">→</span>
+        <div class="flow-step" data-flow="toutiao" onclick="go('toutiao')"><span class="fn">4</span>复制发布 <span class="st-tt">手动</span></div>
+      </div>
+
+      <!-- 新增：多选工具条（勾选后浮出） -->
+      <div class="vtoolbar" id="lib-toolbar" style="visibility:hidden">
+        <span class="selinfo">已选 <em id="sel-n">0</em> 条 · 6 位UP主 · 时间跨度 9-14 ~ 9-21</span>
+        <div class="spacer"></div>
+        <button class="btn sm" onclick="alert('原型演示：走现有 /api/content/generate 流程')">生成素材底稿</button>
+        <button class="btn sm gold" onclick="genSummary()">🔥 生成头条整合稿</button>
+      </div>
+
+      <div class="panel" style="padding:6px 16px 10px">
+        <table class="vtable">
+          <thead><tr>
+            <th style="width:36px"><input type="checkbox" class="ck" id="ck-all" onchange="toggleAll(this)"></th>
+            <th>标题 / UP主</th><th style="width:90px">发布时间</th><th style="width:74px">选题</th><th style="width:110px">整理稿</th><th style="width:60px">转写</th>
+          </tr></thead>
+          <tbody id="lib-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ════════ 视图 2：整理稿（链路中转，新增头条整合类型） ════════ -->
+    <section id="view-summaries">
+      <div class="header">
+        <h2>整理稿</h2>
+        <div class="spacer"></div>
+        <span class="count">4 条 · 魔兽无限话题</span>
+      </div>
+      <p style="color:var(--text-secondary);font-size:13px;margin-top:5px">头条整合稿生成后出现在列表顶部，点「生成头条图文」进入出图流程。</p>
+
+      <div class="flow-bar">
+        <div class="flow-step" onclick="go('library')"><span class="fn">1</span>勾选素材</div>
+        <span class="flow-arrow">→</span>
+        <div class="flow-step on" onclick="go('summaries')"><span class="fn">2</span>生成整理稿</div>
+        <span class="flow-arrow">→</span>
+        <div class="flow-step" onclick="go('toutiao')"><span class="fn">3</span>生成头条图文</div>
+        <span class="flow-arrow">→</span>
+        <div class="flow-step" onclick="go('toutiao')"><span class="fn">4</span>复制发布 <span class="st-tt">手动</span></div>
+      </div>
+
+      <div class="sum-grid" id="sum-grid"></div>
+    </section>
+
+    <!-- ════════ 视图 3：头条图文（链路终点：出图 + 复制发布助手） ════════ -->
+    <section id="view-toutiao">
+      <div class="header">
+        <h2>头条图文</h2>
+        <span class="prototype-tag"><span class="dot"></span>图片为试跑 01 真实产物</span>
+        <div class="spacer"></div>
+        <button class="btn sm" onclick="backToSum()">← 返回整理稿</button>
+        <button class="btn sm primary" onclick="downloadAll()">⬇ 下载全部 4 张图</button>
+      </div>
+
+      <div class="flow-bar">
+        <div class="flow-step" onclick="go('library')"><span class="fn">1</span>勾选素材</div>
+        <span class="flow-arrow">→</span>
+        <div class="flow-step" onclick="go('summaries')"><span class="fn">2</span>生成整理稿</div>
+        <span class="flow-arrow">→</span>
+        <div class="flow-step on" onclick="go('toutiao')"><span class="fn">3</span>生成头条图文</div>
+        <span class="flow-arrow">→</span>
+        <div class="flow-step on" onclick="go('toutiao')"><span class="fn">4</span>复制发布 <span class="st-tt">手动</span></div>
+      </div>
+
+      <div class="tt-layout">
+        <!-- 左：图片栏 -->
+        <div class="tt-left">
+          <div class="img-rail">
+            <div class="mh"><span class="l">配图 · 4 张（1080×1440）</span></div>
+            <div class="img-stack" id="img-stack"></div>
+          </div>
+        </div>
+        <!-- 右：文案复制 + 检查清单 -->
+        <div class="tt-right">
+          <div class="copy-box">
+            <div class="mh"><span class="l">📝 微头条文案</span><div style="flex:1"></div>
+              <button class="btn sm gold" onclick="copyText()">📋 复制文案</button>
+            </div>
+            <textarea class="copy-area" id="copy-area" spellcheck="false">魔兽世界「无限」11月4日就开服了，但这次和怀旧服完全是两个游戏。
+
+把最近半个月各路UP的B测体验整理成了4张决策卡，进游戏前必须想清楚的事都在这：
+
+📌 选模式=选服务器：全球一服，普通/PVP/RP不同模式不能互相组队，开黑前先对齐
+📌 WA插件全禁：战斗辅助只留美化，官方内置冷却管理器兜底
+📌 没有毕业装：装备按场景特化，团本掉落全加密，按手感选职业别按排名
+📌 练级路线变了：副本刷怪被废，野外任务才是正解；满级160小时，开服就练刚好赶上12月7日开团本
+
+第4张抄作业卡建议收藏，开服直接照抄。
+
+信息来源：B测期间多位UP主公开视频内容整理（口径截至9月21日，正式服可能调整）。
+本文图为AI辅助生成。</textarea>
+            <div class="checklist">
+              <div class="cl-t">✅ 发布检查清单</div>
+              <div id="cl-body"></div>
+            </div>
+            <div class="tips"><b>合规提示：</b>发布时勾选「内容包含AI生成」声明；发布动作保持手动，不走任何自动发布通道。试跑纪律：连续 2 条阅读 &lt;100 停下复盘形态。</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<!-- 生成中弹层 -->
+<div class="modal-mask" id="modal">
+  <div class="modal">
+    <div class="mt" id="modal-t">🔥 生成头条整合稿</div>
+    <div class="md" id="modal-d">正在对 6 条素材做决策化整合……</div>
+    <div class="gen-steps" id="gen-steps"></div>
+    <div style="display:flex;justify-content:flex-end;gap:10px">
+      <button class="btn" id="modal-close" style="display:none" onclick="closeModal()">关闭</button>
+    </div>
+  </div>
+</div>
+<div class="toast" id="toast">已复制</div>
+
+<script>
+/* ── 示例数据（取自素材库真实条目） ── */
+var VIDEOS = [
+  {t:"魔兽无限服其实就是'魔兽世界2'，盘点无限服全部新内容", a:"一起玩魔兽(一条大菜狗)", d:"09-21", lvl:"S", sum:"", tl:0},
+  {t:"《魔兽：无限》中的温暖时刻！这个设计真的很棒！", a:"夏一可死毒舌", d:"09-21", lvl:"B", sum:"mat", tl:792},
+  {t:"开服前必看！魔兽无限服营地增益BUFF全汇总，选专业不纠结！", a:"尤安的魔兽世界", d:"09-21", lvl:"S", sum:"guide", tl:252},
+  {t:"魔兽无限服专业怎么选？全职业抄作业指南", a:"一起玩魔兽(一条大菜狗)", d:"09-20", lvl:"S", sum:"guide", tl:1873},
+  {t:"魔兽无限和如今的魔兽到底有哪些不同？一个视频带你看完！", a:"夏一可死毒舌", d:"09-18", lvl:"A", sum:"", tl:2218},
+  {t:"魔兽无限服开服指南，B测开服后我们到底能玩到什么内容？", a:"一起玩魔兽(一条大菜狗)", d:"09-17", lvl:"S", sum:"guide", tl:1570},
+  {t:"魔兽无限服治疗大盘点，哪个职业最简单，最无脑，最强力", a:"一起玩魔兽(一条大菜狗)", d:"09-17", lvl:"A", sum:"", tl:3181},
+  {t:"魔兽无限服最新内幕：禁用战斗插件、银行扩至96格，无剧透开荒", a:"一起玩魔兽(一条大菜狗)", d:"09-16", lvl:"S", sum:"mat", tl:1414},
+  {t:"魔兽世界无限深度玩法介绍：没有最强职业和毕业装备，全球统一", a:"泰莉亚子", d:"09-15", lvl:"A", sum:"", tl:2331}
+];
+var SUMS = [
+  {t:"魔兽无限 · 开服决策指南（头条整合稿）", type:"tt", src:"6 条素材 · 4 位UP主", time:"刚刚", canGen:true},
+  {t:"魔兽无限服专业怎么选 · 攻略整理", type:"guide", src:"视频库 · 单条", time:"09-20"},
+  {t:"魔兽无限服营地BUFF · 素材底稿", type:"mat", src:"视频库 · 单条", time:"09-21"},
+  {t:"魔兽无限内幕消息 · 素材底稿", type:"mat", src:"视频库 · 单条", time:"09-16"}
+];
+var CHECKS = [
+  "配图顺序：图1封面 → 图2准备 → 图3职业 → 图4专业练级",
+  "发布时勾选「内容包含AI生成」声明（头条AI标注要求）",
+  "手动发布，不走任何自动发布通道（合规红线）",
+  "发布后把阅读/互动数据记入试跑观察表（3-5条后评估形态）"
+];
+var IMGS = [
+  {f:"assets/图1_封面钩子.png", n:"图1 · 封面钩子"},
+  {f:"assets/图2_进游戏前的准备.png", n:"图2 · 进游戏前准备"},
+  {f:"assets/图3_首发职业怎么选.png", n:"图3 · 职业选择"},
+  {f:"assets/图4_专业与练级抄作业.png", n:"图4 · 专业练级抄作业卡"}
+];
+
+var SUM_LB = {guide:"攻略整理", mat:"素材底稿", tt:"头条整合", none:"—"};
+var SUM_CLS = {guide:"tag tt", mat:"tag mat", none:"tag none"};
+var SUM_ICON = {guide:["🏷","#efeee8","#bd8a4e"], mat:["🗂","#efeee8","#5f7a99"]};
+
+function renderLib(){
+  var tb = document.getElementById("lib-body");
+  tb.innerHTML = VIDEOS.map(function(v,i){
+    var tag = v.sum ? '<span class="'+SUM_CLS[v.sum]+'">'+SUM_LB[v.sum]+'</span>' : '<span class="tag none">—</span>';
+    var lvl = v.lvl==="S" ? '<span class="lvl s">S</span>' : v.lvl==="A" ? '<span class="lvl a">A</span>' : '<span class="lvl b">B</span>';
+    var tl = v.tl>0 ? (v.tl>1000 ? (v.tl/1000).toFixed(1)+"k" : v.tl) : '<span style="color:var(--danger);font-size:11px">缺</span>';
+    return '<tr class="vrow" data-i="'+i+'"><td><input type="checkbox" class="ck vck" onchange="toggleSel()"></td>'
+      +'<td><div class="vt-title">'+v.t+'<div class="sub">'+v.a+'</div></div></td>'
+      +'<td style="color:var(--text-secondary)">'+v.d+'</td><td>'+lvl+'</td><td>'+tag+'</td><td style="color:var(--text-secondary)">'+tl+'</td></tr>';
+  }).join("");
+}
+
+function toggleAll(c){
+  document.querySelectorAll(".vck").forEach(function(x){x.checked = c.checked});
+  toggleSel();
+}
+function toggleSel(){
+  var n = document.querySelectorAll(".vck:checked").length;
+  document.getElementById("sel-n").textContent = n;
+  document.getElementById("lib-toolbar").style.visibility = n>0 ? "visible" : "hidden";
+  document.querySelectorAll(".vrow").forEach(function(r){
+    r.classList.toggle("checked", r.querySelector(".vck").checked);
+  });
+}
+
+function renderSums(){
+  var g = document.getElementById("sum-grid");
+  g.innerHTML = SUMS.map(function(s,i){
+    var icon, cls;
+    if(s.type==="tt"){
+      icon = '<div class="sum-ic" style="background:color-mix(in srgb,var(--module-3) 13%,transparent);color:var(--module-3)">🔥</div>';
+    }else{
+      var ic = SUM_ICON[s.type];
+      icon = '<div class="sum-ic" style="background:var(--accent-muted);color:'+ic[2]+'">'+ic[0]+'</div>';
+    }
+    var acts = s.canGen
+      ? '<button class="btn sm gold" onclick="genToutiao()">🔥 生成头条图文</button><button class="btn sm" onclick="alert(\'原型演示\')">查看</button>'
+      : '<button class="btn sm" onclick="alert(\'原型演示\')">查看</button><button class="btn sm" onclick="alert(\'原型演示\')">重新生成</button>';
+    return '<div class="sum-card"'+(s.type==="tt"?' style="border-color:color-mix(in srgb,var(--module-3) 45%,transparent)"':'')+'>'
+      +icon+'<div class="sum-body"><div class="t">'+s.t+'</div><div class="m"><span class="tag '+(s.type==="tt"?"tt":s.type)+'">'+SUM_LB[s.type]+'</span><span class="src">来源：'+s.src+'</span><span class="src">'+s.time+'</span></div></div><div class="sum-acts">'+acts+'</div></div>';
+  }).join("");
+}
+
+function renderToutiao(){
+  document.getElementById("img-stack").innerHTML = IMGS.map(function(im,i){
+    return '<div class="img-item'+(i===0?" on":"")+'" onclick="pickImg(this)"><span class="lb">'+im.n+'</span><img src="'+im.f+'" alt="'+im.n+'"></div>';
+  }).join("");
+  document.getElementById("cl-body").innerHTML = CHECKS.map(function(c){
+    return '<div class="cl-item" onclick="this.classList.toggle(\'done\');this.querySelector(\'.ck\').checked=this.classList.contains(\'done\')"><input type="checkbox" class="ck" onclick="event.stopPropagation();this.closest(\'.cl-item\').classList.toggle(\'done\',this.checked)"><span>'+c+'</span></div>';
+  }).join("");
+}
+function pickImg(el){
+  document.querySelectorAll(".img-item").forEach(function(x){x.classList.remove("on")});
+  el.classList.add("on");
+}
+
+/* ── 生成流程演示 ── */
+var GEN_STEPS_SUM = [
+  ["读取素材转写稿","6 条素材 · 2.1 万字", "汇总多源内容"],
+  ["决策化整合","变化对比 / 对你的影响 / 行动建议", "三件套加工"],
+  ["落库 ai_summaries","summary_type = toutiao_mix","合集稿 source_video_ids 关联"]
+];
+var GEN_STEPS_TT = [
+  ["读取整合稿","开服决策指南 · 4 大板块", "决策化整合稿"],
+  ["渲染信息图模板","封面 / 准备 / 职业 / 抄作业卡", "4 张 1080×1440"],
+  ["生成微头条文案","钩子 + 话题标签 + AI 声明", "附发布检查清单"]
+];
+function runGen(title, desc, steps, after){
+  document.getElementById("modal-t").textContent = title;
+  document.getElementById("modal-d").textContent = desc;
+  var box = document.getElementById("gen-steps");
+  box.innerHTML = steps.map(function(s){
+    return '<div class="gs"><div class="gn">·</div><div class="gt">'+s[0]+'<small>'+s[1]+'</small><small style="color:var(--module-3)">'+s[2]+'</small></div></div>';
+  }).join("");
+  var els = box.querySelectorAll(".gs");
+  document.getElementById("modal-close").style.display = "none";
+  document.getElementById("modal").classList.add("on");
+  var i = 0;
+  function step(){
+    if(i>0){els[i-1].classList.remove("run"); els[i-1].classList.add("ok"); els[i-1].querySelector(".gn").textContent = "✓";}
+    if(i<els.length){
+      els[i].classList.add("run"); els[i].querySelector(".gn").textContent = (i+1);
+      i++; setTimeout(step, 900);
+    }else{
+      document.getElementById("modal-close").style.display = "inline-flex";
+      if(after) after();
+    }
+  }
+  step();
+}
+function genSummary(){ runGen("🔥 生成头条整合稿","正在对勾选素材做决策化整合……", GEN_STEPS_SUM, function(){}); }
+function genToutiao(){ runGen("🔥 生成头条图文","正在渲染信息图与文案……", GEN_STEPS_TT, function(){}); }
+function closeModal(){ document.getElementById("modal").classList.remove("on"); }
+
+function copyText(){
+  var ta = document.getElementById("copy-area");
+  ta.select();
+  try{ document.execCommand("copy"); }catch(e){}
+  if(navigator.clipboard){ navigator.clipboard.writeText(ta.value).catch(function(){}); }
+  var t = document.getElementById("toast");
+  t.textContent = "文案已复制，去头条粘贴发布";
+  t.classList.add("on");
+  setTimeout(function(){ t.classList.remove("on"); }, 2200);
+}
+function downloadAll(){ alert("原型演示：实际实现为打包下载 4 张 PNG（或逐张保存）"); }
+function backToSum(){ go("summaries"); }
+
+function go(view){
+  document.querySelectorAll(".main>section").forEach(function(s){ s.classList.remove("on") });
+  document.getElementById("view-"+view).classList.add("on");
+  document.querySelectorAll(".navi[data-nav]").forEach(function(n){
+    n.classList.toggle("active", n.getAttribute("data-nav")===view);
+  });
+  document.querySelectorAll(".flow-step[data-flow]").forEach(function(f){
+    f.classList.toggle("on", f.getAttribute("data-flow")===view);
+  });
+  document.querySelectorAll(".flow-step:not([data-flow])").forEach(function(f,i){
+    /* 步骤4跟随 toutiao */
+  });
+  window.scrollTo(0,0);
+}
+
+renderLib(); renderSums(); renderToutiao();
+</script>
+</body>
+</html>
