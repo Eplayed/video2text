@@ -1,0 +1,113 @@
+<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { width:1080px; font-family:"PingFang SC","Hiragino Sans GB",sans-serif;
+       background:#241a10; color:#f0e6c8; }
+.wrap { width:1080px; padding:64px 56px 56px; display:flex; flex-direction:column;
+        background:
+          radial-gradient(ellipse at 50% -10%, rgba(255,200,90,.10), transparent 55%),
+          repeating-linear-gradient(48deg, rgba(0,0,0,.10) 0 3px, transparent 3px 9px),
+          repeating-linear-gradient(-42deg, rgba(255,235,180,.025) 0 3px, transparent 3px 11px),
+          linear-gradient(170deg, #3a2a16 0%, #241a10 45%, #2c2013 100%); }
+/* 鎏金双线外框 */
+.frame { position:absolute; inset:18px; pointer-events:none;
+         border:3px solid #8a6a2f; border-radius:10px;
+         box-shadow: inset 0 0 0 5px #241a10, inset 0 0 0 7px #5d451f, 0 0 26px rgba(0,0,0,.5); }
+/* 菱形角饰 */
+.corner { position:absolute; width:30px; height:30px; background:#c9a227;
+          transform:rotate(45deg); box-shadow:0 0 10px rgba(201,162,39,.55); }
+.corner.tl { top:32px; left:32px; } .corner.tr { top:32px; right:32px; }
+.corner.bl { bottom:32px; left:32px; } .corner.br { bottom:32px; right:32px; }
+.wrap-in { position:relative; z-index:1; display:flex; flex-direction:column; flex:1; }
+.topline { display:flex; align-items:center; gap:14px; margin-bottom:38px; }
+.badge { background:linear-gradient(180deg,#e8c95e,#b4882c); color:#241a10; font-weight:800;
+         font-size:25px; padding:8px 22px; border-radius:5px; letter-spacing:2px;
+         border:1px solid #8a6a2f; box-shadow:0 2px 6px rgba(0,0,0,.45); }
+.topline .src { font-size:23px; color:#b9a877; letter-spacing:1px; }
+h1 { font-size:78px; line-height:1.3; font-weight:800; letter-spacing:2px;
+     color:#f7e7b8; text-shadow:0 2px 10px rgba(0,0,0,.6); }
+h1 .gold { color:#ffd75e; }
+.sub { margin-top:26px; font-size:36px; color:#cdbb8b; letter-spacing:3px; }
+/* 鎏金分隔条 */
+.divider { height:3px; margin:34px 0; border-radius:2px;
+           background:linear-gradient(90deg, transparent, #8a6a2f 18%, #ffd75e 50%, #8a6a2f 82%, transparent); }
+/* 提示金框卡（原 tl-box） */
+.gold-box { background:linear-gradient(180deg, rgba(90,64,22,.55), rgba(60,42,15,.65));
+            border:2px solid #8a6a2f; border-radius:12px; padding:34px 40px;
+            box-shadow:inset 0 1px 0 rgba(255,225,140,.25), 0 4px 14px rgba(0,0,0,.4); }
+.gold-box .label { font-size:27px; color:#e8c95e; letter-spacing:4px; margin-bottom:14px; font-weight:700; }
+.gold-box .big { font-size:56px; font-weight:800; color:#ffd75e; text-shadow:0 2px 8px rgba(0,0,0,.5); }
+.gold-box .note { margin-top:12px; font-size:26px; color:#b9a877; }
+/* 列表钩子卡 */
+.hooks { margin-top:44px; display:flex; flex-direction:column; gap:22px; }
+.hook { display:flex; align-items:center; gap:22px;
+        background:linear-gradient(180deg, rgba(255,235,180,.07), rgba(0,0,0,.16));
+        border:1px solid #5d451f; border-left:6px solid #c9a227;
+        border-radius:8px; padding:24px 28px; box-shadow:0 3px 10px rgba(0,0,0,.35); }
+.hook .n { font-size:40px; font-weight:800; color:#e8c95e; min-width:54px;
+           text-shadow:0 1px 4px rgba(0,0,0,.5); }
+.hook .t { font-size:34px; font-weight:700; color:#f7e7b8; }
+.hook .d { font-size:25px; color:#b9a877; margin-top:6px; font-weight:400; }
+h2 { font-size:56px; font-weight:800; letter-spacing:1px; margin-bottom:36px;
+     color:#f7e7b8; text-shadow:0 2px 10px rgba(0,0,0,.6); }
+h2 .gold { color:#ffd75e; }
+/* 任务日志面板 */
+.card { background:linear-gradient(180deg, rgba(50,36,17,.92), rgba(34,24,11,.95));
+        border:2px solid #6b5226; border-radius:10px; padding:30px 34px; margin-bottom:24px;
+        box-shadow:inset 0 1px 0 rgba(255,225,140,.18), 0 4px 12px rgba(0,0,0,.4); }
+.card .head { display:flex; align-items:center; gap:16px; margin-bottom:18px;
+              padding-bottom:14px; border-bottom:1px solid #5d451f; }
+.card .icon { width:50px; height:50px; border-radius:8px; background:linear-gradient(180deg,#e8c95e,#b4882c);
+              color:#241a10; font-size:26px; font-weight:800; display:flex; align-items:center;
+              justify-content:center; flex-shrink:0; border:1px solid #8a6a2f;
+              box-shadow:0 2px 6px rgba(0,0,0,.4); }
+.card .name { font-size:35px; font-weight:700; color:#f7e7b8; }
+/* 任务条目（仿任务日志行） */
+.row { display:flex; align-items:baseline; gap:14px;
+       background:linear-gradient(180deg, rgba(120,90,35,.28), rgba(60,44,17,.32));
+       border:1px solid #4d3a1a; border-radius:8px; padding:17px 22px; margin-bottom:12px; }
+.row .rn { font-size:27px; color:#ffd75e; font-weight:700; flex-shrink:0;
+           text-shadow:0 1px 4px rgba(0,0,0,.5); }
+.row .rv { font-size:27px; color:#e9ddba; line-height:1.5; }
+.row .rv b { color:#ffd75e; }
+.row .tagr { margin-left:auto; font-size:24px; color:#ffd75e; font-weight:700; flex-shrink:0; }
+/* 阵营/重点提示条（原 note） */
+.note { background:linear-gradient(180deg, rgba(90,64,22,.5), rgba(60,42,15,.6));
+        border:1px solid #8a6a2f; border-radius:10px; padding:22px 28px; margin-top:8px;
+        box-shadow:inset 0 1px 0 rgba(255,225,140,.2); }
+.note .nt { font-size:26px; color:#e8c95e; font-weight:700; margin-bottom:8px; letter-spacing:2px; }
+.note .nd { font-size:27px; line-height:1.6; color:#e9ddba; }
+.note .nd b { color:#ffd75e; }
+.footer { margin-top:auto; display:flex; justify-content:space-between; align-items:center;
+          border-top:1px solid #5d451f; padding-top:22px; }
+.footer .l { font-size:23px; color:#9a8a63; }
+.footer .r { font-size:23px; color:#e8c95e; font-weight:600; }
+/* 阵营双色徽记（纯 CSS 自绘：部落红/联盟蓝） */
+.faction { display:inline-flex; align-items:center; gap:8px; font-size:24px; font-weight:800;
+           border-radius:5px; padding:5px 14px; letter-spacing:2px; }
+.faction.horde { background:linear-gradient(180deg,#8f2f26,#6b1f18); color:#ffd9c9;
+                 border:1px solid #c25d4f; }
+.faction.alliance { background:linear-gradient(180deg,#2f4f8f,#1f3566); color:#cfe0ff;
+                    border:1px solid #6f9fdf; }
+/* 阵营主题背景图层（AI 自绘概念图垫底，低透明度保证文字可读） */
+.wrap.bg-neutral::before, .wrap.bg-alliance::before, .wrap.bg-horde::before {
+  content:""; position:absolute; inset:0; background-position:center; background-size:cover; opacity:.34; }
+.wrap.bg-neutral::before { background-image:url("file:///Users/zhangyajun/Documents/project/video2text/output/toutiao/_assets/neutral_bg.jpg"); }
+.wrap.bg-alliance::before { background-image:url("file:///Users/zhangyajun/Documents/project/video2text/output/toutiao/_assets/alliance_bg.jpg"); }
+.wrap.bg-horde::before { background-image:url("file:///Users/zhangyajun/Documents/project/video2text/output/toutiao/_assets/horde_bg.jpg"); }
+/* 行级阵营色（联盟蓝边/部落红边 + 同色系底） */
+.row.f-alliance { border-left:5px solid #6f9fdf;
+                  background:linear-gradient(180deg, rgba(47,79,143,.42), rgba(30,50,95,.48)); }
+.row.f-horde { border-left:5px solid #c25d4f;
+               background:linear-gradient(180deg, rgba(143,47,38,.42), rgba(95,30,24,.48)); }
+</style></head><body><div class="wrap " style="height:1440px;position:relative">
+  <div class="frame"></div>
+  <div class="corner tl"></div><div class="corner tr"></div><div class="corner bl"></div><div class="corner br"></div>
+  <div class="wrap-in">
+  <div class="topline"><div class="badge">整合</div><div class="src">决策指南 · 6/6</div><div style="flex:1"></div></div>
+  <h2>专业与练级抄作业</h2>
+  <div style="font-size:26px;color:#b9a877;margin:-22px 0 30px;letter-spacing:1px">赚金币、自给自足、练级路线一次说清</div>
+  <div class="card"><div class="head"><div class="icon">盾</div><div class="name">专业练级</div></div><div class="row "><div class="rn">赚金币</div><div class="rv">双采集最稳：采矿/草药/剥皮任选两个</div><div class="tagr">最稳</div></div><div class="row "><div class="rn">自给自足</div><div class="rv">按本职业护甲类型选制造专业+对应采集，板甲→锻造+采矿</div><div class="tagr">对口</div></div><div class="row "><div class="rn">五门全练</div><div class="rv">2主专业+3生活专业，建议急救也练，能独立搓治疗药水</div><div class="tagr">建议</div></div><div class="row "><div class="rn">营地系统</div><div class="rv">野外支营火=1小时强力BUFF+修理商+双倍休息经验</div><div class="tagr">必用</div></div><div class="row "><div class="rn">传承点数</div><div class="rv">全账号共享，6门商业技能共18点，练小号前先点冒险天赋</div><div class="tagr">共享</div></div></div>
+  <div class="note"><div class="nt">练级路线变了</div><div class="nd">副本无限刷怪升级被废（小怪经验大砍），最优解是野外任务线+进本一次性任务。</div></div>
+  <div class="footer"><div class="l">多源信息整合 · 09月23日</div><div class="r">AI 辅助生成</div></div>
+  </div>
+</div></body></html>

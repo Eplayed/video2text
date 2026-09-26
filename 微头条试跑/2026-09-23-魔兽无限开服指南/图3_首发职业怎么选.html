@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { width: 1080px; height: 1440px; font-family: "PingFang SC", "Hiragino Sans GB", sans-serif; background: #14161d; color: #e8e4d8; overflow: hidden; }
+  .wrap { width: 1080px; height: 1440px; padding: 70px 70px 60px; display: flex; flex-direction: column; background: linear-gradient(160deg, #1a1d28 0%, #14161d 55%, #171a22 100%); }
+  .topline { display: flex; align-items: center; gap: 16px; margin-bottom: 40px; }
+  .badge { background: #c9a227; color: #14161d; font-weight: 700; font-size: 26px; padding: 8px 22px; border-radius: 6px; letter-spacing: 2px; }
+  .topline .src { font-size: 24px; color: #8b8fa0; letter-spacing: 1px; }
+  h2 { font-size: 58px; font-weight: 800; letter-spacing: 1px; margin-bottom: 40px; }
+  h2 .gold { color: #f0c954; }
+  .role { background: #1e2130; border-radius: 16px; padding: 30px 38px; margin-bottom: 26px; }
+  .role .rh { display: flex; align-items: center; gap: 18px; margin-bottom: 18px; }
+  .role .icon { width: 52px; height: 52px; border-radius: 10px; background: rgba(201,162,39,0.16); color: #f0c954; font-size: 30px; font-weight: 800; display: flex; align-items: center; justify-content: center; }
+  .role .rn { font-size: 36px; font-weight: 700; }
+  .picks { display: flex; flex-direction: column; gap: 12px; }
+  .pick { display: flex; align-items: baseline; gap: 16px; background: #262a3c; border-radius: 10px; padding: 16px 24px; }
+  .pick .pn { font-size: 30px; font-weight: 700; min-width: 130px; }
+  .pick .pd { font-size: 26px; color: #9aa0b0; }
+  .pick .star { color: #f0c954; font-size: 26px; margin-left: auto; flex-shrink: 0; }
+  .adv { margin-top: 8px; background: rgba(201,162,39,0.1); border: 1px solid rgba(201,162,39,0.35); border-radius: 12px; padding: 26px 32px; }
+  .adv .at { font-size: 28px; color: #c9a227; font-weight: 700; margin-bottom: 10px; letter-spacing: 2px; }
+  .adv .ad { font-size: 28px; line-height: 1.6; color: #d5d8e0; }
+  .adv .ad b { color: #f0c954; }
+  .footer { margin-top: auto; display: flex; justify-content: space-between; align-items: center; border-top: 1px solid #2a2e3c; padding-top: 26px; }
+  .footer .l { font-size: 24px; color: #6b7080; }
+  .footer .r { font-size: 24px; color: #c9a227; font-weight: 600; letter-spacing: 1px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="topline">
+    <div class="badge">魔兽·无限</div>
+    <div class="src">开服决策指南 · 3/4</div>
+  </div>
+  <h2>首发职业<span class="gold">怎么选</span>（B测口碑）</h2>
+
+  <div class="role">
+    <div class="rh"><div class="icon">盾</div><div class="rn">坦克 · 三选一</div></div>
+    <div class="picks">
+      <div class="pick"><div class="pn">防骑</div><div class="pd">天赋构筑最自由：正统盾流 / 双手抢仇恨 / 法伤流</div><div class="star">最有趣</div></div>
+      <div class="pick"><div class="pn">熊德</div><div class="pd">身板极硬、上手最简单，公认容错率最高</div><div class="star">最省心</div></div>
+      <div class="pick"><div class="pn">防战</div><div class="pd">经典带盾流，改动最少、底子最稳</div><div class="star">最经典</div></div>
+    </div>
+  </div>
+
+  <div class="role">
+    <div class="rh"><div class="icon">十</div><div class="rn">治疗 · 三条路</div></div>
+    <div class="picks">
+      <div class="pick"><div class="pn">奶德</div><div class="pd">机制大改最灵动，野性成长+迅捷不吞HOT，降维打击</div><div class="star">最期待</div></div>
+      <div class="pick"><div class="pn">奶萨</div><div class="pd">图腾全团共享+投掷回收，团刷地位稳如泰山</div><div class="star">最稳</div></div>
+      <div class="pick"><div class="pn">牧师</div><div class="pd">戒律盾系 vs 神圣团刷系定位彻底分化</div><div class="star">两极</div></div>
+    </div>
+  </div>
+
+  <div class="role">
+    <div class="rh"><div class="icon">剑</div><div class="rn">输出 · B测表现</div></div>
+    <div class="picks">
+      <div class="pick"><div class="pn">增强萨</div><div class="pd">嘉年华公认最惊艳专精，DPS 天花板</div><div class="star">T0</div></div>
+      <div class="pick"><div class="pn">元素萨/术士</div><div class="pd">爆发与机制全面加强，第一梯队</div><div class="star">T1</div></div>
+      <div class="pick"><div class="pn">鸟德</div><div class="pd">接近巫妖王之怒形态，历年最强版本鸟德</div><div class="star">T1</div></div>
+    </div>
+  </div>
+
+  <div class="adv">
+    <div class="at">关键提醒</div>
+    <div class="ad">无限服<b>没有毕业装 BIS</b>：装备按场景特化（对亡灵/野兽/龙伤害加成），团本掉落全加密无法提前挖掘——<b>「版本 T0」含金量被稀释，按手感选，别按排名选。</b></div>
+  </div>
+
+  <div class="footer">
+    <div class="l">职业数据为 B 测口径，正式服随时可能调整</div>
+    <div class="r">AI 辅助生成</div>
+  </div>
+</div>
+</body>
+</html>

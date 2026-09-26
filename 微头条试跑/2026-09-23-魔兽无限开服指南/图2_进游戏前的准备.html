@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { width: 1080px; height: 1440px; font-family: "PingFang SC", "Hiragino Sans GB", sans-serif; background: #14161d; color: #e8e4d8; overflow: hidden; }
+  .wrap { width: 1080px; height: 1440px; padding: 70px 70px 60px; display: flex; flex-direction: column; background: linear-gradient(160deg, #1a1d28 0%, #14161d 55%, #171a22 100%); }
+  .topline { display: flex; align-items: center; gap: 16px; margin-bottom: 40px; }
+  .badge { background: #c9a227; color: #14161d; font-weight: 700; font-size: 26px; padding: 8px 22px; border-radius: 6px; letter-spacing: 2px; }
+  .topline .src { font-size: 24px; color: #8b8fa0; letter-spacing: 1px; }
+  h2 { font-size: 58px; font-weight: 800; letter-spacing: 1px; margin-bottom: 44px; }
+  h2 .gold { color: #f0c954; }
+  .card { background: #1e2130; border-radius: 16px; padding: 34px 40px; margin-bottom: 30px; }
+  .card .head { display: flex; align-items: baseline; gap: 18px; margin-bottom: 20px; }
+  .card .num { font-size: 40px; font-weight: 800; color: #c9a227; }
+  .card .name { font-size: 38px; font-weight: 700; }
+  .card .tag { margin-left: auto; font-size: 24px; color: #c9a227; background: rgba(201,162,39,0.14); padding: 6px 18px; border-radius: 20px; }
+  .modes { display: flex; gap: 18px; margin-bottom: 18px; }
+  .mode { flex: 1; background: #262a3c; border-radius: 12px; padding: 22px 18px; text-align: center; }
+  .mode .mn { font-size: 32px; font-weight: 700; }
+  .mode .md { font-size: 22px; color: #9aa0b0; margin-top: 8px; line-height: 1.4; }
+  .warn { background: rgba(201,60,60,0.12); border-left: 5px solid #c93c3c; border-radius: 8px; padding: 20px 26px; font-size: 27px; line-height: 1.55; color: #e8c8c8; }
+  .warn b { color: #ff8f8f; }
+  .kv { display: flex; gap: 26px; margin-bottom: 20px; }
+  .kv .item { flex: 1; background: #262a3c; border-radius: 12px; padding: 24px 28px; }
+  .kv .k { font-size: 24px; color: #c9a227; margin-bottom: 10px; letter-spacing: 2px; }
+  .kv .v { font-size: 34px; font-weight: 700; }
+  .kv .vd { font-size: 23px; color: #9aa0b0; margin-top: 8px; line-height: 1.45; }
+  .bullet { display: flex; gap: 18px; align-items: flex-start; margin-bottom: 18px; }
+  .bullet .dot { width: 12px; height: 12px; border-radius: 50%; background: #c9a227; margin-top: 14px; flex-shrink: 0; }
+  .bullet .txt { font-size: 30px; line-height: 1.6; color: #d5d8e0; }
+  .bullet .txt b { color: #f0c954; }
+  .footer { margin-top: auto; display: flex; justify-content: space-between; align-items: center; border-top: 1px solid #2a2e3c; padding-top: 26px; }
+  .footer .l { font-size: 24px; color: #6b7080; }
+  .footer .r { font-size: 24px; color: #c9a227; font-weight: 600; letter-spacing: 1px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="topline">
+    <div class="badge">魔兽·无限</div>
+    <div class="src">开服决策指南 · 2/4</div>
+  </div>
+  <h2>进游戏前，先做 <span class="gold">3 个决定</span></h2>
+
+  <div class="card">
+    <div class="head"><div class="num">①</div><div class="name">选模式</div><div class="tag">= 选服务器</div></div>
+    <div class="modes">
+      <div class="mode"><div class="mn">普通</div><div class="md">PVE 需双方<br>同意才开打</div></div>
+      <div class="mode"><div class="mn">PVP</div><div class="md">动态平衡<br>双方阵营</div></div>
+      <div class="mode"><div class="mn">RP</div><div class="md">角色扮演<br>特殊规则</div></div>
+      <div class="mode"><div class="mn">硬核</div><div class="md">一命模式<br>后续开放</div></div>
+    </div>
+    <div class="warn"><b>同模式才能组队</b>——朋友开黑务必提前对齐模式。一命角色阵亡后可免费转入其他模式，不用删号。</div>
+  </div>
+
+  <div class="card">
+    <div class="head"><div class="num">②</div><div class="name">硬盘与客户端</div><div class="tag">提前准备</div></div>
+    <div class="kv">
+      <div class="item"><div class="k">有正式服客户端</div><div class="v">+14GB 增量</div><div class="vd">底层资源与正式服共通</div></div>
+      <div class="item"><div class="k">全新下载</div><div class="v">约 70GB</div><div class="vd">纯怀旧服玩家提前腾空间</div></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="head"><div class="num">③</div><div class="name">插件习惯清零</div><div class="tag">WA 落幕</div></div>
+    <div class="bullet"><div class="dot"></div><div class="txt">战斗辅助类插件<b>全部禁用</b>，只保留界面美化功能</div></div>
+    <div class="bullet"><div class="dot"></div><div class="txt">官方将内置<b>冷却管理器</b>、技能提醒等替代功能，普通玩家可无插件游玩</div></div>
+    <div class="bullet"><div class="dot"></div><div class="txt">附带利好：<b>世界 BUFF 团队无效</b>（只在野外生效），打本不用再卡世界 BUFF</div></div>
+  </div>
+
+  <div class="footer">
+    <div class="l">排队预警：美服 B 测排队 2 万+，开服请有心理预期</div>
+    <div class="r">AI 辅助生成</div>
+  </div>
+</div>
+</body>
+</html>

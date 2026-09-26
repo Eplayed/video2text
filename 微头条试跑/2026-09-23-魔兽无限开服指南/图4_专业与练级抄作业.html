@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { width: 1080px; height: 1440px; font-family: "PingFang SC", "Hiragino Sans GB", sans-serif; background: #14161d; color: #e8e4d8; overflow: hidden; }
+  .wrap { width: 1080px; height: 1440px; padding: 70px 70px 60px; display: flex; flex-direction: column; background: linear-gradient(160deg, #1a1d28 0%, #14161d 55%, #171a22 100%); }
+  .topline { display: flex; align-items: center; gap: 16px; margin-bottom: 40px; }
+  .badge { background: #c9a227; color: #14161d; font-weight: 700; font-size: 26px; padding: 8px 22px; border-radius: 6px; letter-spacing: 2px; }
+  .topline .src { font-size: 24px; color: #8b8fa0; letter-spacing: 1px; }
+  h2 { font-size: 58px; font-weight: 800; letter-spacing: 1px; margin-bottom: 40px; }
+  h2 .gold { color: #f0c954; }
+  .card { background: #1e2130; border-radius: 16px; padding: 32px 38px; margin-bottom: 26px; }
+  .card .head { display: flex; align-items: center; gap: 18px; margin-bottom: 20px; }
+  .card .icon { width: 52px; height: 52px; border-radius: 10px; background: rgba(201,162,39,0.16); color: #f0c954; font-size: 28px; font-weight: 800; display: flex; align-items: center; justify-content: center; }
+  .card .name { font-size: 36px; font-weight: 700; }
+  .row { display: flex; align-items: baseline; gap: 14px; background: #262a3c; border-radius: 10px; padding: 18px 24px; margin-bottom: 12px; }
+  .row .rn { font-size: 28px; color: #c9a227; font-weight: 700; min-width: 168px; }
+  .row .rv { font-size: 28px; color: #d5d8e0; line-height: 1.5; }
+  .row .rv b { color: #f0c954; }
+  .note { background: rgba(201,162,39,0.1); border: 1px solid rgba(201,162,39,0.35); border-radius: 12px; padding: 24px 30px; margin-top: 6px; }
+  .note .nt { font-size: 27px; color: #c9a227; font-weight: 700; margin-bottom: 8px; letter-spacing: 2px; }
+  .note .nd { font-size: 28px; line-height: 1.6; color: #d5d8e0; }
+  .note .nd b { color: #f0c954; }
+  .footer { margin-top: auto; display: flex; justify-content: space-between; align-items: center; border-top: 1px solid #2a2e3c; padding-top: 26px; }
+  .footer .l { font-size: 24px; color: #6b7080; }
+  .footer .r { font-size: 24px; color: #c9a227; font-weight: 600; letter-spacing: 1px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="topline">
+    <div class="badge">魔兽·无限</div>
+    <div class="src">开服决策指南 · 4/4</div>
+  </div>
+  <h2>专业与练级<span class="gold">抄作业卡</span></h2>
+
+  <div class="card">
+    <div class="head"><div class="icon">锤</div><div class="name">专业：按目的选</div></div>
+    <div class="row"><div class="rn">想赚金币</div><div class="rv"><b>双采集</b>：采矿 / 草药 / 剥皮任选二，材料直接挂拍卖行</div></div>
+    <div class="row"><div class="rn">自给自足</div><div class="rv">按本职业<b>护甲类型</b>选制造专业 + 对应采集（板甲→锻造+采矿）</div></div>
+    <div class="row"><div class="rn">通用建议</div><div class="rv">2 主专业 + 3 生活技能<b>五门全练</b>：急救可独立搓治疗药水</div></div>
+  </div>
+
+  <div class="card">
+    <div class="head"><div class="icon">火</div><div class="name">营地系统：野外补给站</div></div>
+    <div class="row"><div class="rn">随身营地</div><div class="rv">野外支营火 = <b>1 小时强力 BUFF</b> + 修理商 + 双倍休息经验</div></div>
+    <div class="row"><div class="rn">专业配件</div><div class="rv">各专业可放专属设施（钓鱼放鱼缸<b>全属性+8%</b>），效果全队共享</div></div>
+    <div class="row"><div class="rn">传承点数</div><div class="rv"><b>全账号共享</b>，6 门商业技能共 18 点，练小号前先点冒险天赋</div></div>
+  </div>
+
+  <div class="note">
+    <div class="nt">练级路线变了</div>
+    <div class="nd">副本无限刷怪升级被废（小怪经验大砍），最优解是<b>野外任务线 + 进本一次性任务</b>。开服还有约一个月窗口，不用抢肝。</div>
+  </div>
+
+  <div class="footer">
+    <div class="l">收藏这张卡，开服直接照抄</div>
+    <div class="r">AI 辅助生成</div>
+  </div>
+</div>
+</body>
+</html>
