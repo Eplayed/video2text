@@ -193,6 +193,10 @@ textarea{resize:vertical;min-height:84px}
 .video-cover img[src=""],.video-cover img.error{display:none}
 .video-cover img.error+.cover-ph,.video-cover img[src=""]+.cover-ph{display:grid}
 .video-cover .cover-len{position:absolute;bottom:8px;right:8px;background:rgba(20,19,17,.72);color:#fff;border-radius:6px;padding:2px 8px;font-size:11px;font-weight:700;letter-spacing:.02em}
+.video-cover .cover-src{position:absolute;bottom:8px;left:8px;border-radius:6px;padding:2px 8px;font-size:10.5px;font-weight:700;letter-spacing:.03em;color:#fff;background:rgba(20,19,17,.6);backdrop-filter:blur(4px);z-index:1}
+.video-cover .cover-src.src-wechat{background:#07c160}
+.video-cover .cover-src.src-douyin{background:var(--module-2)}
+.video-cover.cover-wx .cover-ph{color:#07c160;background:linear-gradient(135deg,color-mix(in srgb,#07c160 7%,var(--surface-nested)),var(--surface-nested))}
 .video-card .checkbox{position:absolute;top:10px;right:10px;width:22px;height:22px;border:1.6px solid rgba(255,255,255,.85);border-radius:7px;background:rgba(20,19,17,.35);backdrop-filter:blur(4px);cursor:pointer;transition:all .15s;display:grid;place-items:center;color:#fff;z-index:2}
 .video-card .v-del{position:absolute;top:10px;left:10px;width:22px;height:22px;border:none;border-radius:7px;background:rgba(20,19,17,.35);backdrop-filter:blur(4px);cursor:pointer;transition:all .15s;display:grid;place-items:center;color:#fff;opacity:.75;z-index:2}
 .video-card .v-del:hover{background:rgba(220,38,38,.88);opacity:1}
@@ -411,7 +415,7 @@ textarea{resize:vertical;min-height:84px}
       <div class="nav-sep">内容</div>
       <div class="navi" id="nav-materials" onclick="switchPage('materials')"><span class="nav-ic" data-icon="grid"></span>数据与同步</div>
       <div class="navi" id="nav-radar" onclick="switchPage('radar')"><span class="nav-ic" data-icon="radar"></span>选题雷达</div>
-      <div class="navi" id="nav-videos" onclick="switchPage('videos')"><span class="nav-ic" data-icon="list"></span>视频库</div>
+      <div class="navi" id="nav-videos" onclick="switchPage('videos')"><span class="nav-ic" data-icon="list"></span>素材库</div>
       <div class="navi" id="nav-summaries" onclick="switchPage('summaries')"><span class="nav-ic" data-icon="book"></span>整理稿</div>
       <div class="navi" id="nav-toutiao" onclick="switchPage('toutiao')"><span class="nav-ic" data-icon="flame"></span>头条图文</div>
       <div class="navi" id="nav-wechat" onclick="switchPage('wechat')"><span class="nav-ic" data-icon="edit"></span>公众号图文</div>
@@ -491,7 +495,7 @@ textarea{resize:vertical;min-height:84px}
         <div class="modcard" onclick="switchPage('videos')">
           <div class="mc-head">
             <span class="mc-ic" style="background:color-mix(in srgb,var(--module-2) 14%,transparent);color:var(--module-2)" data-icon="list"></span>
-            <div class="mc-tt"><div class="mc-name">视频库</div><div class="mc-desc">按选题等级筛选，勾选生成整理稿</div></div>
+            <div class="mc-tt"><div class="mc-name">素材库</div><div class="mc-desc">抖音+微信统一素材池，勾选生成整理稿</div></div>
             <span class="mc-arw" data-icon="chevron"></span>
           </div>
           <div class="mc-body"><span class="mc-main">选题 → 二创</span><span class="mc-extra">攻略 / 面试题</span></div>
@@ -630,7 +634,7 @@ textarea{resize:vertical;min-height:84px}
         <h3 style="display:flex;align-items:center;gap:9px">
           <span class="cic" style="background:color-mix(in srgb,var(--module-3) 14%,transparent);color:var(--module-3)" data-icon="activity"></span>我的订阅
           <span class="count" id="count-subs" style="margin-left:auto">0 个</span>
-          <button class="btn ghost sm" onclick="openAuthorImport()"><span data-icon="plus" class="ic14"></span>导入视频库作者</button>
+          <button class="btn ghost sm" onclick="openAuthorImport()"><span data-icon="plus" class="ic14"></span>导入素材库作者</button>
           <button class="btn sm" id="btn-sync-all-subs" onclick="syncSubscriptions()"><span data-icon="bolt" class="ic14"></span>同步全部</button>
         </h3>
         <div class="p-sub">订阅的抖音主页/微信公众号，点「同步」自动拉取新内容（抖音 20 条视频+ASR 转写，微信 RSS 文章直接入库）。点作者名可改名，点分类徽章设置分类（新内容自动归类）。微信订阅需先部署 <a href="https://github.com/cooderl/wewe-rss" target="_blank" style="color:var(--module-2)">WeWe RSS</a> 服务。</div>
@@ -667,7 +671,7 @@ textarea{resize:vertical;min-height:84px}
         <button class="btn ghost sm" onclick="syncContentDb()">同步内容库</button>
         <button class="btn sm" onclick="syncWorkbench()"><span data-icon="activity" class="ic14"></span>同步工作台</button>
       </div>
-      <p style="font-size:12px;color:var(--text-tertiary);margin:0 0 12px">订阅同步时会自动执行数据同步，手动按钮仅作兜底。浏览素材与生成内容请使用「视频库」。缺 ASR 的视频无法生成整理稿或发布知识库。</p>
+      <p style="font-size:12px;color:var(--text-tertiary);margin:0 0 12px">订阅同步时会自动执行数据同步，手动按钮仅作兜底。浏览素材与生成内容请使用「素材库」。缺 ASR 的视频无法生成整理稿或发布知识库。</p>
       <div id="sync-stats" style="display:flex;gap:12px;flex-wrap:wrap">
         <div class="empty" style="flex:1;padding:24px"><span class="e" data-icon="grid"></span>加载中...</div>
       </div>
@@ -717,14 +721,15 @@ textarea{resize:vertical;min-height:84px}
       </div>
     </section>
 
-    <!-- ── 视频库 ── -->
+    <!-- ── 素材库 ── -->
     <section id="page-videos">
       <div class="header">
-        <h2>视频库</h2>
+        <h2>素材库</h2>
         <div class="spacer"></div>
         <span class="count" id="count-videos">0 条</span>
       </div>
       <div class="toolbar">
+        <div class="cat-pills" id="source-pills" style="margin:0"></div>
         <div class="search-box"><span data-icon="search" class="ic14"></span><input class="page-search" placeholder="搜索标题 / 作者 / 描述..." oninput="loadCurrentView()"></div>
         <select id="topic-filter" onchange="loadVideos()">
           <option value="">全部作者</option>
@@ -785,7 +790,7 @@ textarea{resize:vertical;min-height:84px}
           <div class="spacer"></div>
           <span class="count" id="count-toutiao">0 组</span>
         </div>
-        <p style="font-size:12px;color:var(--text-tertiary);margin:0 0 12px">链路：视频库勾选素材 → 生成「头条整合稿」→ 整理稿点「生成头条图文」→ 这里复制文案+下载图片 → <b>手动</b>发布头条号（勾选 AI 辅助声明）。</p>
+        <p style="font-size:12px;color:var(--text-tertiary);margin:0 0 12px">链路：素材库勾选素材 → 生成「头条整合稿」→ 整理稿点「生成头条图文」→ 这里复制文案+下载图片 → <b>手动</b>发布头条号（勾选 AI 辅助声明）。</p>
         <div class="grid" id="grid-toutiao">
           <div class="empty"><span class="e" data-icon="flame"></span>加载中...</div>
         </div>
@@ -833,7 +838,7 @@ textarea{resize:vertical;min-height:84px}
           <div class="spacer"></div>
           <span class="count" id="count-wechat">0 组</span>
         </div>
-        <p style="font-size:12px;color:var(--text-tertiary);margin:0 0 12px">链路：视频库勾选素材 → 生成「公众号文章素材」整合稿 → 整理稿点「生成公众号图文」→ 填 <b>≥300 字作者真实底稿</b> + 传 <b>≥2 张真实截图</b> → 这里复制文案 + 取图 → <b>手动</b>发图片消息（平台未开放图片原创声明，发布时如实声明 AI 辅助）。</p>
+        <p style="font-size:12px;color:var(--text-tertiary);margin:0 0 12px">链路：素材库勾选素材 → 生成「公众号文章素材」整合稿 → 整理稿点「生成公众号图文」→ 填 <b>≥300 字作者真实底稿</b> + 传 <b>≥2 张真实截图</b> → 这里复制文案 + 取图 → <b>手动</b>发图片消息（平台未开放图片原创声明，发布时如实声明 AI 辅助）。</p>
         <div class="grid" id="grid-wechat">
           <div class="empty"><span class="e" data-icon="edit"></span>加载中...</div>
         </div>
@@ -1093,7 +1098,7 @@ textarea{resize:vertical;min-height:84px}
         <h3 style="font-size:15px;font-weight:800;display:flex;align-items:center;gap:9px;margin-bottom:4px">
           <span class="cic" style="width:30px;height:30px;border-radius:9px;display:grid;place-items:center;background:color-mix(in srgb,var(--module-4) 14%,transparent);color:var(--module-4)" data-icon="book"></span>RAG 知识库（Dify）
         </h3>
-        <div style="font-size:12px;color:var(--text-secondary);margin-bottom:16px">配置后可在视频库一键把视频（口播原文 + 整理稿）发布到 Dify 知识库，用于检索问答。当前状态：<span id="dify-status" style="font-weight:700">未配置</span></div>
+        <div style="font-size:12px;color:var(--text-secondary);margin-bottom:16px">配置后可在素材库一键把视频（口播原文 + 整理稿）发布到 Dify 知识库，用于检索问答。当前状态：<span id="dify-status" style="font-weight:700">未配置</span></div>
 
         <div class="form-grid">
           <div class="form-group">
@@ -1303,7 +1308,7 @@ async function loadDashboard() {
         <span class="rm">${esc(String(s.updated_at||'').slice(5,16))}</span>
       </div>`).join('');
   } else {
-    rs.innerHTML = '<div class="rm" style="padding:16px 4px;color:var(--text-tertiary)">暂无整理稿，去视频库选择视频生成</div>';
+    rs.innerHTML = '<div class="rm" style="padding:16px 4px;color:var(--text-tertiary)">暂无整理稿，去素材库选择素材生成</div>';
   }
 
   updateSidebarStatus({running: data.running});
@@ -1324,6 +1329,7 @@ async function loadTopics() {
 // ── 加载列表 ──
 let _activeCategory = '';
 let _activeGame = '';
+let _activeSource = '';  // ''=全部 / douyin / wechat（素材库来源筛选）
 const CATEGORY_ORDER = ['前端面试', 'AI技术', '游戏攻略', '编程开发', '产品设计', '数码评测', '商业财经', '职场成长', '生活日常', '其他'];
 const TYPE_LABELS = {game_guide: '游戏攻略', wechat_material: '公众号素材', toutiao_mix: '头条整合稿', guide_article: '攻略文章（已废弃）', ai_interview: 'AI面试题'};
 
@@ -1335,10 +1341,12 @@ async function loadVideos() {
   if (topic) params.set('topic', topic);
   if (_activeCategory) params.set('category', _activeCategory);
   if (_activeGame) params.set('game', _activeGame);
+  if (_activeSource) params.set('source', _activeSource);
   const [data, cats] = await Promise.all([
     fetch('/api/videos?' + params).then(r=>r.json()),
     fetch('/api/categories').then(r=>r.json()).catch(()=>({categories:[], games:[]})),
   ]);
+  renderSourcePills(data.sources || null);
   renderCategoryPills(cats.categories || []);
   renderGamePills(cats.games || []);
   renderVideos(data.videos || []);
@@ -1364,6 +1372,30 @@ function setCategoryFilter(cat) {
   _activeCategory = _activeCategory === cat ? '' : cat;
   _activeGame = '';  // 切换分类时游戏筛选失效
   selectedVideos.clear();  // 切换分类 = 重新选择，清空残留选中
+  window_lastSelected = null;
+  loadVideos();
+}
+
+// ── 来源筛选（抖音 / 微信文章），复用 cat-pill 样式 ──
+function renderSourcePills(sources) {
+  const box = document.getElementById('source-pills');
+  if (!box) return;
+  const nDouyin = sources ? (sources.douyin || 0) : '';
+  const nWechat = sources ? (sources.wechat || 0) : '';
+  const nAll = sources ? (nDouyin + nWechat) : '';
+  const items = [
+    {key: '', label: '全部', n: nAll},
+    {key: 'douyin', label: '抖音', n: nDouyin},
+    {key: 'wechat', label: '微信', n: nWechat},
+  ];
+  box.innerHTML = items.map(it =>
+    `<span class="cat-pill ${_activeSource===it.key?'active':''}" onclick="setSourceFilter('${it.key}')"><span>${it.label}</span>${it.n !== '' ? `<span class="n">${it.n}</span>` : ''}</span>`
+  ).join('');
+}
+
+function setSourceFilter(src) {
+  _activeSource = _activeSource === src ? '' : src;
+  selectedVideos.clear();  // 切换来源 = 重新选择，清空残留选中（避免跨来源误生成）
   window_lastSelected = null;
   loadVideos();
 }
@@ -1579,7 +1611,7 @@ async function loadToutiaoList() {
     const items = data.items || [];
     document.getElementById('count-toutiao').textContent = (data.total||0) + ' 组';
     if (!items.length) {
-      grid.innerHTML = '<div class="empty"><span class="e">' + iconSvg('flame') + '</span>还没有头条图文<br><small>视频库勾选素材 → 生成「头条整合稿」→ 整理稿页点「生成头条图文」</small></div>';
+      grid.innerHTML = '<div class="empty"><span class="e">' + iconSvg('flame') + '</span>还没有头条图文<br><small>素材库勾选素材 → 生成「头条整合稿」→ 整理稿页点「生成头条图文」</small></div>';
       return;
     }
     grid.innerHTML = items.map(p => `
@@ -1833,7 +1865,7 @@ async function loadWechatList() {
     const items = data.items || [];
     document.getElementById('count-wechat').textContent = (data.total||0) + ' 组';
     if (!items.length) {
-      grid.innerHTML = '<div class="empty"><span class="e">' + iconSvg('edit') + '</span>还没有公众号图文<br><small>视频库勾选素材 → 生成「公众号文章素材」→ 整理稿页点「生成公众号图文」→ 填 ≥300 字真实底稿</small></div>';
+      grid.innerHTML = '<div class="empty"><span class="e">' + iconSvg('edit') + '</span>还没有公众号图文<br><small>素材库勾选素材 → 生成「公众号文章素材」→ 整理稿页点「生成公众号图文」→ 填 ≥300 字真实底稿</small></div>';
       return;
     }
     grid.innerHTML = items.map(p => {
@@ -2106,7 +2138,7 @@ async function loadInterviewQuestions() {
 function renderVideos(videos) {
   const grid = document.getElementById('grid-videos');
   if (!videos.length) {
-    grid.innerHTML = '<div class="empty"><span class="e">' + iconSvg('list') + '</span>暂无视频</div>';
+    grid.innerHTML = '<div class="empty"><span class="e">' + iconSvg('list') + '</span>暂无素材</div>';
     updateOptimizeButton();
     return;
   }
@@ -2124,12 +2156,17 @@ function renderVideos(videos) {
       : '';
     const len = v.transcript_length || 0;
     const cover = v.cover_url || '';
-    const lenText = len ? `${len} 字` : '无转写';
+    const isWechat = v.source === 'wechat' || v.sheet === '微信文章';
+    const lenText = len ? `${len} 字` : (isWechat ? '无正文' : '无转写');
+    const srcBadge = isWechat
+      ? '<span class="cover-src src-wechat">微信</span>'
+      : '<span class="cover-src src-douyin">抖音</span>';
     return `<div class="video-card ${isSelected?'selected':''} ${isFail?'failed':''}" data-key="${videoKey}" onclick='toggleSelect(event,"${v.sheet}","${v.row}")' ondblclick='openDetail("${v.sheet}","${v.row}")'>
-      <div class="video-cover">
+      <div class="video-cover ${isWechat && !cover ? 'cover-wx' : ''}">
         <img src="${esc(cover)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.classList.add('error')">
-        <div class="cover-ph">${iconSvg('film', 30)}</div>
+        <div class="cover-ph">${iconSvg(isWechat ? 'book' : 'film', 30)}</div>
         <span class="cover-len">${lenText}</span>
+        ${srcBadge}
         <div class="v-del" title="删除视频" onclick='event.stopPropagation();deleteVideoOne("${escAttr(v.sheet)}", "${v.row}", "${escAttr((v.title||'').slice(0,40))}")'>${iconSvg('trash', 12)}</div>
         <div class="checkbox">${iconSvg('check', 14)}</div>
       </div>
@@ -2292,9 +2329,11 @@ async function openDetail(sheet, row) {
   const data = await fetch(`/api/videos/${sheet}/${row}`).then(r=>r.json());
   if (data.error) { document.getElementById('modal-title').textContent = '❌ '+data.error; return; }
 
+  const isWechat = data.source === 'wechat' || sheet === '微信文章';
   document.getElementById('modal-title').textContent = data.title||'';
-  document.getElementById('modal-info').innerHTML =
-    `👤 ${esc(data.author)}　🕐 ${data.pub_time||'-'}　🆔 ${data.id||'-'}　📄 ${sheet} R${row}`;
+  document.getElementById('modal-info').innerHTML = isWechat
+    ? `💬 微信文章　👤 ${esc(data.author)}　🕐 ${esc((data.pub_time||'-').slice(0,16))}　📄 ${sheet} R${row}`
+    : `👤 ${esc(data.author)}　🕐 ${data.pub_time||'-'}　🆔 ${data.id||'-'}　📄 ${sheet} R${row}`;
   document.getElementById('modal-basic').innerHTML =
     `<b>状态：</b>${esc(data.status)}<br><b>链接：</b><a href="${esc(data.video_url)}" target="_blank" style="color:var(--module-2)">${esc(data.link||'')}</a>` +
     (data.cover ? `<br><b>封面：</b><a href="${esc(data.cover)}" target="_blank" style="color:var(--module-2)">查看封面</a>` : '');
@@ -2302,10 +2341,21 @@ async function openDetail(sheet, row) {
   document.getElementById('modal-tags').innerHTML =
     (data.tags||'').split(/[,，\s]+/).filter(Boolean).map(t => `<span>${esc(t)}</span>`).join('');
 
-  document.getElementById('modal-asr').textContent = data.raw_transcript || data.asr || '（无 ASR 数据）';
-  document.getElementById('modal-ai-copy').textContent = data.ai_copy || '（未优化）';
+  if (isWechat) {
+    // 微信文章版式：正文替代 ASR，无「AI 优化文案」区（整理稿生成后在整理稿页查看）
+    document.getElementById('modal-asr-title').textContent = '文章正文';
+    document.getElementById('modal-asr').textContent = data.asr || '（无正文）';
+    document.getElementById('modal-ai-title').parentElement.style.display = 'none';
+  } else {
+    document.getElementById('modal-asr').textContent = data.raw_transcript || data.asr || '（无 ASR 数据）';
+    document.getElementById('modal-ai-copy').textContent = data.ai_copy || '（未优化）';
+  }
 
-  document.getElementById('modal-actions').innerHTML = `
+  document.getElementById('modal-actions').innerHTML = isWechat ? `
+    <a href="${esc(data.link||'#')}" target="_blank"><button class="btn sm" style="background:#07c160;border-color:#07c160;color:#fff">💬 打开原文</button></a>
+    <button class="btn ghost sm" onclick="copyText(\`${escBacktick(data.asr||'')}\`)">📋 复制正文</button>
+    <button class="btn ghost sm" style="color:var(--module-5)" onclick="deleteVideoOne('${escAttr(sheet)}', ${row}, '${escAttr((data.title||'').slice(0,40))}')">🗑 删除</button>
+  ` : `
     <a href="${esc(data.video_url||'#')}" target="_blank"><button class="btn sm">▶ 观看原视频</button></a>
     <button class="btn ghost sm" onclick="copyText(\`${escBacktick(data.raw_transcript||data.asr||'')}\`)">📋 复制口播</button>
     <button class="btn ghost sm" style="color:var(--module-5)" onclick="deleteVideoOne('${escAttr(sheet)}', ${row}, '${escAttr((data.title||'').slice(0,40))}')">🗑 删除视频</button>
@@ -2658,13 +2708,13 @@ async function syncWorkbench() {
 }
 
 async function generateSelectedContent() {
-  if (selectedVideos.size === 0) { alert('请先选择要整理的视频'); return false; }
+  if (selectedVideos.size === 0) { alert('请先选择要整理的素材'); return false; }
   const keys = [...selectedVideos];
   const summaryType = document.getElementById('summary-type').value;
   const combine = document.getElementById('generate-mode').value === 'combine';
   const label = TYPE_LABELS[summaryType] || '整理稿';
   const modeText = combine ? '合并生成 1 篇' : `逐个生成 ${keys.length} 篇`;
-  if (!confirm(`将把 ${keys.length} 个视频${modeText}${label}，确定继续吗？`)) return false;
+  if (!confirm(`将把 ${keys.length} 条素材${modeText}${label}，确定继续吗？`)) return false;
 
   setStatus('running', combine ? `正在合并生成${label}...` : `正在生成 ${keys.length} 条${label}...`);
   try {
@@ -3079,7 +3129,7 @@ function renderSubscriptions(items) {
   document.getElementById('count-subs').textContent = items.length + ' 个';
   updateSubCatFilterOptions(items);
   if (!items.length) {
-    box.innerHTML = '<div style="font-size:12.5px;color:var(--text-tertiary);padding:10px 0">暂无订阅。点「导入视频库作者」一键订阅已采集的作者，或在采集中心输入主页链接点「订阅该作者」。</div>';
+    box.innerHTML = '<div style="font-size:12.5px;color:var(--text-tertiary);padding:10px 0">暂无订阅。点「导入素材库作者」一键订阅已采集的作者，或在采集中心输入主页链接点「订阅该作者」。</div>';
     updateSyncCheckedBtn();
     return;
   }
@@ -3141,11 +3191,11 @@ async function openAuthorImport() {
     if (resp.error) { setStatus('error', resp.error); return; }
     authors = resp.authors || [];
   } catch(e) { setStatus('error', '加载作者失败: ' + e.message); return; }
-  if (!authors.length) { setStatus('error', '视频库暂无作者数据'); return; }
+  if (!authors.length) { setStatus('error', '素材库暂无作者数据'); return; }
 
   resetModal();
   showModal();
-  document.getElementById('modal-title').textContent = '导入视频库作者为订阅';
+  document.getElementById('modal-title').textContent = '导入素材库作者为订阅';
   document.getElementById('modal-info').textContent = '点击作者名即建立订阅（自动解析其主页）';
   document.getElementById('modal-basic').innerHTML = authors.map(a => {
     const done = a.subscribed ? '已订阅' : '+ 订阅';
@@ -3265,7 +3315,7 @@ function renderRadar() {
   const box = document.getElementById('radar-list');
   const toggleBtn = document.getElementById('radar-toggle');
   if (!_radarData || !_radarData.topics.length) {
-    box.innerHTML = '<div class="empty" style="padding:40px">暂无标签数据——先在视频库跑一次「AI 分类」</div>';
+    box.innerHTML = '<div class="empty" style="padding:40px">暂无标签数据——先在素材库跑一次「AI 分类」</div>';
     if (toggleBtn) toggleBtn.style.display = 'none';
     return;
   }
