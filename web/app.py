@@ -110,36 +110,48 @@ def _ai_config():
     return {"method": method, "api_key": api_key, "api_base": api_base, "model": model}
 
 # ── API: 视频列表 ──
+def _first_markdown_image(text: str) -> str:
+    """从 Markdown 正文提取第一张图片 URL（微信文章封面兜底：入库时不存 cover_url，正文首图即头图）。"""
+    if not text:
+        return ""
+    m = re.search(r"!\[[^\]]*\]\((https?://[^)\s]+)", text)
+    if m:
+        return m.group(1)
+    m = re.search(r'<img[^>]+src=["\'](https?://[^"\']+)', text)
+    return m.group(1) if m else ""
+
+
 @app.route("/api/videos")
 def api_videos():
     topic = request.args.get("topic", "")
     q     = request.args.get("q", "").lower()
     category = request.args.get("category", "")
     game = request.args.get("game", "")
-    if not INDEX_PATH.exists():
-        return jsonify({"videos": [], "total": 0})
-    with open(INDEX_PATH, encoding="utf-8") as f:
-        data = json.load(f)
-    videos = data.get("videos", [])
-    # 合并 SQLite 中的分类/标签/Dify 同步状态（按 sheet+row 关联）
-    db_info = _load_video_extras()
-    for v in videos:
-        info = db_info.get((v.get("sheet"), v.get("row")))
-        if info:
-            v["db_id"] = info["id"]
-            v["category"] = info["category"]
-            v["ai_tags"] = info["ai_tags"]
-            v["game"] = info["game"]
-            v["dify_synced_at"] = info["dify_synced_at"]
-            v["summary_type"] = info.get("summary_type", "")
-        else:
-            v.setdefault("category", "")
-            v.setdefault("ai_tags", "")
-            v.setdefault("game", "")
-            v.setdefault("dify_synced_at", "")
-            v.setdefault("summary_type", "")
+    source = request.args.get("source", "")  # ''=全部 / douyin / wechat
+    videos = []
+    if INDEX_PATH.exists():
+        with open(INDEX_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+        videos = data.get("videos", [])
+        # 合并 SQLite 中的分类/标签/Dify 同步状态（按 sheet+row 关联）
+        db_info = _load_video_extras()
+        for v in videos:
+            info = db_info.get((v.get("sheet"), v.get("row")))
+            if info:
+                v["db_id"] = info["id"]
+                v["category"] = info["category"]
+                v["ai_tags"] = info["ai_tags"]
+                v["game"] = info["game"]
+                v["dify_synced_at"] = info["dify_synced_at"]
+                v["summary_type"] = info.get("summary_type", "")
+            else:
+                v.setdefault("category", "")
+                v.setdefault("ai_tags", "")
+                v.setdefault("game", "")
+                v.setdefault("dify_synced_at", "")
+                v.setdefault("summary_type", "")
 
-    # 追加 SQLite 中的微信文章（不经过 video_index.json）
+    # 追加 SQLite 中的微信文章（DB 是微信文章权威源，不经过 video_index.json，索引重建不会丢）
     if DB_PATH.exists():
         try:
             with _db_lock:
@@ -148,12 +160,14 @@ def api_videos():
                     wx_rows = conn.execute(
                         "SELECT id, source_sheet, source_row, source_url, author, title, "
                         "status, published_at, category, ai_tags, game, dify_synced_at, "
-                        "COALESCE(cover_url,'') as cover "
+                        "COALESCE(cover_url,'') as cover, COALESCE(transcript,'') as transcript "
                         "FROM videos WHERE source_sheet = '微信文章' ORDER BY id DESC LIMIT 200"
                     ).fetchall()
                 finally:
                     conn.close()
             for r in wx_rows:
+                body = r["transcript"] or ""
+                cover = r["cover"] or _first_markdown_image(body)
                 videos.append({
                     "id": r["id"], "db_id": r["id"],
                     "sheet": r["source_sheet"], "row": r["source_row"],
@@ -161,14 +175,26 @@ def api_videos():
                     "aweme_id": "", "author": r["author"] or "",
                     "title": r["title"] or "", "status": r["status"] or "",
                     "published_at": r["published_at"] or "",
-                    "cover": r["cover"] or "",
+                    "create_time": (r["published_at"] or "")[:10],
+                    "cover": cover, "cover_url": cover,
+                    "transcript_length": len(body),
                     "category": r["category"] or "",
                     "ai_tags": r["ai_tags"] or "",
                     "game": r["game"] or "",
                     "dify_synced_at": r["dify_synced_at"] or "",
+                    "summary_type": "",
                 })
         except Exception:
             pass
+    # 来源标识统一：微信文章 vs 抖音，前端卡片徽章/筛选用
+    for v in videos:
+        v["source"] = "wechat" if v.get("sheet") == "微信文章" else "douyin"
+    # 来源计数取筛选前的合并列表，保证药丸数字与卡片口径一致
+    source_counts = {"douyin": 0, "wechat": 0}
+    for v in videos:
+        source_counts[v["source"]] = source_counts.get(v["source"], 0) + 1
+    if source in ("douyin", "wechat"):
+        videos = [v for v in videos if v["source"] == source]
     if topic:
         videos = [v for v in videos if v.get("author", "") == topic]
     if category:
@@ -196,7 +222,7 @@ def api_videos():
         key=lambda v: (v.get("published_at") or v.get("create_time") or v.get("pub_time") or ""),
         reverse=True,
     )
-    return jsonify({"videos": videos, "total": len(videos)})
+    return jsonify({"videos": videos, "total": len(videos), "sources": source_counts})
 
 
 def _load_video_extras() -> dict:
@@ -380,6 +406,39 @@ def api_update_video_category():
 # ── API: 视频详情 ──
 @app.route("/api/videos/<sheet>/<int:row>")
 def api_video_detail(sheet, row):
+    # 微信文章分支：不落 Excel，DB 是权威源；响应结构与抖音视频同构，前端弹窗零特判
+    if sheet == "微信文章":
+        if not DB_PATH.exists():
+            return jsonify({"error": "内容库不存在"}), 404
+        video = content_store.get_video_by_source(DB_PATH, sheet, row)
+        if not video:
+            return jsonify({"error": f"微信文章 R{row} 不存在"}), 404
+        body = video.get("transcript") or ""
+        cover = video.get("cover_url") or _first_markdown_image(body)
+        detail = {
+            "link": video.get("source_url") or "",
+            "video_url": video.get("source_url") or "",
+            "status": video.get("status") or "",
+            "id": "",
+            "author": video.get("author") or "",
+            "pub_time": video.get("published_at") or "",
+            "title": video.get("title") or "",
+            "asr": body,
+            "raw_transcript": "",
+            "tags": video.get("ai_tags") or "",
+            "cover": cover,
+            "ai_copy": "",
+            "ai_title": "",
+            "keywords": "",
+            "remark": "",
+            "sheet": sheet,
+            "row": row,
+            "keyframes": [],
+            "source": "wechat",
+        }
+        _attach_related_summaries(detail, sheet, row)
+        return jsonify(detail)
+
     import openpyxl
     if not EXCEL_PATH.exists():
         return jsonify({"error": "Excel 不存在"}), 404
@@ -396,6 +455,7 @@ def api_video_detail(sheet, row):
     detail = {k: str(ws.cell(row, c).value or "") for k, c in cols.items()}
     detail["sheet"] = sheet
     detail["row"] = row
+    detail["source"] = "douyin"
     wb.close()
     # 已抽取的关键帧（生成攻略文章时落盘），供自媒体工作台取材配图
     try:
@@ -407,6 +467,12 @@ def api_video_detail(sheet, row):
     # 该视频相关的最新整理稿（wechat_material/game_guide/ai_interview），供工作台取材时优先于原始转写。
     # 含两种挂载：本视频直接挂的稿 + 本视频作为源视频之一的合集稿（source_video_ids）。
     # 整理稿是素材底稿不是成品文章：工作台取材后仍需生成+人工润色才能发布
+    _attach_related_summaries(detail, sheet, row)
+    return jsonify(detail)
+
+
+def _attach_related_summaries(detail: dict, sheet: str, row: int) -> None:
+    """把与该素材相关的最新整理稿按类型挂到 detail 上（抖音视频与微信文章共用）。"""
     try:
         if DB_PATH.exists():
             video = content_store.get_video_by_source(DB_PATH, sheet, row)
@@ -449,7 +515,6 @@ def api_video_detail(sheet, row):
                         break
     except Exception:
         detail["wechat_material"] = ""
-    return jsonify(detail)
 
 
 @app.route("/media/<path:filename>")
@@ -1183,6 +1248,8 @@ def _video_keyframe_markdown(videos: list, max_frames: int = 5, per_video: int =
     for video in videos:
         if len(collected) >= max_frames:
             break
+        if (video.get("source_sheet") or "") == "微信文章":
+            continue  # 微信文章无视频可抽帧；其 aweme_id 是 URL hash，不跳过会误走下载解析
         aweme_id = (video.get("aweme_id") or "").strip() or material_store.extract_aweme_id(
             video.get("source_url") or video.get("video_url") or ""
         )
@@ -2206,6 +2273,8 @@ def api_videos_delete():
                 sheet, row = it.get("sheet"), int(it.get("row") or 0)
                 if sheet and row:
                     content_store.delete_video(DB_PATH, sheet, row)
+                    if sheet == "微信文章":
+                        deleted += 1  # 微信文章不落 Excel，DB 删除即计数
             # 2. 清 Excel 行（所有 sheet 中匹配行清空 1-15 列，行号保持不变）
             wb = openpyxl.load_workbook(str(EXCEL_PATH))
             target_sheets = {it.get("sheet") for it in items if it.get("sheet")}
