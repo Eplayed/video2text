@@ -63,7 +63,10 @@ def fetch_rss(feed_url: str, timeout: int = 30) -> list[dict[str, str]]:
     items: list[dict[str, str]] = []
 
     # Try RSS 2.0 first
-    ns = {"content": "http://purl.org/rss/1.0/modules/content/"}
+    ns = {
+        "content": "http://purl.org/rss/1.0/modules/content/",
+        "dc": "http://purl.org/dc/elements/1.1/",
+    }
     for item in root.findall(".//item"):
         title = (item.findtext("title") or "").strip()
         link = (item.findtext("link") or "").strip()
