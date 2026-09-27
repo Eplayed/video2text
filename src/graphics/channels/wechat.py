@@ -26,8 +26,8 @@ ROOT = Path(__file__).resolve().parents[3]
 OUTPUT_DIR = ROOT / "output" / "wechat"
 CANVAS_W, CANVAS_H = 1080, 1440  # 3:4，微头条试跑已验证同机制跑得通
 
-# 模板白名单（迁移方案 §5.4-2：去游戏皮味，quest/tier/guide/bold 不进）
-TEMPLATE_WHITELIST = ["classic", "minimal", "magazine"]
+# 模板白名单（wechat 清新绿为默认：零背景图、与游戏资产解耦；去游戏皮味，quest/tier/guide/bold 不进）
+TEMPLATE_WHITELIST = ["wechat", "minimal", "classic", "magazine"]
 
 CARD_TARGET_MIN, CARD_TARGET_MAX = 6, 8   # 目标张数
 MAX_IMAGES = 20                            # 平台硬上限（图片消息 ≤20 张）
@@ -36,7 +36,10 @@ DIGEST_MAX = 120                           # lint：摘要上限
 AUTHOR_DRAFT_MIN = 300                     # 作者真实底稿建议字数
 
 # 合规尾注（迁移方案 §5.4-3，替代头条版措辞）
+# 亲测模式：作者真实底稿在位，实测口吻
 _COMPLIANCE_NOTE = "本文由 AI 辅助创作，实测由 AI 真机执行、全程截图留档，结果经作者复核确认。"
+# 转载模式：无底稿，把他人已总结好的内容整理归纳，转述口吻 + 归源免责
+_COMPLIANCE_NOTE_REPOST = "本文由 AI 辅助整理归纳，内容源自公开分享，观点与结论归原作者，如有侵权请联系删除。"
 
 # 微信版发布检查清单（迁移方案 §5.4-6；2026-09-26 按平台官方口径校正合规两条）
 _CHECKLIST = [
@@ -69,13 +72,7 @@ __THEME_LINE__
 __TITLE_LINE__
 __TEMPLATE_LINE__
 
-最高优先约束——作者真实底稿（亲历事实，本组卡片唯一的观点与结论来源）：
-- 你只做「把真实底稿结构化成卡片」这一件事，严禁凭空生成观点、严禁添加底稿里没有的判断；整合稿只作背景材料补充。
-- 第一人称（我实测/我发现/我踩的坑）只能用于底稿里出现过的事实，其余内容一律转述口吻。
-- 底稿与整合稿冲突时，以底稿为准。
-
-作者真实底稿：
-{draft}
+__SOURCE_BLOCK__
 
 要求：
 - 第 1 张 kind="cover"：title 大标题（≤18字，尽量含数字）；subtitle 一句话（≤20字，可空）；timeline_label 固定填「本期看点」；timeline 一句话看点（≤22字）；timeline_note（≤28字，可空）；hooks 3-4 条，每条 t（≤14字）+ d（≤20字）
@@ -93,6 +90,23 @@ __TEMPLATE_LINE__
 
 整合稿：
 {content}"""
+
+
+# 来源约束块：亲测模式（底稿为唯一观点源）vs 转载模式（整合稿为观点源、转述口吻）
+_SOURCE_BLOCK_TESTED = """最高优先约束——作者真实底稿（亲历事实，本组卡片唯一的观点与结论来源）：
+- 你只做「把真实底稿结构化成卡片」这一件事，严禁凭空生成观点、严禁添加底稿里没有的判断；整合稿只作背景材料补充。
+- 第一人称（我实测/我发现/我踩的坑）只能用于底稿里出现过的事实，其余内容一律转述口吻。
+- 底稿与整合稿冲突时，以底稿为准。
+
+作者真实底稿：
+{draft}"""
+
+_SOURCE_BLOCK_REPOST = """最高优先约束——转载整理模式（无作者亲测底稿，本组卡片的观点与结论全部来自下方整合稿）：
+- 你只做「把整合稿里他人已总结好的内容结构化成卡片」这一件事，严禁凭空生成整合稿里没有的观点或数据。
+- 全程转述口吻（如「据介绍」「实测反馈」「网友总结」），禁用第一人称亲历表述（我实测/我踩的坑）。
+- 忠实归纳，不夸大、不添加未经证实的结论；整合稿信息不足时宁可少写，也不硬凑。
+
+（本篇为转载整理，无作者亲测底稿）"""
 
 
 def _build_cards_prompt(summary, author_draft, theme="", template="classic"):
@@ -113,13 +127,17 @@ def _build_cards_prompt(summary, author_draft, theme="", template="classic"):
                       "可微调语气与字数但必须保留核心词，不要另起炉灶。" % summary["title"].strip())
     tpl_key = template if template in TEMPLATE_WHITELIST else "classic"
     tpl = templates._TEMPLATES[tpl_key]
+    is_repost = not (author_draft or "").strip()
+    source_block = _SOURCE_BLOCK_REPOST if is_repost else _SOURCE_BLOCK_TESTED
+    compliance = _COMPLIANCE_NOTE_REPOST if is_repost else _COMPLIANCE_NOTE
     prompt = (_CARDS_PROMPT
               .replace("{schema_placeholder}", schema)
               .replace("{{DATE}}", date_str)
-              .replace("__COMPLIANCE__", _COMPLIANCE_NOTE)
+              .replace("__COMPLIANCE__", compliance)
               .replace("__THEME_LINE__", theme_line)
               .replace("__TITLE_LINE__", title_line)
-              .replace("__TEMPLATE_LINE__", tpl["hint"]))
+              .replace("__TEMPLATE_LINE__", tpl["hint"])
+              .replace("__SOURCE_BLOCK__", source_block))
     # 底稿与 content 放最后替换，避免正文里的花括号被误伤
     prompt = prompt.replace("{draft}", (author_draft or "").strip()[:3000])
     prompt = prompt.replace("{content}", (summary.get("content") or "")[:12000])
@@ -188,15 +206,31 @@ def _fallback_cards(summary, author_draft):
     quotes = _lines("金句摘录")
     risks = _lines("风险核查")
     draft_lines = [l.strip() for l in (author_draft or "").splitlines() if l.strip()]
+    is_repost = not draft_lines
 
     hook_src = arguments or draft_lines or lead
     hooks = [{"t": "核心论点", "d": re.sub(r"^[-*#>\s]+", "", h)[:20]} for h in hook_src[:3]]
     if not hooks:
         hooks = [{"t": "详见", "d": "整合稿正文"}]
 
+    cover_subtitle = "AI 辅助整理 · 内容源自公开分享" if is_repost else "作者实测 · AI 辅助整理"
+    # 第 5-6 张：亲测模式=作者亲历+金句风险；转载模式无底稿，改为风险核查+金句摘录（均有整合稿来源）
+    if is_repost:
+        card5 = {"kind": "list", "title": "风险核查", "section": "风险", "icon": "险",
+                 "items": _items_from_lines(risks),
+                 "note": {"title": "提醒", "text": "内容整理自公开分享，本地模板兜底生成，发布前请人工核对数值与结论。"}}
+        card6 = {"kind": "list", "title": "金句摘录", "section": "金句", "icon": "句",
+                 "items": _items_from_lines(quotes)}
+    else:
+        card5 = {"kind": "list", "title": "作者亲历", "section": "亲历", "icon": "真",
+                 "items": _items_from_lines(draft_lines),
+                 "note": {"title": "提醒", "text": "本地模板兜底生成，发布前请人工核对数值与结论。"}}
+        card6 = {"kind": "list", "title": "金句与风险", "section": "金句", "icon": "句",
+                 "items": _items_from_lines(quotes + risks)}
+
     cards = [
         {"kind": "cover", "bg": "neutral", "badge": "公众号", "title": title,
-         "subtitle": "作者实测 · AI 辅助整理",
+         "subtitle": cover_subtitle,
          "timeline_label": "本期看点", "timeline": (lead[0][:22] if lead else title),
          "timeline_note": "本地模板生成，请人工核对",
          "hooks": hooks},
@@ -206,20 +240,25 @@ def _fallback_cards(summary, author_draft):
          "items": _items_from_lines(data_lines)},
         {"kind": "list", "title": "正文要点", "section": "要点", "icon": "文",
          "items": _items_from_lines(skeleton)},
-        {"kind": "list", "title": "作者亲历", "section": "亲历", "icon": "真",
-         "items": _items_from_lines(draft_lines),
-         "note": {"title": "提醒", "text": "本地模板兜底生成，发布前请人工核对数值与结论。"}},
-        {"kind": "list", "title": "金句与风险", "section": "金句", "icon": "句",
-         "items": _items_from_lines(quotes + risks)},
+        card5,
+        card6,
     ]
-    copy_text = (
-        "%s\n\n作者真机实测，6 张卡片看懂结论：\n\n"
-        "📌 核心论点：见第 2 张\n📌 关键数据：见第 3 张\n"
-        "📌 作者亲历的坑：见第 5 张，建议收藏\n\n%s" % (title, _COMPLIANCE_NOTE)
-    )
+    if is_repost:
+        copy_text = (
+            "%s\n\n内容整理自公开分享，6 张卡片看懂要点：\n\n"
+            "📌 核心论点：见第 2 张\n📌 关键数据：见第 3 张\n"
+            "📌 风险与金句：见第 5-6 张，建议收藏\n\n%s" % (title, _COMPLIANCE_NOTE_REPOST)
+        )
+    else:
+        copy_text = (
+            "%s\n\n作者真机实测，6 张卡片看懂结论：\n\n"
+            "📌 核心论点：见第 2 张\n📌 关键数据：见第 3 张\n"
+            "📌 作者亲历的坑：见第 5 张，建议收藏\n\n%s" % (title, _COMPLIANCE_NOTE)
+        )
     digest_src = (lead[0] if lead else "") + (re.sub(r"^[-*#>\s]+", "", arguments[0]) if arguments else "")
     digest = (digest_src or title)[:DIGEST_MAX]
-    source_note = "基于作者真机实测整理（数据口径截至%s）" % datetime.now().strftime("%m月%d日")
+    source_note = ("整理归纳自公开分享内容（数据口径截至%s）" if is_repost
+                   else "基于作者真机实测整理（数据口径截至%s）") % datetime.now().strftime("%m月%d日")
     return {"cards": cards, "copy_text": copy_text, "digest": digest,
             "keyword_reply": "", "source_note": source_note}
 
@@ -248,11 +287,14 @@ def lint_package(manifest, out_dir):
         issues.append("warn: digest 摘要缺失（发布页需要 120 字摘要段）")
     elif len(digest) > DIGEST_MAX:
         issues.append("warn: digest %d 字，超 %d 字上限" % (len(digest), DIGEST_MAX))
-    shots = [im for im in images if im.get("source") == "real_screenshot"]
-    if len(shots) < 2:
-        issues.append("warn: 真实截图 %d 张，铁律要求 ≥2 张且禁 AI 插画冒充截图" % len(shots))
-    if len(manifest.get("author_draft") or "") < AUTHOR_DRAFT_MIN:
-        issues.append("warn: 作者真实底稿不足 %d 字，建议补充亲历细节" % AUTHOR_DRAFT_MIN)
+    # 转载模式（无作者真实底稿）：内容源自公开分享、无需亲测截图，跳过截图/底稿字数铁律
+    is_repost = not (manifest.get("author_draft") or "").strip()
+    if not is_repost:
+        shots = [im for im in images if im.get("source") == "real_screenshot"]
+        if len(shots) < 2:
+            issues.append("warn: 真实截图 %d 张，铁律要求 ≥2 张且禁 AI 插画冒充截图" % len(shots))
+        if len(manifest.get("author_draft") or "") < AUTHOR_DRAFT_MIN:
+            issues.append("warn: 作者真实底稿不足 %d 字，建议补充亲历细节" % AUTHOR_DRAFT_MIN)
     pkg_dir = out_dir / str(manifest.get("summary_id"))
     for im in images:
         p = pkg_dir / (im.get("file") or "")
@@ -267,20 +309,23 @@ def lint_package(manifest, out_dir):
 
 
 def generate_graphics(summary, ai_config, author_draft="", progress_cb=None,
-                      theme="", skin="", title="", template="classic", real_screenshots=None):
-    """主入口：wechat_material 整合稿 + 作者真实底稿 → manifest dict（落盘 output/wechat/<summary_id>/）。
+                      theme="", skin="", title="", template="wechat", real_screenshots=None):
+    """主入口：wechat_material 整合稿 → manifest dict（落盘 output/wechat/<summary_id>/）。
 
-    author_draft:     str 作者 300 字真实底稿，**必填**（迁移方案 §6：不给就抛错拒绝生成）
+    两种模式（由 author_draft 是否为空自动判定）：
+      - 亲测模式（draft 非空）：底稿为唯一观点源，实测口吻，lint 要求真实截图 ≥2 张。
+      - 转载模式（draft 为空）：把他人已总结好的整合稿归纳成图文，转述口吻，无需底稿/截图。
+
+    author_draft:     str 作者真实底稿；亲测模式建议 ≥300 字，转载模式留空即可
     theme:            str 题材名，注入 prompt + 选插画素材文件夹（可空）
-    skin:             str 调色板/背景垫图（可空，默认深色系 wow 调色板、无垫图）
+    skin:             str 调色板/背景垫图（可空；wechat 模板不取背景图，天然去游戏资产）
     title:            str 图文标题，非空时覆盖素材标题
-    template:         str 模板，限白名单 classic/minimal/magazine，越界回落 classic
-    real_screenshots: list 真实截图路径（铁律 ≥2 张），复制进包并标 source=real_screenshot
+    template:         str 模板，限白名单 wechat/minimal/classic/magazine，越界回落 wechat
+    real_screenshots: list 真实截图路径（亲测模式铁律 ≥2 张），复制进包并标 source=real_screenshot
     """
     draft = (author_draft or "").strip()
-    if not draft:
-        raise ValueError("作者真实底稿不能为空（迁移方案 §6 强制机制：亲历事实必须前置注入）")
-    tpl_key = template if template in TEMPLATE_WHITELIST else "classic"
+    is_repost = not draft
+    tpl_key = template if template in TEMPLATE_WHITELIST else "wechat"
     tpl = templates._TEMPLATES[tpl_key]
     summary_id = int(summary["id"])
     if (title or "").strip():
@@ -325,15 +370,17 @@ def generate_graphics(summary, ai_config, author_draft="", progress_cb=None,
         browser = p.chromium.launch()
         page = browser.new_page(viewport={"width": CANVAS_W, "height": CANVAS_H})
         brand = (theme or "").strip()[:12]
+        # wechat 模板零图片依赖：强制不取 hero，从根上杜绝游戏背景图兜底渗入
+        no_hero = (tpl_key == "wechat")
         for idx, card in enumerate(cards, 1):
             kind = card.get("kind") or "list"
             ctx = {"brand": brand, "idx": idx, "total": total, "skin_key": skin_key, "canvas_h": CANVAS_H}
             if kind == "cover" and idx == 1:
-                hero = skins._hero_uri(card, cover_img, skin_uri, assets_dir)
+                hero = None if no_hero else skins._hero_uri(card, cover_img, skin_uri, assets_dir)
                 html = tpl["cover"](card, css, hero, ctx)
             else:
                 band = skins._pick_band_image(theme_imgs, idx)
-                hero = skins._hero_uri(card, band, skin_uri, assets_dir)
+                hero = None if no_hero else skins._hero_uri(card, band, skin_uri, assets_dir)
                 html = tpl["list"](card, css, hero, ctx)
             html_path = out_dir / ("img%d.html" % idx)
             png_path = out_dir / ("img%d.png" % idx)
@@ -359,6 +406,7 @@ def generate_graphics(summary, ai_config, author_draft="", progress_cb=None,
         "id": summary_id,
         "summary_id": summary_id,
         "channel": "wechat",
+        "mode": "repost" if is_repost else "tested",
         "title": summary.get("title") or "",
         "copy_text": data.get("copy_text") or "",
         "digest": data.get("digest") or "",
