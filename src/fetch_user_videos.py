@@ -55,7 +55,12 @@ def extract_aweme_id_from_url(url: str) -> str:
 
 
 def load_existing_aweme_ids(excel_path: str) -> set[str]:
-    """读取 Excel 中已存在的视频 ID，用于主页批量抓取去重。"""
+    """读取 Excel 中已存在的视频 ID，用于主页批量抓取去重。
+
+    注意：read_only 模式下必须用 iter_rows 顺序单遍扫描。
+    旧写法逐格调 ws.cell(row, col) 是 O(N²)（每次调用从流头重新解析 XML），
+    1076 行实测 231 秒；改 iter_rows 后同为秒级。
+    """
     existing = set()
     path = Path(excel_path)
     if not excel_path or not path.exists():
@@ -66,13 +71,10 @@ def load_existing_aweme_ids(excel_path: str) -> set[str]:
     wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
     try:
         for ws in wb.worksheets:
-            for row in range(2, ws.max_row + 1):
-                aweme_id = str(ws.cell(row, 3).value or "").strip()
-                if aweme_id:
-                    existing.add(aweme_id)
-                    continue
-                link = str(ws.cell(row, 1).value or "").strip()
-                aweme_id = extract_aweme_id_from_url(link)
+            for link_col, _status, id_col in ws.iter_rows(min_row=2, max_col=3, values_only=True):
+                aweme_id = str(id_col or "").strip()
+                if not aweme_id:
+                    aweme_id = extract_aweme_id_from_url(str(link_col or "").strip())
                 if aweme_id:
                     existing.add(aweme_id)
     finally:

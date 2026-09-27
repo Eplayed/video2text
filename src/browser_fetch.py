@@ -11,6 +11,9 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
+import threading
+import time
 from pathlib import Path
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -62,6 +65,82 @@ def browser_fetch_user_videos(user_url: str, max_videos: int = 20, timeout: int 
             continue
 
     return []
+
+
+def browser_fetch_users_batch(
+    user_items: list,
+    max_videos: int = 20,
+    timeout: int = 75,
+    on_progress=None,
+) -> dict:
+    """批量拉取多个作者主页：一次 Chromium 启动跑完所有作者。
+
+    订阅同步主路径——替代逐作者调 browser_fetch_user_videos（每次冷启动
+    Chromium 5-15 秒，无新视频也要付这笔成本）。
+
+    参数：
+        user_items: [{"id": str, "url": str}]，id 用于回传结果对账
+        max_videos: 每作者最多取多少条
+        timeout: 单作者秒上限（看门狗按 timeout*len+30 兜底杀进程）
+        on_progress: 回调 (done, total, item_id, ids, error)，每完成一个作者触发
+
+    返回：{id: [aweme_id, ...]}，失败的作者不在结果里。
+    """
+    if not user_items or not _SCRIPT.exists():
+        return {}
+
+    node = next((n for n in _NODE_CANDIDATES if n and os.path.exists(n)), "")
+    if not node:
+        return {}
+
+    tmp = tempfile.NamedTemporaryFile(
+        "w", suffix=".json", delete=False, encoding="utf-8")
+    try:
+        json.dump(user_items, tmp, ensure_ascii=False)
+        tmp.close()
+
+        results: dict = {}
+        total = len(user_items)
+        done = 0
+        proc = subprocess.Popen(
+            [node, str(_SCRIPT), "users", tmp.name, str(max_videos)],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            text=True, env=_ENV, cwd=str(_PROJECT_ROOT),
+        )
+        # 看门狗：页面级超时已由脚本内部控制，此处只兜底进程级挂死
+        killer = threading.Timer(timeout * total + 30, proc.kill)
+        killer.start()
+        try:
+            for line in proc.stdout:
+                line = line.strip()
+                if not line.startswith("{"):
+                    continue
+                try:
+                    data = json.loads(line)
+                except ValueError:
+                    continue
+                item_id = str(data.get("id", ""))
+                done += 1
+                if data.get("ok") and data.get("ids"):
+                    results[item_id] = [str(i) for i in data["ids"]]
+                    if on_progress:
+                        on_progress(done, total, item_id, results[item_id], "")
+                elif on_progress:
+                    on_progress(done, total, item_id, None,
+                               str(data.get("error", ""))[:120])
+        finally:
+            killer.cancel()
+            proc.stdout.close()
+            proc.wait()
+        return results
+    except Exception as e:
+        print(f"[browser_fetch] 批量拉取异常: {e}", flush=True)
+        return {}
+    finally:
+        try:
+            os.unlink(tmp.name)
+        except OSError:
+            pass
 
 
 def _run_node_json(args: list, timeout: int) -> dict:

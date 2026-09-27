@@ -9,7 +9,11 @@
  * 用法：
  *   node douyin_browser_fetch.js user   <user_url>  [max_videos]  → {"ok":true,"ids":[...]}
  *   node douyin_browser_fetch.js detail <video_url>               → {"ok":true,"info":{...}}
- * 输出：最后一行为 JSON。
+ *   node douyin_browser_fetch.js users  <json_file> [max_videos]  → 每作者一行 {"ok":..,"id":..,"ids":[...]}
+ * 输出：最后一行为 JSON（users 模式为逐作者流式多行）。
+ *
+ * users 批量模式：一次 Chromium 启动跑完所有作者主页（订阅同步的主路径），
+ * 单作者失败只输出错误行、不中断后续作者。
  */
 const path = require("path");
 const fs = require("fs");
@@ -136,13 +140,55 @@ async function fetchVideoDetail(videoUrl) {
   }
 }
 
+/** 模式三：批量作者主页 → 每作者一行 NDJSON（一次 Chromium，订阅同步主路径） */
+async function fetchUserVideosBatch(file, maxVideos) {
+  const items = JSON.parse(fs.readFileSync(file, "utf8"));
+  const browser = await launch();
+  try {
+    const ctx = await newContext(browser);
+    for (const it of items) {
+      const line = { ok: false, id: it.id || "", ids: [] };
+      const page = await ctx.newPage();
+      try {
+        await page.goto(it.url, { waitUntil: "domcontentloaded", timeout: 40000 });
+        try {
+          await page.waitForSelector('a[href*="/video/"]', { timeout: 20000 });
+        } catch (e) {
+          const t = await page.title().catch(() => "");
+          throw new Error("no video cards, title=" + t.slice(0, 30));
+        }
+        await page.waitForTimeout(2500);
+        const ids = await page.evaluate(() => {
+          const out = [];
+          for (const a of document.querySelectorAll('a[href*="/video/"]')) {
+            const m = (a.getAttribute("href") || "").match(/video\/(\d+)/);
+            if (m) out.push(m[1]);
+          }
+          return [...new Set(out)];
+        });
+        if (ids.length) { line.ok = true; line.ids = ids.slice(0, maxVideos); }
+        else line.error = "empty list (maybe login wall / captcha)";
+      } catch (e) {
+        line.error = (e && e.message) || String(e);
+      } finally {
+        await page.close().catch(() => {});
+      }
+      emit(line);
+    }
+  } finally {
+    await browser.close().catch(() => {});
+  }
+}
+
 (async () => {
   const mode = process.argv[2];
   if (mode === "user") {
     await fetchUserVideos(process.argv[3], parseInt(process.argv[4] || "20", 10) || 20);
   } else if (mode === "detail") {
     await fetchVideoDetail(process.argv[3]);
+  } else if (mode === "users") {
+    await fetchUserVideosBatch(process.argv[3], parseInt(process.argv[4] || "20", 10) || 20);
   } else {
-    emit({ ok: false, error: "usage: douyin_browser_fetch.js user <url> [max] | detail <url>" });
+    emit({ ok: false, error: "usage: douyin_browser_fetch.js user <url> [max] | detail <url> | users <json_file> [max]" });
   }
 })().catch((e) => { emit({ ok: false, error: (e && e.message) || String(e) }); });
