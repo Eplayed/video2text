@@ -2,6 +2,16 @@
 
 更新时间：2026-09-27
 
+## 2026-09-27（三）：公众号图文「转载模式」+ wechat 清新绿模板（去游戏背景）
+
+用户诉求：把抖音上别人总结好的 AI 工具内容直接整理成公众号图文，**不要作者真实底稿和真实截图**；图文模板背景**不要用游戏素材**；头条号与公众号保持两套独立。开源调研结论：doocs/md（13k+ star）仅作公众号排版美学参考，无现成「AI 工具推荐卡片」组件，故自定义 wechat 模板。
+
+- **转载/亲测双模式（`src/graphics/channels/wechat.py`）**：由 `author_draft` 是否为空自动判定 `is_repost`。转载模式＝整合稿为唯一观点源、转述口吻（禁第一人称）、免截图/底稿校验、追加转载合规尾注「本文由 AI 辅助整理归纳…观点与结论归原作者」；亲测模式＝底稿为唯一观点源、实测口吻、铁律截图≥2/底稿≥300 不变。`_CARDS_PROMPT` 用 `__SOURCE_BLOCK__` 占位按模式注入 `_SOURCE_BLOCK_REPOST`/`_SOURCE_BLOCK_TESTED`；`_fallback_cards` 转载时第5-6张改「风险核查/金句摘录」、封面副标题改「AI 辅助整理 · 内容源自公开分享」；`lint_package` 转载跳过截图/底稿校验；manifest 新增 `mode: repost|tested` 字段。
+- **去游戏背景（`templates.py` + `css_engine.py`）**：新增 `wechat` 模板（公众号清新绿）——浅纸面 #f6f8f6 + 微信绿 #07c160 + 白色圆角卡片，**纯 CSS 径向渐变装饰、零背景 jpg 依赖**；`css_engine._tpl_tokens` 补 wechat 色板 token。`generate_graphics` 中 `tpl_key=="wechat"` 时强制 `hero=None`，从根上断掉 `skins._hero_uri` 兜底到游戏截图的路径（旧根因：`output/wechat/_assets/` 空时回退 `output/toutiao/_assets/neutral_bg.jpg` 魔兽截图）。
+- **模板白名单**：`TEMPLATE_WHITELIST = ["wechat","minimal","classic","magazine"]`，wechat 为默认；越界回落 wechat。`minimal` 渲染同步支持无图（photo 块可选，永不破图）。
+- **前端（`web/app.py` + `web/templates/index.html`）**：`/api/wechat/generate` 删除底稿必填 400、默认 template=wechat；弹窗底稿/截图 label 改「可选」+ 双模式说明，计数区留空显示「转载模式」绿字、填写转亲测计数；截图提示按模式切换（转载无需截图）；确认弹窗按模式显示不同校验与文案；模板下拉 4 选项默认 wechat，预览图 `tpl_previews/wechat/img1-4.jpg`（540×720 原生 3:4 缩半）。
+- 验证：`py_compile` 全过；离线模板自检 `WECHAT_TEMPLATE_OK`（无 photo 块/无残留 token）；转载逻辑自检 `ALL_REPOST_LOGIC_OK`；重启 Flask 后端到端生成 id=54（转载、无底稿无截图）成功——6 张卡片、`mode=repost`、`lint=[]`、sources 全 template、渲染图目检零游戏背景、copy_text 为转述口吻。
+
 ## 2026-09-27（二）：视频库 → 素材库，微信文章并入统一素材池（本轮）
 
 用户反馈「微信 RSS 采集的文章在视频库没有出口」。设计先行（架构/UI/UX/工作流），三项决策：导航改名「素材库」、运行时 DB 合并（不并入索引）、允许抖音+微信混选生成整理稿。
