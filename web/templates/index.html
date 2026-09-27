@@ -335,7 +335,9 @@ textarea{resize:vertical;min-height:84px}
 .wx-count{font-size:12px;font-weight:700;color:var(--text-tertiary);text-align:right;margin-top:5px}
 .wx-count.ok{color:var(--module-1)}
 .wx-count.bad{color:var(--danger)}
+.wx-count.repost{color:#07c160}
 .wx-req{display:inline-block;background:var(--danger);color:#fff;font-size:10.5px;font-weight:800;border-radius:4px;padding:1px 6px;margin-left:6px;vertical-align:middle}
+.wx-opt{display:inline-block;background:var(--module-1);color:#fff;font-size:10.5px;font-weight:800;border-radius:4px;padding:1px 6px;margin-left:6px;vertical-align:middle}
 .wx-block{border:1px solid var(--border);border-radius:var(--radius-control);background:var(--surface-nested);padding:12px 14px;margin-bottom:12px}
 .wx-block .wx-h{font-size:13px;font-weight:800;margin-bottom:7px}
 .wx-block .wx-b{font-size:13px;line-height:1.75;color:var(--text-secondary);white-space:pre-wrap;word-break:break-word}
@@ -838,7 +840,7 @@ textarea{resize:vertical;min-height:84px}
           <div class="spacer"></div>
           <span class="count" id="count-wechat">0 组</span>
         </div>
-        <p style="font-size:12px;color:var(--text-tertiary);margin:0 0 12px">链路：素材库勾选素材 → 生成「公众号文章素材」整合稿 → 整理稿点「生成公众号图文」→ 填 <b>≥300 字作者真实底稿</b> + 传 <b>≥2 张真实截图</b> → 这里复制文案 + 取图 → <b>手动</b>发图片消息（平台未开放图片原创声明，发布时如实声明 AI 辅助）。</p>
+        <p style="font-size:12px;color:var(--text-tertiary);margin:0 0 12px">链路：素材库勾选素材 → 生成「公众号文章素材」整合稿 → 整理稿点「生成公众号图文」→ 选择模式（<b>转载</b>：底稿留空，直接把他人已总结好的内容整理成图文；<b>亲测</b>：填 ≥300 字真实底稿 + 传 ≥2 张真实截图）→ 这里复制文案 + 取图 → <b>手动</b>发图片消息（平台未开放图片原创声明，发布时如实声明 AI 辅助）。</p>
         <div class="grid" id="grid-wechat">
           <div class="empty"><span class="e" data-icon="edit"></span>加载中...</div>
         </div>
@@ -976,12 +978,12 @@ textarea{resize:vertical;min-height:84px}
         <div class="tt-gen-title">💬 生成公众号图文</div>
         <div class="tt-gen-sub">整合稿 #<span id="wx-gen-id"></span> · 图片消息形态（画布 1080×1440，6-8 张卡片）</div>
         <div class="tt-gen-field">
-          <label>作者真实底稿<span class="wx-req">必填</span><small>（写清你亲自跑了什么、看到什么数字、踩了什么坑 —— 防 AI 味稀释的核心，≥300 字为佳）</small></label>
-          <textarea class="wx-draft-area" id="wx-gen-draft" spellcheck="false" oninput="wxDraftCount()" placeholder="例：我把这套流程在自己公众号上连跑了 3 天。第 1 天阅读 47，第 2 天 132，第 3 天 89。踩的坑是……我的判断是……"></textarea>
-          <div class="wx-count bad" id="wx-draft-count">0 / 300 字（必填，未达 300 字不建议提交）</div>
+          <label>作者真实底稿<span class="wx-opt">可选</span><small>（留空＝转载模式：把他人已总结好的内容整理成图文；填写＝亲测模式：以你的亲历事实为观点源，≥300 字为佳）</small></label>
+          <textarea class="wx-draft-area" id="wx-gen-draft" spellcheck="false" oninput="wxDraftCount();_wxShotRender()" placeholder="转载模式：直接留空即可，系统会把整合稿归纳成卡片。&#10;亲测模式：写清你亲自跑了什么、看到什么数字、踩了什么坑……"></textarea>
+          <div class="wx-count" id="wx-draft-count">转载模式（底稿留空）· 填写后转亲测模式</div>
         </div>
         <div class="tt-gen-field">
-          <label>真实截图<small>（铁律 ≥2 张，会复制进包并标 real_screenshot；不传则 lint 报 error）</small></label>
+          <label>真实截图<small>（可选：仅亲测模式建议传 ≥2 张，会复制进包并标 real_screenshot；转载模式无需截图）</small></label>
           <div class="tt-guide-drop" onclick="document.getElementById('wx-shot-files').click()">📎 点击选择真实截图（最多 10 张 · jpg / png / webp）</div>
           <input type="file" id="wx-shot-files" accept=".jpg,.jpeg,.png,.webp" multiple hidden>
           <div class="tt-guide-thumbs" id="wx-shot-thumbs"></div>
@@ -991,11 +993,12 @@ textarea{resize:vertical;min-height:84px}
           <input id="wx-gen-title" placeholder="图文标题">
         </div>
         <div class="tt-gen-field">
-          <label>图文模板<small>（白名单 3 套，越界自动回落「经典卡片」）</small></label>
+          <label>图文模板<small>（白名单 4 套，越界自动回落「公众号清新绿」）</small></label>
           <select id="wx-gen-tpl" onchange="updateWxTplPreview()">
-            <option value="classic" selected>经典卡片 · 鎏金插画风（默认）</option>
-            <option value="magazine">杂志大片 · 暗色编辑排版</option>
+            <option value="wechat" selected>公众号清新绿 · 浅色卡片（默认 · 零游戏背景）</option>
             <option value="minimal">极简清单 · 浅色知识卡</option>
+            <option value="classic">经典卡片 · 鎏金插画风</option>
+            <option value="magazine">杂志大片 · 暗色编辑排版</option>
           </select>
           <div class="tt-tpl-preview" onclick="openWxTplPages()" title="点击查看 4 页示例">
             <div class="tt-tpl-preview-thumb">
@@ -1698,6 +1701,7 @@ function closeToutiaoGenDialog(e) {
 }
 // ── 图文模板预览 ──
 const TT_TPL_PREVIEW = {
+  wechat:   {label: '公众号清新绿 · 浅色卡片', hint: '浅纸面 + 微信绿点缀 + 白色圆角卡片，纯 CSS 装饰零背景图，适合把他人已总结好的内容整理成图文（无需真实截图）。'},
   classic:  {label: '经典卡片 · 鎏金插画风', hint: '金渐变标题 + 插画主视觉 + 圆环图标三面板，通用性最强的默认选择。'},
   magazine: {label: '杂志大片 · 暗色编辑排版', hint: '大图打底、留白克制的杂志编辑风，适合单话题深挖、观感高级。'},
   minimal:  {label: '极简清单 · 浅色知识卡', hint: '白底清单式知识卡，信息干净清爽，适合多要点罗列、干货整理。'},
@@ -1854,9 +1858,9 @@ async function deleteToutiaoPackage(id) {
   } catch (e) { alert('删除失败: ' + e.message); }
 }
 
-// ── 公众号图文（图片消息形态 · 作者真实底稿必填） ──
+// ── 公众号图文（图片消息形态 · 底稿可选：留空＝转载模式，填写＝亲测模式） ──
 const WX_DRAFT_MIN = 300;
-const WX_TPL_WHITELIST = ['classic', 'magazine', 'minimal'];
+const WX_TPL_WHITELIST = ['wechat', 'minimal', 'classic', 'magazine'];
 
 async function loadWechatList() {
   const grid = document.getElementById('grid-wechat');
@@ -1865,7 +1869,7 @@ async function loadWechatList() {
     const items = data.items || [];
     document.getElementById('count-wechat').textContent = (data.total||0) + ' 组';
     if (!items.length) {
-      grid.innerHTML = '<div class="empty"><span class="e">' + iconSvg('edit') + '</span>还没有公众号图文<br><small>素材库勾选素材 → 生成「公众号文章素材」→ 整理稿页点「生成公众号图文」→ 填 ≥300 字真实底稿</small></div>';
+      grid.innerHTML = '<div class="empty"><span class="e">' + iconSvg('edit') + '</span>还没有公众号图文<br><small>素材库勾选素材 → 生成「公众号文章素材」→ 整理稿页点「生成公众号图文」→ 选转载模式（底稿留空）即可整理成图文</small></div>';
       return;
     }
     grid.innerHTML = items.map(p => {
@@ -1959,7 +1963,7 @@ function openWechatGenDialog(id) {
   }).catch(() => {});
   document.getElementById('wx-gen-draft').value = '';
   document.getElementById('wx-gen-theme').value = '';
-  document.getElementById('wx-gen-tpl').value = 'classic';
+  document.getElementById('wx-gen-tpl').value = 'wechat';
   _wxShotFiles = [];
   _wxShotRender();
   wxDraftCount();
@@ -1976,10 +1980,13 @@ function closeWechatGenDialog(e) {
 function wxDraftCount() {
   const n = document.getElementById('wx-gen-draft').value.trim().length;
   const el = document.getElementById('wx-draft-count');
-  el.textContent = n === 0
-    ? '0 / ' + WX_DRAFT_MIN + ' 字（必填，未达 ' + WX_DRAFT_MIN + ' 字不建议提交）'
-    : n + ' / ' + WX_DRAFT_MIN + ' 字' + (n >= WX_DRAFT_MIN ? ' ✅ 达标' : '（还差 ' + (WX_DRAFT_MIN - n) + ' 字）');
-  el.className = 'wx-count ' + (n >= WX_DRAFT_MIN ? 'ok' : 'bad');
+  if (n === 0) {
+    el.textContent = '转载模式：底稿留空，直接整理公开分享内容（免截图/底稿）';
+    el.className = 'wx-count repost';
+  } else {
+    el.textContent = n + ' / ' + WX_DRAFT_MIN + ' 字' + (n >= WX_DRAFT_MIN ? ' ✅ 亲测模式达标' : '（亲测模式建议 ≥' + WX_DRAFT_MIN + ' 字，还差 ' + (WX_DRAFT_MIN - n) + ' 字）');
+    el.className = 'wx-count ' + (n >= WX_DRAFT_MIN ? 'ok' : 'bad');
+  }
   return n;
 }
 
@@ -2008,11 +2015,18 @@ function closeWxTplPages(e) {
   document.getElementById('wx-tpl-pages-overlay').classList.remove('show');
 }
 
-// ── 真实截图上传（铁律 ≥2 张） ──
+// ── 真实截图上传（仅亲测模式建议 ≥2 张；转载模式无需截图） ──
 function _wxShotRender() {
   const box = document.getElementById('wx-shot-thumbs');
   const n = _wxShotFiles.length;
-  const hint = n < 2 ? `<div style="width:100%;font-size:12px;color:var(--danger);font-weight:700">⚠️ 已选 ${n} 张，铁律要求 ≥2 张真实截图（不足则 lint 报 error）</div>` : '';
+  const draftEl = document.getElementById('wx-gen-draft');
+  const isRepost = !(draftEl && draftEl.value.trim());
+  let hint = '';
+  if (isRepost) {
+    hint = `<div style="width:100%;font-size:12px;color:#07c160;font-weight:700">转载模式无需真实截图（已选 ${n} 张，选填）</div>`;
+  } else if (n < 2) {
+    hint = `<div style="width:100%;font-size:12px;color:var(--danger);font-weight:700">⚠️ 亲测模式已选 ${n} 张，铁律要求 ≥2 张真实截图（不足则 lint 报 error）</div>`;
+  }
   box.innerHTML = hint + _wxShotFiles.map((f, i) => `
     <div class="tt-guide-thumb">
       <img src="${URL.createObjectURL(f)}">
@@ -2053,13 +2067,13 @@ async function confirmWechatGen() {
   const id = _wxGenTargetId;
   if (!id) return;
   const draft = document.getElementById('wx-gen-draft').value.trim();
-  if (!draft) { setStatus('error', '作者真实底稿必填，先写清你亲自跑了什么'); return; }
-  if (draft.length < WX_DRAFT_MIN && !confirm(`底稿只有 ${draft.length} 字（建议 ≥${WX_DRAFT_MIN} 字）。\n底稿太短，AI 会把你的真实经验稀释成通稿味。仍要继续？`)) return;
-  if (_wxShotFiles.length < 2 && !confirm(`只选了 ${_wxShotFiles.length} 张真实截图（铁律 ≥2 张）。\n缺真实截图会被 lint 记 error，也过不了发布清单核验。仍要继续？`)) return;
+  const isRepost = !draft;
+  if (!isRepost && draft.length < WX_DRAFT_MIN && !confirm(`底稿只有 ${draft.length} 字（亲测模式建议 ≥${WX_DRAFT_MIN} 字）。\n底稿太短，AI 会把你的真实经验稀释成通稿味。仍要继续？`)) return;
+  if (!isRepost && _wxShotFiles.length < 2 && !confirm(`只选了 ${_wxShotFiles.length} 张真实截图（亲测模式铁律 ≥2 张）。\n缺真实截图会被 lint 记 error，也过不了发布清单核验。仍要继续？`)) return;
   const theme = document.getElementById('wx-gen-theme').value.trim();
   const title = document.getElementById('wx-gen-title').value.trim();
   const tplEl = document.getElementById('wx-gen-tpl');
-  const tpl = WX_TPL_WHITELIST.indexOf(tplEl.value) >= 0 ? tplEl.value : 'classic';
+  const tpl = WX_TPL_WHITELIST.indexOf(tplEl.value) >= 0 ? tplEl.value : 'wechat';
   const tplLabel = tplEl.selectedOptions[0].textContent.split(' ')[0];
   let shotToken = null;
   if (_wxShotFiles.length) {
@@ -2067,8 +2081,9 @@ async function confirmWechatGen() {
     catch (e) { setStatus('error', '真实截图上传失败: ' + e.message); return; }
   }
   closeWechatGenDialog();
-  const shotLine = shotToken ? `\n真实截图：${_wxShotFiles.length} 张（已上传）` : '\n真实截图：0 张（lint 将报 error）';
-  if (!confirm(`生成公众号图文？\n标题：${title || '（按整合稿标题）'}\n模板：${tplLabel}\n题材：${theme || '自动'}\n底稿：${draft.length} 字${shotLine}\n已有产物会被覆盖。`)) return;
+  const modeLine = isRepost ? '\n模式：转载（整理公开分享内容，观点归原作者）' : `\n模式：亲测（底稿 ${draft.length} 字）`;
+  const shotLine = shotToken ? `\n真实截图：${_wxShotFiles.length} 张（已上传）` : (isRepost ? '' : '\n真实截图：0 张（lint 将报 error）');
+  if (!confirm(`生成公众号图文？\n标题：${title || '（按整合稿标题）'}\n模板：${tplLabel}\n题材：${theme || '自动'}${modeLine}${shotLine}\n已有产物会被覆盖。`)) return;
   setStatus('running', '正在生成公众号图文...');
   try {
     const resp = await fetch('/api/wechat/generate', {

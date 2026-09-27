@@ -1440,13 +1440,14 @@ def api_wechat_shot_upload():
 
 @app.route("/api/wechat/generate", methods=["POST"])
 def api_wechat_generate():
-    """从 wechat_material 整合稿生成公众号图片消息卡片包。作者真实底稿必填（迁移方案 §6）。"""
+    """从 wechat_material 整合稿生成公众号图片消息卡片包。
+    底稿可选：填了走亲测模式（实测口吻），留空走转载模式（把他人已总结内容整理成图文）。"""
     data = request.get_json(force=True)
     summary_id = data.get("summary_id")
     author_draft = str(data.get("author_draft") or "").strip()
     theme = str(data.get("theme") or "").strip()[:30]    # 题材（进 LLM prompt，如「AI工具实测」）
     title = str(data.get("title") or "").strip()[:60]    # 图文标题（空则用整合稿标题）
-    template = str(data.get("template") or "classic").strip()[:20]  # 限白名单，越界适配器内回落 classic
+    template = str(data.get("template") or "wechat").strip()[:20]  # 限白名单，越界适配器内回落 wechat
     shots = []  # 真实截图（弹窗上传，复制进包并标 source=real_screenshot）
     shot_token = str(data.get("shot_token") or "").strip()
     if shot_token and re.fullmatch(r"[0-9a-f]{12}", shot_token):
@@ -1456,8 +1457,6 @@ def api_wechat_generate():
             shots = sorted(p for p in up.iterdir() if p.is_file() and p.suffix.lower() in exts)
     if not summary_id:
         return jsonify({"error": "缺少 summary_id"}), 400
-    if not author_draft:
-        return jsonify({"error": "作者真实底稿必填：写清你真跑了什么、看到什么数字、踩了什么坑（≥300字为佳）"}), 400
     if _wx_task_status.get("running"):
         return jsonify({"error": "已有公众号图文生成任务正在运行"}), 400
 
