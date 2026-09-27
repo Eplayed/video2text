@@ -8,13 +8,19 @@ from .skins import _SKIN_PALETTES, _PALETTE_DEFAULT, _BOLD_ACCENTS
 
 
 def _tpl_tokens(tpl_key, skin_key):
-    """模板级补充色板：minimal 的浅色纸面/墨色，bold 的高饱和强调色。"""
+    """模板级补充色板：minimal 的浅色纸面/墨色，bold 的高饱和强调色，wechat 的公众号清新绿。"""
     if tpl_key == "minimal":
         palette = _SKIN_PALETTES.get(skin_key) or _SKIN_PALETTES[_PALETTE_DEFAULT]
         return {"__PAPER__": "#faf7f0", "__INK__": "#221d15", "__MDIM__": "#6b6252",
                 "__LINE__": "#e3d9c4", "__ACCENT__": palette["gold_deep"]}
     if tpl_key == "bold":
         return {"__ACCENT__": _BOLD_ACCENTS.get(skin_key, "#ffd23f")}
+    if tpl_key == "wechat":
+        # 公众号清新绿：微信绿 #07c160 点缀 + 浅纸面 + 白色卡片，与游戏资产完全解耦。
+        return {"__PAPER__": "#f6f8f6", "__INK__": "#1f2329", "__MDIM__": "#646a73",
+                "__LINE__": "#e6e9e5", "__CARD__": "#ffffff",
+                "__ACCENT__": "#07c160", "__ACCENT_DK__": "#059a4e",
+                "__ACCENT_SOFT__": "rgba(7,193,96,.12)", "__ACCENT_SHADOW__": "rgba(7,193,96,.28)"}
     return {}
 
 
