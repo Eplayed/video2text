@@ -16,13 +16,13 @@ body { width:__W__px; font-family:"PingFang SC","Hiragino Sans GB",sans-serif;
 .wrap { width:__W__px; height:__H__px; padding:56px 60px 52px; display:flex; flex-direction:column;
         position:relative; overflow:hidden;
         background:
-          radial-gradient(ellipse at 50% -8%, rgba(255,205,110,.10), transparent 55%),
+          radial-gradient(ellipse at 50% -8%, __GLOW__, transparent 55%),
           linear-gradient(172deg, __BG_TOP__ 0%, __BG_MID__ 46%, __BG_BOT__ 100%); }
 .frame { position:absolute; inset:20px; pointer-events:none;
          border:2px solid __GOLD_DEEP__; border-radius:10px;
          box-shadow: inset 0 0 0 4px __BG_MID__, inset 0 0 0 6px __GOLD_DEEP__, 0 0 30px rgba(0,0,0,.55); }
 .corner { position:absolute; width:26px; height:26px; background:__GOLD__;
-          transform:rotate(45deg); box-shadow:0 0 12px rgba(201,168,76,.5); z-index:3; }
+          transform:rotate(45deg); box-shadow:0 0 12px rgba(__GOLD_RGB__,.5); z-index:3; }
 .corner.tl { top:34px; left:34px; } .corner.tr { top:34px; right:34px; }
 .corner.bl { bottom:34px; left:34px; } .corner.br { bottom:34px; right:34px; }
 .wrap::before { content:""; position:absolute; inset:0; background-position:center;
@@ -33,7 +33,7 @@ body { width:__W__px; font-family:"PingFang SC","Hiragino Sans GB",sans-serif;
 .wrap.bg-skin::before { background-image:url("__BG_SKIN__"); }
 .wrap-in { position:relative; z-index:1; display:flex; flex-direction:column; flex:1; min-height:0; }
 .topline { display:flex; align-items:center; justify-content:space-between; margin-bottom:30px; }
-.badge { background:linear-gradient(180deg,__GOLD_HI__,__GOLD__); color:#241a10; font-weight:800;
+.badge { background:linear-gradient(180deg,__GOLD_HI__,__GOLD__); color:__ON_ACCENT__; font-weight:800;
          font-size:26px; padding:9px 26px; border-radius:5px; letter-spacing:3px;
          border:1px solid __GOLD_DEEP__; box-shadow:0 2px 8px rgba(0,0,0,.5); }
 .faction { display:inline-flex; align-items:center; font-size:24px; font-weight:800;
@@ -76,14 +76,14 @@ h2 { font-family:"Songti SC","Noto Serif SC","STSong",serif; font-size:62px; fon
             color:__GOLD_HI__; text-shadow:0 2px 10px rgba(0,0,0,.6); }
 .cta .note { margin-top:10px; font-size:24px; color:__DIM__; letter-spacing:1px; }
 .hooks { margin-top:28px; display:flex; flex-wrap:wrap; gap:18px; }
-.hook { flex:1 1 30%; background:rgba(10,12,22,.82); border:1px solid __PANEL_B__;
+.hook { flex:1 1 30%; background:rgba(__PANEL_RGB__,.82); border:1px solid __PANEL_B__;
         border-radius:10px; padding:22px 24px; box-shadow:0 5px 14px rgba(0,0,0,.35); }
 .hooks.g2 .hook { flex-basis:47%; }
 .hook .hd { display:flex; align-items:center; gap:12px; margin-bottom:10px; }
 .hook .n { width:34px; height:34px; background:__GOLD__; transform:rotate(45deg); flex-shrink:0;
-           box-shadow:0 0 10px rgba(201,168,76,.55); position:relative; }
+           box-shadow:0 0 10px rgba(__GOLD_RGB__,.55); position:relative; }
 .hook .n span { position:absolute; inset:0; transform:rotate(-45deg); display:flex; align-items:center;
-                justify-content:center; font-size:20px; font-weight:800; color:#241a10; }
+                justify-content:center; font-size:20px; font-weight:800; color:__ON_ACCENT__; }
 .hook .t { font-family:"Songti SC","Noto Serif SC","STSong",serif; font-size:30px; font-weight:800;
            color:__GOLD_HI__; }
 .hook .d { font-size:24px; line-height:1.5; color:__TEXT__; }
@@ -92,11 +92,11 @@ h2 { font-family:"Songti SC","Noto Serif SC","STSong",serif; font-size:62px; fon
                 background:linear-gradient(90deg, transparent, __GOLD_DEEP__, transparent); }
 .seclabel .tx { font-size:27px; letter-spacing:6px; color:__GOLD__; font-weight:800; }
 .panels { display:flex; flex-direction:column; gap:18px; flex:1; }
-.panel { display:flex; align-items:center; gap:26px; background:rgba(10,12,22,.86);
+.panel { display:flex; align-items:center; gap:26px; background:rgba(__PANEL_RGB__,.86);
          border:1px solid __PANEL_B__; border-radius:12px; padding:26px 30px; flex:1;
          box-shadow:0 6px 16px rgba(0,0,0,.38); }
 .panel .ring { flex-shrink:0; width:92px; height:92px; border-radius:50%;
-               background:radial-gradient(circle at 35% 30%, #232a40, #10131f);
+               background:radial-gradient(circle at 35% 30%, __RING_HI__, __RING_LO__);
                border:2px solid __GOLD__; box-shadow:0 0 0 5px rgba(0,0,0,.35), inset 0 0 14px rgba(0,0,0,.6);
                display:flex; align-items:center; justify-content:center;
                font-family:"Songti SC","Noto Serif SC","STSong",serif; font-size:42px;
@@ -105,7 +105,7 @@ h2 { font-family:"Songti SC","Noto Serif SC","STSong",serif; font-size:62px; fon
 .panel .pt { font-family:"Songti SC","Noto Serif SC","STSong",serif; font-size:33px; font-weight:800;
              color:__GOLD_HI__; margin-bottom:8px; display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
 .panel .pd { font-size:27px; line-height:1.55; color:__TEXT__; }
-.chip { font-size:22px; font-weight:700; color:#241a10; letter-spacing:2px;
+.chip { font-size:22px; font-weight:700; color:__ON_ACCENT__; letter-spacing:2px;
         background:linear-gradient(180deg,__GOLD_HI__,__GOLD__); border-radius:5px; padding:3px 12px;
         border:1px solid __GOLD_DEEP__; }
 .panel.f-alliance { border-color:#2f4f8f; }
