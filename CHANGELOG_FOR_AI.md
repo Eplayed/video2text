@@ -2,6 +2,16 @@
 
 更新时间：2026-09-28
 
+## 2026-09-28（三）：图文变体轴第一步——配色/字体预设表 + classic token 化（样张选型中）
+
+用户诉求：头条号图文「每次生成只有一种布局太呆板」，希望可换颜色/字体/位置但保持模板家族观感。开源调研首推 guizang-social-card-skill（AGPL-3.0，28 版式+10 主题+data-theme 换肤+预设闭集禁自定义 hex），只吸收架构不抄代码。落地拆两步：第一步配色轴+字体轴+样张选型（本轮），第二步版式轴 + tier/quest/guide 的 CSS token 化 + 生成链路接线。
+
+- **新增 `src/graphics/variants.py`（预设闭集表）**：`PALETTE_PRESETS` 3 组（gold_night 现状 / ember_forge 熔火赤金 / arcane_dusk 暮光奥术），每组＝皮肤调色板同键名覆盖（bg_top/bg_mid/bg_bot/gold/gold_hi/gold_deep/panel/panel_b/text/dim）+ 模板级 token 覆盖；`FONT_PRESETS` 2 组（serif 现状 / heavy 标题换黑体），`apply_font(css, key)` 用正则整体替换两套字体栈（`"Songti SC","Noto Serif SC"[,"STSong"],serif` 与 `"PingFang SC","Hiragino Sans GB",sans-serif`），不改模板结构。`resolve_palette(skin,palette)` / `palette_tokens(tpl,palette)` 供调用方合并进 `_build_css` 的 extra_tokens。`PALETTE_READY_TPLS={"classic"}`：配色轴第一步只接通 classic，tier/quest/guide 的 CSS 仍有大量硬编码色值（荧光绿轨/红金紫梯队），第二步再 token 化。
+- **`templates.py` `_CSS_CLASSIC` token 化（9 处）**：新增 6 个 token `__GLOW__`/`__GOLD_RGB__`/`__ON_ACCENT__`/`__PANEL_RGB__`/`__RING_HI__`/`__RING_LO__`；默认值放 `variants.CLASSIC_BASE_TOKENS`（＝token 化前的字面量），`css_engine._tpl_tokens` 不动、合并逻辑在调用方，保证零行为变化；阵营色（`.faction.*`/`.panel.f-*`）语义固定不 token 化。
+- **样张（选型产物，gitignore 区）**：临时脚本（work 区不进 git）渲染 24 张 PNG + contact sheet 到 `output/_variant_samples/`：classic 3 配色×2 字体、guide/tier/quest 各 2 字体（配色固定现状），每组合封面+内页；索引页 `http://localhost:15801/media/_variant_samples/index.html`。数据源：包 55（classic/魔兽世界-无限）、包 99921-99923（guide/tier/quest/魔兽世界-正式服）。
+- 验证：`py_compile` 过；零行为变化硬验证——classic 现状组合样张与包 55 原图 **md5 字节全等**，tier/quest/guide 仅封面报头日期随渲染日变化（模板设计行为）；目检通过（新配色无残留蓝/金块、徽章深色文字对比足够、heavy 标题已转黑体）。
+- 待用户选定后（第二步）：`toutiao.py` generate_graphics 增 palette/font 参数 + manifest variant 字段、前端选择器、tier/quest/guide token 化、版式轴。
+
 ## 2026-09-28（二）：成品图文卡片禁出现编辑向文字（「口播未给」类三层防线）
 
 用户投诉包 55 的 `output/toutiao/55/img4.png` 底部 note 出现「各职业具体数值只在视频图片里，口播未给」——成品图直接发布给读者，素材缺口说明/审核提示绝不能进图。根因三层：① LLM 卡片化文案不受约束时会把缺口写进文案；② 兜底卡片硬编码「本地模板生成，请人工核对」「详见正文」等编辑向文字；③ 整合稿纪律「没有就写无」会把「无/待定」渗进卡片字段。对应三层防线：
