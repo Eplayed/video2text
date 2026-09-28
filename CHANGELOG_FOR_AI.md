@@ -1,6 +1,17 @@
 # video2text 改动说明（给其他 AI / Agent）
 
-更新时间：2026-09-27
+更新时间：2026-09-28
+
+## 2026-09-28：公众号模板视觉升级为「信号格」（A 风格落地，仅 wechat 一套）
+
+用户从三家族样张（信号格/纸页志/瑞士网格，见 `output/wechat/_samples/_contact-sheet.jpg`）中选定 **A 信号格**，并澄清三条管线归属：① 抖音采集→头条图文＝魔兽游戏类（不动）；② **抖音采集→公众号图文＝AI 工具/AI 科普类（信号格只应用在这里）**；③ 公众号采集→头条图文＝魔兽游戏类（不动）。故本轮只改 wechat 模板视觉，头条号两套（classic/guide/tier 等）与管线/字段/接口零改动。
+
+- **设计来源**：pageweave（github.com/Liliane0310/pageweave）「Signal Grid」家族排版语法，走「设计期吸收」路线——只吸收排版设计（规则头/信号线/2×2 瓦片末格反白/阅读流带/左绿边线总结条/进度点页脚），不搬 112MB 字体与模板文件进仓库；自包含 CSS + 系统字体，色板仍由 `css_engine._tpl_tokens("wechat")` 注入（微信绿 #07c160 不变）。
+- **`src/graphics/templates.py`**：`_CSS_WECHAT` 整体重写为信号格 CSS；`_cover_html_wechat` / `_list_html_wechat` 重写 markup 匹配新类（cover：`.rhead`+`.sig`+`h1[.long]`+`.sub`+`.tiles`（末格 `.tile.sigcell`）+`.flow`（3 step 第 1 格取卡片 `timeline`「本期看点」+ 固定 `.cta`「开始阅读 →」）+`.ftr`；list：`.rhead`+`.kick`（`SECTION %02d · {icon} {section}`）+`h2[.long]`+`.sub2`+`.rows`（`.row` 眉题用 `%02d / {tag}`）+`.note`（左绿边线 + 右绿 `NOTE →` 块）+`.ftr`）。签名/转义/long 类/`__H__` 替换/dots 惯例全保留；仍零图片依赖（`hero_uri` 入参保留但不再使用，wechat.py `no_hero` 机制不变）。`_TEMPLATES["wechat"]` label 改「公众号信号格」、hint 重写（补 timeline/icon/tag 的版面落点说明）。
+- **同步改名**：`css_engine.py` 两处注释、`wechat.py` 白名单注释、`index.html` 模板下拉 label/option/`TT_TPL_PREVIEW.wechat` 三处文案，「公众号清新绿」→「公众号信号格」。
+- **预览图**：`web/static/assets/tpl_previews/wechat/img1-4.jpg` 用信号格版式重生成（封面卡补 `timeline` 字段以驱动阅读流带第 1 格）。
+- 验证：`py_compile` 过；预览图 4 页目检通过（无溢出/无占位符残留/无豆腐块；内页 3 条目时 `.rows` 垂直居中留呼吸感属预期）。
+- 注意：`output/wechat/_samples/` 下三家族样张与 `_contact-sheet.jpg` 为选型产物，在 gitignore 区，不进 git。
 
 ## 2026-09-27（三）：公众号图文「转载模式」+ wechat 清新绿模板（去游戏背景）
 
