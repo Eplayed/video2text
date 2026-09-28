@@ -2,6 +2,17 @@
 
 更新时间：2026-09-28
 
+## 2026-09-28（四）：图文变体轴第二步——选定组合接入生成链路 + 四模板配色轴全接通
+
+用户从 24 张样张中选定「**配色 1 + 字体 1**」＝`gold_night` 鎏金夜蓝 + `serif` 衬线金标（均＝现状）为默认组合。因选定组合＝现状，本轮接线的硬约束是**零行为变化**：所有新 token 默认值必须逐字等于 token 化前的硬编码字面量，默认预设的 palette/tokens 覆盖均为空字典。
+
+- **`variants.py`（补齐 + 默认组合）**：`PALETTE_READY_TPLS` 从 `{"classic"}` 扩为 `{classic,tier,quest,guide}`；补第一步遗漏的 token 缺口——tier 加 `__T_BODYTXT__`，quest 加 `__Q_BNR_HI__`/`__Q_BNR_LO__`/`__Q_BNR_TXT__`/`__Q_ICO_HI__`/`__Q_ICO_LO__`（横幅渐变与 ifact 图标底径向渐变），并在 ember_forge/arcane_dusk 两组预设里给出对应风格化覆盖值；新增 `DEFAULT_PALETTE_KEY="gold_night"` / `DEFAULT_FONT_KEY="serif"`，`resolve_keys(palette,font)` 统一做闭集校验与兜底（None/未知键回落默认），`resolve_palette(skin,palette,tpl_key=None)` 传 tpl_key 且不在 `PALETTE_READY_TPLS` 时忽略预设覆盖（未接通模板保护）。
+- **`templates.py`（tier/quest/guide 三段 CSS token 化）**：背景三段渐变、glow、边框、标题渐变、面板底、正文/次要文字、chip 文字色等全部换成 token；**身份色一律保持硬编码不 token 化**——tier 梯队红/金/紫（tpreview 四色、tbadge 渐变、tcard 左边条、tchip 背景）、quest 火焰/宝石/盾牌（#ff8c32 系）、guide 荧光绿路线轨（#7cfc00 系），换配色时这些语义装饰色不变。
+- **生成链路接线（`channels/toutiao.py`）**：`generate_graphics(...)` 新增 `palette=None, font=None` 两个入参；CSS 构建改为 `resolve_keys → resolve_palette(skin,palette,tpl_key) → extra = {**css_engine._tpl_tokens(...), **variants.palette_tokens(...)} → _build_css → apply_font(css,font_key)`；manifest 新增 `palette`/`font` 两个字段，产出包可追溯用了哪组变体。
+- **API 与前端（`web/app.py` + `web/templates/index.html`）**：`/api/toutiao/generate` 接收并透传 `palette`/`font`（各截断 20 字符，空串转 None 走默认）；头条生成弹窗在模板下拉后新增「配色 / 字体」两个闭集下拉（鎏金夜蓝/熔火赤金/暮光奥术 × 衬线金标/硬朗黑体，默认选中现状组合），确认弹窗文案同步显示所选组合。简单入口 `generateToutiaoGraphics`（只发 summary_id）不动，走后端默认。
+- 验证：4 个 `.py` 全部 `py_compile` 过；**零行为变化硬验证**——重跑样张脚本，现状组合 8/8 HTML 与改动前**字节全等**（CSS 完全一致），7/8 PNG md5 相同，唯一差异张（tier 封面）经 numpy 像素分析为 2.19% 像素变化、**最大差值仅 3/255** 且全图散布，同时该张 HTML 字节全等 → 定性为 Chromium PNG 编码量化噪声，非行为变化；Flask 重启后 200；端到端离线验证（合成整合稿 + 空 `ai_config` 走 `_fallback_cards` 本地兜底，不消耗 LLM）三用例全过：A 默认 classic 不传参 → manifest `gold_night/serif` 且无 token 残留、B `tier+ember_forge+heavy` → 换色与字体替换均生效、C `magazine+ember_forge` → 未接通模板忽略配色预设保持皮原色。
+- 仍未做：**版式轴**（换布局/换元素位置）留待后续；`minimal`/`bold`/`magazine`/`wechat` 四模板的配色轴尚未接通（传预设会被安全忽略），需要时按同一套路 token 化并加进 `PALETTE_READY_TPLS`。
+
 ## 2026-09-28（三）：图文变体轴第一步——配色/字体预设表 + classic token 化（样张选型中）
 
 用户诉求：头条号图文「每次生成只有一种布局太呆板」，希望可换颜色/字体/位置但保持模板家族观感。开源调研首推 guizang-social-card-skill（AGPL-3.0，28 版式+10 主题+data-theme 换肤+预设闭集禁自定义 hex），只吸收架构不抄代码。落地拆两步：第一步配色轴+字体轴+样张选型（本轮），第二步版式轴 + tier/quest/guide 的 CSS token 化 + 生成链路接线。
