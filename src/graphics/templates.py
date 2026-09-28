@@ -265,70 +265,75 @@ h2.long { font-size:54px; }
 .dots i.on { background:__ACCENT__; }
 """
 
-# ════════════════════════ 模板三·五：wechat 公众号清新绿（浅色卡片 · 零图片依赖） ════════════════════════
-# 美学参考 doocs/md（WTFPL）默认主题：浅纸面 + 微信绿点缀 + 白色圆角卡片。
-# 纯 CSS 渐变装饰，不依赖任何背景 jpg——公众号渠道去游戏资产的专用模板。
+# ════════════════════════ 模板三·五：wechat 公众号信号格（结构化教程流 · 零图片依赖） ════════════════════════
+# 设计期吸收自 pageweave「Signal Grid」家族排版语法（规则头/信号线/2×2 瓦片/阅读流带/总结条），
+# 仅吸收设计不搬文件：自包含 CSS + 系统字体（PingFang SC），微信绿 #07c160 色板由 css_engine 注入。
+# 纯 CSS 装饰，不依赖任何背景 jpg——公众号渠道去游戏资产的专用模板。
 _CSS_WECHAT = """
 * { margin:0; padding:0; box-sizing:border-box; }
 body { width:__W__px; font-family:"PingFang SC","Hiragino Sans GB",sans-serif;
        background:__PAPER__; color:__INK__; }
-.wrap { width:__W__px; height:__H__px; padding:72px 76px 58px; display:flex; flex-direction:column;
-        position:relative; overflow:hidden;
-        background:
-          radial-gradient(ellipse 640px 440px at 108% -6%, __ACCENT_SOFT__, transparent 60%),
-          radial-gradient(ellipse 540px 400px at -10% 104%, __ACCENT_SOFT__, transparent 55%),
-          __PAPER__; }
-.wrap::after { content:""; position:absolute; top:0; left:0; right:0; height:12px;
-               background:linear-gradient(90deg, __ACCENT__ 0%, __ACCENT_DK__ 100%); }
+.wrap { width:__W__px; height:__H__px; padding:80px 78px 56px; display:flex; flex-direction:column;
+        position:relative; overflow:hidden; background:__PAPER__; }
 .wrap-in { position:relative; z-index:1; display:flex; flex-direction:column; flex:1; min-height:0; }
-.tagrow { display:flex; justify-content:space-between; align-items:center; margin-bottom:44px; }
-.pill { background:__ACCENT__; color:#ffffff; border-radius:999px; padding:12px 32px; font-size:26px;
-        font-weight:800; letter-spacing:4px; box-shadow:0 10px 24px __ACCENT_SHADOW__; }
-.tagrow .idx { font-size:26px; color:__MDIM__; letter-spacing:4px; font-weight:700; }
-h1 { font-size:92px; line-height:1.2; font-weight:900; color:__INK__;
-     text-wrap:balance; word-break:keep-all; }
-h1.long { font-size:72px; }
-.hl-strip { width:132px; height:14px; border-radius:7px; background:__ACCENT__; margin:30px 0 24px; }
-.sub { font-size:30px; color:__MDIM__; line-height:1.6; letter-spacing:1px; }
-.photo { margin-top:40px; border-radius:20px; overflow:hidden; flex:0 0 30%;
-         box-shadow:0 24px 60px rgba(31,35,41,.12); }
-.photo img { width:100%; height:100%; object-fit:cover; display:block; }
-.hooks { margin-top:44px; flex:1; display:flex; flex-direction:column; gap:24px; justify-content:center; }
-.hk { display:flex; align-items:flex-start; gap:24px; background:__CARD__; border-radius:18px;
-      padding:26px 30px; box-shadow:0 10px 28px rgba(31,35,41,.06); }
-.hk .dot { flex-shrink:0; width:44px; height:44px; border-radius:50%; background:__ACCENT__;
-           color:#ffffff; display:flex; align-items:center; justify-content:center;
-           font-size:26px; font-weight:900; margin-top:2px; }
-.hk .bd { flex:1; min-width:0; }
-.hk .t { font-size:33px; font-weight:800; color:__INK__; margin-bottom:6px; }
-.hk .d { font-size:26px; color:__MDIM__; line-height:1.5; }
+/* 规则头：细线 + 小字距双栏眉题 */
+.rhead { display:flex; justify-content:space-between; align-items:baseline;
+         font-size:22px; letter-spacing:.18em; color:__MDIM__; font-weight:600;
+         padding-bottom:20px; border-bottom:1px solid __LINE__; }
+.rhead b { color:__INK__; font-weight:700; }
+.sig { width:64px; height:10px; background:__ACCENT__; margin-top:30px; }
+h1 { margin-top:28px; font-size:88px; line-height:1.18; font-weight:800; color:__INK__;
+     letter-spacing:.01em; text-wrap:balance; word-break:keep-all; }
+h1.long { font-size:68px; }
+.sub { margin-top:22px; font-size:30px; color:__MDIM__; line-height:1.6; letter-spacing:.02em; }
+/* 2×2 要点瓦片：末格信号绿反白 */
+.tiles { margin-top:40px; flex:1; min-height:0; display:grid; grid-template-columns:1fr 1fr;
+         grid-auto-rows:1fr; gap:20px; }
+.tile { background:__CARD__; padding:28px 30px 30px; border-radius:4px; }
+.tile .lb { font-size:20px; letter-spacing:.16em; color:__MDIM__; font-weight:700; }
+.tile .t { margin:12px 0 8px; font-size:33px; font-weight:800; color:__INK__; }
+.tile .d { font-size:24px; line-height:1.55; color:__MDIM__; }
+.tile.sigcell { background:__ACCENT__; }
+.tile.sigcell .lb { color:rgba(255,255,255,.82); }
+.tile.sigcell .t { color:#ffffff; }
+.tile.sigcell .d { color:rgba(255,255,255,.92); }
+/* 阅读流带：三步骤 + 绿色行动格 */
+.flow { margin-top:36px; padding-top:26px; border-top:1px solid __LINE__; }
+.flow .fh { display:flex; justify-content:space-between; align-items:baseline; margin-bottom:18px; }
+.flow .fh .ft { font-size:30px; font-weight:800; color:__INK__; }
+.flow .fh .fr { font-size:19px; letter-spacing:.14em; color:__ACCENT_DK__; font-weight:700; }
+.flow .track { display:grid; grid-template-columns:1fr 1fr 1fr 200px;
+               border:1px solid __LINE__; background:__CARD__; }
+.flow .step { padding:20px 22px; border-right:1px solid __LINE__; }
+.flow .step small { display:block; font-size:18px; letter-spacing:.1em; color:__MDIM__; font-weight:700; }
+.flow .step b { display:block; margin-top:14px; font-size:23px; line-height:1.4;
+                font-weight:600; color:__INK__; }
+.flow .cta { background:__ACCENT__; color:#ffffff; display:flex; align-items:center;
+             justify-content:center; font-size:24px; font-weight:800; letter-spacing:.06em; }
+/* 页脚：品牌 / 进度点 / 页码 */
+.ftr { margin-top:30px; display:flex; justify-content:space-between; align-items:center;
+       font-size:20px; letter-spacing:.14em; color:__MDIM__; font-weight:600; }
+.dots { display:flex; gap:10px; align-items:center; }
+.dots i { width:12px; height:12px; border-radius:50%; background:__LINE__; display:block; }
+.dots i.on { background:__ACCENT__; }
 /* 内页 */
-.lhead { margin-bottom:28px; }
-.lhead .sec { display:flex; align-items:center; gap:20px; margin-bottom:22px; }
-.lhead .sec .n { background:__ACCENT__; color:#ffffff; font-size:26px; font-weight:900;
-                 letter-spacing:3px; border-radius:8px; padding:8px 20px; }
-.lhead .sec .ln { flex:1; height:2px; background:__LINE__; }
-h2 { font-size:64px; font-weight:900; color:__INK__;
+.kick { margin-top:34px; font-size:21px; letter-spacing:.16em; color:__ACCENT_DK__; font-weight:800; }
+h2 { margin-top:14px; font-size:66px; line-height:1.16; font-weight:800; color:__INK__;
      text-wrap:balance; word-break:keep-all; }
 h2.long { font-size:52px; }
-.lhead .sub2 { margin-top:14px; font-size:28px; color:__MDIM__; }
-.rows { flex:1; display:flex; flex-direction:column; gap:22px; justify-content:center; }
-.row { display:flex; gap:26px; background:__CARD__; border-radius:18px; padding:28px 30px;
-       align-items:flex-start; box-shadow:0 10px 28px rgba(31,35,41,.06); }
-.row .no { font-size:40px; font-weight:900; color:__ACCENT__; width:72px; flex-shrink:0; line-height:1.1; }
-.row .bd { flex:1; min-width:0; }
-.row .pt { font-size:33px; font-weight:800; color:__INK__; margin-bottom:8px;
-           display:flex; align-items:center; gap:16px; flex-wrap:wrap; }
-.row .pd { font-size:26px; color:__MDIM__; line-height:1.55; }
-.ochip { font-size:22px; font-weight:700; color:__ACCENT_DK__; background:__ACCENT_SOFT__;
-         border-radius:999px; padding:4px 16px; letter-spacing:2px; }
-.callout { margin-top:24px; background:__CARD__; border-left:10px solid __ACCENT__;
-           border-radius:14px; padding:26px 30px; box-shadow:0 10px 28px rgba(31,35,41,.06); }
-.callout .nt { font-size:25px; font-weight:800; color:__INK__; letter-spacing:4px; margin-bottom:10px; }
-.callout .nd { font-size:26px; color:__MDIM__; line-height:1.6; }
-.dots { margin-top:32px; display:flex; justify-content:center; gap:14px; }
-.dots i { width:14px; height:14px; border-radius:50%; background:__LINE__; }
-.dots i.on { background:__ACCENT__; }
+.sub2 { margin-top:14px; font-size:28px; color:__MDIM__; }
+.rows { margin-top:34px; flex:1; min-height:0; display:flex; flex-direction:column;
+        gap:18px; justify-content:center; }
+.row { background:__CARD__; border-radius:4px; padding:26px 30px; }
+.row .lb { font-size:20px; letter-spacing:.14em; color:__ACCENT_DK__; font-weight:800; }
+.row .t { margin:10px 0 6px; font-size:33px; font-weight:800; color:__INK__; }
+.row .d { font-size:25px; line-height:1.55; color:__MDIM__; }
+.note { margin-top:24px; display:flex; gap:22px; align-items:stretch; }
+.note .bd { flex:1; border-left:6px solid __ACCENT__; padding:6px 0 6px 26px; }
+.note .nt { font-size:21px; letter-spacing:.14em; color:__ACCENT_DK__; font-weight:800; margin-bottom:10px; }
+.note .nd { font-size:26px; line-height:1.6; color:__INK__; }
+.note .cta { flex-shrink:0; width:190px; background:__ACCENT__; color:#ffffff; border-radius:4px;
+             display:flex; align-items:center; justify-content:center; font-size:24px; font-weight:800; }
 """
 
 # ════════════════════════ 模板四：bold 大字报（高对比冲击） ════════════════════════
@@ -848,68 +853,89 @@ def _list_html_minimal(card, css, hero_uri, ctx):
     )
 
 
-# ── wechat 公众号清新绿 渲染（photo 块可选：无图时纯 CSS 装饰，永不破图） ──
+# ── wechat 公众号信号格 渲染（纯 CSS 结构化版面，零图片依赖，永不破图） ──
+# 封面：规则头 → 信号线 → 大标题 → 2×2 要点瓦片（末格绿反白）→ 阅读流带 → 页脚
 def _cover_html_wechat(card, css, hero_uri, ctx):
     hooks = (card.get("hooks") or [])[:4]
-    rows = "".join(
-        '<div class="hk"><div class="dot">%d</div><div class="bd">'
-        '<div class="t">%s</div><div class="d">%s</div></div></div>'
-        % (i + 1, _esc(h.get("t", "")), _esc(h.get("d", "")))
+    tiles = "".join(
+        '<div class="tile%s"><div class="lb">%02d / POINT</div>'
+        '<div class="t">%s</div><div class="d">%s</div></div>'
+        % (" sigcell" if i == len(hooks) - 1 else "", i + 1,
+           _esc(h.get("t", "")), _esc(h.get("d", "")))
         for i, h in enumerate(hooks)
+    )
+    # 阅读流带：第 1 格用卡片自带的「本期看点」一句话，后两格为固定阅读引导
+    claim = str(card.get("timeline") or "")[:14] or "先看结论"
+    steps = "".join(
+        '<div class="step"><small>%s</small><b>%s</b></div>' % (a, _esc(b))
+        for a, b in (("01 / 看点", claim),
+                     ("02 / 拆解", "逐页看工具与实操"),
+                     ("03 / 上手", "照步骤直接复现"))
     )
     sub = card.get("subtitle") or card.get("timeline_note") or ""
     sub_html = ('<div class="sub">%s</div>' % _esc(sub)) if sub else ""
-    photo_html = ('<div class="photo"><img src="%s"></div>' % hero_uri) if hero_uri else ""
-    return """%s<div class="wrap" style="height:__H__px">
-  <div class="wrap-in">
-  <div class="tagrow"><div class="pill">%s</div><div class="idx">01 / %02d</div></div>
-  <h1 class="%s">%s</h1>
-  <div class="hl-strip"></div>
-  %s
-  %s
-  <div class="hooks">%s</div>
-  </div>
-</div></body></html>""".replace("__H__", str(ctx["canvas_h"])) % (
-        _page_open(css),
-        _esc(ctx["brand"] or "整合速览"), ctx["total"],
-        "long" if len(str(card.get("title") or "")) > 12 else "", _esc(card.get("title", "")),
-        sub_html, photo_html, rows,
-    )
-
-
-def _list_html_wechat(card, css, hero_uri, ctx):
-    items = card.get("items") or []
-    rows = "".join(
-        '<div class="row"><div class="no">%02d</div><div class="bd">'
-        '<div class="pt">%s%s</div><div class="pd">%s</div></div></div>'
-        % (i + 1, _esc(it.get("name", "")),
-           ('<span class="ochip">%s</span>' % _esc(it.get("tag", ""))) if it.get("tag") else "",
-           _esc(it.get("desc", "")))
-        for i, it in enumerate(items)
-    )
-    note = card.get("note") or {}
-    note_html = (
-        '<div class="callout"><div class="nt">%s</div><div class="nd">%s</div></div>'
-        % (_esc(note.get("title", "提醒")), _esc(note.get("text", "")))
-    ) if note.get("text") else ""
-    sub_html = ('<div class="sub2">%s</div>' % _esc(card.get("subtitle", ""))) if card.get("subtitle") else ""
     dots = "".join('<i class="%s"></i>' % ("on" if (i + 1) == ctx["idx"] else "")
                    for i in range(ctx["total"]))
     return """%s<div class="wrap" style="height:__H__px">
   <div class="wrap-in">
-  <div class="tagrow"><div class="pill">%s</div><div class="idx">%02d / %02d</div></div>
-  <div class="lhead"><div class="sec"><div class="n">%s</div><div class="ln"></div></div>
-    <h2 class="%s">%s</h2>%s</div>
-  <div class="rows">%s</div>
+  <div class="rhead"><b>%s</b><span>COVER · 信号格 SIGNAL GRID</span></div>
+  <div class="sig"></div>
+  <h1 class="%s">%s</h1>
   %s
-  <div class="dots">%s</div>
+  <div class="tiles">%s</div>
+  <div class="flow">
+    <div class="fh"><div class="ft">这一辑怎么读</div><div class="fr">READING FLOW</div></div>
+    <div class="track">%s<div class="cta">开始阅读 →</div></div>
+  </div>
+  <div class="ftr"><span>CLAIM · PROOF · ACTION</span><div class="dots">%s</div>
+    <span>01 / %02d</span></div>
   </div>
 </div></body></html>""".replace("__H__", str(ctx["canvas_h"])) % (
         _page_open(css),
-        _esc(ctx["brand"] or "整合速览"), ctx["idx"], ctx["total"],
-        _esc(card.get("section", "要点")),
+        _esc(ctx["brand"] or "整合速览"),
+        "long" if len(str(card.get("title") or "")) > 12 else "", _esc(card.get("title", "")),
+        sub_html, tiles, steps, dots, ctx["total"],
+    )
+
+
+# 内页：规则头 → 栏目眉题 → 大标题 → 条目卡 → 总结条（左绿边线 + 右绿行动块）→ 页脚
+def _list_html_wechat(card, css, hero_uri, ctx):
+    items = card.get("items") or []
+    rows = "".join(
+        '<div class="row"><div class="lb">%02d / %s</div>'
+        '<div class="t">%s</div><div class="d">%s</div></div>'
+        % (i + 1, _esc(it.get("tag") or "要点"),
+           _esc(it.get("name", "")), _esc(it.get("desc", "")))
+        for i, it in enumerate(items)
+    )
+    note = card.get("note") or {}
+    note_html = (
+        '<div class="note"><div class="bd"><div class="nt">%s</div>'
+        '<div class="nd">%s</div></div><div class="cta">NOTE →</div></div>'
+        % (_esc(note.get("title", "提醒")), _esc(note.get("text", "")))
+    ) if note.get("text") else ""
+    sub_html = ('<div class="sub2">%s</div>' % _esc(card.get("subtitle", ""))) if card.get("subtitle") else ""
+    icon = str(card.get("icon") or "").strip()[:1]
+    section = _esc(card.get("section", "要点"))
+    kick = "SECTION %02d · %s%s" % (ctx["idx"], (icon + " ") if icon else "", section)
+    dots = "".join('<i class="%s"></i>' % ("on" if (i + 1) == ctx["idx"] else "")
+                   for i in range(ctx["total"]))
+    return """%s<div class="wrap" style="height:__H__px">
+  <div class="wrap-in">
+  <div class="rhead"><b>%s</b><span>%s · %02d / %02d</span></div>
+  <div class="kick">%s</div>
+  <h2 class="%s">%s</h2>%s
+  <div class="rows">%s</div>
+  %s
+  <div class="ftr"><span>CLAIM · PROOF · ACTION</span><div class="dots">%s</div>
+    <span>%02d / %02d</span></div>
+  </div>
+</div></body></html>""".replace("__H__", str(ctx["canvas_h"])) % (
+        _page_open(css),
+        _esc(ctx["brand"] or "整合速览"), section, ctx["idx"], ctx["total"],
+        kick,
         "long" if len(str(card.get("title") or "")) > 12 else "", _esc(card.get("title", "")), sub_html,
-        rows, note_html, dots,
+        rows, note_html, dots, ctx["idx"], ctx["total"],
     )
 
 
@@ -1179,12 +1205,15 @@ _TEMPLATES = {
     "minimal": {"label": "极简清单", "css": _CSS_MINIMAL,
                 "cover": _cover_html_minimal, "list": _list_html_minimal,
                 "hint": "视觉模板：极简清单——浅色纸面、粗黑标题、勾选清单，条目干净利落，desc 控制在 18 字内短句。"},
-    "wechat": {"label": "公众号清新绿", "css": _CSS_WECHAT,
+    "wechat": {"label": "公众号信号格", "css": _CSS_WECHAT,
                "cover": _cover_html_wechat, "list": _list_html_wechat,
-               "hint": "视觉模板：公众号清新绿——浅纸面 + 微信绿点缀 + 白色圆角卡片，纯 CSS 装饰零背景图依赖，"
-                       "适合把他人已总结好的内容整理成图文（无需真实截图）。封面 section 写栏目名，"
-                       "hooks 的 t 为要点名词短语、d 一句讲完；列表卡 items 的 name=工具或要点名，"
-                       "tag=可选标签（如「免费」「强推」），desc=一句话点评，note 写使用提醒。"},
+               "hint": "视觉模板：公众号信号格——浅纸面 + 微信绿信号线 + 2×2 要点瓦片（末格绿反白）"
+                       "+ 阅读流带 + 左绿边线总结条，纯 CSS 装饰零背景图依赖，"
+                       "专为「抖音采集的 AI 工具/AI 科普内容 → 公众号图文」设计（无需真实截图）。"
+                       "封面 hooks 3-4 条：t 为要点名词短语（≤14字）、d 一句讲完（≤20字），"
+                       "timeline 填本期看点一句话；列表卡 items 的 name=工具或要点名，"
+                       "tag=可选标签（如「免费」「强推」，会显示在条目眉题），desc=一句话点评，"
+                       "icon 单字（如 测/坑/省/比，显示在栏目前），note 写使用提醒。"},
     "bold": {"label": "大字报", "css": _CSS_BOLD,
              "cover": _cover_html_bold, "list": _list_html_bold,
              "hint": "视觉模板：大字报——高对比、超大字号、冲击力拉满，标题多用数字对比（如「122 对 300」）。"},

@@ -26,7 +26,7 @@ ROOT = Path(__file__).resolve().parents[3]
 OUTPUT_DIR = ROOT / "output" / "wechat"
 CANVAS_W, CANVAS_H = 1080, 1440  # 3:4，微头条试跑已验证同机制跑得通
 
-# 模板白名单（wechat 清新绿为默认：零背景图、与游戏资产解耦；去游戏皮味，quest/tier/guide/bold 不进）
+# 模板白名单（wechat 信号格为默认：零背景图、与游戏资产解耦；去游戏皮味，quest/tier/guide/bold 不进）
 TEMPLATE_WHITELIST = ["wechat", "minimal", "classic", "magazine"]
 
 CARD_TARGET_MIN, CARD_TARGET_MAX = 6, 8   # 目标张数
