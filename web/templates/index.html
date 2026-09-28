@@ -924,6 +924,20 @@ textarea{resize:vertical;min-height:84px}
             </div>
           </div>
         </div>
+        <div class="tt-gen-field">
+          <label>配色 / 字体 <small>（预设闭集：经典卡片/梯度榜/任务面板/攻略图解随配色换肤，其余模板保持皮原色；字体对全部模板生效）</small></label>
+          <div style="display:flex;gap:10px">
+            <select id="tt-gen-palette" style="flex:1">
+              <option value="gold_night" selected>鎏金夜蓝（现状默认）</option>
+              <option value="ember_forge">熔火赤金</option>
+              <option value="arcane_dusk">暮光奥术</option>
+            </select>
+            <select id="tt-gen-font" style="flex:1">
+              <option value="serif" selected>衬线金标（现状默认）</option>
+              <option value="heavy">硬朗黑体</option>
+            </select>
+          </div>
+        </div>
         <div class="tt-gen-field" id="tt-guide-upload-field" style="display:none">
           <label>攻略图上传 <small>（第 1 张做封面，其余按顺序进内页；不上传则读 output/toutiao/&lt;题材&gt;攻略图/ 文件夹）</small></label>
           <div class="tt-guide-drop" onclick="document.getElementById('tt-guide-files').click()">📎 点击选择攻略图（最多 10 张 · jpg / png / webp）</div>
@@ -1790,6 +1804,12 @@ async function confirmToutiaoGen() {
   const tplEl = document.getElementById('tt-gen-tpl');
   const tpl = tplEl.value;
   const tplLabel = tplEl.selectedOptions[0].textContent.split(' ')[0];
+  const palEl = document.getElementById('tt-gen-palette');
+  const palette = palEl.value;
+  const palLabel = palEl.selectedOptions[0].textContent;
+  const fontEl = document.getElementById('tt-gen-font');
+  const font = fontEl.value;
+  const fontLabel = fontEl.selectedOptions[0].textContent;
   let guideToken = null;
   if (tpl === 'guide' && _ttGuideFiles.length) {
     try { guideToken = await ttGuideUpload(); }
@@ -1797,12 +1817,12 @@ async function confirmToutiaoGen() {
   }
   closeToutiaoGenDialog();
   const guideLine = guideToken ? `\n攻略图：${_ttGuideFiles.length} 张（已上传）` : '';
-  if (!confirm(`生成头条图文？\n标题：${title || '（按整合稿标题）'}\n模板：${tplLabel}\n题材：${theme || '自动'}\n皮的资产名：${skin}${guideLine}\n已有产物会被覆盖。`)) return;
+  if (!confirm(`生成头条图文？\n标题：${title || '（按整合稿标题）'}\n模板：${tplLabel}\n配色：${palLabel}\n字体：${fontLabel}\n题材：${theme || '自动'}\n皮的资产名：${skin}${guideLine}\n已有产物会被覆盖。`)) return;
   setStatus('running', '正在生成头条图文...');
   try {
     const resp = await fetch('/api/toutiao/generate', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({summary_id: id, theme, skin, title, template: tpl, guide_token: guideToken})
+      body: JSON.stringify({summary_id: id, theme, skin, title, template: tpl, guide_token: guideToken, palette, font})
     }).then(r=>r.json());
     if (resp.error) { setStatus('error', resp.error); return; }
     pollToutiaoStatus(id);
