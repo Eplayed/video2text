@@ -16,7 +16,7 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 
-from .. import skins, css_engine, templates, renderer, package
+from .. import skins, css_engine, templates, renderer, package, ir
 from .base import ChannelAdapter
 # 借用头条线的 JSON 容错解析与【标签】切段（两者均渠道无关，Phase 3 视情上移内核）
 from .toutiao import _parse_json, _split_tags
@@ -80,6 +80,11 @@ __SOURCE_BLOCK__
 - bg 只允许 "neutral"；禁止输出 faction/faction_text 等游戏阵营字段
 - 每张卡内容留呼吸感：条目宁少勿多，desc 一句话讲完，超长会被截断
 - 所有文字精简口语化，一律纯文本，禁用 markdown 符号（* # ` > 等）
+- 成品文案纪律（重要）：卡片文字是直接发布给读者看的成品，不是给编辑看的审校稿。
+  严禁出现素材缺口说明与审核提示，例如「口播未给」「视频里没讲」「素材未提」「整合稿没写」
+  「ASR/转写」「待核实」「请人工核对」「本地模板生成」「详见正文」「无」这类字样。
+  素材信息不足时，直接少写一条或把该字段留空字符串，绝不写占位说明来交代缺口。
+  需要提醒读者时，只能写读者视角的话（如「工具功能与价格可能调整，以官方最新说明为准」）。
 - copy_text：图片消息配文，纯文本，结构 = 钩子开头（1-2句）+ 要点 4-6 条（每条一行）+ 收尾引导（1句，可引导关键词回复）+ 空行 + 「__COMPLIANCE__」，全文 200-320 字
 - digest：公众号摘要（≤120字），单独成段可读懂，不写「见图」类字样
 - keyword_reply：关注后自动回复引导语（≤30字，如「回复 工具清单 领取完整实测列表」；素材里没有可推关键词就留空字符串）
@@ -186,7 +191,8 @@ def _items_from_lines(lines, limit=5):
         else:
             name, desc = line[:8], line[:34]
         items.append({"name": name, "desc": desc, "tag": ""})
-    return items or [{"name": "详见", "desc": "整合稿正文", "tag": ""}]
+    # 兜底也不能写「详见整合稿正文」这类编辑向字样：图是直接给读者看的
+    return items or [{"name": "说明", "desc": "这部分内容较少，可看其他几张配图", "tag": ""}]
 
 
 def _fallback_cards(summary, author_draft):
@@ -211,20 +217,20 @@ def _fallback_cards(summary, author_draft):
     hook_src = arguments or draft_lines or lead
     hooks = [{"t": "核心论点", "d": re.sub(r"^[-*#>\s]+", "", h)[:20]} for h in hook_src[:3]]
     if not hooks:
-        hooks = [{"t": "详见", "d": "整合稿正文"}]
+        hooks = [{"t": "看点", "d": "详见后面几张配图"}]
 
     cover_subtitle = "AI 辅助整理 · 内容源自公开分享" if is_repost else "作者实测 · AI 辅助整理"
     # 第 5-6 张：亲测模式=作者亲历+金句风险；转载模式无底稿，改为风险核查+金句摘录（均有整合稿来源）
     if is_repost:
         card5 = {"kind": "list", "title": "风险核查", "section": "风险", "icon": "险",
                  "items": _items_from_lines(risks),
-                 "note": {"title": "提醒", "text": "内容整理自公开分享，本地模板兜底生成，发布前请人工核对数值与结论。"}}
+                 "note": {"title": "提醒", "text": "内容整理自公开分享，工具功能与价格可能调整，以官方最新说明为准。"}}
         card6 = {"kind": "list", "title": "金句摘录", "section": "金句", "icon": "句",
                  "items": _items_from_lines(quotes)}
     else:
         card5 = {"kind": "list", "title": "作者亲历", "section": "亲历", "icon": "真",
                  "items": _items_from_lines(draft_lines),
-                 "note": {"title": "提醒", "text": "本地模板兜底生成，发布前请人工核对数值与结论。"}}
+                 "note": {"title": "提醒", "text": "实测结论基于当时版本与环境，后续更新可能有变化。"}}
         card6 = {"kind": "list", "title": "金句与风险", "section": "金句", "icon": "句",
                  "items": _items_from_lines(quotes + risks)}
 
@@ -232,7 +238,7 @@ def _fallback_cards(summary, author_draft):
         {"kind": "cover", "bg": "neutral", "badge": "公众号", "title": title,
          "subtitle": cover_subtitle,
          "timeline_label": "本期看点", "timeline": (lead[0][:22] if lead else title),
-         "timeline_note": "本地模板生成，请人工核对",
+         "timeline_note": "",
          "hooks": hooks},
         {"kind": "list", "title": "核心论点", "section": "论点", "icon": "论",
          "items": _items_from_lines(arguments)},
@@ -287,6 +293,9 @@ def lint_package(manifest, out_dir):
         issues.append("warn: digest 摘要缺失（发布页需要 120 字摘要段）")
     elif len(digest) > DIGEST_MAX:
         issues.append("warn: digest %d 字，超 %d 字上限" % (len(digest), DIGEST_MAX))
+    # 兜底提醒只进 lint 面板（给编辑看），不再写进卡片图（给读者看）
+    if manifest.get("model") == "local-template":
+        issues.append("warn: 本次为本地模板兜底生成（LLM 不可用），发布前请人工核对数值与结论")
     # 转载模式（无作者真实底稿）：内容源自公开分享、无需亲测截图，跳过截图/底稿字数铁律
     is_repost = not (manifest.get("author_draft") or "").strip()
     if not is_repost:
@@ -356,6 +365,8 @@ def generate_graphics(summary, ai_config, author_draft="", progress_cb=None,
         data = _fallback_cards(summary, draft)
 
     cards = data.get("cards") or []
+    # 渲染前清洗：剔除「素材未提」「请人工核对」等编辑向元语言（成品图直接面向读者）
+    cards = ir.sanitize_cards(cards)
     if len(cards) > MAX_IMAGES:
         cards = cards[:MAX_IMAGES]  # 平台硬上限截断，lint 会再报
     if skin_uri:

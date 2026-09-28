@@ -13,7 +13,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from .. import skins, css_engine, templates, renderer, package
+from .. import skins, css_engine, templates, renderer, package, ir
 from .base import ChannelAdapter
 
 # ── 头条渠道目录 / 画布常量（原 toutiao_graphics.py L22-26）──
@@ -38,6 +38,11 @@ __TEMPLATE_LINE__
 - 阵营主题背景：整卡内容阵营专属时 card 加 bg 字段（"alliance"=联盟蓝金大教堂 / "horde"=部落暗红峡谷）+ faction 字段 + faction_text（如"联盟专属"）；混合阵营内容不要设 bg，用条目级 faction 区分
 - 每张卡内容要留呼吸感：条目宁少勿多，desc 一句话讲完，超长会被截断
 - 所有文字精简口语化；只能用整合稿里的事实，严禁编造
+- 成品文案纪律（重要）：卡片文字是直接发布给读者看的成品，不是给编辑看的审校稿。
+  严禁出现素材缺口说明与审核提示，例如「口播未给」「视频里没讲」「素材未提」「整合稿没写」
+  「ASR/转写」「待核实」「请人工核对」「本地模板生成」「详见正文」「无」这类字样。
+  整合稿信息不足时，直接少写一条或把该字段留空字符串，绝不写占位说明来交代缺口。
+  需要提醒读者时，只能写读者视角的话（如「测试服数值随时可能调整，以正式服为准」）。
 - copy_text：微头条文案，结构 = 钩子开头（1-2句）+ 📌 要点 4 条（每条一行，冒号+短解释）+ 收尾引导（1句）+ 空行 + 「信息来源：多位UP主公开视频内容整理（口径截至{{DATE}}，可能有调整）」+「本文图为AI辅助生成，发布时勾选AI辅助声明。」，全文 200-320 字
 
 输出 JSON（cards 数组 4 个对象，第一个 kind 为 cover，其余为 list；copy_text 为字符串）：
@@ -155,7 +160,7 @@ def _fallback_cards(summary):
     impact = tags.get("对你的影响", "")[:400]
     action = tags.get("行动建议", "")[:400]
     timeline = tags.get("时间线", "").strip().splitlines()
-    tl_text = timeline[0][:22] if timeline else "详见正文"
+    tl_text = timeline[0][:22] if timeline else ""
 
     def _rows(text, limit=5):
         rows = []
@@ -165,11 +170,12 @@ def _fallback_cards(summary):
             name = seg[0][:8] if len(seg) > 1 else "要点"
             desc = (seg[1] if len(seg) > 1 else line)[:34]
             rows.append({"name": name, "desc": desc, "tag": ""})
-        return rows or [{"name": "详见", "desc": "整理稿正文", "tag": ""}]
+        # 兜底也不能写「详见整合稿正文」这类编辑向字样：图是直接给读者看的
+        return rows or [{"name": "说明", "desc": "这部分内容较少，可看其他几张配图", "tag": ""}]
 
     cards = [
         {"kind": "cover", "bg": "neutral", "badge": "整合", "title": title, "subtitle": "多源信息 · 决策化整合",
-         "timeline_label": "关键时间线", "timeline": tl_text, "timeline_note": "本地模板生成，请人工核对",
+         "timeline_label": "关键时间线", "timeline": tl_text, "timeline_note": "",
          "hooks": [{"t": "变化对比", "d": "见第 2 张"}, {"t": "对你的影响", "d": "见第 3 张"},
                    {"t": "行动建议", "d": "见第 4 张"}]},
         {"kind": "list", "title": "核心变化对比", "section": "变化", "icon": "变",
@@ -177,7 +183,8 @@ def _fallback_cards(summary):
         {"kind": "list", "title": "对你的影响", "section": "影响", "icon": "响",
          "items": _rows(impact)},
         {"kind": "list", "title": "行动建议", "section": "行动", "icon": "行",
-         "items": _rows(action), "note": {"title": "提醒", "text": "本地模板兜底生成，发布前请人工核对数值。"}},
+         "items": _rows(action),
+         "note": {"title": "提醒", "text": "数值与机制可能随版本调整，以官方最新公告为准。"}},
     ]
     copy_text = (
         "%s\n\n多源信息决策化整合，4 张卡片看懂变化、影响与行动建议：\n\n📌 变化对比：见配图 2\n"
@@ -233,6 +240,8 @@ def generate_graphics(summary, ai_config, progress_cb=None, theme="", skin="wow"
         data = _fallback_cards(summary)
 
     cards = data.get("cards") or []
+    # 渲染前清洗：剔除「口播未给」「请人工核对」等编辑向元语言（成品图直接面向读者）
+    cards = ir.sanitize_cards(cards)
     if skin_uri:
         for card in cards:
             card["bg"] = "skin"
