@@ -13,7 +13,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from .. import skins, css_engine, templates, renderer, package, ir
+from .. import skins, css_engine, templates, renderer, package, ir, variants
 from .base import ChannelAdapter
 
 # ── 头条渠道目录 / 画布常量（原 toutiao_graphics.py L22-26）──
@@ -194,7 +194,7 @@ def _fallback_cards(summary):
     return {"cards": cards, "copy_text": copy_text}
 
 
-def generate_graphics(summary, ai_config, progress_cb=None, theme="", skin="wow", title="", template="classic", guide_images=None):
+def generate_graphics(summary, ai_config, progress_cb=None, theme="", skin="wow", title="", template="classic", guide_images=None, palette=None, font=None):
     """主入口：整合稿 → manifest dict（图片落盘 output/toutiao/<summary_id>/）。
 
     theme:     str 题材/游戏名，注入 LLM 卡片化 + 选插画素材文件夹
@@ -203,6 +203,8 @@ def generate_graphics(summary, ai_config, progress_cb=None, theme="", skin="wow"
     template:  str 模板——classic 经典卡片 / magazine 杂志大片 / minimal 极简清单 / bold 大字报，
                决定整体版式/字体/装饰（背景、布局、文字大小样式）
     guide_images: list 攻略图解模板的上传攻略图路径（弹窗上传，优先于素材文件夹）
+    palette:   str 配色预设键（variants.PALETTE_KEYS 闭集）；None/未知回落默认 gold_night（现状）
+    font:      str 字体预设键（variants.FONT_KEYS 闭集）；None/未知回落默认 serif（现状）
     """
     tpl_key = template if template in templates._TEMPLATES else "classic"
     tpl = templates._TEMPLATES[tpl_key]
@@ -218,8 +220,12 @@ def generate_graphics(summary, ai_config, progress_cb=None, theme="", skin="wow"
             progress_cb(msg)
 
     skin_key, skin_uri = skins.resolve_skin(skin, _ASSETS_DIR)
-    palette = skins._SKIN_PALETTES.get(skin_key) or skins._SKIN_PALETTES[skins._PALETTE_DEFAULT]
-    css = css_engine._build_css(tpl["css"], palette, skin_uri, _ASSETS_DIR, css_engine._tpl_tokens(tpl_key, skin_key), CANVAS_W, CANVAS_H)
+    palette_key, font_key = variants.resolve_keys(palette, font)
+    palette = variants.resolve_palette(skin_key, palette_key, tpl_key)
+    extra_tokens = dict(css_engine._tpl_tokens(tpl_key, skin_key))
+    extra_tokens.update(variants.palette_tokens(tpl_key, palette_key))
+    css = css_engine._build_css(tpl["css"], palette, skin_uri, _ASSETS_DIR, extra_tokens, CANVAS_W, CANVAS_H)
+    css = variants.apply_font(css, font_key)
     if tpl_key == "guide":
         if guide_images:
             theme_imgs = [Path(p) for p in guide_images]
@@ -285,6 +291,8 @@ def generate_graphics(summary, ai_config, progress_cb=None, theme="", skin="wow"
         "theme": (theme or "").strip(),
         "skin": skin_key,
         "template": tpl_key,
+        "palette": palette_key,
+        "font": font_key,
         "canvas": "%dx%d" % (CANVAS_W, CANVAS_H),
         "summary_type": summary.get("summary_type", ""),
         "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),

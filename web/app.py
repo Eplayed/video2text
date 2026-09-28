@@ -1317,6 +1317,8 @@ def api_toutiao_generate():
     skin = str(data.get("skin") or "wow").strip()[:30]  # 图的皮（背景资产）
     title = str(data.get("title") or "").strip()[:60]  # 图文标题（弹框可改，空则用整理稿标题）
     template = str(data.get("template") or "classic").strip()[:20]  # 图文模板（版式/字体风格）
+    palette = str(data.get("palette") or "").strip()[:20]  # 配色预设键（闭集，空/未知回落默认 gold_night）
+    font = str(data.get("font") or "").strip()[:20]        # 字体预设键（闭集，空/未知回落默认 serif）
     guide_imgs = []  # 攻略图解模板：弹窗上传的攻略图（优先于素材文件夹）
     guide_token = str(data.get("guide_token") or "").strip()
     if guide_token and re.fullmatch(r"[0-9a-f]{12}", guide_token):
@@ -1347,7 +1349,8 @@ def api_toutiao_generate():
             _tt_task_status["progress"] = "LLM 卡片化整合稿..."
             package = toutiao_graphics.generate_graphics(summary, _ai_config(), progress_cb=cb,
                                                           theme=theme, skin=skin, title=title,
-                                                          template=template, guide_images=guide_imgs)
+                                                          template=template, guide_images=guide_imgs,
+                                                          palette=palette or None, font=font or None)
             _tt_task_status["package"] = {"id": package["id"], "title": package["title"], "images": len(package["images"])}
             _tt_task_status["progress"] = "✅ 已生成 %d 张信息图，可复制文案发布" % len(package["images"])
         except Exception:
