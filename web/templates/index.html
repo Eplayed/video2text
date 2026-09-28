@@ -993,9 +993,9 @@ textarea{resize:vertical;min-height:84px}
           <input id="wx-gen-title" placeholder="图文标题">
         </div>
         <div class="tt-gen-field">
-          <label>图文模板<small>（白名单 4 套，越界自动回落「公众号清新绿」）</small></label>
+          <label>图文模板<small>（白名单 4 套，越界自动回落「公众号信号格」）</small></label>
           <select id="wx-gen-tpl" onchange="updateWxTplPreview()">
-            <option value="wechat" selected>公众号清新绿 · 浅色卡片（默认 · 零游戏背景）</option>
+            <option value="wechat" selected>公众号信号格 · 结构化教程流（默认 · 零游戏背景）</option>
             <option value="minimal">极简清单 · 浅色知识卡</option>
             <option value="classic">经典卡片 · 鎏金插画风</option>
             <option value="magazine">杂志大片 · 暗色编辑排版</option>
@@ -1701,7 +1701,7 @@ function closeToutiaoGenDialog(e) {
 }
 // ── 图文模板预览 ──
 const TT_TPL_PREVIEW = {
-  wechat:   {label: '公众号清新绿 · 浅色卡片', hint: '浅纸面 + 微信绿点缀 + 白色圆角卡片，纯 CSS 装饰零背景图，适合把他人已总结好的内容整理成图文（无需真实截图）。'},
+  wechat:   {label: '公众号信号格 · 结构化教程流', hint: '浅纸面 + 微信绿信号线 + 2×2 要点瓦片（末格绿反白）+ 阅读流带 + 左绿边线总结条，纯 CSS 装饰零背景图，专为抖音采集的 AI 工具/AI 科普内容转公众号图文设计（无需真实截图）。'},
   classic:  {label: '经典卡片 · 鎏金插画风', hint: '金渐变标题 + 插画主视觉 + 圆环图标三面板，通用性最强的默认选择。'},
   magazine: {label: '杂志大片 · 暗色编辑排版', hint: '大图打底、留白克制的杂志编辑风，适合单话题深挖、观感高级。'},
   minimal:  {label: '极简清单 · 浅色知识卡', hint: '白底清单式知识卡，信息干净清爽，适合多要点罗列、干货整理。'},
