@@ -1,6 +1,18 @@
 # video2text 改动说明（给其他 AI / Agent）
 
-更新时间：2026-09-28
+更新时间：2026-09-29
+
+## 2026-09-29：图文变体轴第三步——版式轴接入（CSS 覆盖层重排 + 前端下拉）+ quest 封面 ifact 修复
+
+变体三轴的最后一轴。版式＝同一模板内元素排布的变化，沿用预设闭集原则（只许从表里挑，禁自定义）。技术路线与字体轴同套路：**构建后 CSS 末尾追加覆盖片段**，不改 HTML 结构——各模板 `.wrap-in` 均为 `display:flex; flex-direction:column`，子块用 `order` 重排；覆盖选择器与原模板同特异度、追加在 `<style>` 末尾后来居上。`default` 空覆盖＝现状，零行为变化。
+
+- **顺手修复隐藏 bug（quest 封面 ifact）**：`_CSS_QUEST` 里定义了 `.ifact{display:flex;gap:18px}` 横向容器，但 `_cover_html_quest` 从未输出该 div，4 个 `.ifc` 摘要格直接在列容器里纵向全宽堆叠。修复为 `facts_html = ('<div class="ifact">%s</div>' % facts) if facts else ""` 并同步末尾插值。**注意这是有意的行为变化**：quest 封面 HTML 与旧产物不同（摘要行变横向四格），「默认零变化」口径对 quest 封面不成立，其余模板不受影响。
+- **`variants.py`（版式预设表）**：`LAYOUT_PRESETS` 3 组——`default` 经典排布（空覆盖）／`hero_first` 图先行（报头钉最上 order:-2、主图上移到标题前 order:-1）／`summary_first` 要点先行（主图沉底 order:1、标题下摘要块自然上浮）。每组 `css` 为 `{模板键: 覆盖片段}`，只给 classic/tier/quest/guide 四个已接通模板定义（classic 用 `.topline/.hero`、tier/quest 用 `.mast/.hero`、guide 用 `.mast/.gmap`），其余模板 no-op。新增 `LAYOUT_KEYS`/`DEFAULT_LAYOUT_KEY` 与三接口 `resolve_layout`（None/未知回落 default）、`layout_css(tpl,layout)`（默认/未知/未覆盖返回空串）、`layout_label`。模块文档字符串补第 4 条设计原则。
+- **生成链路接线（`channels/toutiao.py`）**：`generate_graphics(...)` 新增 `layout=None` 入参；接线顺序 `_build_css → layout_extra=variants.layout_css(...) → if layout_extra: css += "\n/* layout:%s */\n%s" → apply_font`（门控追加，default 为空串即零注入）；manifest 新增 `layout` 字段。
+- **API 与前端（`web/app.py` + `web/templates/index.html`）**：`/api/toutiao/generate` 接收并透传 `layout`（截断 20 字符，空串转 None 走默认）；头条生成弹窗在「配色 / 字体」后加「版式」闭集下拉（经典排布/图先行/要点先行，默认经典），确认弹窗文案同步显示所选版式。
+- 验证：4 个 `.py` `py_compile` 过；样张脚本渲染 4 包（55/99921/99922/99923）×3 版式×2 卡＝24 张到 `output/_layout_samples/`（索引页 `http://localhost:15801/media/_layout_samples/index.html`），目检无新增溢出/错位——hero_first 主图确实置顶、summary_first 摘要块确实上浮且 quest 摘要行保持横向四格；**默认零变化硬验证**——e2e 用例 D 断言显式 `layout="default"` 与不传 layout 的封面 HTML 字节全等、用例 A 断言默认 HTML 无 `/* layout:` 标记，`git diff` 复核覆盖追加受 `if layout_extra:` 门控；e2e 扩到七用例（A 默认/B tier 熔火黑体/C magazine 保护/D 显式 default 零变化/E hero_first 注入/F 未知键回落/G quest summary_first+ifact 断言）全过 `ALL_OK`；Flask 重启后首页与样张索引均 200。
+- 已知既有现象（非本轮引入）：guide 封面地图顶部金色标题被裁一半，是源攻略图自带标题横幅被 `.gmap img{object-fit:cover}` 裁切所致，default 版式同样存在，与版式轴无关，未处理。
+- 仍未做：`minimal`/`bold`/`magazine`/`wechat` 四模板配色轴未接通（传预设被安全忽略），版式轴 likewise 对这四个模板 no-op；需要时按同一套路 token 化/加覆盖片段并登记进对应闭集表。
 
 ## 2026-09-28（四）：图文变体轴第二步——选定组合接入生成链路 + 四模板配色轴全接通
 
