@@ -2,6 +2,17 @@
 
 更新时间：2026-09-29
 
+## 2026-09-29（五）：summary_first 标题遮挡修复 + 头条图文移除「提醒」块与条目首字徽章
+
+用户报障三件事：①「图片都在布局底部，是不是都随机」；②「有些字被挡住了」；③「图文中移除『提醒』和每个首字」。
+
+- **①定性（非随机，是版式设计行为）**：包 56 manifest `layout=summary_first`——用户自己选的「要点先行」预设，设计即大图沉底；前端版式下拉默认选中 `default`（经典排布，index.html L940 `selected`），`RANDOM_POOL=["hero_first","summary_first"]` 不含 default，只有显式选「每次随机」才抽签。结论：不想要图沉底选「经典排布」或「图先行」即可，代码零改动。
+- **②根因（负边距 × order 重排叠加冲突）**：`templates.py` `_CSS_CLASSIC` 的 `h2{margin-top:-84px}` 是为「default 布局下内页标题压在横带图下沿」设计的叠压效果；`summary_first` 把 `.band` 沉底后 h2 失去图片托底，负边距把标题向上拉进 `.topline` 报头行，首字被不透明金色 `.badge`（brand 徽章）盖住（包 56 img2「机」/img4「B」实测复现）。grep 确认全文件仅此一处负边距。**修复**：`variants.py` summary_first 的 classic 覆盖层追加 `.wrap-in>h2{margin-top:18px}` 解除（同特异度后来居上）+ 根因注释。
+- **③a 移除条目首字徽章（两处落点，markup+CSS 双删）**：classic 内页 `.panel .ring`（92px 圆环，显示条目 name 首字）与 quest 封面 `.ifc .ico`（54px 圆，显示看点标题首字）——`templates.py` 删两处 CSS 与 `_list_html_classic`/`_cover_html_quest` 的对应 markup。**阵营色补偿**：原联盟/部落色只挂在 `.ring` 上，删除会丢阵营区分 → 改挂 `.panel.f-alliance/.f-horde` 左侧 `border-left:8px solid` 色条。其余模板（magazine/minimal/bold/tier/guide）条目行用数字/步骤序号，无首字徽章，不动。
+- **③b 移除「提醒」块（头条渠道三道防线）**：prompt 要求行改「不要输出 note 字段」→ `_build_cards_prompt` schema JSON 示例去 note → 主流程渲染前 `for card in cards: card.pop("note", None)` 代码级剔除（防 LLM 无视 prompt、防本地兜底卡 `_fallback_cards` 第 4 张自带 `note.title='提醒'` 漏出）。模板渲染函数的 `note_html` 分支**保留**（公众号渠道不受影响）；tier `.footnote`、guide `.panelbox`、quest `.flowbox` 属功能性信息块，判定保留。
+- **验证**：三文件 `py_compile` 过；e2e 扩到**十七用例**全过 `ALL_OK`——J 用例补 `.wrap-in>h2{margin-top:18px}` 断言，新增 P（兜底卡自带 note，断言全部 `img*.html` 无「提醒」残留）、Q（classic 无 `class="ring"`/CSS 无 `.panel .ring{`、quest 无 `class="ico"`）；另生成目检包 99998（classic+summary_first）肉眼确认标题完整、无圆环、无提醒块。Flask 按端口 PID 重启（50804→52910），lsof 换 PID + HTTP 200 双确认。
+- **记录沉淀**：`.agents/memories/40-graphics-variants.md` 新增「负边距 × order 重排 = 遮挡陷阱」「移除视觉元素 = markup+CSS 双删+补偿」两节，并写明「图沉底是 summary_first 设计行为、报障先查 manifest.layout」。
+
 ## 2026-09-29（四）：版式轴全模板覆盖（magazine/minimal/bold 补齐）+ 用户标题代码级强制
 
 用户报障「没有随机布局 + 标题改了生成的图文没变」，要求第一性原则修复。**取证（包 56 manifest，12:01 生成）一条记录同时定性两个报障**：`template=magazine`、`layout=summary_first`（随机确实抽中并落盘）、`title="魔兽无限：任务物品智能轮流拾取"`（用户新标题确实传入落盘），但 `cards[0].title="魔兽无限B测：任务物品智能轮流拾取"`（LLM 擅自加「B测」）。即两个报障都不是「参数没传到」，而是「传到了但没生效」。另排查双入口假设：`generateToutiaoGraphics`（简单按钮）grep 仅定义处 1 个匹配、无调用点，属死代码，排除。
