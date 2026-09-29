@@ -1,13 +1,22 @@
 # 图文变体轴（配色/字体/版式）守则
 
-以下约束来自 2026-09-29 两轮「选项选了不生效」报障的复盘，触碰 `src/graphics/variants.py`、`src/graphics/channels/*.py`、`src/graphics/templates.py` 时必须遵守：
+以下约束来自 2026-09-29 三轮「选项选了不生效」报障/复盘，触碰 `src/graphics/variants.py`、`src/graphics/channels/*.py`、`src/graphics/templates.py` 时必须遵守：
 
-## 静默失效是头号敌人（已复发两次）
+## 静默失效是头号敌人（已复发三次）
 
 - 第一次：版式预设只写封面选择器，内页图块类名不同（classic 内页是 `.band` 不是 `.hero`）→ 覆盖注入了但匹配不到元素，内页零变化。
 - 第二次：`LAYOUT_PRESETS` 只登记 classic/tier/quest/guide 四模板，用户实际生成的 magazine 拿到空串 → `layout_css` 静默返回 ""，版式/随机全无效且界面无从察觉。
-- **规则：任何用户可选的轴（配色/字体/版式），要么对下拉里全部模板生效，要么在前端提示文案里如实标注生效范围**（index.html 弹窗 hint）。两者都不做＝静默失效，禁止。
-- 新增模板进 `templates._TEMPLATES` 时，必须同步检查 `PALETTE_READY_TPLS`、`LAYOUT_PRESETS` 各预设的 `{模板键: 片段}` 是否登记；未登记就是 no-op，要在 CHANGELOG「仍未做」里写明。
+- 第三次：**字体轴对 wechat/minimal 全程 no-op**——`apply_font` 靠「Songti 衬线栈正则替换」实现，这两个模板 CSS 全篇黑体栈，无锚点可匹配 → 原样返回 CSS，选「重黑」毫无变化（头条线选 minimal 同样中招）。教训：**基于「文本替换/选择器匹配」生效的机制，必须先确认目标模板里真的有可匹配的锚点**，不能假设所有模板同构。
+- **规则：任何用户可选的轴（配色/字体/版式），要么对下拉里全部模板生效，要么在前端提示文案里如实标注生效范围**（index.html 弹窗 hint + 确认行文案，如公众号侧 `palNote`）。两者都不做＝静默失效，禁止。
+- 新增模板进 `templates._TEMPLATES` 时，必须同步检查 `PALETTE_READY_TPLS`（＝`_TPL_BASE_TOKENS` 键集）、`LAYOUT_PRESETS` 各预设的 `{模板键: 片段}`、`FONT_PRESETS` 各预设的 `tpl_css`（仅全篇黑体栈的模板需要）是否登记；未登记就是 no-op，要在 CHANGELOG「仍未做」里写明。
+- **防线已代码化**：`scripts/check_variant_tokens.py`（进 git）对三轴逐组合实测「CSS 是否真的变化 / token 是否有残留」，**字体轴与配色轴失效即报错**（不再只 warn）。改 variants/templates/css_engine 后必跑。
+
+## 字体轴双路机制（2026-09-29 起）
+
+- 两路并存，一路都不能少：① **正则字体栈替换**——把模板 CSS 里的 Songti 衬线栈换成预设栈（对 classic/magazine/bold/guide/tier/quest 生效）；② **按模板追加片段** `FONT_PRESETS[键]["tpl_css"][tpl_key]`——对无衬线锚点的模板（wechat/minimal）在 CSS 末尾追加 `/* font:键 */` 片段。
+- **调用方必须传 `tpl_key`**：`apply_font(css, font_key, tpl_key)`，两个渠道适配器（toutiao/wechat）都要传，少传即静默 no-op。
+- 追加片段的写法约束：只动 `font-family`/`font-weight`/`letter-spacing`，**绝不动盒模型**（宽高/padding/margin 一动就重排版式，与版式轴打架）；字重变大后字宽也变大，顺手收紧字距（-.01em ~ -.015em）抵换行风险。
+- 重黑字体选型踩坑记录：**PingFang SC 最粗只到 Semibold，写 `font-weight:900` 在 Chromium 里视觉无感**；本机 `/System/Library/Fonts/Hiragino Sans GB.ttc` 的 W6 是真重黑。栈写 `'"Hiragino Sans GB","Heiti SC","PingFang SC",sans-serif'`，缺字体时回落 PingFang 不炸。
 
 ## 版式覆盖机制（改规则前先读）
 
@@ -46,12 +55,14 @@
 
 - **共用同一套渲染内核**：`src.graphics` 的 skins / css_engine / templates（同一 `_TEMPLATES` 注册表）/ renderer / package，两个渠道适配器 `channels/toutiao.py`、`channels/wechat.py` 只在渠道层组装差异。用户问「是不是同一套框架」＝是，内核同源。
 - **头条**：7 模板全开、变体三轴（palette/font/layout）已接、素材选图已随机、题材插画作主视觉（`<题材>图片素材/`）。
-- **公众号**：白名单只放 wechat/minimal/classic/magazine；默认 `template="wechat"` 信号格且 `no_hero`＝**零素材图依赖**（防游戏背景渗进 AI 工具类图文）；主视觉来自用户提供的 `real_screenshots`（≥2 张铁律 lint + 10MB 上限，截图会复制进包）；`author_draft` 非空＝亲测模式、空＝转载模式；**变体三轴与素材随机均未接**（签名无这三参数，CSS 走 `_tpl_tokens` 皮原色）。
-- 要给公众号接三轴，按头条同法：签名加 `palette/font/layout` → `_tpl_tokens` 之后叠 `variants.palette_tokens` / `layout_css` / `apply_font` → 前端下拉 + app.py 透传；注意 wechat 模板的块结构需单独写覆盖片段，别复用 classic 的选择器。
+- **公众号**：白名单只放 wechat/minimal/classic/magazine；默认 `template="wechat"` 信号格且 `no_hero`＝**零素材图依赖**（防游戏背景渗进 AI 工具类图文）；主视觉来自用户提供的 `real_screenshots`（≥2 张铁律 lint + 10MB 上限，截图会复制进包）；`author_draft` 非空＝亲测模式、空＝转载模式；**变体三轴已接（2026-09-29）**，素材随机**有意不接**（主视觉是用户真实截图，随机换图无意义）。
+- 公众号三轴落地要点（改这块前先读）：① 配色靠 `WECHAT_BASE_TOKENS`（9 键，默认值与 `css_engine._tpl_tokens("wechat")` 字面量**逐字相等**＝默认零变化）+ `_TPL_BASE_TOKENS["wechat"]` 登记，各预设再补 wechat tokens；**可读性硬约束：任何预设都保持「浅纸面 + 深墨字 + 白卡」，只换信号色家族，禁止套用头条深色夜底**。② 版式片段用 wechat 自己的类名（`.rhead`/`.sig`/`.kick`/`.tiles`/`.rows`/`.ftr`），**不能复用 classic 选择器**；`.ftr` 原始规则无 order，只有「图沉底」类预设需要 `.ftr{order:3}` 护脚。③ 字体走 `tpl_css` 追加片段（见「字体轴双路机制」节）。④ 前端两处如实提示：弹窗 hint + `confirmWechatGen` 确认行 `palNote`（选了非默认配色但模板未接通配色轴时明示「仍按默认色出图」）。
+- 未接通配色轴的模板：`minimal`/`magazine`/`bold`（前端已如实提示）。要接按 `WECHAT_BASE_TOKENS` 同法：补基线 token 表 → 登记 `_TPL_BASE_TOKENS` → 各预设补该模板 tokens → 跑 `scripts/check_variant_tokens.py`。
 
 ## 验证与排查
 
-- e2e 脚本在 work 区（不进 git）：`e2e_variants.py`，18 用例（A-R），跑法 `cd 项目根 && env -u PYTHONHOME -u PYTHONPATH /usr/local/bin/python3 <脚本>`，末行必须 `ALL_OK`。改动 variants/toutiao/templates/skins 后必跑；脚本 `main()` 开头会钉死 `toutiao._RNG_SEED`（素材随机化的前置条件）。
+- e2e 脚本在 work 区（不进 git）：头条线 `e2e_variants.py`（18 用例 A-R）、公众号线 `e2e_wechat_variants.py`（10 用例 W1-W10），跑法 `cd 项目根 && env -u PYTHONHOME -u PYTHONPATH /usr/local/bin/python3 <脚本>`，末行必须 `ALL_OK`。改动 variants/templates/css_engine 后**两条线都要跑**（同一内核）；改 toutiao/skins 跑头条线，改 wechat 跑公众号线。头条脚本 `main()` 开头会钉死 `toutiao._RNG_SEED`（素材随机化的前置条件）；公众号渠道选图未随机，无种子依赖。
+- 两条线都必含的两类硬断言：① **默认零变化**——三轴传未知键/默认键时，产物 HTML 与基线用例**字节全等**（依赖各模板 `*_BASE_TOKENS` 与 `css_engine._tpl_tokens` 字面量逐字相等，改任一侧都要同步）；② **信号色替换彻底**——旧色十六进制与 `rgba(` 形式都零残留。
 - 新增覆盖规则必配断言用例：封面 HTML 断言 `/* layout:键 */` 标记 + 具体片段字符串逐字匹配；内页断言读 `img2.html`；标题类断言用 monkeypatch `toutiao._llm_cards` 模拟 LLM 改写（finally 恢复）。
-- 排查「选项不生效」第一性原则顺序：① 读产物 `output/toutiao/<id>/manifest.json`（参数是否落盘）→ ② 读 `img*.html`（覆盖是否注入、选择器是否匹配）→ ③ 才怀疑前端/进程。manifest 落了参数但 HTML 无效果＝覆盖字典缺口；manifest 没落参数＝链路/进程问题（先查旧进程占端口）。
+- 排查「选项不生效」第一性原则顺序：① 读产物 `output/toutiao/<id>/manifest.json`（公众号是 `output/wechat/<id>/manifest.json`）看参数是否落盘 → ② 读 `img*.html`（覆盖是否注入、选择器是否匹配）→ ③ 才怀疑前端/进程。manifest 落了参数但 HTML 无效果＝覆盖字典缺口（或字体轴漏传 `tpl_key`）；manifest 没落参数＝链路/进程问题（先查旧进程占端口）。
 - Flask 重启纪律见 `30-python-backend.md` 与 AGENTS.md（按端口 PID 杀，禁 pkill 失配模式，重启后 lsof 换 PID + 页面特征双确认）。

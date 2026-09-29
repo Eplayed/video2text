@@ -2,6 +2,19 @@
 
 更新时间：2026-09-29
 
+## 2026-09-29（七）：公众号渠道接入变体三轴 + 字体轴双路机制（修 wechat/minimal 静默失效）
+
+用户诉求：「请为 wechat 模板接入配色、字体和版式三轴」——即抖音素材→整理稿→公众号图文这条链路，也要像头条一样能选配色/字体/版式。取证时发现一个**连带 bug**：字体轴对全篇黑体栈的模板（wechat、minimal）一直是静默 no-op，头条线选 minimal 同样中招。
+
+- **根因①（字体轴只做衬线栈替换）**：`variants.apply_font(css, font_key)` 的实现是「把 CSS 里的 Songti 衬线字体栈正则替换成预设栈」。classic/magazine/bold/guide/tier/quest 六模板有 Songti 锚点所以生效；`wechat`/`minimal` 模板 CSS 全篇是 PingFang SC 黑体栈，**没有可匹配的锚点 → 替换零命中 → 函数原样返回 CSS**，界面上选了「重黑」但成品图毫无变化，且无任何报错。
+- **修复①（预设表加按模板追加片段，双路生效）**：`FONT_PRESETS[键]` 新增可选字段 `tpl_css = {模板键: CSS片段}`；`apply_font(css, font_key, tpl_key=None)` 改成两路——先做原有正则字体栈替换，再追加 `tpl_css.get(tpl_key)` 片段（带 `/* font:键 */` 标记，同版式轴范式）。`heavy` 预设补 wechat/minimal 片段，字体族用 `_HEAVY_SANS_STACK = '"Hiragino Sans GB","Heiti SC","PingFang SC",sans-serif'`：**PingFang SC 最粗只到 Semibold，`font-weight:900` 在 Chromium 里视觉无感**，Hiragino Sans GB 的 W6 是真重黑且本机存在（`/System/Library/Fonts/Hiragino Sans GB.ttc`），缺字体时回落 PingFang 不炸。片段只动 `font-family`/`font-weight`/`letter-spacing`，**不动盒模型**；顺带收紧字距（-.01em / -.015em）抵消字宽变大带来的换行风险。
+- **调用点必须传 tpl_key**：`channels/toutiao.py`（1 行改动 + 注释）与 `channels/wechat.py` 的 `apply_font` 调用都补上 `tpl_key`。**少传就是静默 no-op**——`scripts/check_variant_tokens.py` 已把字体轴核对从「warn」升级为「失效即报错」（对每个「预设 × 已登记模板」组合实测 CSS 是否真的变化）。
+- **根因②（配色轴未登记 wechat）**：`_TPL_BASE_TOKENS` 的键集就是 `PALETTE_READY_TPLS`，此前只登记 classic/tier/quest/guide，未登记模板 `palette_tokens` 恒返回 `{}`。修复：新增 `WECHAT_BASE_TOKENS`（9 键，**默认值与 `css_engine._tpl_tokens("wechat")` 的字面量逐字相等**＝选默认配色时产物零变化的硬保证）并登记；`ember_forge`/`arcane_dusk` 各补一组 wechat tokens（信号色 `#d9622b` / `#7b5fd0`，深色 `#a9451a` / `#5b41ab`，纸面 `#fbf6f1` / `#f5f4fa`）。**公众号可读性硬约束**：任何预设都必须保持「浅纸面 + 深墨字 + 白卡」，只换信号色家族，不得套用头条的深色夜底。
+- **版式轴补 wechat 片段**：`LAYOUT_PRESETS` 两个预设各加 wechat 覆盖，**类名与 classic 完全不同，不能复用选择器**（wechat 是 `.rhead`/`.sig`/`.kick`/`.tiles`/`.rows`/`.ftr`）。`hero_first`：封面 `.tiles{order:-2}` 图集上浮、内页 `.wrap-in>.note{order:-2;margin-top:26px}`；`summary_first`：封面 `.rows{order:-2;margin-top:26px}` 要点上浮 + `.tiles{order:1;align-content:end}` 图集沉底 + `.ftr{order:3}` 护脚。注意 wechat 的 `.ftr` 原始规则**没有 order**，所以 hero_first 完全不碰页脚，只有 summary_first 需要显式护脚（否则沉底的图集会把页脚挤上去）。
+- **接线（渠道 + API + 前端）**：`wechat.generate_graphics` 签名加 `palette/font/layout`（默认 None＝旧行为），CSS 叠加顺序与头条同范式：`resolve_keys` → 随机版式整包抽一次 → `resolve_palette(skin_key, palette_key, tpl_key)` → `extra_tokens = _tpl_tokens + palette_tokens` → `_build_css` → 追加 `layout_css` → `apply_font(css, font_key, tpl_key)`；manifest 落三轴**真实键**（永不落 "random"）。`web/app.py` `/api/wechat/generate` 读三字段（`str(data.get("x") or "").strip()[:20]` 同款三行）并透传。`web/templates/index.html` 公众号弹窗加三个下拉（`wx-gen-palette`/`wx-gen-font`/`wx-gen-layout`，版式含「每次随机」），`confirmWechatGen` 读取后写进请求体、确认行显示三轴文案；**配色轴未接通的模板如实提示**（弹窗 hint + 确认行 `palNote`：「该模板未接通配色轴，本次仍按默认色出图」）。弹窗打开时不重置下拉，与头条侧 `openToutiaoGenDialog` 行为一致（靠 HTML `selected` 天然默认）。
+- **验证**：5 个 .py `py_compile` 过；`scripts/check_variant_tokens.py`（本轮新增，进 git 作持久回归）复跑 `ALL_OK`（配色 5 模板接通、字体轴 wechat/minimal × heavy 均报「生效（追加片段）」、版式 8×2 片段核对）；**公众号 e2e 新脚本 `e2e_wechat_variants.py`（work 区，W1-W10 十用例）`ALL_OK`**——W1 默认组合微信绿 `#07c160` 在位且无 token 残留；W2/W3 两组配色替换信号色、微信绿与 `rgba(7,193,96` 零残留、白卡保持；W4 heavy 封面+内页都吃到；W5/W6 两版式覆盖注入（含 `.ftr{order:3}` 护脚断言）；W7 random 三次均抽中合法键（实测 hero_first / summary_first 都出现过）；**W8 三轴传未知键回落后，封面 HTML 与 W1 默认组合字节全等**（默认零变化硬验证）；W9 minimal+heavy 字距指纹；W10 minimal+ember_forge 不改色（未登记即 no-op 的如实记录）。头条线 e2e 18 用例复跑 `ALL_OK`（字体轴改造未破坏既有渠道）。Flask 按端口 PID 重启并双确认。
+- **仍未做**：`minimal`/`magazine`/`bold` 配色轴仍未登记 tokens（前端已如实提示，需要时按 `WECHAT_BASE_TOKENS` 同法补基线表 + 登记 + 各预设补该模板 tokens）；公众号**素材选图仍不随机**（主视觉来自用户提供的真实截图，随机换图无意义，与头条不同）；`guide` 模板不在公众号白名单内。
+
 ## 2026-09-29（六）：头条素材选图随机化 + 公众号渠道框架核查
 
 用户两件事：①「头条号图文素材图片也可以是随机的，并不是第一张图片就是第一张图片素材」；②「素材库选抖音素材→整理稿→公众号图文，生成的和现在是一套框架吗」。
