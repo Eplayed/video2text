@@ -2,6 +2,18 @@
 
 更新时间：2026-09-29
 
+## 2026-09-29（八）：公众号参考样本拆解 + 模板库新增 lilac_list / cream_gold 两模板（三轴同步登记）
+
+用户诉求：「我看到有些公众号图文排版很好看，你可以给我拆解他的结构，然后丰富我们的模板库吗？」——给了两篇 mp.weixin.qq.com 卡片图文链接，确认「两个都加」。
+
+- **拆解（文档进 git）**：`公众号卡片参考拆解-2026-09-29.md`——抓取两篇参考正文 + 45 张卡片图（`temp/wx_ref/`，不入库），逐图量出可复用参数：样本 A 浅紫编辑清单风（浅紫网格纸面 `#EDEFF7` + 信号紫 `#5B4FE0` + 藏青结论条 `#202A44` + 星金 `#E0A32E` + 编号白卡清单，零背景图依赖）；样本 B 奶油金插画教程风（奶油纸面 `#F4F0E7` + 金超大编号 `#C89B42` + 右半幅通高插画位 + 点线步骤流 + 键值面板 + 三栏收益条）。结论：两样本视觉语言不属于现有 4 套公众号模板任一 → **新增两个模板**而非新版式预设。
+- **templates.py**：`_CSS_LILAC_LIST`/`_CSS_CREAM_GOLD` 两套 CSS + 4 个渲染函数（封面/内页各一）+ 注册表 2 条。身份色独立前缀 `__L_*__`（5 键）/`__C_*__`（5 键），可读性 7 键与 wechat 同名同义；cream_gold 右半幅插画位 `.illo` 为 absolute——**有题材图铺图、无图渲染 `.illo.blank` 金色点阵装饰块**（永不破版）。顺带把 cream_gold 内页 strip 第三栏标签硬编码「提醒」改「重点」（用户消息 13 明令成品图移除「提醒」，e2e W13 加回归守护）。
+- **variants.py 三轴登记**：① 配色——新增 `LILAC_LIST_BASE_TOKENS`（12 键）/`CREAM_GOLD_BASE_TOKENS`（11 键，**无 `__ACCENT__`**，金色走 `__ACCENT_DK__`/`__C_NUM__`）并登记 `_TPL_BASE_TOKENS`（自动进 `PALETTE_READY_TPLS`，配色轴扩到 7 模板）；**身份键是常量、不进配色预设**，共享键随预设自动级联。② 字体——`FONT_PRESETS["heavy"]["tpl_css"]` 补两键（两模板全篇黑体栈无 Songti 锚点，必须走追加片段路）。③ 版式——两预设 × 两模板片段：lilac 封面 `.stats`/内页 `.note` 上浮，cream 封面 `.steps`/内页 `.strip` 上浮；**两个盒模型坑**：cream `.steps` 上浮必须同时解除 `flex:1`（改 `flex:0 0 auto`，否则吞掉整页高度）并用 `.ftr{margin-top:auto}` 兜页脚沉底；lilac 封面余高把 `.stats` 改 `margin-top:auto` 与 `.sum` 的 auto 边距均分（避免中部大白带，`padding-top:42px` 保底间距），两个版式片段同步 `padding-top:0` 重置。
+- **wechat.py 接线**：白名单扩 6 套；hero 三分法——`no_hero_tpls=("wechat","lilac_list")` 恒 None（零图片模板），cream_gold 封面只吃题材图（`cover_img.as_uri()`，无素材→blank 装饰块）、内页恒 None，其余走 `skins._hero_uri`。
+- **前端**：index.html 公众号弹窗模板白名单文案 4 套→6 套、新增「浅紫清单·编辑清单风」「奶油金插画·教程步骤风」两个选项；三轴 hint 更新为「配色对信号格/经典卡片/浅紫清单/奶油金生效，字体与版式对 6 套全部生效」。
+- **验证**：三文件 `py_compile` 过；`scripts/check_variant_tokens.py` ALL_OK（配色 7 模板接通、版式 10 模板 ×2 预设片段核对、字体 10 模板全生效）；公众号 e2e 扩到 **14 用例** ALL_OK——新增 W11（lilac 默认无 `__L_*__` 残留、零图片无 `<img>`）、W12（lilac 三轴：换色/heavy 指纹 `.sum .sd{font-weight:900}`/封面+内页版式注入）、W13（cream 默认无 `__C_*__` 残留、无图走 `.illo blank` 降级、**成品无「提醒」字样**）、W14（cream 三轴：共享键换色 + 身份金 `#C89B42` 保持常量）；样张脚本生成两套各 4 页进 `web/static/assets/tpl_previews/{lilac_list,cream_gold}/`，目视核对无残留/无裁切并据此修掉 lilac 封面大白带。Flask 按端口 PID 纪律重启（62355→72113），lsof 换 PID + 新文案/样张静态资源 200 双确认。
+- **仍未做**：`minimal`/`magazine`/`bold` 配色轴仍未登记；参考原图 45 张在 `temp/wx_ref/` 不入库（`temp/` 已在 .gitignore）。
+
 ## 2026-09-29（七）：公众号渠道接入变体三轴 + 字体轴双路机制（修 wechat/minimal 静默失效）
 
 用户诉求：「请为 wechat 模板接入配色、字体和版式三轴」——即抖音素材→整理稿→公众号图文这条链路，也要像头条一样能选配色/字体/版式。取证时发现一个**连带 bug**：字体轴对全篇黑体栈的模板（wechat、minimal）一直是静默 no-op，头条线选 minimal 同样中招。
