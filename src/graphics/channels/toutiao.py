@@ -194,7 +194,7 @@ def _fallback_cards(summary):
     return {"cards": cards, "copy_text": copy_text}
 
 
-def generate_graphics(summary, ai_config, progress_cb=None, theme="", skin="wow", title="", template="classic", guide_images=None, palette=None, font=None):
+def generate_graphics(summary, ai_config, progress_cb=None, theme="", skin="wow", title="", template="classic", guide_images=None, palette=None, font=None, layout=None):
     """主入口：整合稿 → manifest dict（图片落盘 output/toutiao/<summary_id>/）。
 
     theme:     str 题材/游戏名，注入 LLM 卡片化 + 选插画素材文件夹
@@ -205,6 +205,7 @@ def generate_graphics(summary, ai_config, progress_cb=None, theme="", skin="wow"
     guide_images: list 攻略图解模板的上传攻略图路径（弹窗上传，优先于素材文件夹）
     palette:   str 配色预设键（variants.PALETTE_KEYS 闭集）；None/未知回落默认 gold_night（现状）
     font:      str 字体预设键（variants.FONT_KEYS 闭集）；None/未知回落默认 serif（现状）
+    layout:    str 版式预设键（variants.LAYOUT_KEYS 闭集）；None/未知回落默认 default（现状）
     """
     tpl_key = template if template in templates._TEMPLATES else "classic"
     tpl = templates._TEMPLATES[tpl_key]
@@ -221,10 +222,14 @@ def generate_graphics(summary, ai_config, progress_cb=None, theme="", skin="wow"
 
     skin_key, skin_uri = skins.resolve_skin(skin, _ASSETS_DIR)
     palette_key, font_key = variants.resolve_keys(palette, font)
+    layout_key = variants.resolve_layout(layout)
     palette = variants.resolve_palette(skin_key, palette_key, tpl_key)
     extra_tokens = dict(css_engine._tpl_tokens(tpl_key, skin_key))
     extra_tokens.update(variants.palette_tokens(tpl_key, palette_key))
     css = css_engine._build_css(tpl["css"], palette, skin_uri, _ASSETS_DIR, extra_tokens, CANVAS_W, CANVAS_H)
+    layout_extra = variants.layout_css(tpl_key, layout_key)
+    if layout_extra:
+        css += "\n/* layout:%s */\n%s" % (layout_key, layout_extra)
     css = variants.apply_font(css, font_key)
     if tpl_key == "guide":
         if guide_images:
@@ -293,6 +298,7 @@ def generate_graphics(summary, ai_config, progress_cb=None, theme="", skin="wow"
         "template": tpl_key,
         "palette": palette_key,
         "font": font_key,
+        "layout": layout_key,
         "canvas": "%dx%d" % (CANVAS_W, CANVAS_H),
         "summary_type": summary.get("summary_type", ""),
         "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
