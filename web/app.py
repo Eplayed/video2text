@@ -1319,6 +1319,7 @@ def api_toutiao_generate():
     template = str(data.get("template") or "classic").strip()[:20]  # 图文模板（版式/字体风格）
     palette = str(data.get("palette") or "").strip()[:20]  # 配色预设键（闭集，空/未知回落默认 gold_night）
     font = str(data.get("font") or "").strip()[:20]        # 字体预设键（闭集，空/未知回落默认 serif）
+    layout = str(data.get("layout") or "").strip()[:20]    # 版式预设键（闭集，空/未知回落默认 default＝现状）
     guide_imgs = []  # 攻略图解模板：弹窗上传的攻略图（优先于素材文件夹）
     guide_token = str(data.get("guide_token") or "").strip()
     if guide_token and re.fullmatch(r"[0-9a-f]{12}", guide_token):
@@ -1350,7 +1351,8 @@ def api_toutiao_generate():
             package = toutiao_graphics.generate_graphics(summary, _ai_config(), progress_cb=cb,
                                                           theme=theme, skin=skin, title=title,
                                                           template=template, guide_images=guide_imgs,
-                                                          palette=palette or None, font=font or None)
+                                                          palette=palette or None, font=font or None,
+                                                          layout=layout or None)
             _tt_task_status["package"] = {"id": package["id"], "title": package["title"], "images": len(package["images"])}
             _tt_task_status["progress"] = "✅ 已生成 %d 张信息图，可复制文案发布" % len(package["images"])
         except Exception:
