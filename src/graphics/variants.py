@@ -9,10 +9,14 @@
 4. 版式预设 = 在构建好的 CSS 末尾追加「覆盖片段」（flex order 重排等），
    不改 HTML 结构；default 为空覆盖 ＝ 现状零行为变化。
 
-覆盖范围：配色轴对 classic/tier/quest/guide 四个模板生效（resolve_palette 传入
-tpl_key 时，未接通模板自动忽略预设覆盖、保持皮原色）；字体轴对全部模板生效。
+覆盖范围：配色轴对 classic/tier/quest/guide/wechat 五个模板生效（resolve_palette 传入
+tpl_key 时，未接通模板自动忽略预设覆盖、保持皮原色）；字体轴对全部模板生效，但机制分两路：
+有 Songti 衬线栈的模板走字体栈替换，全篇黑体栈的 wechat/minimal 走 FONT_PRESETS[heavy]["tpl_css"]
+追加片段——调用方必须把 tpl_key 传给 apply_font，否则这两个模板的字体轴静默失效。
 语义装饰色不随配色轴变化：classic 阵营色、tier 梯队红/金/紫、quest 火焰/宝石/盾牌、
 guide 荧光绿路线轨——它们是模板的身份色。
+公众号信号格（wechat）例外：它的身份色就是信号色 __ACCENT__，允许随配色轴换家族
+（微信绿 / 熔火暖橙 / 暮光紫），但必须保持「浅纸面 + 深墨字 + 白卡」的正文可读性。
 
 默认组合（2026-09-28 用户选定「配色 1 + 字体 1」）：鎏金夜蓝 + 衬线金标，
 即现状零行为变化；所有 base token 默认值 ＝ token 化之前的硬编码字面量。
@@ -29,10 +33,34 @@ _BODY_STACK = '"PingFang SC","Hiragino Sans GB",sans-serif'
 _HEAD_RE = re.compile(r'"Songti SC","Noto Serif SC"(?:,"STSong")?,serif')
 _BODY_RE = re.compile(r'"PingFang SC","Hiragino Sans GB",sans-serif')
 
+# 重黑字体栈：给「全篇只有 PingFang 黑体栈」的模板用（wechat / minimal）。
+# PingFang SC 最粗只到 Semibold，单靠 font-weight:900 在 Chromium 里几乎看不出变化；
+# Hiragino Sans GB 自带 W6 重黑（macOS 系统内置，已核对 /System/Library/Fonts 存在），
+# 换族才有真实的笔画粗细差异。缺字体时按栈内顺序回落 PingFang SC，不会渲染失败。
+_HEAVY_SANS_STACK = '"Hiragino Sans GB","Heiti SC","PingFang SC",sans-serif'
+
 # ── 字体预设：head/body 为 None 表示保持现状 ──
+# tpl_css：按模板追加的覆盖片段（机制同版式轴），专治「正则无可替换目标」的静默失效——
+# wechat / minimal 全篇没有 Songti 衬线栈，head 替换对它们恒为 no-op，必须靠追加片段生效。
+# 片段只动字体族 / 字重 / 字距，不动盒模型尺寸，避免与版式轴的 order 重排打架；
+# 标题同时收紧字距（Hiragino W6 比 PingFang 略宽），把换行风险抵回去。
 FONT_PRESETS = {
     "serif": {"label": "衬线金标（现状）", "head": None, "body": None},
-    "heavy": {"label": "硬朗黑体", "head": _BODY_STACK, "body": None},
+    "heavy": {
+        "label": "硬朗黑体",
+        "head": _BODY_STACK,
+        "body": None,
+        "tpl_css": {
+            "wechat": "h1,h2{font-family:%s;font-weight:900;letter-spacing:-.01em}"
+                      ".rhead,.ftr,.tile .lb,.flow .step small{font-weight:800}"
+                      ".tile .t,.row .t,.flow .fh .ft,.flow .step b{font-weight:900}"
+                      ".sub,.sub2,.tile .d,.row .d{font-weight:500}" % _HEAVY_SANS_STACK,
+            "minimal": "h1,h2{font-family:%s;font-weight:900;letter-spacing:-.015em}"
+                       ".pill,.ck .t,.row .pt,.callout .nt{font-weight:900}"
+                       ".tagrow .idx,.lhead .sec .n,.row .no,.ochip{font-weight:900}"
+                       ".sub,.ck .d,.row .pd,.callout .nd{font-weight:500}" % _HEAVY_SANS_STACK,
+        },
+    },
 }
 FONT_KEYS = ["serif", "heavy"]
 DEFAULT_FONT_KEY = "serif"
@@ -111,17 +139,38 @@ GUIDE_BASE_TOKENS = {
     "__G_FADE__": "rgba(23,16,6,.5)",         # 攻略图暗角
 }
 
+# wechat 公众号信号格：浅纸面 + 深墨字 + 微信绿信号色（默认值＝css_engine._tpl_tokens 里的字面量）。
+# ⚠ 键名与 minimal/bold 模板共用（__PAPER__/__INK__/__MDIM__/__LINE__/__ACCENT__），但不串色：
+#   1) 预设 tokens 只在 palette_tokens() 里按 tpl_key 取表，minimal/bold 未登记 → 返回 {}，永不注入；
+#   2) _build_css 的字面量替换发生在「单个模板自己的 CSS 字符串」内，跨模板物理隔离。
+# 公众号正文可读性硬约束：任何预设都必须保持「浅纸面 + 深墨字 + 白卡」，只换信号色家族。
+WECHAT_BASE_TOKENS = {
+    "__PAPER__": "#f6f8f6",                   # 页面纸面底色（微冷灰绿）
+    "__INK__": "#1f2329",                     # 主文字墨色
+    "__MDIM__": "#646a73",                    # 次级/描述文字
+    "__LINE__": "#e6e9e5",                    # 分隔细线 / 进度点底色
+    "__CARD__": "#ffffff",                    # 瓦片 / 条目卡 / 流带底
+    "__ACCENT__": "#07c160",                  # 信号色（微信绿）：信号线/末格反白/行动块/左边线
+    "__ACCENT_DK__": "#059a4e",               # 信号色深版：眉题/小标签文字
+    "__ACCENT_SOFT__": "rgba(7,193,96,.12)",  # 信号色浅底（预留）
+    "__ACCENT_SHADOW__": "rgba(7,193,96,.28)",  # 信号色投影（预留）
+}
+
 # 模板 → 基础 token 表；配色轴已接通的模板即此表键集
 _TPL_BASE_TOKENS = {
     "classic": CLASSIC_BASE_TOKENS,
     "tier": TIER_BASE_TOKENS,
     "quest": QUEST_BASE_TOKENS,
     "guide": GUIDE_BASE_TOKENS,
+    "wechat": WECHAT_BASE_TOKENS,
 }
 PALETTE_READY_TPLS = set(_TPL_BASE_TOKENS)
 
 # ── 配色预设：palette 覆盖皮肤调色板同键名，tokens 覆盖模板级 token ──
-# tokens 是四模板键的扁平合集；替换按字面量进行，当前模板 CSS 里没有的键自然 no-op。
+# tokens 是各已接通模板（classic/tier/quest/guide/wechat）键的扁平合集；
+# 替换按字面量进行，当前模板 CSS 里没有的键自然 no-op。
+# ⚠ 往这里加新键前必须确认：该键名不会出现在「其它已接通模板」的 CSS 里，否则会串色
+#   （未接通模板拿不到 tokens，天然安全）。回归核对：scripts/check_variant_tokens.py。
 PALETTE_PRESETS = {
     "gold_night": {
         "label": "鎏金夜蓝（现状）",
@@ -166,6 +215,11 @@ PALETTE_PRESETS = {
             "__G_CHIP_HI__": "#ffbe78", "__G_ON_ACCENT__": "#2a1206",
             "__G_TAG__": "rgba(34,17,7,.9)", "__G_PANEL__": "rgba(23,12,4,.85)",
             "__G_FADE__": "rgba(23,11,4,.5)",
+            # wechat（公众号信号格）：保持浅纸面白卡深墨字，只把信号色换成熔火暖橙
+            "__PAPER__": "#fbf6f1", "__INK__": "#231d18", "__MDIM__": "#6d6157",
+            "__LINE__": "#ece1d6", "__CARD__": "#ffffff",
+            "__ACCENT__": "#d9622b", "__ACCENT_DK__": "#a9451a",
+            "__ACCENT_SOFT__": "rgba(217,98,43,.12)", "__ACCENT_SHADOW__": "rgba(217,98,43,.28)",
         },
     },
     "arcane_dusk": {
@@ -206,6 +260,11 @@ PALETTE_PRESETS = {
             "__G_CHIP_HI__": "#cbb8f0", "__G_ON_ACCENT__": "#1b1030",
             "__G_TAG__": "rgba(26,19,48,.9)", "__G_PANEL__": "rgba(18,13,34,.85)",
             "__G_FADE__": "rgba(16,11,30,.5)",
+            # wechat（公众号信号格）：保持浅纸面白卡深墨字，只把信号色换成暮光奥术紫
+            "__PAPER__": "#f5f4fa", "__INK__": "#1e1b2c", "__MDIM__": "#67617d",
+            "__LINE__": "#e6e3ef", "__CARD__": "#ffffff",
+            "__ACCENT__": "#7b5fd0", "__ACCENT_DK__": "#5b41ab",
+            "__ACCENT_SOFT__": "rgba(123,95,208,.12)", "__ACCENT_SHADOW__": "rgba(123,95,208,.28)",
         },
     },
 }
@@ -228,6 +287,11 @@ DEFAULT_PALETTE_KEY = "gold_night"
 # 用户实际最常用的 magazine 拿到空串 → 版式/随机静默失效、界面还无从察觉。
 # 现补齐 magazine/minimal/bold，头条下拉里的 7 个模板全部生效）。
 # 无主图内页（minimal/bold）的「图先行」语义就近取该页主视觉块（callout/warn）上浮。
+#
+# 2026-09-29 再补 wechat（公众号信号格，零图片依赖）：封面主视觉＝.tiles 要点瓦片，
+# 内页主视觉＝.note 总结条、要点块＝.rows 条目卡；两个预设都要保持语义差异
+# （hero_first＝主视觉上浮，summary_first＝要点先给/主视觉沉底）。
+# 至此头条 7 模板 + 公众号信号格全部有版式覆盖，不再有静默 no-op 的模板。
 LAYOUT_PRESETS = {
     "default": {
         "label": "经典排布（现状）",
@@ -255,6 +319,14 @@ LAYOUT_PRESETS = {
                        ".wrap-in>.callout{order:-1;margin-top:0;margin-bottom:26px}",
             "bold": ".tagrow{order:-2}.poster{order:-1;flex-basis:34%}"
                     ".wrap-in>.warn{order:-1;margin-top:0;margin-bottom:28px}",
+            # wechat 公众号信号格（2026-09-29 接入）：零图片模板，「图先行」就近取该页主视觉块上浮——
+            # 封面＝2×2 要点瓦片 .tiles（自带 flex:1，上浮后成为顶部大视觉块）；
+            # 内页＝左绿边线总结条 .wrap-in>.note（该页最重的主视觉）。
+            # 一律用「负 order 上浮」范式（minimal/bold 先例）：.rhead/.sig/.kick 给更负值钉在原位，
+            # .ftr 完全不碰——它靠 DOM 末位 + order:0 沉底，正 order 会把它挤出末尾。
+            "wechat": ".rhead{order:-4}.sig{order:-3}.kick{order:-3}"
+                      ".tiles{order:-2}"
+                      ".wrap-in>.note{order:-2;margin-top:26px}.wrap-in>h2{margin-top:30px}",
         },
     },
     "summary_first": {
@@ -284,6 +356,12 @@ LAYOUT_PRESETS = {
             "bold": ".poster{order:1}"
                     ".tagrow{order:-3}.lhead{order:-2}"
                     ".wrap-in>.warn{order:-1;margin-top:0;margin-bottom:28px}",
+            # wechat 公众号信号格（2026-09-29 接入）：封面把要点瓦片沉到阅读流带之后（标题+阅读导引先行），
+            # .ftr 同时给更大 order(3) 保住页脚末位——这是唯一需要正 order 的场景，必须连带处理页脚；
+            # 内页把要点条目卡 .rows 上浮到标题之前＝要点先行，.note/.ftr 顺势留在尾部。
+            "wechat": ".rhead{order:-4}.kick{order:-3}"
+                      ".rows{order:-2;margin-top:26px}.wrap-in>h2{margin-top:30px}"
+                      ".tiles{order:1;align-content:end}.ftr{order:3}",
         },
     },
 }
@@ -328,8 +406,13 @@ def palette_tokens(tpl_key, palette_key):
     return tokens
 
 
-def apply_font(css, font_key):
-    """按字体预设整体替换 CSS 里的字体栈；预设缺失或未定义时原样返回。"""
+def apply_font(css, font_key, tpl_key=None):
+    """按字体预设整体替换 CSS 里的字体栈；预设缺失或未定义时原样返回。
+
+    tpl_key：可选。传入时会追加该预设的「按模板覆盖片段」（FONT_PRESETS[键]["tpl_css"]），
+    用于没有衬线栈可替换的模板（wechat / minimal）——否则字体轴对它们恒为 no-op。
+    不传（默认）＝ 只做字体栈替换，历史调用点零行为变化。
+    """
     preset = FONT_PRESETS.get(font_key)
     if not preset:
         return css
@@ -338,7 +421,22 @@ def apply_font(css, font_key):
         css = _HEAD_RE.sub(lambda m: head, css)
     if body:
         css = _BODY_RE.sub(lambda m: body, css)
+    if tpl_key:
+        frag = (preset.get("tpl_css") or {}).get(tpl_key)
+        if frag:
+            css += "\n/* font:%s */\n%s" % (font_key, frag)
     return css
+
+
+def font_tpl_css(tpl_key, font_key):
+    """该模板在该字体预设下的追加片段；默认/未知/未覆盖模板返回空串（零行为变化）。
+
+    单独暴露一个读取口，供回归核对脚本与前端 hint 判定「这个模板的字体轴到底生不生效」。
+    """
+    preset = FONT_PRESETS.get(font_key)
+    if not preset:
+        return ""
+    return (preset.get("tpl_css") or {}).get(tpl_key, "")
 
 
 def font_label(font_key):

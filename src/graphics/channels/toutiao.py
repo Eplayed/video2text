@@ -249,7 +249,8 @@ def generate_graphics(summary, ai_config, progress_cb=None, theme="", skin="wow"
     layout_extra = variants.layout_css(tpl_key, layout_key)
     if layout_extra:
         css += "\n/* layout:%s */\n%s" % (layout_key, layout_extra)
-    css = variants.apply_font(css, font_key)
+    # tpl_key 必传：minimal 全篇只有黑体栈，没有 Songti 可替换，靠预设的按模板追加片段才生效
+    css = variants.apply_font(css, font_key, tpl_key)
     # 素材选图随机化（2026-09-29 用户要求「素材图片也可以是随机的，并不是第一张图片就是
     # 第一张图片素材」）：此前封面永远取比例最大的竖图、横带按固定顺序轮换，同一素材库
     # 生成多少次都是同一批图。现在每次生成建一个新随机源（_make_rng，_RNG_SEED 可固定复现），
