@@ -28,15 +28,30 @@
 - 删徽章/色块这类元素时三件事一起做：① 渲染函数里的 markup 删掉；② 对应 CSS 规则删掉（留死样式会误导后人）；③ 若该元素承载了语义色（阵营色/状态色），把语义转移到仍在的元素上（2026-09-29 删 `.panel .ring` 后阵营色改挂 `.panel.f-alliance/.f-horde` 左侧 8px 色条）。
 - 渠道级下线某内容块（如头条「提醒」）用三道防线：prompt 禁止生成 → schema 示例去掉该字段 → 主流程渲染前 `card.pop(...)` 代码级剔除（防 LLM 不听话 + 防本地兜底卡漏出）；模板渲染函数的分支保留，其他渠道不受影响。
 
+## 素材选图随机化（2026-09-29 起）
+
+- `skins._pick_cover_image(paths, rng=None)` / `_pick_band_image(paths, idx, rng=None, exclude=None)` 的 `rng=None` 分支是**旧确定行为**（封面取比例最大竖图、横带按比例升序固定轮换），公众号等既有调用点依赖它，**不得删除或改语义**；随机走 `rng` 分支（封面在竖构图池 >=1.0 里抽、池空回落全池；横带在 `exclude` 之外的未用素材里抽，耗尽才允许重复）。
+- 随机源必须每次生成新建一个（`toutiao._make_rng()`），并在渲染循环里累积 `used_assets`（封面 + 各页横带）当排除集——否则同包多页会反复抽到同一张图。
+- **guide 模板永不走随机**：`<题材>攻略图/` 是用户上传的有序素材（地图/路线/资料图），顺序即语义。
+- 随机化必须配「可复现 + 可追溯」两件套：模块级 `_RNG_SEED`（生产 None，测试设整数）+ manifest `assets` 字段（本包用到的素材文件名，首个为封面）。**跑 e2e 前必须钉死种子**，否则「两次生成字节全等」类断言（D 用例）会误报。
+- 报障「每次都是同一张图」先查：① 素材目录里有几张图（`output/toutiao/<题材>图片素材/`）；② manifest `assets`；③ 是不是 guide 模板（设计如此）。
+
 ## 用户显式输入是契约，代码级强制
 
 - 用户在弹窗填的「图文标题」必须逐字上封面。链路：弹窗 title → app.py → `generate_graphics(title=...)` 覆盖 `summary["title"]` → prompt + 渲染。
 - **禁止只在 prompt 里说「优先采用」**——实测 LLM（deepseek-v4-flash）会自行加词（「魔兽无限：…」→「魔兽无限B测：…」）。`channels/toutiao.py` 在 `sanitize_cards` 之后有代码级强制 `cards[0]["title"] = summary.get("title") or user_title[:60]`，不得移除；prompt 措辞保持「必须逐字使用，不得增删改写」。
 - 推广原则：凡是「界面承诺了 X 决定 Y」的传参，落点必须有代码级保证，模型自觉只能当锦上添花。
 
+## 渠道分工（头条 vs 公众号，2026-09-29 核查）
+
+- **共用同一套渲染内核**：`src.graphics` 的 skins / css_engine / templates（同一 `_TEMPLATES` 注册表）/ renderer / package，两个渠道适配器 `channels/toutiao.py`、`channels/wechat.py` 只在渠道层组装差异。用户问「是不是同一套框架」＝是，内核同源。
+- **头条**：7 模板全开、变体三轴（palette/font/layout）已接、素材选图已随机、题材插画作主视觉（`<题材>图片素材/`）。
+- **公众号**：白名单只放 wechat/minimal/classic/magazine；默认 `template="wechat"` 信号格且 `no_hero`＝**零素材图依赖**（防游戏背景渗进 AI 工具类图文）；主视觉来自用户提供的 `real_screenshots`（≥2 张铁律 lint + 10MB 上限，截图会复制进包）；`author_draft` 非空＝亲测模式、空＝转载模式；**变体三轴与素材随机均未接**（签名无这三参数，CSS 走 `_tpl_tokens` 皮原色）。
+- 要给公众号接三轴，按头条同法：签名加 `palette/font/layout` → `_tpl_tokens` 之后叠 `variants.palette_tokens` / `layout_css` / `apply_font` → 前端下拉 + app.py 透传；注意 wechat 模板的块结构需单独写覆盖片段，别复用 classic 的选择器。
+
 ## 验证与排查
 
-- e2e 脚本在 work 区（不进 git）：`e2e_variants.py`，17 用例（A-Q），跑法 `cd 项目根 && env -u PYTHONHOME -u PYTHONPATH /usr/local/bin/python3 <脚本>`，末行必须 `ALL_OK`。改动 variants/toutiao/templates 后必跑。
+- e2e 脚本在 work 区（不进 git）：`e2e_variants.py`，18 用例（A-R），跑法 `cd 项目根 && env -u PYTHONHOME -u PYTHONPATH /usr/local/bin/python3 <脚本>`，末行必须 `ALL_OK`。改动 variants/toutiao/templates/skins 后必跑；脚本 `main()` 开头会钉死 `toutiao._RNG_SEED`（素材随机化的前置条件）。
 - 新增覆盖规则必配断言用例：封面 HTML 断言 `/* layout:键 */` 标记 + 具体片段字符串逐字匹配；内页断言读 `img2.html`；标题类断言用 monkeypatch `toutiao._llm_cards` 模拟 LLM 改写（finally 恢复）。
 - 排查「选项不生效」第一性原则顺序：① 读产物 `output/toutiao/<id>/manifest.json`（参数是否落盘）→ ② 读 `img*.html`（覆盖是否注入、选择器是否匹配）→ ③ 才怀疑前端/进程。manifest 落了参数但 HTML 无效果＝覆盖字典缺口；manifest 没落参数＝链路/进程问题（先查旧进程占端口）。
 - Flask 重启纪律见 `30-python-backend.md` 与 AGENTS.md（按端口 PID 杀，禁 pkill 失配模式，重启后 lsof 换 PID + 页面特征双确认）。

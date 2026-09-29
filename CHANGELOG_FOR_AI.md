@@ -2,6 +2,17 @@
 
 更新时间：2026-09-29
 
+## 2026-09-29（六）：头条素材选图随机化 + 公众号渠道框架核查
+
+用户两件事：①「头条号图文素材图片也可以是随机的，并不是第一张图片就是第一张图片素材」；②「素材库选抖音素材→整理稿→公众号图文，生成的和现在是一套框架吗」。
+
+- **①根因（选图完全确定性）**：`skins._pick_cover_image(paths)` 永远返回 `_img_ratio`（h/w）最大者＝优先竖构图；`_pick_band_image(paths, idx)` 按比例升序排序后 `(idx-2) % len` 固定轮换。即同一素材库生成一百次，封面永远是同一张、内页横带顺序永远一样——用户看到的「第一张图总是第一张素材」不是 bug 而是旧设计。
+- **①修复（`skins.py` 内核参数化，向后兼容）**：两个选图函数各加可选参数——`_pick_cover_image(paths, rng=None)`：`rng` 给定时在**竖构图池（比例 >= 1.0）**里 `rng.choice`，池空回落全池（防横图被拉竖裁切；实测「魔兽世界-正式服图片素材」3 张全是横图，走回落分支）；`_pick_band_image(paths, idx, rng=None, exclude=None)`：`rng` 给定时在「还没用过的素材」里随机抽，`exclude` 接受单张或列表（封面 + 前几页横带），素材耗尽才允许重复。**`rng=None` 逐字保持旧行为**——公众号渠道 `wechat.py` 三处调用点不传 rng，零行为变化。
+- **①接线（`channels/toutiao.py`）**：生成主流程每次新建随机源 `rng = _make_rng()`，封面传 rng、横带传 `rng, exclude=used_assets` 并把选中图追加进 `used_assets`（包内不撞封面、不重复）。**guide 模板不走随机**：`<题材>攻略图/` 是用户上传的有序素材（地图/路线/资料图），保持 `theme_imgs[0]` 封面 + `(idx-1) % len` 顺序轮换。**可复现钩子**：模块级 `_RNG_SEED = None`（生产真随机）+ `_make_rng()`，测试/复现某次选图时设成整数即可让选图完全确定。**可追溯**：manifest 新增 `assets` 字段（本包实际用到的素材文件名列表，首个为封面主视觉）——随机后不能再靠目录顺序倒推「这张成品图用的哪张素材」。
+- **②核查结论（同一套渲染内核，渠道组装不同）**：抖音素材→整理稿→公众号图文（`channels/wechat.py`）与头条**共用 `src.graphics` 内核**：同一批皮肤/素材函数（`_theme_image_paths`/`_pick_cover_image`/`_pick_band_image`）、同一 `css_engine._build_css`、同一 `templates._TEMPLATES` 注册表、同一 `renderer.render_card_html` 与 `package` manifest 封装。差异在渠道层：公众号默认 `template="wechat"` 信号格模板且 `no_hero`（**零素材图依赖**，杜绝游戏背景图渗进 AI 工具类图文）、白名单只放 wechat/minimal/classic/magazine、有亲测（`author_draft` 非空）/转载双模式与「真实截图 ≥2 张」铁律 lint、截图会被复制进包。**变体三轴（palette/font/layout）目前只接了头条**——`wechat.generate_graphics` 签名无这三参数，CSS 走 `_tpl_tokens` 皮原色；素材随机化本轮也只接头条（公众号主视觉本就来自真实截图，随机换素材图无意义）。
+- **验证**：`skins.py`/`toutiao.py`/`wechat.py` `py_compile` 过；e2e 扩到**十八用例**全过 `ALL_OK`——新增 R（`rng=None` 旧行为断言 `cover==paths[0]`/`band==paths[0]`；20 个种子封面出现 3 种取值；横带恒不越池、不与已用素材撞图；素材耗尽回落全池）、R2（真实包 manifest `assets` 非空且列出 4 个文件名）、R3（同种子选图逐字复现、6 个种子出现 6 种素材组合＝随机确实到达渠道层）。**e2e 自身适配**：`main()` 开头钉死 `toutiao._RNG_SEED = 20260929`，否则 D 用例「显式 default 与不传 layout 字节全等」会因两次选到不同素材而误报。
+- **仍未做**：公众号渠道未接变体三轴与素材随机（需要时按头条同法接：签名加参数 → `_tpl_tokens` 后叠 `palette_tokens`/`layout_css`/`apply_font` → 选图传 rng）；`minimal`/`bold`/`magazine`/`wechat` 配色轴仍未接通。
+
 ## 2026-09-29（五）：summary_first 标题遮挡修复 + 头条图文移除「提醒」块与条目首字徽章
 
 用户报障三件事：①「图片都在布局底部，是不是都随机」；②「有些字被挡住了」；③「图文中移除『提醒』和每个首字」。
