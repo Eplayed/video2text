@@ -1138,6 +1138,8 @@ def _cover_html_quest(card, css, hero_uri, ctx):
         '<div class="ifc"><div class="ico">%s</div><div class="t">%s</div><div class="d">%s</div></div>'
         % (_esc((str(h.get("t") or "?"))[:1]), _esc(h.get("t", "")), _esc(h.get("d", "")))
         for h in hooks) if hooks else ""
+    # 修复：摘要行必须包进 .ifact 横向容器（此前漏包导致 4 个 .ifc 在列容器里纵向全宽堆叠）
+    facts_html = ('<div class="ifact">%s</div>' % facts) if facts else ""
     sub = card.get("subtitle") or card.get("timeline") or ""
     banner = ('<div class="banner"><div class="ln"></div><div class="bx">%s</div><div class="ln r"></div></div>'
               % _esc(sub)) if sub else ""
@@ -1159,7 +1161,7 @@ def _cover_html_quest(card, css, hero_uri, ctx):
 </div></body></html>""".replace("__H__", str(ctx["canvas_h"])) % (
     _page_open(css), _esc(ctx["brand"] or "任务攻略"), _pgdate(),
     "long" if len(str(card.get("title") or "")) > 12 else "", _esc(card.get("title", "")),
-    banner, shield, hero_uri, facts, tn_html)
+    banner, shield, hero_uri, facts_html, tn_html)
 
 
 def _list_html_quest(card, css, hero_uri, ctx):
