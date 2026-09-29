@@ -64,8 +64,10 @@ def _build_cards_prompt(summary, theme="", template="classic"):
     theme_line = ("本篇题材：%s。封面标题、各卡标题和 copy_text 都要点明该题材（游戏名/模式名），让读者一眼知道这是哪个游戏的内容。" % theme) if theme else "本篇题材：未指定，按整合稿内容自行判断题材并在标题点明。"
     title_line = ""
     if (summary.get("title") or "").strip():
-        title_line = ("推荐标题（来自整理稿/用户指定）：%s。第 1 张 cover 卡的 title 优先采用它，"
-                      "可微调语气与字数但必须保留核心词，不要另起炉灶。" % summary["title"].strip())
+        # 措辞收紧（2026-09-29）：旧版「优先采用、可微调」实测仍被模型加词改写；
+        # 生成侧已有代码级强制覆盖兜底，这里同步要求逐字使用，保证 subtitle/copy_text 语境一致。
+        title_line = ("封面标题（来自整理稿/用户指定）：%s。第 1 张 cover 卡的 title 必须逐字使用该标题，"
+                      "不得增删改写任何字词；subtitle 和 copy_text 围绕它展开。" % summary["title"].strip())
     tpl = templates._TEMPLATES.get(template) or templates._TEMPLATES["classic"]
     prompt = (_CARDS_PROMPT
               .replace("{schema_placeholder}", schema)
@@ -259,6 +261,12 @@ def generate_graphics(summary, ai_config, progress_cb=None, theme="", skin="wow"
     cards = data.get("cards") or []
     # 渲染前清洗：剔除「口播未给」「请人工核对」等编辑向元语言（成品图直接面向读者）
     cards = ir.sanitize_cards(cards)
+    # 用户显式指定的标题必须逐字上封面（2026-09-29 修复：此前只在 prompt 里说「优先采用」，
+    # LLM 仍会自行加词改写——实测把「魔兽无限：…」改成「魔兽无限B测：…」印上封面。
+    # 承诺「图文标题决定封面主标题」是产品契约，改为代码级强制，不依赖模型自觉）。
+    user_title = (title or "").strip()
+    if user_title and cards:
+        cards[0]["title"] = summary.get("title") or user_title[:60]
     if skin_uri:
         for card in cards:
             card["bg"] = "skin"
