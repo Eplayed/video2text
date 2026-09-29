@@ -433,6 +433,8 @@ h1.list.long { font-size:52px; }
 .gmap.cover { flex:1; min-height:420px; }
 .gmap.list { flex:0 0 38%; min-height:300px; }
 .gmap img { width:100%; height:100%; object-fit:cover; display:block; filter:saturate(.94) sepia(.05); }
+.gfull { position:absolute; inset:0; z-index:0; overflow:hidden; }
+.gfull img { width:100%; height:100%; object-fit:cover; display:block; }
 .gmap .edge { position:absolute; inset:0;
               background:radial-gradient(ellipse at center, transparent 55%, __G_FADE__ 100%); }
 .gmap .tag { position:absolute; top:16px; right:16px; background:__G_TAG__; border:1px solid __GOLD_DEEP__;
@@ -1005,7 +1007,19 @@ def _list_html_bold(card, css, hero_uri, ctx):
 
 
 # ── guide 渲染（攻略图解：攻略图主视觉 + 路线轨 + 指令面板） ──
+# 攻略图比例 >= 该值视为「整图信息图」（自带标题横幅/路线面板，比例贴近画布 1.78），
+# 封面改满铺整图；塞进 .gmap 子盒会被 object-fit:cover 上下裁切、切掉图内自带标题。
+_GUIDE_FULLBLEED_RATIO = 1.6
+
+
 def _cover_html_guide(card, css, hero_uri, ctx):
+    ratio = ctx.get("cover_ratio")
+    if ratio is not None and ratio >= _GUIDE_FULLBLEED_RATIO:
+        return """%s<div class="wrap" style="height:__H__px">
+  <div class="gfull"><img src="%s"></div>
+  <div class="frame"></div>
+  <div class="wrap-in"></div>
+</div></body></html>""".replace("__H__", str(ctx["canvas_h"])) % (_page_open(css), hero_uri)
     hooks = (card.get("hooks") or [])[:4]
     chain = " <b>→</b> ".join(_esc(h.get("t", "")) for h in hooks) if hooks else "详见路线图"
     tl = card.get("timeline") or ""

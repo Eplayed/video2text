@@ -265,9 +265,11 @@ def generate_graphics(summary, ai_config, progress_cb=None, theme="", skin="wow"
         browser = p.chromium.launch()
         page = browser.new_page(viewport={"width": CANVAS_W, "height": CANVAS_H})
         brand = (theme or "").strip()[:12]
+        cover_ratio = skins._img_ratio(cover_img) if cover_img is not None else None
         for idx, card in enumerate(cards, 1):
             kind = card.get("kind") or "list"
-            ctx = {"brand": brand, "idx": idx, "total": total, "skin_key": skin_key, "canvas_h": CANVAS_H}
+            ctx = {"brand": brand, "idx": idx, "total": total, "skin_key": skin_key,
+                   "canvas_h": CANVAS_H, "cover_ratio": cover_ratio}
             if kind == "cover" and idx == 1:
                 hero = skins._hero_uri(card, cover_img, skin_uri, _ASSETS_DIR)
                 html = tpl["cover"](card, css, hero, ctx)
