@@ -2,6 +2,19 @@
 
 更新时间：2026-09-29
 
+## 2026-09-29（四）：版式轴全模板覆盖（magazine/minimal/bold 补齐）+ 用户标题代码级强制
+
+用户报障「没有随机布局 + 标题改了生成的图文没变」，要求第一性原则修复。**取证（包 56 manifest，12:01 生成）一条记录同时定性两个报障**：`template=magazine`、`layout=summary_first`（随机确实抽中并落盘）、`title="魔兽无限：任务物品智能轮流拾取"`（用户新标题确实传入落盘），但 `cards[0].title="魔兽无限B测：任务物品智能轮流拾取"`（LLM 擅自加「B测」）。即两个报障都不是「参数没传到」，而是「传到了但没生效」。另排查双入口假设：`generateToutiaoGraphics`（简单按钮）grep 仅定义处 1 个匹配、无调用点，属死代码，排除。
+
+- **根因①（版式静默失效，第二次复发）**：`LAYOUT_PRESETS` 每预设的 css 是 `{模板键: 覆盖片段}`，`layout_css(tpl_key, layout_key)` 查不到模板键返回空串。此前只登记 classic/tier/quest/guide 四模板，用户实际生成的 magazine（以及 minimal/bold）拿到空串 → 随机版式抽中落盘但 CSS 零注入、视觉零变化、界面无任何提示。与 09-29（三）的内页选择器缺口同属「静默失效」家族。
+- **修复①（`variants.py` 全模板覆盖）**：`hero_first`/`summary_first` 两预设各补 magazine/minimal/bold 规则（依据 `templates.py` 三模板真实块结构与 flex 尺寸设计）——magazine 封面默认 photo 已在 head 之前（天然图先行），`hero_first` 只放大主图（`.photo{flex-basis:54%}`）不重排，`summary_first` 大图沉到标题后目录前（`.photo{order:1}.index{order:2}`）；内页横带 `.wrap-in>.lband`/引言 `.wrap-in>.note-q` 同步重排。minimal/bold 封面主图上移放大（`.photo/.poster{order:-1}` + flex-basis 增大）、`.tagrow` 钉顶；**两模板内页无主图**，`hero_first`/`summary_first` 语义就近取主视觉块上浮（minimal→`.wrap-in>.callout`、bold→`.wrap-in>.warn`，order:-1 + 清零上边距）。选择器不共存说明：`.photo/.poster` 属封面、`.callout/.warn` 属内页，同片段并列写互不误伤。至此头条下拉 7 模板版式轴全部生效；注释块同步写明修复缘由。
+- **根因②（标题被 LLM 改写）**：链路传参全程正确，但旧 prompt 措辞「优先采用它，可微调语气与字数但必须保留核心词」给了模型改写空间，实测被加词。软约束违反产品契约（弹窗明示「图文标题决定封面主标题」）。
+- **修复②（`channels/toutiao.py` 代码级强制）**：`sanitize_cards` 之后新增——`user_title` 非空时 `cards[0]["title"] = summary.get("title") or user_title[:60]`，用户标题逐字上封面，不依赖模型自觉（`summary["title"]` 已在入口被 title 覆盖，兜底路径 `_fallback_cards` 本就正确）。prompt title_line 同步收紧为「必须逐字使用该标题，不得增删改写任何字词」，保证 subtitle/copy_text 语境一致。
+- **前端提示（`index.html`）**：版式 hint「对经典卡片/梯度榜/任务面板/攻略图解生效」→「**版式对全部模板生效**」（配色仍如实标注四模板、字体全部）。配色轴不覆盖 magazine/minimal/bold 属既有设计（`PALETTE_READY_TPLS`），不在本轮范围。
+- **验证**：`variants.py`/`toutiao.py` `py_compile` 过；e2e 扩到**十五用例**全过 `ALL_OK`——新增 M（magazine+summary_first：封面吃到 photo/index 重排、img2 吃到 lband/note-q 重排）、N（minimal/bold+hero_first：封面主图上移放大规则注入、bold 内页 warn 上浮）、O（monkeypatch `_llm_cards` 返回改写标题「LLM擅自改写的标题B测」，断言 manifest cards[0].title 与封面 HTML 均为用户标题、改写标题不出现）；Flask 按端口 PID 重启（47588→50804），lsof 换 PID + 首页含「版式对全部模板生效」双确认接管。
+- **记录沉淀**：新增 `.agents/memories/40-graphics-variants.md`（变体轴守则：静默失效头号敌人、版式覆盖机制要点、用户输入代码级强制原则、e2e 跑法与「选项不生效」第一性排查顺序 manifest→HTML→前端/进程）。
+- 仍未做：`minimal`/`bold`/`magazine`/`wechat` 配色轴未接通（传预设被安全忽略，前端已如实标注）；`generateToutiaoGraphics` 死代码未清理（无害，留待顺手删）。
+
 ## 2026-09-29（三）：版式轴内页重排补全（方案一）+ 随机版式选项
 
 - **根因（用户报障「第一张变、后面几张不变」）**：版式轴第三步的 `LAYOUT_PRESETS` 只写了**封面级**选择器（`.hero`/`.gmap`/`.mast`），而 classic 内页图块叫 `.band`、要点容器 `.panels`、小结 `.note`，tier 内页是 `.tier` 包 `.thead`/`.tgrid` 且**无主图**——覆盖片段注入到了内页 HTML（`/* layout:... */` 标记在），但选择器匹配不到任何元素 → 内页零变化。manifest 证据（包 56）：`layout=summary_first` 已生效、四张 HTML 都含标记，唯独 img2-4 无 `.hero` 可排。属实现缺口，非运维问题。
