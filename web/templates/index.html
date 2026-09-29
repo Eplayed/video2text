@@ -1032,6 +1032,26 @@ textarea{resize:vertical;min-height:84px}
           </div>
         </div>
         <div class="tt-gen-field">
+          <label>配色 / 字体 / 版式 <small>（预设闭集：配色只对「信号格 / 经典卡片」生效，极简清单与杂志大片未接通配色轴；字体与版式对白名单 4 套模板全部生效）</small></label>
+          <div style="display:flex;gap:10px">
+            <select id="wx-gen-palette" style="flex:1">
+              <option value="gold_night" selected>默认配色（信号格微信绿 / 经典鎏金）</option>
+              <option value="ember_forge">熔火暖橙（经典为赤金）</option>
+              <option value="arcane_dusk">暮光紫（经典为奥术）</option>
+            </select>
+            <select id="wx-gen-font" style="flex:1">
+              <option value="serif" selected>默认字体（信号格黑体 / 经典衬线）</option>
+              <option value="heavy">硬朗黑体（标题重黑）</option>
+            </select>
+            <select id="wx-gen-layout" style="flex:1">
+              <option value="default" selected>经典排布（现状默认）</option>
+              <option value="hero_first">主视觉先行（瓦片/大图置顶）</option>
+              <option value="summary_first">要点先行（摘要上浮）</option>
+              <option value="random">每次随机（自动换排布）</option>
+            </select>
+          </div>
+        </div>
+        <div class="tt-gen-field">
           <label>题材<small>（自由填写，进 LLM prompt，决定卡片标题点明什么主题）</small></label>
           <input id="wx-gen-theme" placeholder="例：AI工具实测 / 前端性能优化 / 副业复盘（留空由模型自判）">
         </div>
@@ -2104,6 +2124,16 @@ async function confirmWechatGen() {
   const tplEl = document.getElementById('wx-gen-tpl');
   const tpl = WX_TPL_WHITELIST.indexOf(tplEl.value) >= 0 ? tplEl.value : 'wechat';
   const tplLabel = tplEl.selectedOptions[0].textContent.split(' ')[0];
+  // 变体三轴：值与文案都取自下拉，未知值后端一律回落默认（＝现状）
+  const palEl = document.getElementById('wx-gen-palette');
+  const palette = palEl.value;
+  const palLabel = palEl.selectedOptions[0].textContent;
+  const fontEl = document.getElementById('wx-gen-font');
+  const font = fontEl.value;
+  const fontLabel = fontEl.selectedOptions[0].textContent;
+  const layEl = document.getElementById('wx-gen-layout');
+  const layout = layEl.value;
+  const layoutLabel = layEl.selectedOptions[0].textContent;
   let shotToken = null;
   if (_wxShotFiles.length) {
     try { shotToken = await wxShotUpload(); }
@@ -2112,12 +2142,15 @@ async function confirmWechatGen() {
   closeWechatGenDialog();
   const modeLine = isRepost ? '\n模式：转载（整理公开分享内容，观点归原作者）' : `\n模式：亲测（底稿 ${draft.length} 字）`;
   const shotLine = shotToken ? `\n真实截图：${_wxShotFiles.length} 张（已上传）` : (isRepost ? '' : '\n真实截图：0 张（lint 将报 error）');
-  if (!confirm(`生成公众号图文？\n标题：${title || '（按整合稿标题）'}\n模板：${tplLabel}\n题材：${theme || '自动'}${modeLine}${shotLine}\n已有产物会被覆盖。`)) return;
+  // 配色轴只对已登记 tokens 的模板生效；选了非默认配色又挑了未接通模板时如实告知，避免"改了没变"
+  const palNote = (palette !== 'gold_night' && tpl !== 'wechat' && tpl !== 'classic')
+    ? '（该模板未接通配色轴，本次仍按默认色出图）' : '';
+  if (!confirm(`生成公众号图文？\n标题：${title || '（按整合稿标题）'}\n模板：${tplLabel}\n配色：${palLabel}${palNote}\n字体：${fontLabel}\n版式：${layoutLabel}\n题材：${theme || '自动'}${modeLine}${shotLine}\n已有产物会被覆盖。`)) return;
   setStatus('running', '正在生成公众号图文...');
   try {
     const resp = await fetch('/api/wechat/generate', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({summary_id: id, author_draft: draft, theme, title, template: tpl, shot_token: shotToken})
+      body: JSON.stringify({summary_id: id, author_draft: draft, theme, title, template: tpl, shot_token: shotToken, palette, font, layout})
     }).then(r=>r.json());
     if (resp.error) { setStatus('error', resp.error); return; }
     pollWechatStatus();
