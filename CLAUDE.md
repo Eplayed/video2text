@@ -22,7 +22,7 @@
 ## 关键纪律
 
 1. 改策略：只改 `content_store.py` 权威源，通过 `/api/strategy/channels` 下发，不直接改工作台侧逻辑。
-2. 改代码后必须重启 Flask（无热重载）：`cd web && python3 app.py`（端口 15801）。
+2. 改代码后必须重启 Flask（无热重载）：先按占用端口的 PID 杀旧进程（`lsof -nP -i :15801` 取 PID 后 `kill`），再 `cd web && python3 app.py`；重启后用 `lsof` 确认 PID 已换、新进程真正接管。禁用 `pkill -f "web/app.py"`——它匹配不到实际命令行（`.../MacOS/Python app.py`），会造成旧进程占端口、新进程静默退出。
 3. 运行数据不进 git：`config/config.env`（Cookie/API Key）、`video_index.json` 等索引文件、`*.json` 索引——换机时手动迁移。
 4. AI 加工未配置时静默跳过、不阻断采集主流程。
 

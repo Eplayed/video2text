@@ -7,6 +7,7 @@
 - **根因**：源攻略图（`output/toutiao/<题材>攻略图/4_01.jpg` 等，1078×1918，h/w≈1.78）本身是整张 9:16 信息图——顶部自带金色标题横幅、中部地图、底部路线面板，比例与画布 1080×1920（1.778）几乎一致；旧逻辑把它塞进 `.gmap.cover` 子盒（约 968×1100、比例≈1.14），`object-fit:cover` 居中裁切上下各约 300px，图内自带标题横幅被切半。与版式轴无关，default 版式同样存在。
 - **修复（两文件三处）**：`channels/toutiao.py` ctx 注入 `cover_ratio = skins._img_ratio(cover_img)`（h/w，异常返回 None）；`templates.py` guide CSS 新增 `.gfull{position:absolute;inset:0;z-index:0;overflow:hidden}` 与 `.gfull img{width:100%;height:100%;object-fit:cover}`；`_cover_html_guide` 开头加分支——`ctx["cover_ratio"] >= _GUIDE_FULLBLEED_RATIO`（常量 1.6）时输出满铺结构 `div.gfull>img + div.frame + div.wrap-in(空)`，整图满画布（1.779≈1.778 几乎零裁切）；装饰框 `.frame`（无 z-index）与内容层 `.wrap-in`（z-index:1）均在 DOM 更后/更高层，正常压整图之上。ratio < 1.6 或 None（如 wechat 通道未注入）走原结构、零变化；guide 内页（`.gmap.list` 横带）不受影响。
 - **验证**：`templates.py`/`toutiao.py` `py_compile` 过；样张脚本补同款 ctx 注入后重跑，guide 三版式封面目检满铺整图、顶部标题横幅与底部路线面板完整、装饰框正常，内页结构不变；e2e 扩到九用例（新增 H：guide 封面含 `div.gfull` 且内页不含；I：monkeypatch `_img_ratio` 返回 1.0 回落旧结构无 `div.gfull`）全过 `ALL_OK`；Flask 重启 200。
+- **勘误（重启纪律）**：本节与版式轴节所记「Flask 重启 200」当时均由**旧进程**返回——`pkill -f "web/app.py"` 匹配不到实际命令行（`.../MacOS/Python app.py`，cwd=web），旧进程未被杀、新进程抢端口失败静默退出，15801 端口持续由 09-28 21:31 启动的旧代码占据。用户侧现象（09-29 11:00 包 56）：生成弹窗没有「版式」下拉、配色/字体可选但布局不变；manifest 证据为 `palette=ember_forge` 生效但**无 `layout` 字段**（新代码即使不传也会写 `layout=default`）。已改为按端口 PID 杀（`lsof -nP -i :15801` → `kill`）后重启，并以 `lsof` PID 更换 + 首页含 `tt-gen-layout` 双重确认新进程接管；AGENTS/CLAUDE/CODEBUDDY/规则文档的重启纪律同步改写。
 
 ## 2026-09-29：图文变体轴第三步——版式轴接入（CSS 覆盖层重排 + 前端下拉）+ quest 封面 ifact 修复
 
