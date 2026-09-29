@@ -223,6 +223,11 @@ DEFAULT_PALETTE_KEY = "gold_night"
 # 内页规则一律用「直接子选择器」或「内页专有类」，避免误伤同名嵌套元素：
 #   .wrap-in>.note  —— classic 封面的 .note 嵌在 .cta 里，不加 > 会被连带重排；
 #   .tier>.tgrid    —— .tier 只存在于 tier 内页，封面用的是 .tpreview，天然隔离。
+#
+# 全模板覆盖（2026-09-29 二次修复：此前只覆盖 classic/tier/quest/guide，
+# 用户实际最常用的 magazine 拿到空串 → 版式/随机静默失效、界面还无从察觉。
+# 现补齐 magazine/minimal/bold，头条下拉里的 7 个模板全部生效）。
+# 无主图内页（minimal/bold）的「图先行」语义就近取该页主视觉块（callout/warn）上浮。
 LAYOUT_PRESETS = {
     "default": {
         "label": "经典排布（现状）",
@@ -242,6 +247,14 @@ LAYOUT_PRESETS = {
                     ".tier>.thead{margin-bottom:22px}.tbadge{font-size:104px;width:176px}",
             "quest": ".mast{order:-2}.hero{order:-1}",
             "guide": ".mast{order:-2}.gmap{order:-1}",
+            # magazine 封面默认已图先于标题，改为放大主图强化「图先行」；内页横带图同步放大
+            "magazine": ".photo{flex-basis:54%}.wrap-in>.lband{flex-basis:30%}",
+            # minimal/bold 封面：主图上移到标题之前并放大；内页无主图，主视觉块（callout/warn）上浮
+            # （.photo/.callout 分属封面/内页不共存，.tagrow 两页都有、钉顶即可）
+            "minimal": ".tagrow{order:-2}.photo{order:-1;flex-basis:38%}"
+                       ".wrap-in>.callout{order:-1;margin-top:0;margin-bottom:26px}",
+            "bold": ".tagrow{order:-2}.poster{order:-1;flex-basis:34%}"
+                    ".wrap-in>.warn{order:-1;margin-top:0;margin-bottom:28px}",
         },
     },
     "summary_first": {
@@ -257,6 +270,16 @@ LAYOUT_PRESETS = {
                     ".tier>.tgrid{order:-1;margin-bottom:16px}.tier>.thead{order:1;margin-bottom:0}",
             "quest": ".hero{order:1}",
             "guide": ".gmap{order:1}",
+            # magazine 封面：大图沉到标题之后、目录之前；内页横带图沉到条目之后、引言之前
+            "magazine": ".photo{order:1}.index{order:2}"
+                        ".wrap-in>.lband{order:1}.wrap-in>.note-q{order:2}",
+            # minimal/bold 封面：主图沉底，要点清单上浮；内页：提醒块上浮到标题正下方（要点导语位）
+            "minimal": ".photo{order:1}"
+                       ".tagrow{order:-3}.lhead{order:-2}"
+                       ".wrap-in>.callout{order:-1;margin-top:0;margin-bottom:26px}",
+            "bold": ".poster{order:1}"
+                    ".tagrow{order:-3}.lhead{order:-2}"
+                    ".wrap-in>.warn{order:-1;margin-top:0;margin-bottom:28px}",
         },
     },
 }
