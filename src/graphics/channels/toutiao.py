@@ -9,6 +9,7 @@ generate_graphics 主流程、manifest 包管理薄封装、ToutiaoChannel 适�
 prompt 文案、【固定标签】兜底解析。Python 3.9 兼容：不用 match / X|Y 语法。
 """
 import json
+import random
 import re
 from datetime import datetime
 from pathlib import Path
@@ -24,6 +25,16 @@ OUTPUT_DIR = ROOT / "output" / "toutiao"
 CANVAS_W, CANVAS_H = 1080, 1920
 
 _ASSETS_DIR = OUTPUT_DIR / "_assets"
+
+# 素材选图随机种子（2026-09-29 素材随机化引入）：
+# 生产为 None —— 每次生成新建随机源，同一素材库多次出图会换封面/换横带；
+# 测试或需要复现某次选图时，把它设成整数即可让选图完全确定（e2e 用它保证字节级断言可复现）。
+_RNG_SEED = None
+
+
+def _make_rng():
+    """按 _RNG_SEED 建随机源；None 表示真随机。"""
+    return random.Random(_RNG_SEED)
 
 # ── LLM 卡片化 ──
 _CARDS_PROMPT = """你是微头条竖版信息图排版师。把下面的整合稿排成 4 张竖版卡片（1080x1920 竖屏 9:16），供直接渲染出图。直接输出 JSON，不要思考过程、不要解释。
@@ -239,6 +250,12 @@ def generate_graphics(summary, ai_config, progress_cb=None, theme="", skin="wow"
     if layout_extra:
         css += "\n/* layout:%s */\n%s" % (layout_key, layout_extra)
     css = variants.apply_font(css, font_key)
+    # 素材选图随机化（2026-09-29 用户要求「素材图片也可以是随机的，并不是第一张图片就是
+    # 第一张图片素材」）：此前封面永远取比例最大的竖图、横带按固定顺序轮换，同一素材库
+    # 生成多少次都是同一批图。现在每次生成建一个新随机源（_make_rng，_RNG_SEED 可固定复现），
+    # 封面在竖构图池里随机抽、横带在「本包还没用过的素材」里随机抽（不撞封面、包内不重复）。
+    # guide 模板不走随机——攻略图目录是用户上传的有序素材，顺序有意义，保持确定取法。
+    rng = _make_rng()
     if tpl_key == "guide":
         if guide_images:
             theme_imgs = [Path(p) for p in guide_images]
@@ -247,7 +264,7 @@ def generate_graphics(summary, ai_config, progress_cb=None, theme="", skin="wow"
         cover_img = theme_imgs[0] if theme_imgs else None
     else:
         theme_imgs = skins._theme_image_paths(theme, skin_key, OUTPUT_DIR)
-        cover_img = skins._pick_cover_image(theme_imgs)
+        cover_img = skins._pick_cover_image(theme_imgs, rng)
 
     _pg("LLM 卡片化整合稿（模板：%s）..." % tpl["label"])
     data = _llm_cards(summary, ai_config, theme, tpl_key)
@@ -287,6 +304,8 @@ def generate_graphics(summary, ai_config, progress_cb=None, theme="", skin="wow"
         page = browser.new_page(viewport={"width": CANVAS_W, "height": CANVAS_H})
         brand = (theme or "").strip()[:12]
         cover_ratio = skins._img_ratio(cover_img) if cover_img is not None else None
+        # 本包已用素材（封面 + 各页横带），随机选图时作为排除集，避免同图重复出现
+        used_assets = [cover_img] if cover_img is not None else []
         for idx, card in enumerate(cards, 1):
             kind = card.get("kind") or "list"
             ctx = {"brand": brand, "idx": idx, "total": total, "skin_key": skin_key,
@@ -298,7 +317,9 @@ def generate_graphics(summary, ai_config, progress_cb=None, theme="", skin="wow"
                 if tpl_key == "guide":
                     band = theme_imgs[(idx - 1) % len(theme_imgs)] if theme_imgs else None
                 else:
-                    band = skins._pick_band_image(theme_imgs, idx)
+                    band = skins._pick_band_image(theme_imgs, idx, rng, exclude=used_assets)
+                    if band is not None:
+                        used_assets.append(band)
                 hero = skins._hero_uri(card, band, skin_uri, _ASSETS_DIR)
                 html = tpl["list"](card, css, hero, ctx)
             html_path = out_dir / ("img%d.html" % idx)
@@ -322,6 +343,9 @@ def generate_graphics(summary, ai_config, progress_cb=None, theme="", skin="wow"
         "palette": palette_key,
         "font": font_key,
         "layout": layout_key,
+        # 素材选图已随机化（2026-09-29）：记录本包实际用到的素材文件名（首个为封面主视觉），
+        # 便于事后追溯「这张成品图用的是哪张素材」——随机后不能再靠目录顺序倒推。
+        "assets": [p.name for p in used_assets],
         "canvas": "%dx%d" % (CANVAS_W, CANVAS_H),
         "summary_type": summary.get("summary_type", ""),
         "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
