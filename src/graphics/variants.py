@@ -18,6 +18,7 @@ guide 荧光绿路线轨——它们是模板的身份色。
 即现状零行为变化；所有 base token 默认值 ＝ token 化之前的硬编码字面量。
 Python 3.9 兼容：不用 match / X|Y 语法。
 """
+import random
 import re
 
 from .skins import _PALETTE_DEFAULT, _SKIN_PALETTES
@@ -261,6 +262,10 @@ LAYOUT_PRESETS = {
 }
 LAYOUT_KEYS = ["default", "hero_first", "summary_first"]
 DEFAULT_LAYOUT_KEY = "default"
+# 随机版式：只从「非 default」预设里挑，保证每次生成都看得到与经典排布不同的块序；
+# 一次生成只抽一次（整包统一版式，不会一张一个样），抽中的真实键写进 manifest.layout。
+RANDOM_LAYOUT_KEY = "random"
+RANDOM_POOL = ["hero_first", "summary_first"]
 
 
 def resolve_keys(palette_key, font_key):
@@ -335,3 +340,13 @@ def layout_css(tpl_key, layout_key):
 def layout_label(layout_key):
     preset = LAYOUT_PRESETS.get(layout_key) or {}
     return preset.get("label") or layout_key
+
+
+def pick_random_layout():
+    """随机版式：从非 default 预设池里抽一个真实键返回。
+
+    一次生成只应调用一次（整包统一版式，不会一张一个样），
+    抽中的真实键再经 resolve_layout / layout_css 生效，并写进 manifest.layout，
+    保证「随机」在产物里可追溯（manifest 落的是 hero_first / summary_first，不是 random）。
+    """
+    return random.choice(RANDOM_POOL)

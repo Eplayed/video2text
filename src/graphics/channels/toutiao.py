@@ -205,7 +205,9 @@ def generate_graphics(summary, ai_config, progress_cb=None, theme="", skin="wow"
     guide_images: list 攻略图解模板的上传攻略图路径（弹窗上传，优先于素材文件夹）
     palette:   str 配色预设键（variants.PALETTE_KEYS 闭集）；None/未知回落默认 gold_night（现状）
     font:      str 字体预设键（variants.FONT_KEYS 闭集）；None/未知回落默认 serif（现状）
-    layout:    str 版式预设键（variants.LAYOUT_KEYS 闭集）；None/未知回落默认 default（现状）
+    layout:    str 版式预设键（variants.LAYOUT_KEYS 闭集）；None/未知回落默认 default（现状）；
+               传 "random"（variants.RANDOM_LAYOUT_KEY）＝本次生成随机抽一个真实预设，整包统一，
+               抽中键写进 manifest.layout（可追溯，不会落 "random"）
     """
     tpl_key = template if template in templates._TEMPLATES else "classic"
     tpl = templates._TEMPLATES[tpl_key]
@@ -222,7 +224,11 @@ def generate_graphics(summary, ai_config, progress_cb=None, theme="", skin="wow"
 
     skin_key, skin_uri = skins.resolve_skin(skin, _ASSETS_DIR)
     palette_key, font_key = variants.resolve_keys(palette, font)
-    layout_key = variants.resolve_layout(layout)
+    # 版式：random＝本次生成随机抽一个真实预设（整包统一，抽中键写进 manifest），其余走闭集回落
+    if layout == variants.RANDOM_LAYOUT_KEY:
+        layout_key = variants.pick_random_layout()
+    else:
+        layout_key = variants.resolve_layout(layout)
     palette = variants.resolve_palette(skin_key, palette_key, tpl_key)
     extra_tokens = dict(css_engine._tpl_tokens(tpl_key, skin_key))
     extra_tokens.update(variants.palette_tokens(tpl_key, palette_key))
