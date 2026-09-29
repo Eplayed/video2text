@@ -1,11 +1,13 @@
 # -*- coding: utf-8 -*-
-"""图文变体轴预设表（配色 / 字体）。
+"""图文变体轴预设表（配色 / 字体 / 版式）。
 
 设计原则（参照开源 social-card skill 的「预设闭集」做法）：
 1. 只允许从表里挑预设，不接受任意 hex，保证同一模板家族的观感统一；
 2. 配色预设 = 皮肤调色板覆盖（与 skins._SKIN_PALETTES 同键名）+ 模板级 token 覆盖，
    下游模板 CSS 结构一行不改即可整体换色；
-3. 字体预设 = 对已构建好的 CSS 做「字体栈整体替换」，同样不改模板结构。
+3. 字体预设 = 对已构建好的 CSS 做「字体栈整体替换」，同样不改模板结构；
+4. 版式预设 = 在构建好的 CSS 末尾追加「覆盖片段」（flex order 重排等），
+   不改 HTML 结构；default 为空覆盖 ＝ 现状零行为变化。
 
 覆盖范围：配色轴对 classic/tier/quest/guide 四个模板生效（resolve_palette 传入
 tpl_key 时，未接通模板自动忽略预设覆盖、保持皮原色）；字体轴对全部模板生效。
@@ -209,6 +211,40 @@ PALETTE_PRESETS = {
 PALETTE_KEYS = ["gold_night", "ember_forge", "arcane_dusk"]
 DEFAULT_PALETTE_KEY = "gold_night"
 
+# ── 版式预设：CSS 覆盖层，不改 HTML 结构 ──
+# 原理：各模板 .wrap-in 均为 flex 纵向容器，子块默认可用 order 重排；
+# 覆盖 CSS 在 _build_css 之后追加到样式表末尾，同特异度后来居上。
+# 每预设的 css 为 {模板键: 覆盖片段}；未覆盖的模板保持现状（零行为变化）。
+# 默认版式 default 为空覆盖 ＝ 现状。
+LAYOUT_PRESETS = {
+    "default": {
+        "label": "经典排布（现状）",
+        "css": {},
+    },
+    "hero_first": {
+        "label": "图先行（大图置顶）",
+        "css": {
+            # 报头行钉在最上（order:-2），主图上移到标题之前（order:-1）
+            "classic": ".topline{order:-2}.hero{order:-1}",
+            "tier": ".mast{order:-2}.hero{order:-1}",
+            "quest": ".mast{order:-2}.hero{order:-1}",
+            "guide": ".mast{order:-2}.gmap{order:-1}",
+        },
+    },
+    "summary_first": {
+        "label": "要点先行（摘要上浮）",
+        "css": {
+            # 主图沉底（order:1），标题下方的摘要块（cta/tpreview/ifact/panelbox）自然上浮
+            "classic": ".hero{order:1}",
+            "tier": ".hero{order:1}",
+            "quest": ".hero{order:1}",
+            "guide": ".gmap{order:1}",
+        },
+    },
+}
+LAYOUT_KEYS = ["default", "hero_first", "summary_first"]
+DEFAULT_LAYOUT_KEY = "default"
+
 
 def resolve_keys(palette_key, font_key):
     """None/未知值 → 回落到默认组合；返回 (palette_key, font_key)。"""
@@ -264,3 +300,21 @@ def font_label(font_key):
 def palette_label(palette_key):
     preset = PALETTE_PRESETS.get(palette_key) or {}
     return preset.get("label") or palette_key
+
+
+def resolve_layout(layout_key):
+    """None/未知值 → 回落到默认版式（现状排布）。"""
+    return layout_key if layout_key in LAYOUT_PRESETS else DEFAULT_LAYOUT_KEY
+
+
+def layout_css(tpl_key, layout_key):
+    """该模板在该版式预设下的覆盖 CSS 片段；默认/未知/未覆盖模板返回空串（零行为变化）。"""
+    preset = LAYOUT_PRESETS.get(layout_key)
+    if not preset:
+        return ""
+    return (preset.get("css") or {}).get(tpl_key, "")
+
+
+def layout_label(layout_key):
+    preset = LAYOUT_PRESETS.get(layout_key) or {}
+    return preset.get("label") or layout_key
