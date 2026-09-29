@@ -262,10 +262,14 @@ LAYOUT_PRESETS = {
         "css": {
             # 封面：主图沉底（order:1），标题下方的摘要块（cta/tpreview/ifact/panelbox）自然上浮
             # classic 内页：横带图沉到要点之后、小结压尾（标题+分区+要点先给）
+            #   ⚠ 必须同时解除 h2 的 margin-top:-84px——那个负边距是为「标题压在横带图下沿」
+            #   设计的；band 沉底后标题会顶进报头行，首字被 brand 徽章金底吞掉（2026-09-29
+            #   用户报障「有些字被挡住了」，包 56 img2「机」/img4「B」实测复现）。
             # tier 内页：条目网格上浮到大徽章行之前（要点先行）
             # quest/guide 内页：图块随 .hero/.gmap 一起沉底，步骤轨/路线轨上浮
             "classic": ".hero{order:1}"
-                       ".wrap-in>.band{order:1}.wrap-in>.note{order:2;margin-top:20px}",
+                       ".wrap-in>.band{order:1}.wrap-in>.note{order:2;margin-top:20px}"
+                       ".wrap-in>h2{margin-top:18px}",
             "tier": ".hero{order:1}"
                     ".tier>.tgrid{order:-1;margin-bottom:16px}.tier>.thead{order:1;margin-bottom:0}",
             "quest": ".hero{order:1}",
