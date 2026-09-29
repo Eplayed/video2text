@@ -27,7 +27,8 @@ OUTPUT_DIR = ROOT / "output" / "wechat"
 CANVAS_W, CANVAS_H = 1080, 1440  # 3:4，微头条试跑已验证同机制跑得通
 
 # 模板白名单（wechat 信号格为默认：零背景图、与游戏资产解耦；去游戏皮味，quest/tier/guide/bold 不进）
-TEMPLATE_WHITELIST = ["wechat", "minimal", "classic", "magazine"]
+# lilac_list/cream_gold 为 2026-09-29 公众号参考拆解新增的编辑向骨架：浅紫清单零图依赖、奶油金封面右半幅插画位
+TEMPLATE_WHITELIST = ["wechat", "minimal", "classic", "magazine", "lilac_list", "cream_gold"]
 
 CARD_TARGET_MIN, CARD_TARGET_MAX = 6, 8   # 目标张数
 MAX_IMAGES = 20                            # 平台硬上限（图片消息 ≤20 张）
@@ -330,10 +331,10 @@ def generate_graphics(summary, ai_config, author_draft="", progress_cb=None,
     theme:            str 题材名，注入 prompt + 选插画素材文件夹（可空）
     skin:             str 调色板/背景垫图（可空；wechat 模板不取背景图，天然去游戏资产）
     title:            str 图文标题，非空时覆盖素材标题
-    template:         str 模板，限白名单 wechat/minimal/classic/magazine，越界回落 wechat
+    template:         str 模板，限白名单 wechat/minimal/classic/magazine/lilac_list/cream_gold，越界回落 wechat
     real_screenshots: list 真实截图路径（亲测模式铁律 ≥2 张），复制进包并标 source=real_screenshot
     palette:          str 配色预设键（variants.PALETTE_KEYS 闭集）；None/未知回落默认 gold_night。
-                      只对已接通配色轴的模板生效（wechat 信号格＝换信号色家族；classic 同）；
+                      只对已接通配色轴的模板生效（wechat/lilac_list/cream_gold 换信号色家族、classic 同）；
                       minimal/magazine 未接通，选了也保持皮原色（前端 hint 已如实标注）。
     font:             str 字体预设键（variants.FONT_KEYS 闭集）；None/未知回落默认 serif（现状）。
     layout:           str 版式预设键（variants.LAYOUT_KEYS 闭集）；None/未知回落默认 default（现状）；
@@ -406,17 +407,26 @@ def generate_graphics(summary, ai_config, author_draft="", progress_cb=None,
         browser = p.chromium.launch()
         page = browser.new_page(viewport={"width": CANVAS_W, "height": CANVAS_H})
         brand = (theme or "").strip()[:12]
-        # wechat 模板零图片依赖：强制不取 hero，从根上杜绝游戏背景图兜底渗入
-        no_hero = (tpl_key == "wechat")
+        # 零图片依赖模板（纯 CSS 装饰）：强制不取 hero，从根上杜绝游戏背景图兜底渗入
+        no_hero_tpls = ("wechat", "lilac_list")
         for idx, card in enumerate(cards, 1):
             kind = card.get("kind") or "list"
             ctx = {"brand": brand, "idx": idx, "total": total, "skin_key": skin_key, "canvas_h": CANVAS_H}
             if kind == "cover" and idx == 1:
-                hero = None if no_hero else skins._hero_uri(card, cover_img, skin_uri, assets_dir)
+                if tpl_key in no_hero_tpls:
+                    hero = None
+                elif tpl_key == "cream_gold":
+                    # 奶油金封面右半幅插画位：只吃题材插画图，无素材则 None → 模板降级金色装饰块
+                    hero = cover_img.as_uri() if cover_img is not None else None
+                else:
+                    hero = skins._hero_uri(card, cover_img, skin_uri, assets_dir)
                 html = tpl["cover"](card, css, hero, ctx)
             else:
-                band = skins._pick_band_image(theme_imgs, idx)
-                hero = None if no_hero else skins._hero_uri(card, band, skin_uri, assets_dir)
+                if tpl_key in no_hero_tpls or tpl_key == "cream_gold":
+                    hero = None  # cream_gold 内页满幅，不占插画位
+                else:
+                    band = skins._pick_band_image(theme_imgs, idx)
+                    hero = skins._hero_uri(card, band, skin_uri, assets_dir)
                 html = tpl["list"](card, css, hero, ctx)
             html_path = out_dir / ("img%d.html" % idx)
             png_path = out_dir / ("img%d.png" % idx)

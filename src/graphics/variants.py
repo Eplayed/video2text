@@ -9,14 +9,17 @@
 4. 版式预设 = 在构建好的 CSS 末尾追加「覆盖片段」（flex order 重排等），
    不改 HTML 结构；default 为空覆盖 ＝ 现状零行为变化。
 
-覆盖范围：配色轴对 classic/tier/quest/guide/wechat 五个模板生效（resolve_palette 传入
-tpl_key 时，未接通模板自动忽略预设覆盖、保持皮原色）；字体轴对全部模板生效，但机制分两路：
-有 Songti 衬线栈的模板走字体栈替换，全篇黑体栈的 wechat/minimal 走 FONT_PRESETS[heavy]["tpl_css"]
-追加片段——调用方必须把 tpl_key 传给 apply_font，否则这两个模板的字体轴静默失效。
+覆盖范围：配色轴对 classic/tier/quest/guide/wechat/lilac_list/cream_gold 七个模板生效
+（resolve_palette 传入 tpl_key 时，未接通模板自动忽略预设覆盖、保持皮原色）；字体轴对全部模板生效，
+但机制分两路：有 Songti 衬线栈的模板走字体栈替换，全篇黑体栈的 wechat/minimal/lilac_list/cream_gold
+走 FONT_PRESETS[heavy]["tpl_css"] 追加片段——调用方必须把 tpl_key 传给 apply_font，
+否则这些模板的字体轴静默失效。
 语义装饰色不随配色轴变化：classic 阵营色、tier 梯队红/金/紫、quest 火焰/宝石/盾牌、
-guide 荧光绿路线轨——它们是模板的身份色。
+guide 荧光绿路线轨、lilac_list 的网格/星标/藏青条（__L_*__）、cream_gold 的金编号/点阵/图标瓦
+（__C_*__）——它们是模板的身份色。
 公众号信号格（wechat）例外：它的身份色就是信号色 __ACCENT__，允许随配色轴换家族
-（微信绿 / 熔火暖橙 / 暮光紫），但必须保持「浅纸面 + 深墨字 + 白卡」的正文可读性。
+（微信绿 / 熔火暖橙 / 暮光紫），但必须保持「浅纸面 + 深墨字 + 白卡」的正文可读性；
+lilac_list / cream_gold 同理走「浅纸面」路线，共享键（纸面/墨色/线/卡/信号色）随预设换家族。
 
 默认组合（2026-09-28 用户选定「配色 1 + 字体 1」）：鎏金夜蓝 + 衬线金标，
 即现状零行为变化；所有 base token 默认值 ＝ token 化之前的硬编码字面量。
@@ -59,6 +62,16 @@ FONT_PRESETS = {
                        ".pill,.ck .t,.row .pt,.callout .nt{font-weight:900}"
                        ".tagrow .idx,.lhead .sec .n,.row .no,.ochip{font-weight:900}"
                        ".sub,.ck .d,.row .pd,.callout .nd{font-weight:500}" % _HEAVY_SANS_STACK,
+            # lilac_list / cream_gold（2026-09-29 接入）同样是全篇黑体栈、无 Songti 可替换，
+            # 只能靠追加片段生效；片段只动字体族/字重，不动盒模型，避免与版式轴 order 打架。
+            "lilac_list": "h1,h2{font-family:%s;font-weight:900;letter-spacing:-.01em}"
+                          ".badge,.ckick,.cat,.row .no,.note .nt{font-weight:900}"
+                          ".row .t,.stat .n,.sum .sd{font-weight:900}"
+                          ".sub,.sub2,.stat .lb,.row .d{font-weight:500}" % _HEAVY_SANS_STACK,
+            "cream_gold": "h1,h2{font-family:%s;font-weight:900;letter-spacing:-.01em}"
+                          ".numrow .no,.kick,.sect .st,.step .sn,.step .sic,.note .nt{font-weight:900}"
+                          ".kv .k,.kv .v,.strip .cv,.step .st{font-weight:900}"
+                          ".sub,.sub2,.step .sd,.kv .kd{font-weight:500}" % _HEAVY_SANS_STACK,
         },
     },
 }
@@ -156,6 +169,41 @@ WECHAT_BASE_TOKENS = {
     "__ACCENT_SHADOW__": "rgba(7,193,96,.28)",  # 信号色投影（预留）
 }
 
+# 浅紫编辑清单（lilac_list，2026-09-29 由公众号参考样本拆解落地）：
+# 浅紫网格纸面 + 藏青结论条 + 星标点缀 + 序号行清单。身份色（__L_*__）不随配色轴变，
+# 只有共享键（纸面/墨色/线/卡/信号色）随预设换家族——同 wechat 的处理方式。
+LILAC_LIST_BASE_TOKENS = {
+    "__PAPER__": "#EDEFF7",                   # 页面纸面底色（浅紫灰）
+    "__INK__": "#1E2230",                     # 主文字墨色（藏黑）
+    "__MDIM__": "#8A8FA0",                    # 次级/描述文字
+    "__LINE__": "#E2E5F1",                    # 分隔细线 / 卡片描边
+    "__CARD__": "#FCFCFE",                    # 卡片底（近白）
+    "__ACCENT__": "#5B4FE0",                  # 信号色（编辑紫）：序号/星标/强调线
+    "__ACCENT_DK__": "#4A40C8",               # 信号色深版：眉题文字
+    "__L_GRID__": "#E2E5F1",                  # 纸面网格线（身份装饰）
+    "__L_STAR__": "#E0A32E",                  # 星标金（身份装饰）
+    "__L_PANEL__": "#202A44",                 # 藏青结论条底
+    "__L_PANELTXT__": "#EDEFF5",              # 藏青条上的文字
+    "__L_NUMBG__": "#E4E4F6",                 # 序号徽章浅紫底
+}
+
+# 奶油金插画（cream_gold，2026-09-29 同上）：奶油纸面 + 金色编号 + 右半幅插画位。
+# ⚠ 该模板 CSS 里没有 __ACCENT__（金色直接用 __ACCENT_DK__ / __C_NUM__ 表达），不要补键，
+#   否则配色预设注入无目标的 token，check 脚本会判「漏定义」。
+CREAM_GOLD_BASE_TOKENS = {
+    "__PAPER__": "#F4F0E7",                   # 页面纸面底色（奶油）
+    "__INK__": "#1A1815",                     # 主文字墨色（近黑）
+    "__MDIM__": "#8B8578",                    # 次级/描述文字（暖灰）
+    "__LINE__": "#E3DAC6",                    # 分隔细线 / 卡片描边
+    "__CARD__": "#FDFCF9",                    # 卡片底（暖白）
+    "__ACCENT_DK__": "#A8762A",               # 金棕强调：眉题/键值/描边
+    "__C_TILE__": "#EFE9DB",                  # 图标瓦底（身份装饰）
+    "__C_DOTS__": "#D9C9A6",                  # 金色点阵装饰（无素材图时的插画位降级）
+    "__C_NUM__": "#C89B42",                   # 编号金
+    "__C_VAL__": "#A8762A",                   # 键值面板的值色
+    "__C_ROW__": "#FDFCF9",                   # 键值行底
+}
+
 # 模板 → 基础 token 表；配色轴已接通的模板即此表键集
 _TPL_BASE_TOKENS = {
     "classic": CLASSIC_BASE_TOKENS,
@@ -163,6 +211,8 @@ _TPL_BASE_TOKENS = {
     "quest": QUEST_BASE_TOKENS,
     "guide": GUIDE_BASE_TOKENS,
     "wechat": WECHAT_BASE_TOKENS,
+    "lilac_list": LILAC_LIST_BASE_TOKENS,
+    "cream_gold": CREAM_GOLD_BASE_TOKENS,
 }
 PALETTE_READY_TPLS = set(_TPL_BASE_TOKENS)
 
@@ -327,6 +377,21 @@ LAYOUT_PRESETS = {
             "wechat": ".rhead{order:-4}.sig{order:-3}.kick{order:-3}"
                       ".tiles{order:-2}"
                       ".wrap-in>.note{order:-2;margin-top:26px}.wrap-in>h2{margin-top:30px}",
+            # lilac_list 浅紫编辑清单（2026-09-29 接入）：零图片模板，「图先行」＝该页最重的主视觉块上浮。
+            # 封面＝三张统计卡 .stats 抬到标题之前（.sum 的 margin-top:auto 保持不动，
+            # 结论条 + 页脚继续沉底，页面不留白）；内页＝星金边提示条 .note 上浮（同 wechat 内页范式）。
+            "lilac_list": ".badge{order:-4}.stars{order:-3}.ckick{order:-3}"
+                          ".stats{order:-2;margin-top:30px;padding-top:0}h1{margin-top:30px}"
+                          ".cat{order:-4}.wrap-in>.note{order:-2;margin-top:26px}"
+                          ".wrap-in>h2{margin-top:30px}",
+            # cream_gold 奶油金插画（2026-09-29 接入）：右半幅插画位 .illo 是 absolute（不参与 order），
+            # 「图先行」取流内主视觉——封面＝点线步骤轨 .steps 上浮，同时解除它的 flex:1
+            # （否则它会吞掉整页高度、把标题挤到底），改由 .ftr 的 margin-top:auto 兜住页脚沉底；
+            # 内页＝三栏收益条 .strip 上浮到标题之前。
+            "cream_gold": ".steps{order:-1;flex:0 0 auto;margin-top:0;margin-bottom:26px}"
+                          ".ftr{margin-top:auto}"
+                          ".kick{order:-4}.strip{order:-2;margin-top:26px}"
+                          ".wrap-in>h2{margin-top:30px}",
         },
     },
     "summary_first": {
@@ -362,6 +427,21 @@ LAYOUT_PRESETS = {
             "wechat": ".rhead{order:-4}.kick{order:-3}"
                       ".rows{order:-2;margin-top:26px}.wrap-in>h2{margin-top:30px}"
                       ".tiles{order:1;align-content:end}.ftr{order:3}",
+            # lilac_list（2026-09-29 接入）：封面把藏青结论条 .sum 抬到标题之前＝结论先行，
+            # 三张统计卡 .stats 下沉为支撑数据——解除 .sum 的 margin-top:auto、给 .stats 加 flex:1
+            # 撑满余高（否则下半页留白），.ftr 给 order:3 保住页脚末位（唯一需要正 order 的场景）；
+            # 内页把编号白卡列表 .rows 抬到标题之前＝要点先行（同 wechat 内页范式）。
+            "lilac_list": ".badge{order:-4}.stars{order:-3}.ckick{order:-3}"
+                          ".sum{order:-2;margin-top:30px}"
+                          ".stats{order:1;flex:1;align-content:center;margin-top:34px;padding-top:0}"
+                          ".ftr{order:3}"
+                          ".cat{order:-4}.rows{order:-2;margin-top:26px}"
+                          ".wrap-in>h2{margin-top:30px}",
+            # cream_gold（2026-09-29 接入）：封面把副题 .sub 抬到「金编号 + 标题」之前＝摘要先行；
+            # 内页把提示条 .note 抬到标题之前＝结论先行（.panel 保持 flex:1 撑满余高，不动盒模型）。
+            "cream_gold": ".sub{order:-1;margin-top:0;margin-bottom:22px}"
+                          ".kick{order:-4}.wrap-in>.note{order:-2;margin-top:24px}"
+                          ".wrap-in>h2{margin-top:28px}",
         },
     },
 }

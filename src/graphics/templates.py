@@ -328,6 +328,166 @@ h2.long { font-size:52px; }
              display:flex; align-items:center; justify-content:center; font-size:24px; font-weight:800; }
 """
 
+# ════════════════════ 模板三·六：lilac_list 浅紫编辑清单（榜单/工具合集 · 零图片依赖） ════════════════════
+# 拆解自公众号参考样本 A（浅紫编辑清单风，详见《公众号卡片参考拆解-2026-09-29.md》）：
+# 网格纸面 + 圆角白卡 + 藏青总结面板 + 星金点缀，封面靠「三张统计卡 + 藏青结论面板」撑视觉，
+# 内页靠「幽灵描边大数字 + 编号白卡列表（重点卡紫描边）」。只用系统字体，不依赖任何 jpg。
+# token 约定：可读性 7 键（__PAPER__/__INK__/__MDIM__/__LINE__/__CARD__/__ACCENT__/__ACCENT_DK__）
+# 与 wechat 同名同义，随配色预设整体换家族但永远「浅纸深字白卡」；身份色走 __L_*__ 前缀，
+# 避免被别的模板的预设段串改（先例：__T_*__ / __Q_*__ / __G_*__）。
+_CSS_LILAC_LIST = """
+* { margin:0; padding:0; box-sizing:border-box; }
+body { width:__W__px; font-family:"PingFang SC","Hiragino Sans GB",sans-serif;
+       background:__PAPER__; color:__INK__; }
+.wrap { width:__W__px; height:__H__px; padding:76px 78px 50px; position:relative; overflow:hidden;
+        display:flex; flex-direction:column;
+        background:
+          linear-gradient(__L_GRID__ 1px, transparent 1px) 0 0/100% 96px,
+          linear-gradient(90deg, __L_GRID__ 1px, transparent 1px) 0 0/96px 100%,
+          __PAPER__; }
+.wrap-in { position:relative; z-index:1; display:flex; flex-direction:column; flex:1; min-height:0; }
+/* 封面：栏目徽章 → 三星 → 大写眉题 → 大标题 → 导语 → 三张统计卡 → 藏青结论面板 → 页脚 */
+.badge { align-self:flex-start; display:flex; align-items:center; gap:14px; background:__CARD__;
+         border:1px solid __LINE__; border-radius:999px; padding:12px 26px;
+         font-size:22px; font-weight:700; letter-spacing:.12em; color:__ACCENT_DK__; }
+.badge i { width:12px; height:12px; border-radius:50%; background:__ACCENT__; display:block; }
+.stars { margin-top:34px; display:flex; align-items:center; gap:12px; }
+.stars i { display:block; background:__L_STAR__; transform:rotate(45deg); }
+.stars i.s1 { width:15px; height:15px; }
+.stars i.s2 { width:26px; height:26px; }
+.ckick { margin-top:30px; font-size:21px; letter-spacing:.22em; font-weight:700; color:__MDIM__; }
+h1 { margin-top:16px; font-size:84px; line-height:1.16; font-weight:800; letter-spacing:.01em;
+     color:__INK__; text-wrap:balance; word-break:keep-all; }
+h1.long { font-size:64px; }
+.sub { margin-top:22px; font-size:29px; line-height:1.62; color:__MDIM__; }
+/* 统计卡：margin-top:auto 与 .sum 的 auto 边距均分封面余高（避免中部大白带），padding-top 保底间距 */
+.stats { margin-top:auto; padding-top:42px; display:grid; grid-template-columns:1fr 1fr 1fr; gap:20px; }
+.stat { background:__CARD__; border:1px solid __LINE__; border-radius:16px; padding:26px 24px 24px; }
+.stat .n { font-size:31px; font-weight:800; line-height:1.22; color:__ACCENT_DK__; }
+.stat .lb { margin-top:12px; font-size:21px; line-height:1.5; color:__MDIM__; }
+.sum { margin-top:auto; display:flex; gap:22px; align-items:flex-start; background:__L_PANEL__;
+       border-radius:18px; padding:32px 34px; }
+.sum .no { flex-shrink:0; width:58px; height:58px; border-radius:14px; background:rgba(255,255,255,.14);
+           color:#ffffff; display:flex; align-items:center; justify-content:center;
+           font-size:25px; font-weight:800; }
+.sum .bd { flex:1; min-width:0; }
+.sum .st { font-size:20px; letter-spacing:.18em; font-weight:700; color:__L_STAR__; }
+.sum .sd { margin-top:10px; font-size:28px; line-height:1.55; font-weight:600; color:__L_PANELTXT__; }
+.ftr { margin-top:28px; display:flex; justify-content:space-between; align-items:center;
+       font-size:20px; letter-spacing:.14em; color:__MDIM__; font-weight:600; }
+.dots { display:flex; gap:10px; align-items:center; }
+.dots i { width:12px; height:12px; border-radius:50%; background:__LINE__; display:block; }
+.dots i.on { background:__ACCENT__; }
+/* 内页：栏目标签 → 大标题 + 下划线 → 幽灵描边大数字 → 编号白卡列表 → 星金边提示条 → 页脚 */
+.cat { align-self:flex-start; background:__L_NUMBG__; color:__ACCENT_DK__; border-radius:8px;
+       padding:10px 20px; font-size:21px; font-weight:800; letter-spacing:.16em; }
+h2 { margin-top:26px; font-size:64px; line-height:1.16; font-weight:800; color:__INK__;
+     text-wrap:balance; word-break:keep-all; }
+h2.long { font-size:50px; }
+.rule { margin-top:20px; width:96px; height:8px; border-radius:4px; background:__ACCENT__; }
+.sub2 { margin-top:18px; font-size:27px; line-height:1.6; color:__MDIM__; }
+.ghost { position:absolute; right:0; top:96px; z-index:-1; font-size:210px; line-height:1;
+         font-weight:900; letter-spacing:-.02em; color:transparent; -webkit-text-stroke:2px __LINE__; }
+.rows { margin-top:34px; flex:1; min-height:0; display:flex; flex-direction:column; gap:18px;
+        justify-content:center; }
+.row { display:flex; gap:22px; align-items:flex-start; background:__CARD__;
+       border:1px solid __LINE__; border-radius:16px; padding:24px 26px; }
+.row.hot { border:2px solid __ACCENT__; }
+.row .no { flex-shrink:0; width:52px; height:52px; border-radius:12px; background:__L_NUMBG__;
+           color:__ACCENT_DK__; display:flex; align-items:center; justify-content:center;
+           font-size:24px; font-weight:800; }
+.row .bd { flex:1; min-width:0; }
+.row .t { font-size:31px; font-weight:800; line-height:1.3; color:__INK__; }
+.row .d { margin-top:8px; font-size:24px; line-height:1.55; color:__MDIM__; }
+.row .tag { flex-shrink:0; align-self:center; background:__ACCENT__; color:#ffffff; border-radius:999px;
+            padding:8px 18px; font-size:20px; font-weight:800; }
+.note { margin-top:24px; border-left:8px solid __L_STAR__; background:__CARD__;
+        border-radius:0 14px 14px 0; padding:22px 26px; }
+.note .nt { font-size:20px; letter-spacing:.14em; font-weight:800; color:__ACCENT_DK__; }
+.note .nd { margin-top:8px; font-size:26px; line-height:1.6; color:__INK__; }
+"""
+
+# ════════════════════ 模板三·七：cream_gold 奶油金插画风（教程/讲解 · 右半幅插画位） ════════════════════
+# 拆解自公众号参考样本 B（奶油金插画教程风，详见《公众号卡片参考拆解-2026-09-29.md》）：
+# 奶油纸面 + 金超大编号 + 特粗标题 + 右半幅通高插画位 + 点线步骤流 + 键值面板 + 三栏收益条。
+# 插画位由调用方决定给不给图：有题材图才铺图，没有就传 hero_uri=None → 渲染金色装饰块（永不破版）。
+# 身份色走 __C_*__ 前缀（金编号/金棕值/图标瓦/行底/点饰），可读性 7 键与 wechat 同名同义。
+_CSS_CREAM_GOLD = """
+* { margin:0; padding:0; box-sizing:border-box; }
+body { width:__W__px; font-family:"PingFang SC","Hiragino Sans GB",sans-serif;
+       background:__PAPER__; color:__INK__; }
+.wrap { width:__W__px; height:__H__px; padding:74px 78px 48px; position:relative; overflow:hidden;
+        display:flex; flex-direction:column; background:__PAPER__; }
+.wrap.hasillo { padding-right:44px; }
+.wrap-in { position:relative; z-index:1; display:flex; flex-direction:column; flex:1; min-height:0; }
+.hasillo .wrap-in { margin-right:464px; }
+/* 右半幅插画位：有图铺满裁切，无图走 .blank 金色装饰块 */
+.illo { position:absolute; right:0; top:0; width:452px; height:100%; overflow:hidden;
+        background:__C_TILE__; border-left:1px solid __LINE__; }
+.illo img { width:100%; height:100%; object-fit:cover; display:block; }
+.illo.blank { background:
+        radial-gradient(circle at 50% 30%, rgba(200,155,66,.30), transparent 60%),
+        repeating-linear-gradient(135deg, __C_DOTS__ 0 2px, transparent 2px 24px),
+        __PAPER__; }
+.illo .mark { position:absolute; left:0; right:0; top:34%; text-align:center;
+              font-size:150px; line-height:1; font-weight:900; color:__C_NUM__; }
+.illo .cap { position:absolute; left:0; right:0; bottom:52px; text-align:center;
+             font-size:20px; letter-spacing:.2em; font-weight:700; color:__MDIM__; }
+/* 封面：金编号 + 特粗标题同行 → 副题 → 节头 → 点线步骤流 → 页脚 */
+.numrow { display:flex; align-items:baseline; gap:22px; }
+.numrow .no { flex-shrink:0; font-size:112px; line-height:.9; font-weight:900;
+              letter-spacing:-.02em; color:__C_NUM__; }
+h1 { flex:1; min-width:0; font-size:58px; line-height:1.22; font-weight:900; color:__INK__;
+     letter-spacing:.01em; text-wrap:balance; word-break:keep-all; }
+h1.long { font-size:46px; }
+.sub { margin-top:22px; font-size:27px; line-height:1.6; color:__MDIM__; }
+.sect { margin-top:34px; display:flex; align-items:center; gap:16px; }
+.sect .bar { flex-shrink:0; width:46px; height:6px; border-radius:3px; background:__C_NUM__; }
+.sect .st { font-size:26px; font-weight:800; letter-spacing:.06em; color:__ACCENT_DK__; }
+.steps { margin-top:28px; flex:1; min-height:0; position:relative; display:flex;
+         flex-direction:column; gap:22px; justify-content:center; }
+.steps:before { content:""; position:absolute; left:27px; top:34px; bottom:34px;
+                border-left:2px dotted __C_DOTS__; }
+.step { position:relative; z-index:1; display:flex; align-items:flex-start; gap:16px; }
+.step .sn { flex-shrink:0; width:56px; height:56px; border-radius:50%; background:__PAPER__;
+            border:2px solid __C_NUM__; color:__ACCENT_DK__; display:flex; align-items:center;
+            justify-content:center; font-size:24px; font-weight:900; }
+.step .sic { flex-shrink:0; width:56px; height:56px; border-radius:14px; background:__C_TILE__;
+             color:__ACCENT_DK__; display:flex; align-items:center; justify-content:center;
+             font-size:26px; font-weight:800; }
+.step .bd { flex:1; min-width:0; padding-top:2px; }
+.step .st { font-size:29px; font-weight:800; line-height:1.32; color:__INK__; }
+.step .sd { margin-top:6px; font-size:23px; line-height:1.5; color:__MDIM__; }
+.ftr { margin-top:28px; display:flex; justify-content:space-between; align-items:center;
+       font-size:20px; letter-spacing:.14em; font-weight:700; color:__MDIM__; }
+.dots { display:flex; gap:10px; align-items:center; }
+.dots i { width:12px; height:12px; border-radius:50%; background:__LINE__; display:block; }
+.dots i.on { background:__C_NUM__; }
+/* 内页：金色眉题 → 特粗标题 → 键值面板 → 三栏收益条 → 提示条 → 页脚 */
+.kick { font-size:21px; letter-spacing:.2em; font-weight:800; color:__ACCENT_DK__; }
+h2 { margin-top:16px; font-size:60px; line-height:1.18; font-weight:900; color:__INK__;
+     text-wrap:balance; word-break:keep-all; }
+h2.long { font-size:48px; }
+.sub2 { margin-top:14px; font-size:26px; line-height:1.58; color:__MDIM__; }
+.panel { margin-top:30px; flex:1; min-height:0; display:flex; flex-direction:column; gap:14px;
+         justify-content:center; }
+.kv { background:__C_ROW__; border:1px solid __LINE__; border-radius:14px; padding:22px 26px; }
+.kv .top { display:flex; align-items:baseline; justify-content:space-between; gap:18px; }
+.kv .k { flex:1; min-width:0; font-size:29px; font-weight:800; color:__INK__; }
+.kv .v { flex-shrink:0; font-size:22px; font-weight:800; letter-spacing:.06em; color:__C_VAL__; }
+.kv .kd { margin-top:8px; font-size:23px; line-height:1.52; color:__MDIM__; }
+.strip { margin-top:24px; display:grid; grid-template-columns:1fr 1fr 1fr; background:__C_TILE__;
+         border-radius:14px; overflow:hidden; }
+.strip .cell { padding:20px 24px; border-right:1px solid __LINE__; }
+.strip .cell.last { border-right:0; }
+.strip .cl { font-size:19px; letter-spacing:.14em; font-weight:700; color:__MDIM__; }
+.strip .cv { margin-top:8px; font-size:24px; font-weight:800; color:__C_VAL__; }
+.note { margin-top:22px; border-left:8px solid __C_NUM__; background:__CARD__;
+        border-radius:0 14px 14px 0; padding:22px 26px; }
+.note .nt { font-size:20px; letter-spacing:.14em; font-weight:800; color:__ACCENT_DK__; }
+.note .nd { margin-top:8px; font-size:25px; line-height:1.58; color:__INK__; }
+"""
+
 # ════════════════════════ 模板四：bold 大字报（高对比冲击） ════════════════════════
 _CSS_BOLD = """
 * { margin:0; padding:0; box-sizing:border-box; }
@@ -929,6 +1089,174 @@ def _list_html_wechat(card, css, hero_uri, ctx):
     )
 
 
+# ── lilac_list 浅紫编辑清单 渲染（零图片依赖，网格纸面 + 白卡 + 藏青结论面板） ──
+# 封面：栏目徽章 → 三星 → 大写眉题 → 大标题 → 导语 → 三张统计卡 → 藏青结论面板 → 页脚
+def _cover_html_lilac_list(card, css, hero_uri, ctx):
+    hooks = (card.get("hooks") or [])[:3]
+    stats = "".join(
+        '<div class="stat"><div class="n">%s</div><div class="lb">%s</div></div>'
+        % (_esc(h.get("t", "")), _esc(h.get("d", "")))
+        for h in hooks
+    )
+    label = str(card.get("timeline_label") or "").strip()[:18] or "COVER · EDIT LIST"
+    concl = str(card.get("timeline") or "").strip()[:34] or "先给结论，再逐条拆解"
+    sub = card.get("subtitle") or card.get("timeline_note") or ""
+    sub_html = ('<div class="sub">%s</div>' % _esc(sub)) if sub else ""
+    dots = "".join('<i class="%s"></i>' % ("on" if (i + 1) == ctx["idx"] else "")
+                   for i in range(ctx["total"]))
+    return """%s<div class="wrap" style="height:__H__px">
+  <div class="wrap-in">
+  <div class="badge"><i></i><span>%s</span></div>
+  <div class="stars"><i class="s1"></i><i class="s2"></i><i class="s1"></i></div>
+  <div class="ckick">%s</div>
+  <h1 class="%s">%s</h1>
+  %s
+  <div class="stats">%s</div>
+  <div class="sum"><div class="no">结论</div><div class="bd">
+    <div class="st">%s</div><div class="sd">%s</div></div></div>
+  <div class="ftr"><span>EDIT LIST · 编辑清单</span><div class="dots">%s</div>
+    <span>01 / %02d</span></div>
+  </div>
+</div></body></html>""".replace("__H__", str(ctx["canvas_h"])) % (
+        _page_open(css),
+        _esc(ctx["brand"] or "整合速览"),
+        _esc(label),
+        "long" if len(str(card.get("title") or "")) > 12 else "", _esc(card.get("title", "")),
+        sub_html, stats,
+        _esc(label), _esc(concl), dots, ctx["total"],
+    )
+
+
+# 内页：栏目标签 → 大标题 + 下划线 → 幽灵描边大数字 → 编号白卡（首条重点卡）→ 星金提示条 → 页脚
+def _list_html_lilac_list(card, css, hero_uri, ctx):
+    items = card.get("items") or []
+    rows = "".join(
+        '<div class="row%s"><div class="no">%02d</div><div class="bd">'
+        '<div class="t">%s</div><div class="d">%s</div></div>%s</div>'
+        % (" hot" if i == 0 and len(items) > 1 else "", i + 1,
+           _esc(it.get("name", "")), _esc(it.get("desc", "")),
+           ('<div class="tag">%s</div>' % _esc(str(it.get("tag"))[:6])) if it.get("tag") else "")
+        for i, it in enumerate(items)
+    )
+    note = card.get("note") or {}
+    note_html = (
+        '<div class="note"><div class="nt">%s</div><div class="nd">%s</div></div>'
+        % (_esc(note.get("title", "提醒")), _esc(note.get("text", "")))
+    ) if note.get("text") else ""
+    sub_html = ('<div class="sub2">%s</div>' % _esc(card.get("subtitle", ""))) if card.get("subtitle") else ""
+    section = _esc(card.get("section", "要点"))
+    cat = "CATEGORY %02d · %s" % (ctx["idx"], section)
+    dots = "".join('<i class="%s"></i>' % ("on" if (i + 1) == ctx["idx"] else "")
+                   for i in range(ctx["total"]))
+    return """%s<div class="wrap" style="height:__H__px">
+  <div class="wrap-in">
+  <div class="ghost">%02d</div>
+  <div class="cat">%s</div>
+  <h2 class="%s">%s</h2>
+  <div class="rule"></div>%s
+  <div class="rows">%s</div>
+  %s
+  <div class="ftr"><span>%s · EDIT LIST</span><div class="dots">%s</div>
+    <span>%02d / %02d</span></div>
+  </div>
+</div></body></html>""".replace("__H__", str(ctx["canvas_h"])) % (
+        _page_open(css),
+        ctx["idx"], cat,
+        "long" if len(str(card.get("title") or "")) > 12 else "", _esc(card.get("title", "")),
+        sub_html, rows, note_html,
+        section, dots, ctx["idx"], ctx["total"],
+    )
+
+
+# ── cream_gold 奶油金插画风 渲染（封面右半幅插画位，无图降级金色装饰块） ──
+# 封面：金超大编号 + 特粗标题同行 → 副题 → 「N 步搞定」节头 → 点线步骤流 → 页脚
+def _cover_html_cream_gold(card, css, hero_uri, ctx):
+    hooks = (card.get("hooks") or [])[:4]
+    steps = "".join(
+        '<div class="step"><div class="sn">%d</div><div class="sic">%s</div>'
+        '<div class="bd"><div class="st">%s</div><div class="sd">%s</div></div></div>'
+        % (i + 1, _esc(str(h.get("t", ""))[:1] or "·"),
+           _esc(h.get("t", "")), _esc(h.get("d", "")))
+        for i, h in enumerate(hooks)
+    )
+    # 插画位：调用方给了题材图才铺图；没给（hero_uri=None）走金色装饰块 + 单字徽记，永不破版
+    if hero_uri:
+        illo = '<div class="illo"><img src="%s"></div>' % hero_uri
+    else:
+        icon = str(card.get("icon") or "").strip()[:1] or "AI"
+        cap = str(card.get("timeline_label") or "").strip()[:12] or "ILLUSTRATION"
+        illo = ('<div class="illo blank"><div class="mark">%s</div>'
+                '<div class="cap">%s</div></div>' % (_esc(icon), _esc(cap)))
+    sect = str(card.get("timeline_label") or "").strip()[:14] or ("%d 步搞定" % max(len(hooks), 1))
+    sub = card.get("subtitle") or card.get("timeline_note") or ""
+    sub_html = ('<div class="sub">%s</div>' % _esc(sub)) if sub else ""
+    dots = "".join('<i class="%s"></i>' % ("on" if (i + 1) == ctx["idx"] else "")
+                   for i in range(ctx["total"]))
+    return """%s<div class="wrap hasillo" style="height:__H__px">
+  %s
+  <div class="wrap-in">
+  <div class="numrow"><div class="no">%02d</div>
+    <h1 class="%s">%s</h1></div>
+  %s
+  <div class="sect"><div class="bar"></div><div class="st">%s</div></div>
+  <div class="steps">%s</div>
+  <div class="ftr"><span>%s</span><div class="dots">%s</div><span>01 / %02d</span></div>
+  </div>
+</div></body></html>""".replace("__H__", str(ctx["canvas_h"])) % (
+        _page_open(css), illo,
+        ctx["idx"],
+        "long" if len(str(card.get("title") or "")) > 12 else "", _esc(card.get("title", "")),
+        sub_html, _esc(sect), steps,
+        _esc(ctx["brand"] or "整合速览"), dots, ctx["total"],
+    )
+
+
+# 内页（满幅，不占插画位）：金色眉题 → 特粗标题 → 键值面板 → 三栏收益条 → 提示条 → 页脚
+def _list_html_cream_gold(card, css, hero_uri, ctx):
+    items = card.get("items") or []
+    kvs = "".join(
+        '<div class="kv"><div class="top"><div class="k">%s</div><div class="v">%s</div></div>'
+        '%s</div>'
+        % (_esc(it.get("name", "")), _esc(str(it.get("tag") or ("要点 %02d" % (i + 1)))[:8]),
+           ('<div class="kd">%s</div>' % _esc(it.get("desc"))) if it.get("desc") else "")
+        for i, it in enumerate(items)
+    )
+    note = card.get("note") or {}
+    note_html = (
+        '<div class="note"><div class="nt">%s</div><div class="nd">%s</div></div>'
+        % (_esc(note.get("title", "提醒")), _esc(note.get("text", "")))
+    ) if note.get("text") else ""
+    sub_html = ('<div class="sub2">%s</div>' % _esc(card.get("subtitle", ""))) if card.get("subtitle") else ""
+    section = _esc(card.get("section", "要点"))
+    icon = str(card.get("icon") or "").strip()[:1]
+    kick = "SECTION %02d · %s%s" % (ctx["idx"], (icon + " ") if icon else "", section)
+    strip = "".join(
+        '<div class="cell%s"><div class="cl">%s</div><div class="cv">%s</div></div>'
+        % (" last" if i == 2 else "", _esc(cl), _esc(cv))
+        for i, (cl, cv) in enumerate((("适用", section[:8]),
+                                      ("条目", "%d 条" % len(items)),
+                                      ("重点", str(note.get("title") or "看下方")[:8])))
+    )
+    dots = "".join('<i class="%s"></i>' % ("on" if (i + 1) == ctx["idx"] else "")
+                   for i in range(ctx["total"]))
+    return """%s<div class="wrap" style="height:__H__px">
+  <div class="wrap-in">
+  <div class="kick">%s</div>
+  <h2 class="%s">%s</h2>%s
+  <div class="panel">%s</div>
+  <div class="strip">%s</div>
+  %s
+  <div class="ftr"><span>%s</span><div class="dots">%s</div><span>%02d / %02d</span></div>
+  </div>
+</div></body></html>""".replace("__H__", str(ctx["canvas_h"])) % (
+        _page_open(css),
+        kick,
+        "long" if len(str(card.get("title") or "")) > 12 else "", _esc(card.get("title", "")),
+        sub_html, kvs, strip, note_html,
+        _esc(ctx["brand"] or "整合速览"), dots, ctx["idx"], ctx["total"],
+    )
+
+
 # ── bold 渲染 ──
 def _cover_html_bold(card, css, hero_uri, ctx):
     hooks = (card.get("hooks") or [])[:4]
@@ -1219,6 +1547,23 @@ _TEMPLATES = {
                        "timeline 填本期看点一句话；列表卡 items 的 name=工具或要点名，"
                        "tag=可选标签（如「免费」「强推」，会显示在条目眉题），desc=一句话点评，"
                        "icon 单字（如 测/坑/省/比，显示在栏目前），note 写使用提醒。"},
+    "lilac_list": {"label": "浅紫编辑清单", "css": _CSS_LILAC_LIST,
+                   "cover": _cover_html_lilac_list, "list": _list_html_lilac_list,
+                   "hint": "视觉模板：浅紫编辑清单——浅紫网格纸面 + 藏青结论条 + 星标点缀 + 序号行清单，"
+                           "纯 CSS 装饰零背景图依赖，专为「榜单/工具合集/清单类」公众号图文设计。"
+                           "封面 hooks 取前 3 条：t 为要点名词短语（≤14字）、d 一句讲完（≤20字），"
+                           "会做成顶部数据条；timeline_label 填眉题（如「TOP 榜」「工具合集」），"
+                           "timeline 填本期一句话结论；列表卡 section=栏目标题（显示为 CATEGORY 眉题），"
+                           "items 的 name=条目名、tag=可选标签（如「免费」「强推」，显示在行尾）、"
+                           "desc=一句话点评，首条自动高亮为 hot 行；icon 单字（显示在栏目前），note 写使用提醒。"},
+    "cream_gold": {"label": "奶油金插画", "css": _CSS_CREAM_GOLD,
+                   "cover": _cover_html_cream_gold, "list": _list_html_cream_gold,
+                   "hint": "视觉模板：奶油金插画风——奶油纸面 + 金色编号 + 右半幅插画位（有素材图则嵌图，"
+                           "无素材自动降级为金色点阵装饰块），专为「教程/讲解/步骤类」公众号图文设计。"
+                           "封面 hooks 取前 4 条做步骤轨：t 为步骤名（首字自动做图标徽章）、d 一句话说明，"
+                           "timeline_label 填插画位小节名（如「上手 4 步」）；列表卡 section=小节名（做成金色眉题），"
+                           "items 的 name=要点名、tag=可选标签（显示为要点角标）、desc=一句话说明（做成键值面板），"
+                           "icon 单字（显示在眉题），note 写使用提醒，subtitle 写小节补充说明。"},
     "bold": {"label": "大字报", "css": _CSS_BOLD,
              "cover": _cover_html_bold, "list": _list_html_bold,
              "hint": "视觉模板：大字报——高对比、超大字号、冲击力拉满，标题多用数字对比（如「122 对 300」）。"},
