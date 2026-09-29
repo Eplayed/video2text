@@ -16,7 +16,7 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 
-from .. import skins, css_engine, templates, renderer, package, ir
+from .. import skins, css_engine, templates, renderer, package, ir, variants
 from .base import ChannelAdapter
 # 借用头条线的 JSON 容错解析与【标签】切段（两者均渠道无关，Phase 3 视情上移内核）
 from .toutiao import _parse_json, _split_tags
@@ -318,7 +318,8 @@ def lint_package(manifest, out_dir):
 
 
 def generate_graphics(summary, ai_config, author_draft="", progress_cb=None,
-                      theme="", skin="", title="", template="wechat", real_screenshots=None):
+                      theme="", skin="", title="", template="wechat", real_screenshots=None,
+                      palette=None, font=None, layout=None):
     """主入口：wechat_material 整合稿 → manifest dict（落盘 output/wechat/<summary_id>/）。
 
     两种模式（由 author_draft 是否为空自动判定）：
@@ -331,6 +332,13 @@ def generate_graphics(summary, ai_config, author_draft="", progress_cb=None,
     title:            str 图文标题，非空时覆盖素材标题
     template:         str 模板，限白名单 wechat/minimal/classic/magazine，越界回落 wechat
     real_screenshots: list 真实截图路径（亲测模式铁律 ≥2 张），复制进包并标 source=real_screenshot
+    palette:          str 配色预设键（variants.PALETTE_KEYS 闭集）；None/未知回落默认 gold_night。
+                      只对已接通配色轴的模板生效（wechat 信号格＝换信号色家族；classic 同）；
+                      minimal/magazine 未接通，选了也保持皮原色（前端 hint 已如实标注）。
+    font:             str 字体预设键（variants.FONT_KEYS 闭集）；None/未知回落默认 serif（现状）。
+    layout:           str 版式预设键（variants.LAYOUT_KEYS 闭集）；None/未知回落默认 default（现状）；
+                      传 "random"（variants.RANDOM_LAYOUT_KEY）＝本次生成随机抽一个真实预设，
+                      整包统一，抽中的真实键写进 manifest.layout。
     """
     draft = (author_draft or "").strip()
     is_repost = not draft
@@ -349,9 +357,26 @@ def generate_graphics(summary, ai_config, author_draft="", progress_cb=None,
 
     assets_dir = _assets_dir()
     skin_key, skin_uri = skins.resolve_skin(skin, assets_dir)
-    palette = skins._SKIN_PALETTES.get(skin_key) or skins._SKIN_PALETTES[skins._PALETTE_DEFAULT]
+    # 变体三轴（2026-09-29 接入，与头条线共用同一套 variants 内核与预设闭集）：
+    #   配色轴＝皮调色板覆盖 + 模板 token 覆盖，wechat 信号格换的是信号色家族
+    #           （微信绿/熔火暖橙/暮光紫），纸面保持浅底深字白卡；未接通模板自动 no-op；
+    #   版式轴＝覆盖片段追加到构建好的 CSS 末尾（flex order 重排，HTML 结构不动）；
+    #   字体轴＝必须把 tpl_key 传进 apply_font：wechat/minimal 全篇只有黑体栈，
+    #           没有 Songti 可替换，靠预设的「按模板追加片段」才真实生效。
+    palette_key, font_key = variants.resolve_keys(palette, font)
+    if layout == variants.RANDOM_LAYOUT_KEY:
+        layout_key = variants.pick_random_layout()
+    else:
+        layout_key = variants.resolve_layout(layout)
+    palette = variants.resolve_palette(skin_key, palette_key, tpl_key)
+    extra_tokens = dict(css_engine._tpl_tokens(tpl_key, skin_key))
+    extra_tokens.update(variants.palette_tokens(tpl_key, palette_key))
     css = css_engine._build_css(tpl["css"], palette, skin_uri, assets_dir,
-                                css_engine._tpl_tokens(tpl_key, skin_key), CANVAS_W, CANVAS_H)
+                                extra_tokens, CANVAS_W, CANVAS_H)
+    layout_extra = variants.layout_css(tpl_key, layout_key)
+    if layout_extra:
+        css += "\n/* layout:%s */\n%s" % (layout_key, layout_extra)
+    css = variants.apply_font(css, font_key, tpl_key)
     theme_imgs = skins._theme_image_paths(theme, skin_key, OUTPUT_DIR)
     cover_img = skins._pick_cover_image(theme_imgs)
 
@@ -430,6 +455,9 @@ def generate_graphics(summary, ai_config, author_draft="", progress_cb=None,
         "theme": (theme or "").strip(),
         "skin": skin_key,
         "template": tpl_key,
+        "palette": palette_key,
+        "font": font_key,
+        "layout": layout_key,
         "canvas": "%dx%d" % (CANVAS_W, CANVAS_H),
         "summary_type": summary.get("summary_type", ""),
         "checklist": list(_CHECKLIST),

@@ -1453,6 +1453,10 @@ def api_wechat_generate():
     theme = str(data.get("theme") or "").strip()[:30]    # 题材（进 LLM prompt，如「AI工具实测」）
     title = str(data.get("title") or "").strip()[:60]    # 图文标题（空则用整合稿标题）
     template = str(data.get("template") or "wechat").strip()[:20]  # 限白名单，越界适配器内回落 wechat
+    # 变体三轴（闭集，与头条线同一套预设；空/未知一律回落默认＝现状零行为变化）
+    palette = str(data.get("palette") or "").strip()[:20]  # 配色预设键（默认 gold_night＝微信绿信号格）
+    font = str(data.get("font") or "").strip()[:20]        # 字体预设键（默认 serif）
+    layout = str(data.get("layout") or "").strip()[:20]    # 版式预设键（默认 default；可传 random）
     shots = []  # 真实截图（弹窗上传，复制进包并标 source=real_screenshot）
     shot_token = str(data.get("shot_token") or "").strip()
     if shot_token and re.fullmatch(r"[0-9a-f]{12}", shot_token):
@@ -1482,7 +1486,9 @@ def api_wechat_generate():
                 _wx_task_status["progress"] = msg
             package = wechat_graphics.generate_graphics(summary, _ai_config(), author_draft=author_draft,
                                                         progress_cb=cb, theme=theme, title=title,
-                                                        template=template, real_screenshots=shots)
+                                                        template=template, real_screenshots=shots,
+                                                        palette=palette or None, font=font or None,
+                                                        layout=layout or None)
             _wx_task_status["package"] = {"id": package["id"], "title": package["title"], "images": len(package["images"])}
             errs = [i for i in (package.get("lint") or []) if i.startswith("error")]
             suffix = "，⚠️ lint 有 %d 条 error 需处理" % len(errs) if errs else ""
