@@ -4,6 +4,7 @@
 资产目录（assets_dir）与输出目录（output_dir）由调用方注入，本模块不绑定任何渠道。
 Python 3.9 兼容：不用 match / X|Y 语法。
 """
+import random
 import re
 
 
@@ -97,10 +98,16 @@ def _img_ratio(path):
         return None
 
 
-def _pick_cover_image(paths):
-    """封面主视觉：优先竖构图（比例最大）。"""
+def _pick_cover_image(paths, rng=None):
+    """封面主视觉。rng=None 保持旧行为（优先竖构图/比例最大，确定性）；
+    rng 给定（random.Random 实例）则随机抽——2026-09-29 用户要求「素材图片也可以是随机的，
+    并不是第一张图片就是第一张图片素材」：同一素材库多次生成应换图，不再永远同一张上封面。
+    随机时在竖构图池（比例>=1.0）里抽，池空回落全池，避免横图被拉竖裁切。"""
     if not paths:
         return None
+    if rng is not None:
+        pool = [p for p in paths if (_img_ratio(p) or 1.0) >= 1.0] or list(paths)
+        return rng.choice(pool)
     best, best_r = paths[0], -1.0
     for p in paths:
         r = _img_ratio(p)
@@ -109,10 +116,22 @@ def _pick_cover_image(paths):
     return best
 
 
-def _pick_band_image(paths, idx):
-    """内容页横带：优先横构图（比例最小），按页轮换。idx 从 2 起（1 是封面）。"""
+def _pick_band_image(paths, idx, rng=None, exclude=None):
+    """内容页横带。idx 从 2 起（1 是封面）。
+    rng=None 保持旧行为（优先横构图、按页固定轮换）；rng 给定则随机抽：
+    exclude 可为单张图或已用图列表（封面 + 前几页横带），随机时优先在「还没用过的图」里抽，
+    素材不够时才允许重复——保证同一包内各页尽量互不重复、且不与封面撞图，跨包顺序随机。"""
     if not paths:
         return None
+    if rng is not None:
+        used = set()
+        if exclude is not None:
+            if isinstance(exclude, (list, tuple, set)):
+                used = set(exclude)
+            else:
+                used = {exclude}
+        fresh = [p for p in paths if p not in used]
+        return rng.choice(fresh or list(paths))
     wide = [(p, _img_ratio(p) if _img_ratio(p) is not None else 1.0) for p in paths]
     wide.sort(key=lambda x: x[1])
     return wide[(idx - 2) % len(wide)][0]
