@@ -34,7 +34,7 @@ __TEMPLATE_LINE__
 
 要求：
 - 第 1 张 kind="cover"：title 大标题（≤18字，含数字）；subtitle 一句话（≤20字，可空）；timeline（≤22字，如「11月4日开服 → 12月7日开团本」）；timeline_note（≤28字）；timeline_label（如「关键时间线」）；hooks 3-4 条，每条 t（≤14字）+ d（≤20字）；bg 可选，"neutral"=通用史诗背景
-- 第 2-4 张 kind="list"：title（≤14字）；section（条目分组名，≤6字）；icon 单字（如 盾/火/剑）；items 3-5 条，每条 name（≤8字）+ desc（≤30字）+ tag（≤4字，可空，如"最稳""T0"）+ faction（可选，"alliance"或"horde"，仅当该条内容阵营专属时填）；最后一张可带 note 对象，含 title 和 text 两个键
+- 第 2-4 张 kind="list"：title（≤14字）；section（条目分组名，≤6字）；icon 单字（如 盾/火/剑）；items 3-5 条，每条 name（≤8字）+ desc（≤30字）+ tag（≤4字，可空，如"最稳""T0"）+ faction（可选，"alliance"或"horde"，仅当该条内容阵营专属时填）；不要输出 note 字段（成品图已不再渲染「提醒」小结块，写了也会被丢弃）
 - 阵营主题背景：整卡内容阵营专属时 card 加 bg 字段（"alliance"=联盟蓝金大教堂 / "horde"=部落暗红峡谷）+ faction 字段 + faction_text（如"联盟专属"）；混合阵营内容不要设 bg，用条目级 faction 区分
 - 每张卡内容要留呼吸感：条目宁少勿多，desc 一句话讲完，超长会被截断
 - 所有文字精简口语化；只能用整合稿里的事实，严禁编造
@@ -58,7 +58,7 @@ def _build_cards_prompt(summary, theme="", template="classic"):
               '"timeline_label": "...", "timeline": "...", "timeline_note": "...", '
               '"hooks": [{{"t": "...", "d": "..."}}]}},\n'
               '    {{"kind": "list", "title": "...", "subtitle": "...", "section": "...", "icon": "...", '
-              '"items": [{{"name": "...", "desc": "...", "tag": "..."}}], "note": {{"title": "...", "text": "..."}}}}\n  ],\n'
+              '"items": [{{"name": "...", "desc": "...", "tag": "..."}}]}}\n  ],\n'
               '  "copy_text": "..."\n}}')
     date_str = datetime.now().strftime("%m月%d日")
     theme_line = ("本篇题材：%s。封面标题、各卡标题和 copy_text 都要点明该题材（游戏名/模式名），让读者一眼知道这是哪个游戏的内容。" % theme) if theme else "本篇题材：未指定，按整合稿内容自行判断题材并在标题点明。"
@@ -267,6 +267,13 @@ def generate_graphics(summary, ai_config, progress_cb=None, theme="", skin="wow"
     user_title = (title or "").strip()
     if user_title and cards:
         cards[0]["title"] = summary.get("title") or user_title[:60]
+    # 头条成品图不再渲染「提醒」小结块（2026-09-29 用户要求「图文中移除提醒」）：
+    # prompt / schema 已同步禁止生成 note，但 LLM 未必听话、本地兜底卡 _fallback_cards 也仍带
+    # 「提醒」——与标题强制同一原则：渲染前代码级剔除，不留侥幸。
+    # 模板渲染函数里的 note_html 分支保留（公众号等其他渠道不受影响）。
+    for card in cards:
+        if isinstance(card, dict):
+            card.pop("note", None)
     if skin_uri:
         for card in cards:
             card["bg"] = "skin"
