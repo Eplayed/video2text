@@ -1013,12 +1013,14 @@ textarea{resize:vertical;min-height:84px}
           <input id="wx-gen-title" placeholder="图文标题">
         </div>
         <div class="tt-gen-field">
-          <label>图文模板<small>（白名单 4 套，越界自动回落「公众号信号格」）</small></label>
+          <label>图文模板<small>（白名单 6 套，越界自动回落「公众号信号格」）</small></label>
           <select id="wx-gen-tpl" onchange="updateWxTplPreview()">
             <option value="wechat" selected>公众号信号格 · 结构化教程流（默认 · 零游戏背景）</option>
             <option value="minimal">极简清单 · 浅色知识卡</option>
             <option value="classic">经典卡片 · 鎏金插画风</option>
             <option value="magazine">杂志大片 · 暗色编辑排版</option>
+            <option value="lilac_list">浅紫清单 · 编辑清单风（榜单/合集）</option>
+            <option value="cream_gold">奶油金插画 · 教程步骤风</option>
           </select>
           <div class="tt-tpl-preview" onclick="openWxTplPages()" title="点击查看 4 页示例">
             <div class="tt-tpl-preview-thumb">
@@ -1032,7 +1034,7 @@ textarea{resize:vertical;min-height:84px}
           </div>
         </div>
         <div class="tt-gen-field">
-          <label>配色 / 字体 / 版式 <small>（预设闭集：配色只对「信号格 / 经典卡片」生效，极简清单与杂志大片未接通配色轴；字体与版式对白名单 4 套模板全部生效）</small></label>
+          <label>配色 / 字体 / 版式 <small>（预设闭集：配色只对「信号格 / 经典卡片 / 浅紫清单 / 奶油金」生效，极简清单与杂志大片未接通配色轴；字体与版式对白名单 6 套模板全部生效）</small></label>
           <div style="display:flex;gap:10px">
             <select id="wx-gen-palette" style="flex:1">
               <option value="gold_night" selected>默认配色（信号格微信绿 / 经典鎏金）</option>
