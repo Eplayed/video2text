@@ -216,6 +216,12 @@ DEFAULT_PALETTE_KEY = "gold_night"
 # 覆盖 CSS 在 _build_css 之后追加到样式表末尾，同特异度后来居上。
 # 每预设的 css 为 {模板键: 覆盖片段}；未覆盖的模板保持现状（零行为变化）。
 # 默认版式 default 为空覆盖 ＝ 现状。
+#
+# 封面与内页都要变（2026-09-29 修复：此前只写了封面级选择器 .hero/.gmap，
+# classic/tier 内页块名是 .band/.panels/.note/.tgrid，选择器落空 → 内页零变化）。
+# 内页规则一律用「直接子选择器」或「内页专有类」，避免误伤同名嵌套元素：
+#   .wrap-in>.note  —— classic 封面的 .note 嵌在 .cta 里，不加 > 会被连带重排；
+#   .tier>.tgrid    —— .tier 只存在于 tier 内页，封面用的是 .tpreview，天然隔离。
 LAYOUT_PRESETS = {
     "default": {
         "label": "经典排布（现状）",
@@ -224,9 +230,15 @@ LAYOUT_PRESETS = {
     "hero_first": {
         "label": "图先行（大图置顶）",
         "css": {
-            # 报头行钉在最上（order:-2），主图上移到标题之前（order:-1）
-            "classic": ".topline{order:-2}.hero{order:-1}",
-            "tier": ".mast{order:-2}.hero{order:-1}",
+            # 封面：报头行钉在最上（order:-2），主图上移到标题之前（order:-1）
+            # classic 内页：横带图钉在报头之下并解除 700px 高度上限（图更抢眼），小结压尾
+            # tier 内页：无主图，改为放大梯队大徽章（内页的主视觉）
+            # quest/guide 内页：.hero.list / .gmap.list 与封面同名，被同一选择器上浮到标题之前
+            "classic": ".topline{order:-2}.hero{order:-1}"
+                       ".wrap-in>.band{order:-1;max-height:820px}"
+                       ".wrap-in>.note{order:2;margin-top:20px}",
+            "tier": ".mast{order:-2}.hero{order:-1}"
+                    ".tier>.thead{margin-bottom:22px}.tbadge{font-size:104px;width:176px}",
             "quest": ".mast{order:-2}.hero{order:-1}",
             "guide": ".mast{order:-2}.gmap{order:-1}",
         },
@@ -234,9 +246,14 @@ LAYOUT_PRESETS = {
     "summary_first": {
         "label": "要点先行（摘要上浮）",
         "css": {
-            # 主图沉底（order:1），标题下方的摘要块（cta/tpreview/ifact/panelbox）自然上浮
-            "classic": ".hero{order:1}",
-            "tier": ".hero{order:1}",
+            # 封面：主图沉底（order:1），标题下方的摘要块（cta/tpreview/ifact/panelbox）自然上浮
+            # classic 内页：横带图沉到要点之后、小结压尾（标题+分区+要点先给）
+            # tier 内页：条目网格上浮到大徽章行之前（要点先行）
+            # quest/guide 内页：图块随 .hero/.gmap 一起沉底，步骤轨/路线轨上浮
+            "classic": ".hero{order:1}"
+                       ".wrap-in>.band{order:1}.wrap-in>.note{order:2;margin-top:20px}",
+            "tier": ".hero{order:1}"
+                    ".tier>.tgrid{order:-1;margin-bottom:16px}.tier>.thead{order:1;margin-bottom:0}",
             "quest": ".hero{order:1}",
             "guide": ".gmap{order:1}",
         },
