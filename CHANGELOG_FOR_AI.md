@@ -2,6 +2,14 @@
 
 更新时间：2026-09-29
 
+## 2026-09-29（三）：版式轴内页重排补全（方案一）+ 随机版式选项
+
+- **根因（用户报障「第一张变、后面几张不变」）**：版式轴第三步的 `LAYOUT_PRESETS` 只写了**封面级**选择器（`.hero`/`.gmap`/`.mast`），而 classic 内页图块叫 `.band`、要点容器 `.panels`、小结 `.note`，tier 内页是 `.tier` 包 `.thead`/`.tgrid` 且**无主图**——覆盖片段注入到了内页 HTML（`/* layout:... */` 标记在），但选择器匹配不到任何元素 → 内页零变化。manifest 证据（包 56）：`layout=summary_first` 已生效、四张 HTML 都含标记，唯独 img2-4 无 `.hero` 可排。属实现缺口，非运维问题。
+- **修复（方案一：三预设补内页规则，四模板全覆盖）**：`variants.py` 重写 `LAYOUT_PRESETS`，为 `hero_first`/`summary_first` 各补上 classic/tier/quest/guide 的内页重排片段。防嵌套误伤用**直接子选择器/内页专有类**——`.wrap-in>.note`（classic 封面的 `.note` 嵌在 `.cta` 里，不加 `>` 会被连带重排）、`.tier>.tgrid`/`.tier>.thead`（`.tier` 只存在于 tier 内页，封面用 `.tpreview`，天然隔离）。tier 内页无主图：`hero_first` 改为放大梯队大徽章（`.tbadge` 86→104px、宽 150→176px）作主视觉，`summary_first` 让 `.tgrid` 上浮到 `.thead` 之前；classic 内页：`hero_first` 把 `.band` 钉到报头之下并解除 700px 高度上限（→820px，图更抢眼）、`.note` 压尾，`summary_first` 让 `.band` 沉到要点之后、`.note` 压尾。`default` 仍空覆盖＝现状零变化。
+- **随机版式（新选项）**：`variants.py` 新增 `RANDOM_LAYOUT_KEY="random"` 与 `RANDOM_POOL=["hero_first","summary_first"]`（只从非 default 抽，保证看得到与经典排布不同的块序）、`pick_random_layout()`（`random.choice(RANDOM_POOL)`）。`channels/toutiao.py` 生成入口分流：`layout=="random"` 时**本次生成只抽一次**（整包统一版式，不会一张一个样），抽中真实键经 `resolve_layout`/`layout_css` 生效并写进 `manifest.layout`（落 hero_first/summary_first，**不落 "random"**，产物可追溯）；其余走原闭集回落。`index.html` 版式下拉加「每次随机（自动换排布）」选项，前端 JS 原样透传 value；`web/app.py` 无需改（`[:20]` 截断与 `layout or None` 对 "random" 均无碍）。
+- **验证**：`variants.py`/`toutiao.py` `py_compile` 过；e2e 扩到**十二用例**全过 `ALL_OK`（新增 J：classic 内页 img2 吃到 summary_first 的 `.band` 沉底+`.note` 压尾；K：tier 内页 img2 吃到 `.tgrid` 上浮+`.thead` 下沉；L：`layout="random"` 连抽 8 次均落合法真实预设、注入对应覆盖、manifest  never "random"，seen 覆盖两键）；样张脚本重跑 4 包×3 版式×2 卡＝24 张，内页 c2 HTML 逐张确认注入内页重排规则、default 内页无标记（零注入）；Flask 按端口 PID 重启（45358→47588），`lsof` 确认换 PID + 首页含 `<option value="random">` 双重确认接管。
+- 仍未做：`minimal`/`bold`/`magazine`/`wechat` 四模板版式轴 likewise no-op（未接通），需要时按同一套路加覆盖片段并登记进 `LAYOUT_PRESETS`。
+
 ## 2026-09-29（二）：修复 guide 封面标题裁切（比例感知满铺整图）
 
 - **根因**：源攻略图（`output/toutiao/<题材>攻略图/4_01.jpg` 等，1078×1918，h/w≈1.78）本身是整张 9:16 信息图——顶部自带金色标题横幅、中部地图、底部路线面板，比例与画布 1080×1920（1.778）几乎一致；旧逻辑把它塞进 `.gmap.cover` 子盒（约 968×1100、比例≈1.14），`object-fit:cover` 居中裁切上下各约 300px，图内自带标题横幅被切半。与版式轴无关，default 版式同样存在。
