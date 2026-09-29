@@ -92,15 +92,11 @@ h2 { font-family:"Songti SC","Noto Serif SC","STSong",serif; font-size:62px; fon
                 background:linear-gradient(90deg, transparent, __GOLD_DEEP__, transparent); }
 .seclabel .tx { font-size:27px; letter-spacing:6px; color:__GOLD__; font-weight:800; }
 .panels { display:flex; flex-direction:column; gap:18px; flex:1; }
+/* 2026-09-29 用户要求：条目行不再显示「条目名首字」圆环徽章（原 .panel .ring），
+   整块移除；阵营专属条目改由左侧色条区分（原阵营色只挂在 .ring 上，会随圆环一起消失）。 */
 .panel { display:flex; align-items:center; gap:26px; background:rgba(__PANEL_RGB__,.86);
          border:1px solid __PANEL_B__; border-radius:12px; padding:26px 30px; flex:1;
          box-shadow:0 6px 16px rgba(0,0,0,.38); }
-.panel .ring { flex-shrink:0; width:92px; height:92px; border-radius:50%;
-               background:radial-gradient(circle at 35% 30%, __RING_HI__, __RING_LO__);
-               border:2px solid __GOLD__; box-shadow:0 0 0 5px rgba(0,0,0,.35), inset 0 0 14px rgba(0,0,0,.6);
-               display:flex; align-items:center; justify-content:center;
-               font-family:"Songti SC","Noto Serif SC","STSong",serif; font-size:42px;
-               font-weight:900; color:__GOLD_HI__; text-shadow:0 2px 6px rgba(0,0,0,.7); }
 .panel .bd { flex:1; min-width:0; }
 .panel .pt { font-family:"Songti SC","Noto Serif SC","STSong",serif; font-size:33px; font-weight:800;
              color:__GOLD_HI__; margin-bottom:8px; display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
@@ -108,12 +104,8 @@ h2 { font-family:"Songti SC","Noto Serif SC","STSong",serif; font-size:62px; fon
 .chip { font-size:22px; font-weight:700; color:__ON_ACCENT__; letter-spacing:2px;
         background:linear-gradient(180deg,__GOLD_HI__,__GOLD__); border-radius:5px; padding:3px 12px;
         border:1px solid __GOLD_DEEP__; }
-.panel.f-alliance { border-color:#2f4f8f; }
-.panel.f-alliance .ring { border-color:#6f9fdf; color:#cfe0ff;
-                          background:radial-gradient(circle at 35% 30%, #1c2a4a, #101627); }
-.panel.f-horde { border-color:#6b1f18; }
-.panel.f-horde .ring { border-color:#c25d4f; color:#ffd9c9;
-                       background:radial-gradient(circle at 35% 30%, #3a1712, #1d0d0a); }
+.panel.f-alliance { border-color:#2f4f8f; border-left:8px solid #6f9fdf; }
+.panel.f-horde { border-color:#6b1f18; border-left:8px solid #c25d4f; }
 .note { border:3px double __GOLD_DEEP__; border-radius:12px; padding:22px 30px; margin-top:auto;
         background:linear-gradient(180deg, rgba(0,0,0,.22), rgba(0,0,0,.4)); }
 .note .nt { font-size:25px; color:__GOLD__; font-weight:800; margin-bottom:8px; letter-spacing:4px; }
@@ -589,10 +581,6 @@ h1.list.long { font-size:48px; }
 .ifact { display:flex; gap:18px; margin-top:24px; }
 .ifc { flex:1; background:__Q_PANEL__; border:1px solid __GOLD_DEEP__; border-radius:8px;
        padding:16px 12px; text-align:center; box-shadow:inset 0 0 14px rgba(0,0,0,.4); }
-.ifc .ico { width:54px; height:54px; margin:0 auto 10px; border-radius:50%;
-            background:radial-gradient(circle at 35% 30%, __Q_ICO_HI__, __Q_ICO_LO__); border:2px solid __GOLD__;
-            box-shadow:0 0 10px rgba(__Q_GOLD_RGB__,.35); display:flex; align-items:center; justify-content:center;
-            font-size:27px; font-weight:900; color:__Q_GOLDTXT__; }
 .ifc .t { font-size:25px; font-weight:800; color:__Q_GOLDTXT__; margin-bottom:4px; }
 .ifc .d { font-size:21px; color:__Q_MUTE__; line-height:1.4; }
 .tnote { margin-top:14px; text-align:center; font-size:22px; color:__Q_DIM__; }
@@ -680,12 +668,12 @@ def _list_html_classic(card, css, hero_uri, ctx):
     for it in items:
         f_cls = ("f-%s" % it["faction"]) if it.get("faction") in ("alliance", "horde") else ""
         name = _esc(it.get("name", ""))
-        glyph = _esc((it.get("name") or card.get("icon") or "◆")[:1])
         tag = _esc(it.get("tag", ""))
+        # 2026-09-29 用户要求：移除条目名首字圆环（原 <div class="ring">共</div>），行内只留标题+描述
         rows.append(
-            '<div class="panel %s"><div class="ring">%s</div><div class="bd">'
+            '<div class="panel %s"><div class="bd">'
             '<div class="pt">%s%s</div><div class="pd">%s</div></div></div>'
-            % (f_cls, glyph, name,
+            % (f_cls, name,
                ('<span class="chip">%s</span>' % tag) if tag else "",
                _esc(it.get("desc", "")))
         )
@@ -1148,9 +1136,10 @@ def _chain_html(text):
 
 def _cover_html_quest(card, css, hero_uri, ctx):
     hooks = (card.get("hooks") or [])[:4]
+    # 2026-09-29 用户要求：移除「看点标题首字」圆形徽章（原 <div class="ico">变</div>），摘要行只留标题+说明
     facts = "".join(
-        '<div class="ifc"><div class="ico">%s</div><div class="t">%s</div><div class="d">%s</div></div>'
-        % (_esc((str(h.get("t") or "?"))[:1]), _esc(h.get("t", "")), _esc(h.get("d", "")))
+        '<div class="ifc"><div class="t">%s</div><div class="d">%s</div></div>'
+        % (_esc(h.get("t", "")), _esc(h.get("d", "")))
         for h in hooks) if hooks else ""
     # 修复：摘要行必须包进 .ifact 横向容器（此前漏包导致 4 个 .ifc 在列容器里纵向全宽堆叠）
     facts_html = ('<div class="ifact">%s</div>' % facts) if facts else ""
