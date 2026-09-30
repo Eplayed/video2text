@@ -1681,8 +1681,8 @@ def api_poster_plan():
 
     def fn():
         _poster_status["progress"] = "LLM 拆解海报文案（思考型模型约需 3 分钟）..."
-        plan, bad = ai_poster.build_text_plan(summary, _ai_config(), theme=theme, title=title)
-        _poster_status["plan"] = {"plan": plan, "violations": bad,
+        plan, publish, bad = ai_poster.build_text_plan(summary, _ai_config(), theme=theme, title=title)
+        _poster_status["plan"] = {"plan": plan, "publish": publish, "violations": bad,
                                   "chars": ai_poster.plan_chars(plan),
                                   "prompt_text": ai_poster.build_prompt_text(plan)}
         _poster_status["progress"] = ("✅ 文案已拆解（合计 %d 字）" % ai_poster.plan_chars(plan)
@@ -1704,18 +1704,20 @@ def api_poster_generate():
     title = str(data.get("title") or "").strip()[:60]
     ratio = str(data.get("ratio") or "9:16").strip()[:5]
     plan = data.get("plan") if isinstance(data.get("plan"), dict) else None
+    publish = data.get("publish") if isinstance(data.get("publish"), dict) else None
 
     def fn():
         def cb(msg):
             _poster_status["progress"] = msg
         manifest = ai_poster.generate_poster(summary, _ai_config(), theme=theme, title=title,
-                                             ratio=ratio, progress_cb=cb, plan=plan)
+                                             ratio=ratio, progress_cb=cb, plan=plan, publish=publish)
         v = manifest.get("verify") or {}
+        errs = [i for i in (manifest.get("lint") or []) if i.startswith("error")]
         _poster_status["package"] = {"id": manifest["id"], "title": manifest["title"],
                                      "url": manifest["url"], "chars": manifest["text_chars"],
-                                     "verify_ok": v.get("ok")}
-        _poster_status["plan"] = {"plan": manifest["plan"], "violations": [],
-                                  "chars": manifest["text_chars"],
+                                     "verify_ok": v.get("ok"), "lint": manifest.get("lint") or []}
+        _poster_status["plan"] = {"plan": manifest["plan"], "publish": manifest["publish"],
+                                  "violations": errs, "chars": manifest["text_chars"],
                                   "prompt_text": manifest["prompt_text"]}
         _poster_status["progress"] = "✅ 海报已生成（%d 字）%s" % (
             manifest["text_chars"],

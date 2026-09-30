@@ -34,8 +34,17 @@ FALLBACK_DRAFT_MARKERS = (
 
 
 def draft_blockers(summary):
-    """整合稿出图前的质量判据，返回问题列表（空 = 可用）。"""
-    content = str((summary or {}).get("content") or "")
+    """整合稿出图前的质量判据，返回问题列表（空 = 可用）。
+
+    首选 status：AI 成功落 'ai'，AI 失败或未配置退回规则版落 'draft'
+    （见 content_store.generate_summary 的兜底分支）——骨架稿拿去出图必然产出空洞卡片。
+    正文指纹是第二层网：上游改成不再把错误串写进正文之前，库里已存了一批污染稿，
+    那些行的 status 与正文都不可信，只能靠指纹识别。
+    """
+    s = summary or {}
+    if str(s.get("status") or "").strip() == "draft":
+        return ["整合稿是 AI 失败或未配置时留下的规则版骨架（status=draft）"]
+    content = str(s.get("content") or "")
     for marker in FALLBACK_DRAFT_MARKERS:
         if marker in content:
             return ["整合稿是 AI 失败时留下的规则版骨架（命中「%s」）" % marker]

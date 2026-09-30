@@ -2,6 +2,19 @@
 
 更新时间：2026-09-30
 
+## 2026-09-30（补六）：海报产线补发布包字段 + 上游去污染 + 实测出限流与额度两个真实约束
+
+**1. 上游不再把错误串写进整合稿正文。** 补五只在下游拦，本轮改源头：`content_store.generate_summary` / `generate_collection_summary` 的 AI 失败分支不再 `content += "[AI生成失败…]"`，改为把原因写进 `structured_data.fallback_error`（正文是素材，不该混日志）。`gate.draft_blockers` 同时升级为**以 `status` 为主判据**（AI 成功落 `ai`、失败或未配置落 `draft`；实测全库 51 个 ai / 3 个 draft，3 个 draft 正好就是全部污染行），正文指纹降为第二层网，专门兜历史污染稿。e2e 的假整合稿不带 status 字段，因此不受影响（已实测）。
+
+**2. 海报补发布包字段。** `build_text_plan` 现在返回 `(plan, publish, violations)`：`plan` 是要画进图里的文字（仍过 80 字硬门禁），`publish` 是发布页用的配文/摘要/关键词回复/来源说明（只做软校验，进 `manifest.lint`）。`manifest` 新增 `publish`、`copy_text`（自动追加合规尾注）、`digest`、`keyword_reply`、`source_note`、`checklist`（7 条平台侧人工动作）、`lint`、`cost_yuan_estimate`。前端弹窗加「发布页文案」区与「复制发布文案」按钮。修了一个自造 bug：`_clip` 会删掉所有空格，英文关键词「回复 Agent 领取」会被粘成「回复Agent领取」，发布文案改用 `_clip_ws` 只折叠不删除。
+
+**3. 实测出两条硬约束（都写进代码了）。**
+- **`qwen-image-max` 官方 0.5 元/张、限流 RPM=2**（阿里云百炼模型页）。稳定率探针 `scripts/probe_poster_stability.py` 连发 5 张：4 张逐字全对（累计约 316 字零错字），**第 5 张撞 `Requests rate limit exceeded`**。所以 `generate_image` 加了相邻请求 ≥31s 节流 + 限流退避重试（最多 3 次）。结论：**中文文字渲染稳定率目前是 4/4，真正的风险是限流而不是错字**；批量 20 张要约 10 分钟。
+- **会话中途该 key 全线 403 `AccessDenied.Unpurchased`**（`qwen3.8-max` / `qwen-plus` / `deepseek-v4-flash` / `qwen3-vl-flash` / `qwen-image-max` 无一例外，而出图模型 20 分钟前还可用）。聚合站没有余额或账单接口（`/dashboard/billing/*`、`/api/v1/user/balance` 全 404），无法自查剩余额度。**高度怀疑是那 6 次出图（约 3 元）打光了小额试用额度**，也可能是平台侧授权策略变更。因此本轮**第 2 条的端到端真实链路未能验证**，改用离线打桩（stub `generate_image`/`verify_image`）验完 manifest 组装、合规尾注追加、软校验与门禁拒绝；额度恢复后需重跑 `python3 scripts/e2e_ai_poster.py 58` 补一次真实验证。
+
+**验证**：`py_compile` 全过；JS `node --check` 过；`graphics-verify` 三条线 ALL_OK（`gate.py` 改过）；门禁 5 项离线判定（含 status 主判据与指纹兜底各一条负向）全对；发布字段离线打桩验证通过。`content_store.py` 采用 hunk 级暂存提交，未夹带并发的 `classify_videos` 改动。
+
+
 ## 2026-09-30（补五）：出图门禁——LLM 失败不再静默降级出垃圾图
 
 补四里点名「仍未做」的那条，本轮修掉。事故链：DeepSeek 欠费 402 → 整合稿层把「规则版骨架 + `[AI生成失败…Error code: 402]`」写进正文 → 图文层 `_llm_cards` 的 `except Exception: return None` 把同一个 402 吞掉 → `_fallback_cards` 把骨架逐行切片成 5 张读者可见卡片，全程只有 lint 两条 warn。

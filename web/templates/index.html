@@ -363,6 +363,10 @@ textarea{resize:vertical;min-height:84px}
 .pk-verify.pass{background:color-mix(in srgb,#07c160 10%,transparent);color:#07c160;font-weight:700}
 .pk-verify.fail{background:color-mix(in srgb,var(--danger) 10%,transparent);color:var(--danger);font-weight:700}
 .pk-verify.mild{background:var(--surface-nested);color:var(--text-secondary)}
+.pk-sub{font-size:12px;font-weight:800;color:var(--text-secondary);margin:14px 0 6px;letter-spacing:.5px}
+.pk-ta{flex:1;min-height:76px;font-size:12.5px;line-height:1.7;font-family:inherit}
+.pk-pub{white-space:pre-wrap;word-break:break-word;font-family:inherit;font-size:12.5px;line-height:1.75;background:var(--surface-nested);border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin:0;max-height:240px;overflow:auto}
+.pk-ck{margin:0;padding-left:20px;font-size:12px;line-height:1.85;color:var(--text-secondary)}
 .wx-card .s-meta .wx-imgs{color:var(--module-1);font-weight:700}
 .wx-img.real img{outline:2px solid var(--module-1);outline-offset:-2px}
 .wx-img.real .lb{background:rgba(111,143,106,.86)}
@@ -1038,7 +1042,7 @@ textarea{resize:vertical;min-height:84px}
           <button class="btn ghost sm" onclick="posterPlan()">① AI 拆解文案</button>
           <button class="btn sm" style="background:var(--module-5);border-color:var(--module-5);color:#fff" onclick="posterGenerate()">② 出图并校验</button>
         </div>
-        <div class="pk-hint">先「①拆解」拿到可编辑文案（思考型模型约 3 分钟），改完再「②出图」，避免拿不合心的文案白花一次出图。字数门禁 <b>80 字</b>：超了直接拒绝出图，因为字越多错字率越高。</div>
+        <div class="pk-hint">先「①拆解」拿到可编辑文案（思考型模型约 3 分钟），改完再「②出图」，避免拿不合心的文案白花一次出图。字数门禁 <b>80 字</b>：超了直接拒绝出图，因为字越多错字率越高。<br>成本与限流：出图 <b>0.5 元/张</b>、模型 <b>RPM=2</b>（每分钟最多 2 次），客户端已自动节流与退避重试，批量 20 张要约 10 分钟。</div>
         <div id="pk-plan"></div>
         <div id="pk-result"></div>
       </div>
@@ -1916,8 +1920,8 @@ function _pkRow(tag, id, val, max, ph) {
   return `<div class="pk-row"><span class="pk-tag">${tag}</span>`
     + `<input id="${id}" value="${esc(val || '')}" maxlength="${max}" placeholder="${ph}" oninput="pkCount()"></div>`;
 }
-function pkRenderPlan(plan) {
-  plan = plan || {};
+function pkRenderPlan(plan, publish) {
+  plan = plan || {}; publish = publish || {};
   let html = _pkRow('主标题', 'pk-title', plan.title, PK_LIMITS.title, '≤12 字')
     + _pkRow('副标题', 'pk-subtitle', plan.subtitle, PK_LIMITS.subtitle, '≤10 字，可留空');
   (plan.cards || []).slice(0, PK_LIMITS.cardMax).forEach((c, i) => {
@@ -1928,6 +1932,12 @@ function pkRenderPlan(plan) {
   html += _pkRow('尾注', 'pk-footer', plan.footer, PK_LIMITS.footer, '合规转述声明')
     + `<div class="pk-row"><span class="pk-tag">画面风格</span><input id="pk-style" value="${esc(plan.style || '')}" maxlength="120" placeholder="配色 / 材质 / 装饰一句话"></div>`
     + '<div class="pk-count" id="pk-count"></div>';
+  // 发布页文案：不进图，所以不占 80 字预算，但同样是 AI 起草、人可改
+  html += '<div class="pk-sub">发布页文案（不进图，随包一起给你复制走）</div>'
+    + `<div class="pk-row"><span class="pk-tag">配文</span><textarea id="pk-copy" class="pk-ta" placeholder="120-260 字：钩子开头 + 要点 3-5 条 + 收尾引导">${esc(publish.copy_text || '')}</textarea></div>`
+    + `<div class="pk-row"><span class="pk-tag">摘要</span><textarea id="pk-digest" class="pk-ta" style="min-height:44px" placeholder="≤120 字，公众号发布页用">${esc(publish.digest || '')}</textarea></div>`
+    + `<div class="pk-row"><span class="pk-tag">关键词回复</span><input id="pk-kw" value="${esc(publish.keyword_reply || '')}" maxlength="30" placeholder="≤30 字，留空则不配"></div>`
+    + `<div class="pk-row"><span class="pk-tag">来源说明</span><input id="pk-src" value="${esc(publish.source_note || '')}" maxlength="50" placeholder="≤50 字，含数据口径日期"></div>`;
   document.getElementById('pk-plan').innerHTML = html;
   pkCount();
 }
@@ -1940,6 +1950,11 @@ function pkReadPlan() {
   }
   return {title: g('pk-title'), subtitle: g('pk-subtitle'), cards: cards,
           footer: g('pk-footer'), style: g('pk-style')};
+}
+function pkReadPublish() {
+  const g = id => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
+  return {copy_text: g('pk-copy'), digest: g('pk-digest'),
+          keyword_reply: g('pk-kw'), source_note: g('pk-src')};
 }
 function pkCount() {
   const el = document.getElementById('pk-count');
@@ -1967,7 +1982,8 @@ async function posterGenerate() {
   }
   if (!confirm('出图？约 30-60 秒，随后自动回读校验。已有海报会被覆盖。')) return;
   const body = {summary_id: _pkId, ratio: document.getElementById('pk-ratio').value,
-                theme: document.getElementById('pk-theme').value.trim(), plan: plan};
+                theme: document.getElementById('pk-theme').value.trim(),
+                plan: plan, publish: plan ? pkReadPublish() : null};
   const r = await fetch('/api/poster/generate', {method: 'POST',
     headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)}).then(x => x.json());
   if (r.error) { setStatus('error', r.error); return; }
@@ -1989,7 +2005,7 @@ function pollPoster(stage) {
       setStatus('error', '海报任务失败'); return;
     }
     setStatus('done', st.progress || '完成');
-    if (st.plan && st.plan.plan) pkRenderPlan(st.plan.plan);
+    if (st.plan && st.plan.plan) pkRenderPlan(st.plan.plan, st.plan.publish);
     if (stage === 'poster' && st.package && st.package.id) renderPosterResult(st.package.id);
     else box.innerHTML = `<div class="pk-verify pass">✅ ${esc(st.progress || '文案已就绪，可编辑后出图')}</div>`;
   };
@@ -2007,12 +2023,33 @@ async function renderPosterResult(id) {
     cls = 'fail';
     txt = `✗ 图面文字与文案不一致，缺失：${(v.missing || []).join('、') || '（未知）'}——别发布，改文案或重出`;
   }
+  const warns = (m.lint || []).filter(s => !s.startsWith('error'));
+  const pub = pkPublishText(m);
+  const ck = (m.checklist || []).map(s => `<li>${esc(s)}</li>`).join('');
   document.getElementById('pk-result').innerHTML =
     `<img class="pk-img" src="${m.url}?t=${Date.now()}" onclick="window.open('${m.url}','_blank')" title="点击看原图">`
     + `<div class="pk-verify ${cls}">${esc(txt)}</div>`
-    + '<div style="display:flex;gap:8px;margin-top:10px">'
+    + (warns.length ? `<div class="pk-verify mild">${warns.map(esc).join('<br>')}</div>` : '')
+    + `<div class="pk-sub">发布文案（约 ${m.text_chars} 字上图，配文另计；估算成本 ${m.cost_yuan_estimate} 元/张）</div>`
+    + `<pre class="pk-pub">${esc(pub)}</pre>`
+    + `<div class="pk-sub">发布前逐条人工过</div><ul class="pk-ck">${ck}</ul>`
+    + '<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">'
+    + '<button class="btn sm" style="background:var(--module-5);border-color:var(--module-5);color:#fff" onclick="copyPosterPublish()">复制发布文案</button>'
     + '<button class="btn ghost sm" onclick="copyPosterPrompt()">复制出图提示词</button>'
     + '<button class="btn ghost sm" onclick="window.open(\'' + m.url + '\',\'_blank\')">看原图</button></div>';
+}
+function pkPublishText(m) {
+  return ['标题：' + (m.title || ''),
+          '摘要（≤120 字）：' + (m.digest || '（待补）'),
+          '',
+          '【配文】',
+          m.copy_text || '（待手写）',
+          '',
+          '【关键词自动回复】' + (m.keyword_reply || '（未配置）'),
+          '【来源说明】' + (m.source_note || '（未填）')].join('\n');
+}
+function copyPosterPublish() {
+  if (_pkLast) copyText(pkPublishText(_pkLast));
 }
 function copyPosterPrompt() {
   if (_pkLast) copyText(_pkLast.prompt_text || '');

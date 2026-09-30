@@ -17,6 +17,7 @@ Python 3.9 兼容：不用 match / X|Y 语法。
 import base64
 import json
 import re
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -40,6 +41,25 @@ RATIO_LABEL = {"9:16": "竖版 9:16", "3:4": "竖版 3:4", "1:1": "方形 1:1"}
 MAX_TOTAL_CHARS = 80
 TITLE_MAX, SUBTITLE_MAX, FOOTER_MAX = 12, 10, 14
 CARD_TITLE_MAX, CARD_DESC_MAX, CARD_MIN, CARD_MAX = 6, 16, 3, 5
+
+# 发布文案（不进图、只给发布页用）的独立字数档：不受图面 80 字预算约束
+COPY_MIN, COPY_MAX = 120, 260
+DIGEST_MAX = 120
+KEYWORD_MAX, SOURCE_MAX = 30, 50
+
+# 合规尾注：图是 AI 画的、文字是 AI 写的，转述声明必须随配文一起发
+COMPLIANCE_NOTE = "本文由 AI 辅助整理归纳，内容源自公开分享，观点与结论归原作者，如有侵权请联系删除。"
+
+# 海报版发布检查清单：平台侧动作 AI 替不了，逐条人工过
+CHECKLIST = [
+    "图内文字已过 OCR 回读校验（manifest.verify.ok = true），未通过别发",
+    "数字/版本/价格类信息人工核对一手来源（ASR 与模型都可能出错）",
+    "「文章设置」勾选「内容由 AI 生成」（2025-09-01 起强制，平台不自动标注）",
+    "图片消息无「声明原创」入口（平台未开放图片原创），勿找该按钮、勿群发后补标",
+    "配文保留文末合规尾注，勿删；正文禁外链",
+    "尺寸与平台匹配：9:16 小红书/抖音图文、3:4 公众号图片消息、1:1 通用封面",
+    "发布后 72 小时回填数据，便于回看哪种风格有效",
+]
 
 
 class PosterError(Exception):
@@ -83,8 +103,16 @@ _PLAN_PROMPT = """你是自媒体图文编辑。把下面的整合稿压缩成�
   "subtitle": "副标题",
   "cards": [{"t": "卡片标题", "d": "卡片说明"}],
   "footer": "合规转述声明，例：内容整理自公开分享",
-  "style": "画面风格一句话，描述配色/材质/装饰，例：深色影院质感背景，金色雕花边框，卡片做成票根造型"
+  "style": "画面风格一句话，描述配色/材质/装饰，例：深色影院质感背景，金色雕花边框，卡片做成票根造型",
+  "publish": {
+    "copy_text": "发布页配文，120-260 字纯文本：钩子开头 1-2 句 + 要点 3-5 条（每条一行，用「· 」开头）+ 收尾引导 1 句。不要 markdown 符号。",
+    "digest": "摘要，≤120 字，单独成段能读懂，不写「见图」这类字样",
+    "keyword_reply": "关注后自动回复引导语，≤30 字（例：回复 清单 领取完整列表）；素材里没有可推的关键词就留空字符串",
+    "source_note": "来源说明一句话，≤50 字，含数据口径截至{{DATE}}"
+  }
 }
+
+publish 里的文字不会画进海报，是给发布页用的，所以不占上面 80 字的预算；但同样只能用整合稿里的事实。
 
 整合稿：
 __CONTENT__"""
@@ -94,8 +122,40 @@ def _clip(text, limit):
     return re.sub(r"\s+", "", str(text or ""))[:limit]
 
 
+def _clip_ws(text, limit):
+    """发布文案用的裁切：折叠空白但保留单空格——图面字段可以删空格，
+    「回复 Agent 领取」这类关键词删了空格就废了。"""
+    return re.sub(r"\s+", " ", str(text or "")).strip()[:limit]
+
+
+def _clip_publish(raw):
+    """发布文案单独裁切：它不进图，所以不受图面 80 字预算约束。"""
+    raw = raw if isinstance(raw, dict) else {}
+    return {"copy_text": re.sub(r"[ \t]+", " ", str(raw.get("copy_text") or "")).strip()[:COPY_MAX],
+            "digest": _clip_ws(raw.get("digest"), DIGEST_MAX),
+            "keyword_reply": _clip_ws(raw.get("keyword_reply"), KEYWORD_MAX),
+            "source_note": _clip_ws(raw.get("source_note"), SOURCE_MAX)}
+
+
+def lint_publish(pub):
+    """发布文案侧软校验：不阻断出图，只进 manifest.lint 提示人工补。"""
+    bad = []
+    n = len(pub.get("copy_text") or "")
+    if n and (n < COPY_MIN or n > COPY_MAX):
+        bad.append("配文 %d 字，建议 %d-%d 字" % (n, COPY_MIN, COPY_MAX))
+    if len(pub.get("digest") or "") > DIGEST_MAX:
+        bad.append("摘要超 %d 字" % DIGEST_MAX)
+    if len(pub.get("keyword_reply") or "") > KEYWORD_MAX:
+        bad.append("关键词回复超 %d 字" % KEYWORD_MAX)
+    return bad
+
+
 def build_text_plan(summary, ai_config, theme="", title=""):
-    """调 LLM 产出文案计划，并逐字段裁到字数线内。返回 (plan, violations)。"""
+    """调 LLM 产出文案计划 + 发布文案，并逐字段裁到字数线内。
+
+    返回 (plan, publish, violations)：plan 是要画进图里的文字（violations 非空即拒绝出图），
+    publish 是发布页用的配文/摘要/关键词回复/来源说明（只软校验）。
+    """
     api_key, api_base, model = _require_ai(ai_config)
     import openai
 
@@ -103,6 +163,7 @@ def build_text_plan(summary, ai_config, theme="", title=""):
                            timeout=300, max_retries=1)
     prompt = (_PLAN_PROMPT
               .replace("__THEME__", (theme or "未指定，按素材自判").strip())
+              .replace("{{DATE}}", datetime.now().strftime("%m月%d日"))
               .replace("__CONTENT__", (summary.get("content") or "")[:8000]))
     resp = client.chat.completions.create(
         model=model or "qwen-plus",
@@ -122,7 +183,7 @@ def build_text_plan(summary, ai_config, theme="", title=""):
             "cards": cards,
             "footer": _clip(data.get("footer") or "内容整理自公开分享", FOOTER_MAX),
             "style": str(data.get("style") or "深色质感背景，金色细边框，信息卡片纵向排列").strip()[:120]}
-    return plan, lint_plan(plan)
+    return plan, _clip_publish(data.get("publish")), lint_plan(plan)
 
 
 def plan_chars(plan):
@@ -168,11 +229,32 @@ def build_prompt_text(plan, ratio="9:16"):
 
 
 # ── 2. 出图 ──
+# 官方口径（阿里云百炼 qwen-image-max）：0.5 元/张、限流 RPM=2。
+# 实测连发 5 张时第 5 张必撞 "Requests rate limit exceeded"，所以这里既退避也节流。
+PRICE_PER_IMAGE_YUAN = 0.5
+RATE_LIMIT_WAIT_SEC = 31      # RPM=2 → 相邻两次请求至少隔 30s，留 1s 余量
+MAX_ATTEMPTS = 3
+_last_call_at = [0.0]
+
+
+def _throttle():
+    """把相邻出图请求拉开到 RPM=2 允许的间隔，批量跑时不需要调用方自己 sleep。"""
+    wait = RATE_LIMIT_WAIT_SEC - (time.time() - _last_call_at[0])
+    if wait > 0:
+        time.sleep(wait)
+    _last_call_at[0] = time.time()
+
+
+def _rate_limited(status_code, text):
+    return status_code == 429 or "rate limit" in text.lower() or "throttl" in text.lower()
+
+
 def generate_image(prompt_text, size, ai_config, timeout=300):
     """调百炼原生 multimodal-generation 出图，返回 (png 字节, usage)。
 
-    注意：/images/generations（OpenAI 形状）对这些模型是 404；异步 text2image
-    会被拒「current user api does not support asynchronous calls」。只能同步原生端点。
+    注意三件实测事实：/images/generations（OpenAI 形状）对这些模型是 404；异步
+    text2image 会被拒「current user api does not support asynchronous calls」；
+    模型限流 RPM=2，撞限流要退避重试而不是直接失败。返回的 OSS 链接会过期，当场下载。
     """
     api_key, api_base, _ = _require_ai(ai_config)
     url = _api_root(api_base) + "/api/v1/services/aigc/multimodal-generation/generation"
@@ -181,25 +263,34 @@ def generate_image(prompt_text, size, ai_config, timeout=300):
                "parameters": {"size": size}}
     headers = {"Authorization": "Bearer " + api_key, "Content-Type": "application/json",
                "X-DashScope-Async": "disable"}
-    r = requests.post(url, json=payload, headers=headers, timeout=timeout)
-    try:
-        data = r.json()
-    except ValueError:
-        raise PosterError("出图接口返回非 JSON（HTTP %s）：%s" % (r.status_code, r.text[:200]))
-    if "output" not in data:
-        raise PosterError("出图失败：%s" % (data.get("message") or data.get("code")
-                                           or ("HTTP %s %s" % (r.status_code, str(data)[:200]))))
-    content = ((data.get("output") or {}).get("choices") or [{}])[0].get("message", {}).get("content") or []
-    img_url = ""
-    for item in content:
-        if isinstance(item, dict) and item.get("image"):
-            img_url = item["image"]
-            break
-    if not img_url:
-        raise PosterError("出图接口没返回图片地址：%s" % str(data)[:200])
-    png = requests.get(img_url, timeout=180)   # OSS 链接会过期，当场下载
-    png.raise_for_status()
-    return png.content, (data.get("usage") or {})
+    last = ""
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        _throttle()
+        r = requests.post(url, json=payload, headers=headers, timeout=timeout)
+        try:
+            data = r.json()
+        except ValueError:
+            raise PosterError("出图接口返回非 JSON（HTTP %s）：%s" % (r.status_code, r.text[:200]))
+        if "output" in data:
+            content = ((data.get("output") or {}).get("choices") or [{}])[0] \
+                .get("message", {}).get("content") or []
+            img_url = ""
+            for item in content:
+                if isinstance(item, dict) and item.get("image"):
+                    img_url = item["image"]
+                    break
+            if not img_url:
+                raise PosterError("出图接口没返回图片地址：%s" % str(data)[:200])
+            png = requests.get(img_url, timeout=180)   # OSS 链接会过期，当场下载
+            png.raise_for_status()
+            return png.content, (data.get("usage") or {})
+        last = str(data.get("message") or data.get("code") or
+                   ("HTTP %s %s" % (r.status_code, str(data)[:200])))
+        if _rate_limited(r.status_code, last) and attempt < MAX_ATTEMPTS:
+            time.sleep(RATE_LIMIT_WAIT_SEC)
+            continue
+        raise PosterError("出图失败：%s" % last[:300])
+    raise PosterError("出图失败（重试 %d 次仍被限流）：%s" % (MAX_ATTEMPTS, last[:200]))
 
 
 # ── 3. OCR 回读校验 ──
@@ -246,10 +337,12 @@ def verify_image(png_bytes, plan, ai_config, timeout=120):
 
 # ── 编排 ──
 def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
-                    progress_cb=None, do_verify=True, plan=None):
+                    progress_cb=None, do_verify=True, plan=None, publish=None):
     """整理稿 → 海报一张。返回 manifest dict（已落盘 output/poster/<summary_id>/）。
 
-    plan 非空时跳过 LLM 拆解（前端手改文案后重出图走这条），但仍过字数门禁。
+    plan / publish 非空时跳过 LLM 拆解（前端审改过文案再出图走这条）：plan 是要画进图的
+    文字仍过字数硬门禁，publish 是发布页文案只做软校验。两者都不落模型自由发挥——
+    模型只负责画字与排版，写什么由拆解那一步定、由人改。
     """
     _require_ai(ai_config)
     if ratio not in SIZES:
@@ -269,15 +362,16 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
     started = datetime.now()
     if plan is None:
         _pg("LLM 拆解海报文案...")
-        plan, bad = build_text_plan(summary, ai_config, theme=theme, title=title)
+        plan, llm_publish, bad = build_text_plan(summary, ai_config, theme=theme, title=title)
     else:
-        bad = lint_plan(plan)
+        llm_publish, bad = None, lint_plan(plan)
     if bad:
         raise PosterError("文案不合格：" + "；".join(bad))
+    pub = _clip_publish(publish or llm_publish or {})
     chars = plan_chars(plan)
 
     prompt_text = build_prompt_text(plan, ratio)
-    _pg("出图模型绘制海报（%s，约 30-60 秒）..." % SIZES[ratio])
+    _pg("出图模型绘制海报（%s，约 20-60 秒）..." % SIZES[ratio])
     png, usage = generate_image(prompt_text, SIZES[ratio], ai_config)
     (out_dir / "poster.png").write_bytes(png)
     (out_dir / "prompt.txt").write_text(prompt_text + "\n", encoding="utf-8")
@@ -291,12 +385,31 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
             check = {"skipped": True, "ok": None, "error": str(e)[:200],
                      "missing": [], "extra": "", "transcript": ""}
 
+    copy_text = pub.get("copy_text") or ""
+    if copy_text and COMPLIANCE_NOTE[:10] not in copy_text:
+        copy_text = copy_text.rstrip() + "\n\n" + COMPLIANCE_NOTE
+
+    issues = lint_publish(pub)
+    if not pub.get("copy_text"):
+        issues.append("warn: 配文为空，发布页需手写")
+    if not pub.get("digest"):
+        issues.append("warn: 摘要为空（公众号发布页要 ≤%d 字）" % DIGEST_MAX)
+    if check.get("ok") is False:
+        issues.insert(0, "error: 图面文字回读未通过，缺：" + "、".join(check.get("missing") or []))
+    elif check.get("ok") is None:
+        issues.append("warn: 本次未做回读校验，发布前必须人眼核对图面文字")
+
     manifest = {
         "id": summary_id,
         "summary_id": summary_id,
         "channel": "poster",
         "title": plan.get("title") or "",
         "plan": plan,
+        "publish": pub,
+        "copy_text": copy_text,
+        "digest": pub.get("digest") or "",
+        "keyword_reply": pub.get("keyword_reply") or "",
+        "source_note": pub.get("source_note") or "",
         "prompt_text": prompt_text,
         "ratio": ratio,
         "size": SIZES[ratio],
@@ -306,15 +419,19 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
         "image_model": IMAGE_MODEL,
         "ocr_model": OCR_MODEL,
         "usage": usage,
+        "cost_yuan_estimate": PRICE_PER_IMAGE_YUAN,
         "verify": check,
         "source_title": summary.get("title") or "",
         "theme": (theme or "").strip(),
+        "checklist": list(CHECKLIST),
         "created_at": _now(),
         "elapsed_sec": int((datetime.now() - started).total_seconds()),
     }
+    manifest["lint"] = issues
     (out_dir / "manifest.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
-    _pg("✅ 海报已生成" + ("" if check.get("ok") is not False else "（图面文字有缺失，见校验结果）"))
+    errs = [i for i in issues if i.startswith("error")]
+    _pg("✅ 海报已生成" + ("" if errs else "（发布文案与清单已就绪）"))
     return manifest
 
 

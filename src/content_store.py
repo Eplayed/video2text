@@ -733,7 +733,11 @@ def generate_summary(
                 )
             return ai_result, model or method, "ai"
         fallback = _generate_local(video, summary_type)
-        fallback["content"] += f"\n\n[AI生成失败，已保存规则版草稿：{ai_result['error']}]"
+        # 失败原因写进 structured_data，不再追加到正文：正文会被下游当素材抽进卡片，
+        # 「[AI生成失败…Error code: 402]」曾被印到读者可见的成品图上（2026-09-30 事故）。
+        # status=draft 已是权威信号，这里只补一份可排查的原因文本，不动正文。
+        if isinstance(fallback.get("structured_data"), dict):
+            fallback["structured_data"]["fallback_error"] = str(ai_result["error"])[:300]
         return fallback, model or method, "draft"
     return _generate_local(video, summary_type), "local-template", "draft"
 
@@ -761,7 +765,11 @@ def generate_collection_summary(
                 )
             return ai_result, model or method, "ai"
         fallback = _generate_collection_local(videos, summary_type)
-        fallback["content"] += f"\n\n[AI生成失败，已保存规则版草稿：{ai_result['error']}]"
+        # 失败原因写进 structured_data，不再追加到正文：正文会被下游当素材抽进卡片，
+        # 「[AI生成失败…Error code: 402]」曾被印到读者可见的成品图上（2026-09-30 事故）。
+        # status=draft 已是权威信号，这里只补一份可排查的原因文本，不动正文。
+        if isinstance(fallback.get("structured_data"), dict):
+            fallback["structured_data"]["fallback_error"] = str(ai_result["error"])[:300]
         return fallback, model or method, "draft"
     return _generate_collection_local(videos, summary_type), "local-template", "draft"
 
