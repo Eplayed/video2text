@@ -36,6 +36,12 @@ As this project's AI coding tool, you must follow the additional conventions bel
 2. 改代码后必须重启 Flask（无热重载）：先按占用端口的 PID 杀旧进程（`lsof -nP -i :15801` 取 PID 后 `kill`），再 `cd web && python3 app.py`；重启后用 `lsof` 确认 PID 已换、新进程真正接管。禁用 `pkill -f "web/app.py"`——它匹配不到实际命令行（`.../MacOS/Python app.py`），会造成旧进程占端口、新进程静默退出。
 3. 运行数据不进 git：`config/config.env`（Cookie/API Key）、`video_index.json` 等索引文件、`*.json` 索引——换机时手动迁移。
 4. AI 加工未配置时静默跳过、不阻断采集主流程。
+5. 改 `src/graphics/`（配色/字体/版式三轴、模板、渠道适配）前必读 `.agents/memories/40-graphics-variants.md`——三轮「选了不生效」静默失效复盘全在其中；改完必须跑 `/graphics-verify` 三条线全绿。
+
+## Qoder 项目技能（`.qoder/skills/`）
+
+- `/workbench-restart`：按端口 PID 安全重启 Flask + 语法自检 + PID/接口双确认（落实纪律 2）。
+- `/graphics-verify`：一条命令跑完 `check_variant_tokens.py` + 头条/公众号两条 e2e（脚本已收编进 `scripts/e2e_toutiao_variants.py`、`scripts/e2e_wechat_variants.py`）。
 
 # 通用工作纪律(所有 AI 工具生效)
 

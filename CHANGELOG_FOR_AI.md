@@ -1,6 +1,26 @@
 # video2text 改动说明（给其他 AI / Agent）
 
-更新时间：2026-09-29
+更新时间：2026-09-30
+
+## 2026-09-30：Qoder 接手准备——AI 资产摸底、e2e 收编入仓、两个项目技能、依赖钉版
+
+用户诉求：「查看项目中使用了哪些 AI 技能和插件，我想你来接手这个项目，需要 skill/插件可以自行安装，项目太大就分批拆解，后面我来优化」。本轮只做接手准备，不改业务行为。
+
+- **AI 资产摸底（结论）**：规则源在 `.rulesync/rules/`，分发到 AGENTS.md / CLAUDE.md / CODEBUDDY.md / `.cursor/rules` / `.trae/rules` 五份副本；守则两份在 `.agents/memories/`（`30-python-backend.md` 已进 AGENTS.md 规则块，`40-graphics-variants.md` 15KB **此前无任何入口引用**）；Trae 侧另接 `coding-agent-memory-mcp`（库在 `~/Documents/ai-hub/memory-store`），WorkBuddy 有 19 个技能 + 项目记忆 `.workbuddy/memory/MEMORY.md`（三仓库权威源地图）。Qoder 侧接手前无任何项目相关 skill/plugin。
+- **e2e 收编（进 git）**：`scripts/e2e_toutiao_variants.py`（18 用例 A–R）、`scripts/e2e_wechat_variants.py`（14 用例 W1–W14），原只存在于 Trae 私有工作区 `~/.trae-cn/work/6ab65f4c614dcadc9c6e4e41/`（工具一换就丢）。两脚本自包含（绝对 ROOT + `sys.path.insert`，产物写 `output/toutiao/99999`、`output/wechat/99998` 并自清理），迁移零改动。**工作区仍留有未收编的样张脚本**（`gen_new_tpl_previews.py`、`sample_variants.py`、`baseline/` 等），需要时去那儿取。
+- **新增 Qoder 项目技能 `.qoder/skills/`**：`workbench-restart`（把纪律 2 脚本化：py_compile 前置 → 按端口 PID TERM/KILL → `cd web && python3 app.py` nohup → PID 变更 + `/api/stats` 200 双确认，失败保留现场不重启）；`graphics-verify`（一条命令串行跑 `check_variant_tokens.py` + 两条 e2e，非 `ALL_OK` 即非 0 退出，并附「manifest → img*.html → 前端」排查顺序与三轴登记守则）。
+- **AGENTS.md 两处补入口**：关键纪律新增第 5 条（改 `src/graphics/` 前必读 `40-graphics-variants.md`、改完必跑 `/graphics-verify`）+ 增「Qoder 项目技能」小节。刻意只做 4 行索引、不把 15KB 守则内联进规则块（`rules[]` 会在每次会话整份进上下文）。
+- **依赖钉版 `requirements.txt`（进 git）**：按系统 Python 3.9 实测版本钉 Flask 3.1.3 / openpyxl 3.1.5 / requests 2.32.3 / faster-whisper 1.2.1 / openai-whisper 20250625 / playwright 1.40.0 / pillow 11.3.0；文件内注明仍需手动准备的 ffmpeg、playwright 浏览器内核、`vendor/douyin_parse`。**核实结果：`python-docx`、`pandas` 全仓无 import（别误装），`PySide6` 仅 vendor 的 `qt_app.py` GUI 用，主链路不依赖。**
+- **验证**：图文回归三条线跑通 `ALL_OK`（收编前后各一次）；`/workbench-restart` 实跑一次，PID 72113 → 23054、`/api/stats` HTTP 200、日志落 `logs/web_restart.log`。
+- **批次计划（用户已选 A+B 先行）**：A 环境与可复现（本轮主体）；B 工作台工程债——`web/app.py` 三条采集流水线（约 531/716/1603 行）抽公共函数、清 `generateToutiaoGraphics` 死代码、拆 3683 行 `index.html`；C 图文 `minimal`/`magazine`/`bold` 配色轴接通；D 采集与选题链路加固；E 跨工具规则副本对齐与记忆库统一。
+
+## 2026-09-30（补）：B 批开工前置——死代码清除 + 工程债描述纠偏（取证推翻旧文档）
+
+- **清死代码**：`web/templates/index.html` 删除 `generateToutiaoGraphics`（14 行，CHANGELOG 长期挂「留待顺手删」）。取证：全仓 `web/` 仅此一处匹配、无 onclick、`web/static` 下无 .js；活动路径是同文件 `confirmToutiaoGen` → `/api/toutiao/generate`，后端路由仍在使用**不可删**。
+- **旧文档记录过期，已纠**：PROJECT_STATUS 记的三条流水线行号 531/716/1603 实际为 `api_process` 643–741 / `api_fetch_and_process` 840–967 / `api_subscriptions_sync` 2022–2257。
+- **推翻一条既有结论（关键）**：文档原写「三条链路的 AI 打标都由 `_auto_classify_after_sync` 兜底」——实测该函数（330–347）**只有 P1/P2 调用，订阅同步 P3 从未调用**（分类靠 2218–2241 裸 SQL 回填）。因此「三条抽成一个公共函数」不是纯重构，会给订阅链路新增打标副作用与 `_db_lock` 争用。差异清单已写进 PROJECT_STATUS 工程债条目（Excel 打开粒度 / 写入列 / 失败回读 / 状态契约与冲突码 / mark_video_source 来源值），作为 B 批改造的硬约束。
+- **验证**：按纪律 2 用 `/workbench-restart` 重启（23054 → 24457，`/api/stats` 200）；浏览器实测 index.html——console 零 error/warn，`generateToutiaoGraphics` 已 undefined 而 `confirmToutiaoGen`/`openToutiaoGenDialog`/`pollToutiaoStatus`/`confirmWechatGen` 均为 function，首页正常渲染（素材 1179 / 已有 ASR 1009，侧栏 Tab 完整）。
+
 
 ## 2026-09-29（八）：公众号参考样本拆解 + 模板库新增 lilac_list / cream_gold 两模板（三轴同步登记）
 

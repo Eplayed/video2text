@@ -1,6 +1,6 @@
 # video2text 项目现状（给 AI / Agent 的快照）
 
-更新时间：2026-09-14
+更新时间：2026-09-30
 阅读顺序：本文件（现状快照）→ `README.md`（基础用法）→ `CHANGELOG_FOR_AI.md`（2026-06 历史改动与写稿流程约定）。
 双机协作/换机流程见 media-workbench 仓库 `docs/DEV-SYNC.md`（跨三仓库的权威文档）。
 
@@ -26,6 +26,9 @@ src/
   dify_client.py         Dify 知识库 API 客户端（文档级增量同步）
   path_config.py         douyin_parse 解析器路径解析（env → vendor/ → /tmp 兼容）
 web/app.py               Flask 工作台后端（45 个路由，见下）
+src/graphics/            图文渲染内核（Phase 1 抽出）：templates（模板 CSS+渲染）· variants（配色/字体/版式三轴）· skins（皮肤/题材素材）· css_engine（__TOKEN__ 替换）· renderer（Playwright 截图）· package（manifest）· ir（卡片 schema）· channels/{toutiao,wechat}.py（渠道适配器）
+scripts/                 list_candidates（候选查询）· check_variant_tokens（三轴静态检查）· e2e_toutiao_variants / e2e_wechat_variants（图文 e2e，2026-09-30 从 Trae 工作区收编入仓）
+.qoder/skills/           Qoder 项目技能：workbench-restart（安全重启+双确认）· graphics-verify（三线回归）
 vendor/douyin_parse      内置解析器（免依赖 /tmp）
 ```
 
@@ -53,6 +56,8 @@ vendor/douyin_parse      内置解析器（免依赖 /tmp）
 - 2026-09-14：**SQLite 权威源第一步（实体标识）**——videos 表新增 `author_sec_uid`/`source` 列（Excel 重同步不覆盖）：订阅同步按行号回写 sec_uid，启动时按订阅作者名幂等回填存量（737 条）；订阅导入改 SQLite 直查 sec_uid（URL 反查降为兜底）。**索引实体键重构**——video_index 以 aweme_id 为实体键（缺 id 旧条目退回 sheet:row），重建只保留本次扫描到的实体，Excel 清行（删除视频）自动出索引，published/performance 按实体键继承。**采集链修复**——resolve_url 由 HEAD 改 GET(stream)（抖音 CDN 对 HEAD 返回 404/超时导致短链解析失败，Row 834 实测），parser 自带重定向解析作双保险；采集失败原因从 Excel 备注列带回前端
 
 - 2026-09-21~24：**头条图文生成链路**——①采集兜底：抖音 Argus 风控拦截纯 API 签名，parser 解析不到 aweme_id 时改用真实 Chromium 打开视频页抓 detail（src/browser_fetch.py + tools/douyin_browser_fetch.js），视频下载 curl 加 --fail/UA 防空文件；②整合稿：content_store 新增 toutiao_mix 类型（单视频/多视频决策化整合，【标题候选/时间线/变化对比/对你的影响/行动建议/风险核查】固定标签六节结构）；③出图：src/toutiao_graphics.py v3——LLM 卡片化整合稿 → playwright 渲染 9:16（1080×1920）竖版信息图 4 张 + 微头条文案，版式参照 2026-09-24 参考图（金渐变衬线大标题/插画主视觉底缘渐隐/圆环图标三面板/双金边横幅，无页码无来源行）；题材+皮双选择：题材决定 LLM 文案点明的游戏与插画素材文件夹（output/toutiao/<题材>图片素材/，更新素材下次生成即生效），皮决定整套调色板与背景（wow 蓝黑金/d4 烬红/poe 青铜/poe2 墨玉绿/自定义 _assets/<名称>_bg.jpg），插画封面取竖构图、内容页取横构图按页轮换，LLM 不可用走本地模板兜底；④前端：生成弹框新增标题输入框（自动代入整理稿标题，可改可留空），超 12 字标题自动降字号防截断
+- 2026-09-25~29：**Phase 1 内核抽取 + 图文三轴**——`src/graphics/` 从 `toutiao_graphics.py` 抽出渠道无关内核（templates/variants/skins/css_engine/renderer/package/ir），`channels/{toutiao,wechat}.py` 两渠道共用同一渲染内核；公众号模板库扩到 6 套（新增 lilac_list 浅紫清单 / cream_gold 奶油金插画，含参考样本拆解文档）；**变体三轴（配色/字体/版式）两渠道全部接线**，manifest 落真实键；头条素材选图支持随机（rng/exclude + 可复现种子 + manifest.assets 追溯）；`scripts/check_variant_tokens.py` 代码化防线（字体/配色轴失效即报错，因三轮「选了不生效」静默失效复盘而生，守则见 `.agents/memories/40-graphics-variants.md`）
+- 2026-09-30：**Qoder 接手准备**——两条图文 e2e（18+14 用例）从 Trae 私有工作区收编进 `scripts/`；新增 `.qoder/skills/workbench-restart`（按端口 PID 安全重启 + py_compile 前置 + PID/接口双确认）与 `.qoder/skills/graphics-verify`（三线回归一条命令）；AGENTS.md 补纪律第 5 条（改 graphics 先读 40 守则、改完跑验证）；`requirements.txt` 依赖钉版；README 项目结构纠偏（已删模块不再列）。业务行为零改动，三线回归 `ALL_OK`，重启实跑 72113→23054
 
 ## 运营协作现状（2026-09）
 
@@ -72,5 +77,5 @@ vendor/douyin_parse      内置解析器（免依赖 /tmp）
 - 异步任务（分类、Dify 发布、订阅同步）均走"启动 + status 轮询"模式，改动时保持该契约
 - Excel 基础列 A-O，扩展列（选题等级/适合平台等）由索引自动识别
 - 运行中的 web 进程无热重载，改完代码必须重启（15801 端口）
-- 遗留工程债（不阻塞，改采集代码时留意）：web/app.py 三处采集流水线（链接采集/批量获取/订阅同步 ≈531/716/1603 行附近）为逐行复制结构，且传给 process_row 的 ai_config 硬编码 skip（AI 打标实际由流程末尾的 _auto_classify_after_sync 兜底）——重构需抽公共函数，动前先验证三条链路
-- 无 requirements.txt / venv：依赖装在系统 Python 3.9，换机需手动装 flask/openpyxl 等
+- 遗留工程债（不阻塞，改采集代码时留意）：web/app.py 三条采集流水线为逐行复制结构，实际位置（2026-09-30 核对，旧文档记的 531/716/1603 已过期）——链接采集 `api_process` 643–741、批量获取 `api_fetch_and_process` 840–967、订阅同步 `api_subscriptions_sync` 2022–2257。三者**不是简单同构**，抽公共层前必须保住这些差异：Excel 打开粒度（P1/P2 每行 load+save，P3 单工作簿循环内多次 save + finally close）、写入列（P1 只写 col1/2，P2/P3 还写 col3 aweme_id，P3 另读 col4 作者回填）、失败处理（P1/P2 回读第 15 列备注累加 error，P3 不看 `ok` 只写订阅 summary）、状态契约（P1/P2 共用 `_task_status`+`/api/status`，P2 多 total/current 且前端依赖；P3 用 `_sub_status`+`/api/subscriptions/sync/status`；冲突码 400 vs 409、返回结构也不同）、`mark_video_source` 来源值（single_link vs subscription）。**_auto_classify_after_sync（330–347）只有 P1/P2 在流程末尾调用，订阅链路 P3 从未调用**（分类靠 2218–2241 的裸 SQL 回填）——统一化会新增打标副作用与 `_db_lock` 争用，属行为变更不是纯重构。传给 process_row 的 ai_config 三条都硬编码 skip。
+- 依赖钉版见 `requirements.txt`（2026-09-30 新增，按系统 Python 3.9 实测版本；无 venv，ffmpeg / playwright 浏览器内核 / vendor 解析器仍需换机手动准备）
