@@ -1837,6 +1837,19 @@ def _read_cookie_from_file() -> str:
     return ""
 
 
+def _sub_ids(data: dict) -> list[int]:
+    """请求体 ids -> 正整数订阅 id 列表（非数字项丢弃）。"""
+    out = []
+    for raw in data.get("ids") or []:
+        try:
+            n = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if n > 0:
+            out.append(n)
+    return out
+
+
 @app.route("/api/subscriptions")
 def api_subscriptions_list():
     if not DB_PATH.exists():
@@ -1991,22 +2004,43 @@ def api_subscriptions_author(sub_id):
     return jsonify({"success": True})
 
 
-@app.route("/api/subscriptions/<int:sub_id>/category", methods=["POST"])
-def api_subscriptions_category(sub_id):
-    """修改订阅作者的分类（同步的新视频会自动打上）。"""
+@app.route("/api/subscriptions/category", methods=["POST"])
+def api_subscriptions_category():
+    """批量设置订阅分类（同步的新内容会自动打上）。ids 单个/多个同一路径。"""
     data = request.get_json(force=True)
+    ids = _sub_ids(data)
     category = (data.get("category") or "").strip()
     game = (data.get("game") or "").strip()
+    if not ids:
+        return jsonify({"error": "未选择订阅"}), 400
     if category not in content_store.CATEGORIES:
         return jsonify({"error": "无效分类"}), 400
     try:
         with _db_lock:
-            ok = content_store.update_subscription_category(DB_PATH, sub_id, category, game)
+            n = content_store.update_subscriptions_category(DB_PATH, ids, category, game)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-    if not ok:
+    if not n:
         return jsonify({"error": "订阅不存在"}), 404
-    return jsonify({"success": True})
+    return jsonify({"success": True, "updated": n})
+
+
+@app.route("/api/subscriptions/tags", methods=["POST"])
+def api_subscriptions_tags():
+    """批量设置订阅自定义标签（本地分组用，不参与 AI 分类与渠道策略）。"""
+    data = request.get_json(force=True)
+    ids = _sub_ids(data)
+    if not ids:
+        return jsonify({"error": "未选择订阅"}), 400
+    tags = content_store.normalize_tags(data.get("tags") or "")
+    try:
+        with _db_lock:
+            n = content_store.set_subscription_tags(DB_PATH, ids, tags)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    if not n:
+        return jsonify({"error": "订阅不存在"}), 404
+    return jsonify({"success": True, "updated": n, "tags": tags})
 
 
 @app.route("/api/subscriptions/<int:sub_id>", methods=["DELETE"])

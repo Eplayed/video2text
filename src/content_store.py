@@ -119,6 +119,9 @@ def init_db(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "subscriptions", "category", "TEXT DEFAULT ''")
     _ensure_column(conn, "subscriptions", "game", "TEXT DEFAULT ''")
     _ensure_column(conn, "subscriptions", "platform", "TEXT DEFAULT 'douyin'")
+    # tags：用户自定义分组标签（逗号分隔）。与 category 正交——category 是喂
+    # 选题雷达/渠道策略的权威口径，tags 只用于订阅页本地筛选与批量同步。
+    _ensure_column(conn, "subscriptions", "tags", "TEXT DEFAULT ''")
     conn.commit()
 
 
@@ -552,21 +555,53 @@ def update_subscription_author(db_path: str | Path, sub_id: int, author: str) ->
         conn.close()
 
 
-def update_subscription_category(
+def update_subscriptions_category(
     db_path: str | Path,
-    sub_id: int,
+    sub_ids: list[int],
     category: str,
     game: str = "",
-) -> bool:
-    """修改订阅作者的分类/游戏。"""
+) -> int:
+    """批量设置订阅分类/游戏，返回更新条数。game 为空时保留原值。"""
+    if not sub_ids:
+        return 0
+    placeholders = ",".join("?" for _ in sub_ids)
     conn = connect(db_path)
     try:
         cur = conn.execute(
-            "UPDATE subscriptions SET category = ?, game = CASE WHEN ? != '' THEN ? ELSE game END WHERE id = ?",
-            (category, game, game, sub_id),
+            "UPDATE subscriptions SET category = ?, "
+            "game = CASE WHEN ? != '' THEN ? ELSE game END "
+            f"WHERE id IN ({placeholders})",
+            (category, game, game, *sub_ids),
         )
         conn.commit()
-        return cur.rowcount > 0
+        return cur.rowcount
+    finally:
+        conn.close()
+
+
+def normalize_tags(raw: str) -> str:
+    """订阅标签规范化：接受中英文逗号/分号/空格分隔，去空去重后以逗号连接。"""
+    parts = [p.strip() for p in re.split(r"[,，;；\s]+", raw or "") if p.strip()]
+    unique: list[str] = []
+    for p in parts:
+        if p not in unique:
+            unique.append(p)
+    return ",".join(unique)
+
+
+def set_subscription_tags(db_path: str | Path, sub_ids: list[int], tags: str) -> int:
+    """批量覆盖订阅标签（逗号分隔）；传空串即清空，返回更新条数。"""
+    if not sub_ids:
+        return 0
+    placeholders = ",".join("?" for _ in sub_ids)
+    conn = connect(db_path)
+    try:
+        cur = conn.execute(
+            f"UPDATE subscriptions SET tags = ? WHERE id IN ({placeholders})",
+            (tags, *sub_ids),
+        )
+        conn.commit()
+        return cur.rowcount
     finally:
         conn.close()
 

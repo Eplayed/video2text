@@ -216,7 +216,8 @@ textarea{resize:vertical;min-height:84px}
 .pill.cat{background:color-mix(in srgb,var(--module-2) 15%,transparent);color:var(--module-2);cursor:pointer}
 .pill.game{background:color-mix(in srgb,var(--module-5) 14%,transparent);color:var(--module-5);cursor:pointer}
 .pill.cat:hover{filter:brightness(.95)}
-.pill.rag{background:color-mix(in srgb,var(--module-4) 15%,transparent);color:var(--module-4)}
+.pill.tag{background:color-mix(in srgb,var(--module-3) 14%,transparent);color:var(--module-3);cursor:pointer}
+.pill.tag:hover{filter:brightness(.92)}
 .cat-pills{display:flex;align-items:center;gap:8px;margin:0 0 12px;flex-wrap:wrap}
 .cat-pill{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--border);background:var(--surface-card);border-radius:999px;padding:3px 12px;font-size:12px;font-weight:600;color:var(--text-secondary);cursor:pointer;transition:all .12s}
 .cat-pill:hover{border-color:var(--module-2);color:var(--module-2)}
@@ -639,7 +640,7 @@ textarea{resize:vertical;min-height:84px}
           <button class="btn ghost sm" onclick="openAuthorImport()"><span data-icon="plus" class="ic14"></span>导入素材库作者</button>
           <button class="btn sm" id="btn-sync-all-subs" onclick="syncSubscriptions()"><span data-icon="bolt" class="ic14"></span>同步全部</button>
         </h3>
-        <div class="p-sub">订阅的抖音主页/微信公众号，点「同步」自动拉取新内容（抖音 20 条视频+ASR 转写，微信 RSS 文章直接入库）。点作者名可改名，点分类徽章设置分类（新内容自动归类）。微信订阅需先部署 <a href="https://github.com/cooderl/wewe-rss" target="_blank" style="color:var(--module-2)">WeWe RSS</a> 服务。</div>
+        <div class="p-sub">订阅的抖音主页/微信公众号，点「同步」自动拉取新内容（抖音 20 条视频+ASR 转写，微信 RSS 文章直接入库）。点作者名可改名，点分类徽章设置分类（新内容自动归类）。<b>分类</b>是固定 11 类、喂选题雷达与渠道策略的权威口径；<b>标签</b>是你的自定义分组，勾选多个订阅后可批量设分类/设标签，筛完直接点「同步当前筛选」。微信订阅需先部署 <a href="https://github.com/cooderl/wewe-rss" target="_blank" style="color:var(--module-2)">WeWe RSS</a> 服务。</div>
         <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
           <input id="wechat-rss-url" class="page-search" style="flex:1;min-width:200px" placeholder="粘贴 WeWe RSS 订阅地址，如 http://localhost:4000/feed/xxx.xml">
           <select id="wechat-sub-cat" style="width:auto">
@@ -658,12 +659,25 @@ textarea{resize:vertical;min-height:84px}
           <button class="btn sm" onclick="addWechatSubscription()"><span data-icon="plus" class="ic14"></span>添加微信订阅</button>
         </div>
         <div id="sub-status" style="display:none;margin:10px 0 0;font-size:12.5px;color:var(--module-2);font-weight:600"></div>
-        <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;align-items:stretch">
+        <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;align-items:center">
+          <div id="sub-source-tabs" style="display:flex;gap:6px;flex-wrap:wrap"></div>
           <select id="sub-cat-filter" class="page-search" style="width:auto;flex:0 0 auto" onchange="renderSubscriptions(window._subItems||[])">
             <option value="">全部分类</option>
           </select>
+          <select id="sub-tag-filter" class="page-search" style="width:auto;flex:0 0 auto" onchange="renderSubscriptions(window._subItems||[])">
+            <option value="">全部标签</option>
+          </select>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;align-items:center">
           <button class="btn ghost sm" id="btn-sub-check-all" onclick="document.getElementById('sub-check-all').click()" style="display:flex;align-items:center;gap:6px;flex:0 0 auto"><input type="checkbox" id="sub-check-all" style="width:14px;height:14px;margin:0" onchange="syncSubCheckAll(this)">全选</button>
-          <button class="btn sm" id="btn-sync-checked" onclick="syncCheckedSubscriptions()" style="flex:0 0 auto"><span data-icon="bolt" class="ic14"></span>同步勾选（0）</button>
+          <button class="btn sm" id="btn-sync-filtered" onclick="syncFilteredSubscriptions()" style="flex:0 0 auto"><span data-icon="bolt" class="ic14"></span>同步当前筛选</button>
+          <button class="btn ghost sm" id="btn-sync-checked" onclick="syncCheckedSubscriptions()" style="flex:0 0 auto"><span data-icon="bolt" class="ic14"></span>同步勾选（0）</button>
+          <span id="sub-batch-bar" style="display:none;gap:6px;align-items:center;flex-wrap:wrap">
+            <span style="font-size:11.5px;color:var(--text-tertiary)">已选 <b id="sub-batch-n">0</b> 个 →</span>
+            <button class="btn ghost sm" onclick="openSubCatMenu(this, [...window._subChecked], '', '')">设为分类</button>
+            <button class="btn ghost sm" onclick="editSubTags([...window._subChecked])">设为标签</button>
+            <button class="btn ghost sm" onclick="clearSubChecked()">取消选择</button>
+          </span>
         </div>
         <div id="sub-list" style="margin-top:10px"></div>
       </div>
@@ -3121,9 +3135,52 @@ async function loadSubscriptions() {
   } catch(e) { /* 静默 */ }
 }
 
-// ── 订阅列表：分类筛选 + 勾选批量同步 ──
+// ── 订阅列表：来源/分类/标签三维筛选 + 勾选批量操作 ──
 window._subItems = [];
 window._subChecked = new Set();
+window._subSourceFilter = '';
+
+function subTagList(s) {
+  return (s.tags || '').split(',').map(t => t.trim()).filter(Boolean);
+}
+
+function subMatchesFilter(s) {
+  const cat = (document.getElementById('sub-cat-filter') || {}).value || '';
+  const tag = (document.getElementById('sub-tag-filter') || {}).value || '';
+  const src = window._subSourceFilter || '';
+  if (src && (s.platform || 'douyin') !== src) return false;
+  if (cat && (s.category || '未设分类') !== cat) return false;
+  if (tag && !subTagList(s).includes(tag)) return false;
+  return true;
+}
+
+function visibleSubscriptions() {
+  return (window._subItems || []).filter(subMatchesFilter);
+}
+
+function updateSubSourceTabs(items) {
+  const box = document.getElementById('sub-source-tabs');
+  if (!box) return;
+  const counts = {};
+  items.forEach(s => { const p = s.platform || 'douyin'; counts[p] = (counts[p] || 0) + 1; });
+  const tabs = [
+    {key: '', label: '全部来源', n: items.length},
+    {key: 'douyin', label: '抖音视频', n: counts.douyin || 0},
+    {key: 'wechat', label: '微信公众号', n: counts.wechat || 0},
+  ];
+  const off = 'background:color-mix(in srgb,var(--text-tertiary) 16%,transparent);color:var(--text-secondary)';
+  const on = 'background:var(--module-3);color:#fff';
+  box.innerHTML = tabs.map(t => {
+    const active = (window._subSourceFilter || '') === t.key;
+    return `<span class="pill" style="cursor:pointer;padding:4px 12px;font-size:11.5px;${active?on:off}" onclick="setSubSourceFilter('${t.key}')">${t.label} ${t.n}</span>`;
+  }).join('');
+}
+
+function setSubSourceFilter(key) {
+  const cur = window._subSourceFilter || '';
+  window._subSourceFilter = (cur === key && key !== '') ? '' : key;
+  renderSubscriptions(window._subItems || []);
+}
 
 function updateSubCatFilterOptions(items) {
   const sel = document.getElementById('sub-cat-filter');
@@ -3134,21 +3191,38 @@ function updateSubCatFilterOptions(items) {
   sel.value = cats.includes(current) ? current : '';
 }
 
+function updateSubTagFilterOptions(items) {
+  const sel = document.getElementById('sub-tag-filter');
+  if (!sel) return;
+  const current = sel.value;
+  const pool = new Set();
+  items.forEach(s => subTagList(s).forEach(t => pool.add(t)));
+  const tags = [...pool].sort();
+  sel.innerHTML = '<option value="">全部标签</option>' + tags.map(t => `<option value="${escAttr(t)}">${esc(t)}</option>`).join('');
+  sel.value = tags.includes(current) ? current : '';
+}
+
 function updateSyncCheckedBtn() {
+  const n = window._subChecked.size;
   const btn = document.getElementById('btn-sync-checked');
   if (btn) {
-    btn.textContent = '';
-    btn.innerHTML = `<span data-icon="bolt" class="ic14"></span>同步勾选（${window._subChecked.size}）`;
-    btn.disabled = !window._subChecked.size || _subSyncRunning;
+    btn.innerHTML = `<span data-icon="bolt" class="ic14"></span>同步勾选（${n}）`;
+    btn.disabled = !n || _subSyncRunning;
+  }
+  const vis = visibleSubscriptions();
+  const fbtn = document.getElementById('btn-sync-filtered');
+  if (fbtn) {
+    fbtn.innerHTML = `<span data-icon="bolt" class="ic14"></span>同步当前筛选（${vis.length}）`;
+    fbtn.disabled = !vis.length || _subSyncRunning;
+  }
+  const bar = document.getElementById('sub-batch-bar');
+  if (bar) {
+    bar.style.display = n ? 'inline-flex' : 'none';
+    const bn = document.getElementById('sub-batch-n');
+    if (bn) bn.textContent = n;
   }
   const all = document.getElementById('sub-check-all');
-  if (all) {
-    const visible = (window._subItems || []).filter(s => {
-      const f = (document.getElementById('sub-cat-filter') || {}).value || '';
-      return !f || (s.category || '未设分类') === f;
-    });
-    all.checked = visible.length > 0 && visible.every(s => window._subChecked.has(s.id));
-  }
+  if (all) all.checked = vis.length > 0 && vis.every(s => window._subChecked.has(s.id));
 }
 
 function onSubCheckChange(id, checked) {
@@ -3157,33 +3231,45 @@ function onSubCheckChange(id, checked) {
   updateSyncCheckedBtn();
 }
 
+function clearSubChecked() {
+  window._subChecked.clear();
+  renderSubscriptions(window._subItems || []);
+}
+
 function syncSubCheckAll(master) {
-  const f = (document.getElementById('sub-cat-filter') || {}).value || '';
-  (window._subItems || []).forEach(s => {
-    if (!f || (s.category || '未设分类') === f) {
-      if (master.checked) window._subChecked.add(s.id);
-      else window._subChecked.delete(s.id);
-      const cb = document.querySelector(`#sub-list input[data-sub-id="${s.id}"]`);
-      if (cb) cb.checked = master.checked;
-    }
+  visibleSubscriptions().forEach(s => {
+    if (master.checked) window._subChecked.add(s.id);
+    else window._subChecked.delete(s.id);
+    const cb = document.querySelector(`#sub-list input[data-sub-id="${s.id}"]`);
+    if (cb) cb.checked = master.checked;
   });
   updateSyncCheckedBtn();
 }
 
-async function syncCheckedSubscriptions() {
-  const ids = [...window._subChecked];
-  if (!ids.length) { setStatus('error', '请先勾选要同步的订阅'); return; }
+async function syncIdsAndPoll(ids, phrase) {
   try {
     const resp = await fetch('/api/subscriptions/sync', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({ids}),
     }).then(r=>r.json());
     if (resp.error) { setStatus('error', resp.error); return; }
-    setStatus('done', `已开始同步勾选的 ${ids.length} 个订阅`);
+    setStatus('done', `${phrase} ${ids.length} 个订阅`);
     startSubPolling();
   } catch(e) {
     setStatus('error', '批量同步失败: ' + e.message);
   }
+}
+
+function syncCheckedSubscriptions() {
+  const ids = [...window._subChecked];
+  if (!ids.length) { setStatus('error', '请先勾选要同步的订阅'); return; }
+  syncIdsAndPoll(ids, '已开始同步勾选的');
+}
+
+function syncFilteredSubscriptions() {
+  const ids = visibleSubscriptions().map(s => s.id);
+  if (!ids.length) { setStatus('error', '当前筛选下没有订阅'); return; }
+  syncIdsAndPoll(ids, '已开始同步当前筛选的');
 }
 
 function renderSubscriptions(items) {
@@ -3191,16 +3277,17 @@ function renderSubscriptions(items) {
   if (!box) return;
   window._subItems = items;
   document.getElementById('count-subs').textContent = items.length + ' 个';
+  updateSubSourceTabs(items);
   updateSubCatFilterOptions(items);
+  updateSubTagFilterOptions(items);
   if (!items.length) {
     box.innerHTML = '<div style="font-size:12.5px;color:var(--text-tertiary);padding:10px 0">暂无订阅。点「导入素材库作者」一键订阅已采集的作者，或在采集中心输入主页链接点「订阅该作者」。</div>';
     updateSyncCheckedBtn();
     return;
   }
-  const filter = (document.getElementById('sub-cat-filter') || {}).value || '';
-  const shown = filter ? items.filter(s => (s.category || '未设分类') === filter) : items;
+  const shown = visibleSubscriptions();
   if (!shown.length) {
-    box.innerHTML = `<div style="font-size:12.5px;color:var(--text-tertiary);padding:10px 0">分类「${esc(filter)}」下暂无订阅。</div>`;
+    box.innerHTML = '<div style="font-size:12.5px;color:var(--text-tertiary);padding:10px 0">当前筛选条件下没有订阅（来源/分类/标签三个筛选取交集）。</div>';
     updateSyncCheckedBtn();
     return;
   }
@@ -3210,15 +3297,20 @@ function renderSubscriptions(items) {
       ? '<span class="pill" style="background:color-mix(in srgb,#07c160 12%,transparent);color:#07c160;font-size:10px">微信</span>'
       : '<span class="pill" style="background:color-mix(in srgb,var(--module-2) 12%,transparent);color:var(--module-2);font-size:10px">抖音</span>';
     const linkText = isWechat ? 'RSS ↗' : '主页 ↗';
+    const tags = subTagList(s);
+    const tagPills = tags.length
+      ? tags.map(t => `<span class="pill tag" title="点击管理标签" onclick='event.stopPropagation();editSubTags([${s.id}])'>${esc(t)}</span>`).join('')
+      : `<span class="pill tag" title="点击添加分组标签" onclick='event.stopPropagation();editSubTags([${s.id}])'>+标签</span>`;
     return `
     <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--border);border-radius:12px;margin-bottom:8px;background:var(--surface-card);flex-wrap:nowrap">
-      <input type="checkbox" data-sub-id="${s.id}" ${window._subChecked.has(s.id)?'checked':''} onchange="onSubCheckChange(${s.id}, this.checked)" style="flex:0 0 16px;width:16px;height:16px" title="勾选后批量同步">
+      <input type="checkbox" data-sub-id="${s.id}" ${window._subChecked.has(s.id)?'checked':''} onchange="onSubCheckChange(${s.id}, this.checked)" style="flex:0 0 16px;width:16px;height:16px" title="勾选后批量操作">
       <div style="flex:1 1 160px;min-width:0;overflow:hidden">
         <div style="font-weight:700;font-size:13.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
           ${platformBadge}
           <span title="点击修改作者名" style="cursor:pointer;text-decoration:underline dotted 1px;text-underline-offset:3px" onclick='event.stopPropagation();editSubAuthor(${s.id}, "${escAttr(s.author||"")}")'>${esc(s.author || '未知作者')}</span>
-          <span class="pill cat" title="点击设置分类（同步的新内容会自动打上）" onclick='event.stopPropagation();openSubCatMenu(this, ${s.id}, "${esc(s.category||"")}", "${esc(s.game||"")}")'>${esc(s.category || '未设分类')}</span>
+          <span class="pill cat" data-sub-cat="${s.id}" title="点击设置分类（同步的新内容会自动打上）" onclick='event.stopPropagation();openSubCatMenu(this, [${s.id}], "${esc(s.category||"")}", "${esc(s.game||"")}")'>${esc(s.category || '未设分类')}</span>
           ${s.game ? `<span class="pill game">${esc(s.game)}</span>` : ''}
+          ${tagPills}
           <a href="${esc(s.user_url)}" target="_blank" style="color:var(--module-2);font-weight:600;font-size:11.5px;text-decoration:none">${linkText}</a>
         </div>
         <div style="font-size:11.5px;color:var(--text-tertiary);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
@@ -3443,16 +3535,17 @@ function toggleRadarVideos(i) {
   if (el) el.style.display = el.style.display === 'none' ? '' : 'none';
 }
 
-// ── 订阅作者分类 ──
-function openSubCatMenu(el, subId, currentCat, currentGame) {
+// ── 订阅分类（固定 11 类，权威口径）与分组标签（自由标签） ──
+function openSubCatMenu(el, ids, currentCat, currentGame) {
   closeCategoryMenu();
+  if (!ids || !ids.length) { setStatus('error', '请先勾选订阅'); return; }
   const rect = el.getBoundingClientRect();
   const menu = document.createElement('div');
   menu.className = 'cat-menu';
   menu.id = 'cat-menu-pop';
   const cats = [...new Set([...CATEGORY_ORDER, ...((currentCat && !CATEGORY_ORDER.includes(currentCat)) ? [currentCat] : [])])];
   menu.innerHTML = cats.map(c =>
-    `<div onclick="applySubCategory(${subId}, '${esc(c)}', '${esc(currentGame)}')">${esc(c)}${c===currentCat?' ✓':''}</div>`
+    `<div onclick='applySubCategory(${JSON.stringify(ids)}, "${esc(c)}", "${esc(currentGame)}")'>${esc(c)}${c===currentCat?' ✓':''}</div>`
   ).join('');
   document.body.appendChild(menu);
   const top = Math.min(rect.bottom + 6, window.innerHeight - menu.offsetHeight - 10);
@@ -3461,24 +3554,51 @@ function openSubCatMenu(el, subId, currentCat, currentGame) {
   setTimeout(() => document.addEventListener('click', closeCategoryMenu, {once: true}), 0);
 }
 
-async function applySubCategory(subId, category, currentGame) {
+async function applySubCategory(ids, category, currentGame) {
   closeCategoryMenu();
   let game = currentGame || '';
   if (category === '游戏攻略') {
-    const input = prompt('该作者主要讲哪款游戏？（可留空，同步时由 AI 识别）', game);
+    const input = prompt('这些作者主要讲哪款游戏？（可留空，同步时由 AI 识别）', game);
     if (input === null) return;
     game = input.trim();
   }
   try {
-    const resp = await fetch(`/api/subscriptions/${subId}/category`, {
+    const resp = await fetch('/api/subscriptions/category', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({category, game}),
+      body: JSON.stringify({ids, category, game}),
     }).then(r=>r.json());
     if (resp.error) { setStatus('error', resp.error); return; }
-    setStatus('done', `✅ 订阅分类已设为「${category}」，同步的新视频会自动打上`);
+    setStatus('done', `✅ ${resp.updated} 个订阅分类设为「${category}」，同步的新内容会自动打上`);
     loadSubscriptions();
   } catch(e) {
     setStatus('error', '设置分类失败: ' + e.message);
+  }
+}
+
+function subTagsOfIds(ids) {
+  const items = (window._subItems || []).filter(s => ids.includes(s.id));
+  if (!items.length) return '';
+  const first = items[0].tags || '';
+  return items.every(s => (s.tags || '') === first) ? first : '';
+}
+
+async function editSubTags(ids) {
+  if (!ids || !ids.length) { setStatus('error', '请先勾选订阅'); return; }
+  const tip = ids.length > 1
+    ? `为选中的 ${ids.length} 个订阅设置标签（逗号分隔，留空清空）：`
+    : '分组标签（逗号分隔，留空清空）：';
+  const input = prompt(tip, subTagsOfIds(ids));
+  if (input === null) return;
+  try {
+    const resp = await fetch('/api/subscriptions/tags', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ids, tags: input.trim()}),
+    }).then(r=>r.json());
+    if (resp.error) { setStatus('error', resp.error); return; }
+    setStatus('done', `✅ ${resp.updated} 个订阅标签已设为「${resp.tags}」`);
+    loadSubscriptions();
+  } catch(e) {
+    setStatus('error', '设置标签失败: ' + e.message);
   }
 }
 
@@ -3514,12 +3634,13 @@ async function addWechatSubscription() {
     }).then(r=>r.json());
     if (resp.error) { alert(resp.error); return; }
     document.getElementById('wechat-rss-url').value = '';
-    loadSubscriptions();
-    // 新订阅自动弹出分类选择
+    await loadSubscriptions();
+    // 新订阅未选分类时把分类菜单弹在该行的分类徽章上（旧代码用 onclick*=id 模糊选中，
+    // 会先命中作者名的编辑入口，故选了精确的 data-sub-cat）
     const sub = resp.subscription;
     if (sub && !cat) {
-      const pill = document.querySelector(`#sub-list [onclick*="${sub.id}"]`);
-      if (pill) pill.click();
+      const pill = document.querySelector(`#sub-list [data-sub-cat="${sub.id}"]`);
+      if (pill) openSubCatMenu(pill, [sub.id], sub.category || '', sub.game || '');
     }
   } catch(e) {
     alert('订阅失败: ' + e.message);
