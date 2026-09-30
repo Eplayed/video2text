@@ -10,9 +10,9 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 import main as collector  # main.py
-from src import content_store, material_store, toutiao_graphics
+from src import content_store, material_store, toutiao_graphics, ai_poster
 from src.graphics.channels import wechat as wechat_graphics
-from src.dify_client import DifyKBClient, DifyKBError
+from src.graphics import variants as graphics_variants
 from src.path_config import find_parser_dir, ensure_parser_on_path, get_cookie_path
 
 # ── 路径 ──
@@ -27,7 +27,6 @@ app = Flask(__name__, static_folder="static", static_url_path="/static")
 # ── 处理状态（内存） ──
 _task_status = {"running": False, "progress": "", "done": False, "error": ""}
 _classify_status = {"running": False, "progress": "", "done": True, "error": "", "result": None}
-_dify_status = {"running": False, "progress": "", "done": True, "error": "", "result": None}
 _db_lock = threading.RLock()
 
 # ── 工具：cookie 写入与 parser 初始化 ──
@@ -133,7 +132,7 @@ def api_videos():
         with open(INDEX_PATH, encoding="utf-8") as f:
             data = json.load(f)
         videos = data.get("videos", [])
-        # 合并 SQLite 中的分类/标签/Dify 同步状态（按 sheet+row 关联）
+        # 合并 SQLite 中的分类/标签/最新整理稿类型（按 sheet+row 关联）
         db_info = _load_video_extras()
         for v in videos:
             info = db_info.get((v.get("sheet"), v.get("row")))
@@ -142,13 +141,11 @@ def api_videos():
                 v["category"] = info["category"]
                 v["ai_tags"] = info["ai_tags"]
                 v["game"] = info["game"]
-                v["dify_synced_at"] = info["dify_synced_at"]
                 v["summary_type"] = info.get("summary_type", "")
             else:
                 v.setdefault("category", "")
                 v.setdefault("ai_tags", "")
                 v.setdefault("game", "")
-                v.setdefault("dify_synced_at", "")
                 v.setdefault("summary_type", "")
 
     # 追加 SQLite 中的微信文章（DB 是微信文章权威源，不经过 video_index.json，索引重建不会丢）
@@ -159,7 +156,7 @@ def api_videos():
                 try:
                     wx_rows = conn.execute(
                         "SELECT id, source_sheet, source_row, source_url, author, title, "
-                        "status, published_at, category, ai_tags, game, dify_synced_at, "
+                        "status, published_at, category, ai_tags, game, "
                         "COALESCE(cover_url,'') as cover, COALESCE(transcript,'') as transcript "
                         "FROM videos WHERE source_sheet = '微信文章' ORDER BY id DESC LIMIT 200"
                     ).fetchall()
@@ -181,7 +178,6 @@ def api_videos():
                     "category": r["category"] or "",
                     "ai_tags": r["ai_tags"] or "",
                     "game": r["game"] or "",
-                    "dify_synced_at": r["dify_synced_at"] or "",
                     "summary_type": "",
                 })
         except Exception as e:
@@ -228,7 +224,7 @@ def api_videos():
 
 
 def _load_video_extras() -> dict:
-    """从 SQLite 取分类/Dify 字段与最新整理稿类型，键为 (sheet, row)。"""
+    """从 SQLite 取分类/标签与最新整理稿类型，键为 (sheet, row)。"""
     if not DB_PATH.exists():
         return {}
     try:
@@ -236,7 +232,7 @@ def _load_video_extras() -> dict:
             conn = content_store.connect(DB_PATH)
             try:
                 rows = conn.execute(
-                    "SELECT id, source_sheet, source_row, category, ai_tags, game, dify_synced_at FROM videos"
+                    "SELECT id, source_sheet, source_row, category, ai_tags, game FROM videos"
                 ).fetchall()
                 # 每条整理稿的类型（含合集稿的全部源视频）：id 倒序第一个出现的即最新，供列表标注「已整理」
                 summary_rows = conn.execute(
@@ -276,7 +272,6 @@ def _load_video_extras() -> dict:
                 "category": r["category"] or "",
                 "ai_tags": r["ai_tags"] or "",
                 "game": r["game"] or "",
-                "dify_synced_at": r["dify_synced_at"] or "",
                 "summary_type": latest_summary.get((r["source_sheet"], r["source_row"]), ""),
             }
             for r in rows
@@ -1679,144 +1674,6 @@ def api_ai_test():
         return jsonify({"success": True, "reply": reply, "model": cfg["model"]})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)})
-
-
-# ── Dify 知识库配置与发布 ──
-def _dify_config() -> dict:
-    config = collector.load_env_file(str(ENV_PATH))
-    return {
-        "api_base": collector.config_get(config, "DIFY_API_BASE", "http://127.0.0.1"),
-        "api_key": collector.config_get(config, "DIFY_KB_API_KEY"),
-        "dataset_id": collector.config_get(config, "DIFY_DATASET_ID"),
-    }
-
-
-@app.route("/api/dify/config", methods=["GET"])
-def api_dify_config_get():
-    cfg = _dify_config()
-    return jsonify({
-        "api_base": cfg["api_base"],
-        "has_key": bool(cfg["api_key"]),
-        "api_key_masked": _mask_key(cfg["api_key"]),
-        "dataset_id": cfg["dataset_id"],
-    })
-
-
-@app.route("/api/dify/config", methods=["POST"])
-def api_dify_config_save():
-    data = request.get_json(force=True) or {}
-    saved = _dify_config()
-    updates = {}
-    api_base = (data.get("api_base") or "").strip()
-    if api_base:
-        updates["DIFY_API_BASE"] = api_base
-    api_key = (data.get("api_key") or "").strip()
-    if api_key:
-        updates["DIFY_KB_API_KEY"] = api_key  # 留空则沿用已保存 Key
-    dataset_id = (data.get("dataset_id") or "").strip()
-    if dataset_id:
-        updates["DIFY_DATASET_ID"] = dataset_id
-    if not updates:
-        return jsonify({"error": "没有需要保存的配置"}), 400
-    _update_env_file(ENV_PATH, updates)
-    return jsonify({"success": True})
-
-
-@app.route("/api/dify/datasets")
-def api_dify_datasets():
-    cfg = _dify_config()
-    if not cfg["api_key"]:
-        return jsonify({"error": "请先填写 Dify Knowledge API Key"}), 400
-    try:
-        client = DifyKBClient(cfg["api_base"], cfg["api_key"], timeout=20)
-        datasets = client.list_datasets()
-        return jsonify({"datasets": [
-            {"id": d.get("id"), "name": d.get("name"),
-             "doc_count": d.get("document_count", 0)} for d in datasets
-        ]})
-    except DifyKBError as e:
-        return jsonify({"error": str(e)}), 502
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/api/dify/datasets/create", methods=["POST"])
-def api_dify_datasets_create():
-    data = request.get_json(force=True) or {}
-    name = (data.get("name") or "").strip()
-    if not name:
-        return jsonify({"error": "请填写知识库名称"}), 400
-    cfg = _dify_config()
-    if not cfg["api_key"]:
-        return jsonify({"error": "请先填写 Dify Knowledge API Key"}), 400
-    try:
-        client = DifyKBClient(cfg["api_base"], cfg["api_key"], timeout=30)
-        ds = client.create_dataset(name)
-        _update_env_file(ENV_PATH, {"DIFY_DATASET_ID": ds.get("id", "")})
-        return jsonify({"success": True, "id": ds.get("id"), "name": ds.get("name")})
-    except DifyKBError as e:
-        return jsonify({"error": str(e)}), 502
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/api/dify/publish", methods=["POST"])
-def api_dify_publish():
-    if _dify_status.get("running"):
-        return jsonify({"error": "发布任务进行中，请稍候"}), 409
-    cfg = _dify_config()
-    if not cfg["api_key"]:
-        return jsonify({"error": "请先在 AI 设置中配置 Dify Knowledge API Key"}), 400
-    data = request.get_json(force=True, silent=True) or {}
-    keys = data.get("keys") or []
-    force = bool(data.get("force"))
-
-    def run():
-        _dify_status.update(running=True, done=False, error="", progress="准备发布...", result=None)
-        try:
-            client = DifyKBClient(cfg["api_base"], cfg["api_key"], timeout=90)
-            with _db_lock:
-                candidates = content_store.get_dify_candidates(DB_PATH, keys or None)
-            if not force and keys:
-                candidates = [v for v in candidates if not v.get("dify_document_id")] or candidates
-            total = len(candidates)
-            ok = fail = 0
-            errors = []
-            for i, video in enumerate(candidates, 1):
-                _dify_status["progress"] = f"发布 {i}/{total}：{(video.get('title') or '')[:30]}"
-                try:
-                    name, text = content_store.build_dify_document(video)
-                    doc_id = video.get("dify_document_id")
-                    if doc_id:
-                        client.update_document_by_text(cfg["dataset_id"], doc_id, name, text)
-                    else:
-                        resp = client.create_document_by_text(cfg["dataset_id"], name, text)
-                        doc_id = (resp.get("document") or {}).get("id") or resp.get("id")
-                    if not doc_id:
-                        raise DifyKBError("未返回 document id")
-                    with _db_lock:
-                        content_store.set_dify_doc(
-                            DB_PATH, video["id"], doc_id, datetime.now().strftime("%Y-%m-%d %H:%M")
-                        )
-                    ok += 1
-                except (DifyKBError, Exception) as e:
-                    fail += 1
-                    errors.append(f'{(video.get("title") or "未命名")[:24]}: {e}')
-            _dify_status["result"] = {"ok": ok, "fail": fail, "total": total, "errors": errors[:10]}
-            _dify_status["progress"] = f"完成：成功 {ok} / 失败 {fail}"
-        except Exception as e:
-            _dify_status["error"] = f"{e}\n{traceback.format_exc()[-500:]}"
-        finally:
-            _dify_status["running"] = False
-            _dify_status["done"] = True
-
-    threading.Thread(target=run, daemon=True).start()
-    return jsonify({"success": True})
-
-
-@app.route("/api/dify/publish/status")
-def api_dify_publish_status():
-    return jsonify(_dify_status)
 
 
 # ════════════════════════════════════════════════════════════════

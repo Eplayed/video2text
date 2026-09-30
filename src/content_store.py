@@ -89,12 +89,10 @@ def init_db(conn: sqlite3.Connection) -> None:
     )
     _ensure_column(conn, "ai_summaries", "source_video_ids", "TEXT")
     _ensure_column(conn, "ai_summaries", "structured_data", "TEXT")
-    # 分类打标与 Dify 知识库同步字段（Excel 重同步不会覆盖这些列）
+    # 分类打标字段（Excel 重同步不会覆盖这些列）
     _ensure_column(conn, "videos", "category", "TEXT")
     _ensure_column(conn, "videos", "ai_tags", "TEXT")
     _ensure_column(conn, "videos", "game", "TEXT")
-    _ensure_column(conn, "videos", "dify_document_id", "TEXT")
-    _ensure_column(conn, "videos", "dify_synced_at", "TEXT")
     # 实体标识与来源（SQLite 权威源第一步：author_sec_uid 直查替代 URL 反查；
     # source 区分 single_link/subscription 入口。Excel 重同步同样不覆盖这两列）
     _ensure_column(conn, "videos", "author_sec_uid", "TEXT DEFAULT ''")
@@ -903,7 +901,8 @@ def _generate_local(video: dict[str, Any], summary_type: str) -> dict[str, Any]:
             note="规则版草稿基于 ASR 自动抽题，入库前建议人工核对术语、选项和答案。"
         )
     elif summary_type == "wechat_material":
-        # 公众号素材档案（规则版草稿）：固定【标签】分节，下游 Dify 按节解析
+        # 公众号素材档案（规则版草稿）：固定【标签】分节，下游按节解析
+        # （graphics/channels/wechat.py 的本地兜底模板就靠这套分节拼卡）
         out_title = f"公众号素材：{title[:36]}"
         outline = ["【标题候选】", "【导语】", "【核心论点】", "【关键数据】", "【正文骨架】", "【金句摘录】", "【风险核查】"]
         data_lines = [s for s in sentences if re.search(r"\d+(\.\d+)?%|\d{2,}", s)][:5]
@@ -1019,7 +1018,8 @@ def _generate_collection_local(
             note="合并题库草稿已按题目结构生成，入库前建议人工去重并校准答案。"
         )
     elif summary_type == "wechat_material":
-        # 公众号素材档案（规则版草稿）：固定【标签】分节，下游 Dify 按节解析
+        # 公众号素材档案（规则版草稿）：固定【标签】分节，下游按节解析
+        # （graphics/channels/wechat.py 的本地兜底模板就靠这套分节拼卡）
         title = f"公众号素材：{keywords[0] if keywords else '短视频整理'}"
         outline = ["【标题候选】", "【导语】", "【核心论点】", "【关键数据】", "【正文骨架】", "【金句摘录】", "【风险核查】"]
         sentences = []
@@ -2212,96 +2212,3 @@ def _llm_chat(ai_config: dict[str, str], prompt: str, timeout: int = 90) -> dict
         return _parse_llm_json(resp.choices[0].message.content)
     except Exception:
         return {}
-
-
-# ════════════════════════════════════════════════════════════════
-# Dify 知识库发布
-# ════════════════════════════════════════════════════════════════
-
-def get_dify_candidates(
-    db_path: str | Path,
-    keys: list[str] | None = None,
-) -> list[dict[str, Any]]:
-    """取待发布视频。keys 为 ["sheet::row", ...]；为空则取全部有转写的视频。"""
-    conn = connect(db_path)
-    try:
-        rows = conn.execute(
-            "SELECT v.id, v.source_sheet, v.source_row, v.author, v.title, v.tags, "
-            "v.category, v.ai_tags, v.game, v.transcript, v.published_at, "
-            "v.dify_document_id, v.cover_url, v.source_url "
-            "FROM videos v WHERE COALESCE(v.transcript, '') != '' ORDER BY v.id"
-        ).fetchall()
-        items = [dict(r) for r in rows]
-    finally:
-        conn.close()
-    if keys:
-        keyset = set(keys)
-        items = [v for v in items if f'{v["source_sheet"]}::{v["source_row"]}' in keyset]
-    # 附带该视频的整理稿正文（丰富知识库内容）
-    if items:
-        conn = connect(db_path)
-        try:
-            for v in items:
-                rows = conn.execute(
-                    "SELECT title, content FROM ai_summaries WHERE video_id = ? AND content != ''",
-                    (v["id"],),
-                ).fetchall()
-                v["summaries"] = [
-                    {"title": r["title"], "content": (r["content"] or "")[:6000]} for r in rows
-                ]
-        finally:
-            conn.close()
-    return items
-
-
-def build_dify_document(video: dict[str, Any]) -> tuple[str, str]:
-    """构建 Dify 文档（名称, 正文）。"""
-    title = (video.get("title") or "未命名视频").strip()
-    name = f'[{video.get("author") or "未知"}] {title}'[:80]
-    header_lines = [
-        f"# {title}",
-        "",
-        f"- 作者：{video.get('author') or '未知'}",
-        f"- 分类：{video.get('category') or '未分类'}",
-        f"- 游戏：{video.get('game') or '无'}",
-        f"- 标签：{video.get('ai_tags') or video.get('tags') or ''}",
-        f"- 发布时间：{video.get('published_at') or '未知'}",
-        f"- 来源：{video.get('source_url') or ''}",
-        "",
-        "## 口播原文",
-        "",
-        (video.get("transcript") or "").strip(),
-    ]
-    for s in video.get("summaries") or []:
-        if s.get("content"):
-            header_lines += ["", f"## 整理稿：{s['title']}", "", s["content"]]
-    return name, "\n".join(header_lines)
-
-
-def set_dify_doc(
-    db_path: str | Path,
-    video_id: int,
-    document_id: str,
-    synced_at: str,
-) -> None:
-    conn = connect(db_path)
-    try:
-        conn.execute(
-            "UPDATE videos SET dify_document_id = ?, dify_synced_at = ?, updated_at = ? WHERE id = ?",
-            (document_id, synced_at, _now(), video_id),
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def clear_dify_doc(db_path: str | Path, video_id: int) -> None:
-    conn = connect(db_path)
-    try:
-        conn.execute(
-            "UPDATE videos SET dify_document_id = NULL, dify_synced_at = NULL, updated_at = ? WHERE id = ?",
-            (_now(), video_id),
-        )
-        conn.commit()
-    finally:
-        conn.close()

@@ -687,7 +687,7 @@ textarea{resize:vertical;min-height:84px}
         <button class="btn ghost sm" onclick="syncContentDb()">同步内容库</button>
         <button class="btn sm" onclick="syncWorkbench()"><span data-icon="activity" class="ic14"></span>同步工作台</button>
       </div>
-      <p style="font-size:12px;color:var(--text-tertiary);margin:0 0 12px">订阅同步时会自动执行数据同步，手动按钮仅作兜底。浏览素材与生成内容请使用「素材库」。缺 ASR 的视频无法生成整理稿或发布知识库。</p>
+      <p style="font-size:12px;color:var(--text-tertiary);margin:0 0 12px">订阅同步时会自动执行数据同步，手动按钮仅作兜底。浏览素材与生成内容请使用「素材库」。缺 ASR 的视频无法生成整理稿。</p>
       <div id="sync-stats" style="display:flex;gap:12px;flex-wrap:wrap">
         <div class="empty" style="flex:1;padding:24px"><span class="e" data-icon="grid"></span>加载中...</div>
       </div>
@@ -752,7 +752,6 @@ textarea{resize:vertical;min-height:84px}
         </select>
         <div class="spacer"></div>
         <button class="btn ghost sm" id="btn-classify" onclick="classifyVideos()"><span data-icon="bolt" class="ic14"></span>AI 分类</button>
-        <button class="btn ghost sm" id="btn-dify-publish" onclick="publishToDify()"><span data-icon="book" class="ic14"></span>发布到知识库</button>
         <select id="summary-type" onchange="updateOptimizeButton()">
           <option value="game_guide">生成：游戏攻略</option>
           <option value="wechat_material">生成：公众号文章素材</option>
@@ -1152,39 +1151,6 @@ textarea{resize:vertical;min-height:84px}
           </div>
         </div>
       </div>
-
-      <div class="panel" style="margin-top:16px;max-width:640px">
-        <h3 style="font-size:15px;font-weight:800;display:flex;align-items:center;gap:9px;margin-bottom:4px">
-          <span class="cic" style="width:30px;height:30px;border-radius:9px;display:grid;place-items:center;background:color-mix(in srgb,var(--module-4) 14%,transparent);color:var(--module-4)" data-icon="book"></span>RAG 知识库（Dify）
-        </h3>
-        <div style="font-size:12px;color:var(--text-secondary);margin-bottom:16px">配置后可在素材库一键把视频（口播原文 + 整理稿）发布到 Dify 知识库，用于检索问答。当前状态：<span id="dify-status" style="font-weight:700">未配置</span></div>
-
-        <div class="form-grid">
-          <div class="form-group">
-            <label>Dify API 地址</label>
-            <input id="dify-base" type="text" placeholder="http://127.0.0.1">
-            <div class="hint">自部署填服务地址；云端填 https://api.dify.ai</div>
-          </div>
-          <div class="form-group">
-            <label>Knowledge API Key</label>
-            <input id="dify-key" type="password" autocomplete="off" placeholder="dataset-...">
-            <div class="hint" id="dify-key-hint">Dify 知识库页面左侧「API」处生成</div>
-          </div>
-          <div class="form-group">
-            <label>目标知识库</label>
-            <div style="display:flex;gap:8px">
-              <select id="dify-dataset" style="flex:1"></select>
-              <button class="btn ghost sm" style="flex:0 0 auto" onclick="loadDifyDatasets(true)"><span data-icon="activity" class="ic14"></span>刷新</button>
-            </div>
-            <div class="hint">填好 Key 后点刷新拉取知识库列表；也可 <a href="javascript:void(0)" onclick="createDifyDataset()" style="color:var(--module-4);font-weight:600">+ 新建知识库</a></div>
-          </div>
-          <div style="display:flex;gap:10px;align-items:center">
-            <button class="btn" id="btn-dify-save" onclick="saveDifyConfig()"><span data-icon="check" class="ic14"></span>保存配置</button>
-            <button class="btn ghost" id="btn-dify-test" onclick="testDifyConfig()"><span data-icon="bolt" class="ic14"></span>测试连接</button>
-            <span id="dify-test-result" style="font-size:12.5px;font-weight:600"></span>
-          </div>
-        </div>
-      </div>
     </section>
 
   </main>
@@ -1307,7 +1273,7 @@ async function loadCurrentView() {
   if (currentView === 'summaries') return loadSummaries();
   if (currentView === 'toutiao') return loadToutiaoList();
   if (currentView === 'wechat') return showWechatList();
-  if (currentView === 'settings') { await loadAiConfig(); return loadDifyConfig(); }
+  if (currentView === 'settings') return loadAiConfig();
   return loadVideos();
 }
 
@@ -1514,47 +1480,6 @@ async function classifyVideos() {
   } catch(e) {
     btn.disabled = false;
     setStatus('error', '启动分类失败: ' + e.message);
-  }
-}
-
-// ── 发布到 Dify 知识库 ──
-async function publishToDify() {
-  const btn = document.getElementById('btn-dify-publish');
-  if (btn.disabled) return;
-  const keys = [...selectedVideos];
-  const scope = keys.length
-    ? `选中的 ${keys.length} 条视频`
-    : '全部有转写的视频';
-  if (!confirm(`把${scope}发布到 Dify 知识库？已发布的会更新。`)) return;
-  btn.disabled = true;
-  const label = btn.innerHTML;
-  try {
-    const resp = await fetch('/api/dify/publish', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(keys.length ? {keys} : {}),
-    }).then(r=>r.json());
-    if (resp.error) { setStatus('error', resp.error); btn.disabled = false; return; }
-    const timer = setInterval(async () => {
-      try {
-        const st = await fetch('/api/dify/publish/status').then(r=>r.json());
-        btn.innerHTML = '<span data-icon="book" class="ic14"></span>' + (st.progress || '发布中...');
-        if (!st.running) {
-          clearInterval(timer);
-          btn.disabled = false;
-          btn.innerHTML = label;
-          if (st.error) setStatus('error', '发布失败: ' + st.error.split('\n')[0]);
-          else {
-            const r = st.result || {};
-            setStatus('done', `✅ 发布完成：成功 ${r.ok||0} / 失败 ${r.fail||0}`);
-            if (r.errors && r.errors.length) console.warn('发布失败详情:', r.errors);
-          }
-          loadVideos();
-        }
-      } catch(e) { /* 继续轮询 */ }
-    }, 1500);
-  } catch(e) {
-    btn.disabled = false;
-    setStatus('error', '启动发布失败: ' + e.message);
   }
 }
 
@@ -2253,7 +2178,6 @@ function renderVideos(videos) {
           <span class="an">${esc(v.author || '未知作者')}</span>
           <span class="pill cat" title="点击修改分类" onclick='event.stopPropagation();openCategoryMenu(this, "${v.sheet}", ${v.row}, "${esc(v.category || "")}")'>${esc(v.category || '未分类')}</span>
           ${v.game ? `<span class="pill game" title="点击修改游戏名" onclick='event.stopPropagation();editGame(this, "${v.sheet}", ${v.row}, "${esc(v.game)}")'>${esc(v.game)}</span>` : ''}
-          ${v.dify_synced_at ? '<span class="pill rag" title="已同步 Dify 知识库">RAG</span>' : ''}
           ${v.published ? '<span class="pill published">已发布</span>' : ''}
         </div>
         <div class="v-title">${esc(v.title || '（无标题）')}</div>
@@ -2951,137 +2875,6 @@ async function testAiConfig() {
     } else {
       result.textContent = '❌ ' + (resp.error || '连接失败');
       result.style.color = 'var(--danger)';
-    }
-  } catch(e) {
-    result.textContent = '❌ 请求失败: ' + e.message;
-    result.style.color = 'var(--danger)';
-  } finally {
-    btn.disabled = false;
-  }
-}
-
-// ── Dify 设置 ──
-async function loadDifyConfig() {
-  let c;
-  try {
-    c = await fetch('/api/dify/config').then(r=>r.json());
-  } catch(e) {
-    document.getElementById('dify-status').textContent = '读取失败';
-    return;
-  }
-  document.getElementById('dify-base').value = c.api_base || '';
-  const keyInput = document.getElementById('dify-key');
-  keyInput.value = '';
-  keyInput.placeholder = c.has_key ? '已保存，留空则不修改' : 'dataset-...';
-  document.getElementById('dify-key-hint').textContent = c.has_key
-    ? '已保存 Key：' + c.api_key_masked
-    : 'Dify 知识库页面左侧「API」处生成';
-  const st = document.getElementById('dify-status');
-  if (c.has_key && c.dataset_id) {
-    st.textContent = '已配置'; st.style.color = 'var(--module-1)';
-    loadDifyDatasets(false, c.dataset_id);
-  } else if (c.has_key) {
-    st.textContent = '已配置 Key，未选择知识库'; st.style.color = 'var(--danger)';
-    loadDifyDatasets(false, '');
-  } else {
-    st.textContent = '未配置'; st.style.color = 'var(--text-secondary)';
-    const sel = document.getElementById('dify-dataset');
-    sel.innerHTML = '<option value="">请先填写 API Key</option>';
-  }
-}
-
-async function loadDifyDatasets(manual, presetId) {
-  const sel = document.getElementById('dify-dataset');
-  sel.innerHTML = '<option value="">加载中...</option>';
-  try {
-    const resp = await fetch('/api/dify/datasets').then(r=>r.json());
-    if (resp.error) {
-      sel.innerHTML = `<option value="">${resp.error.slice(0, 40)}</option>`;
-      if (manual) setStatus('error', resp.error);
-      return;
-    }
-    const datasets = resp.datasets || [];
-    if (!datasets.length) {
-      sel.innerHTML = '<option value="">（无知识库，点下方新建）</option>';
-      return;
-    }
-    sel.innerHTML = datasets.map(d =>
-      `<option value="${d.id}">${esc(d.name)}（${d.doc_count||0} 文档）</option>`
-    ).join('');
-    const target = presetId || document.getElementById('dify-dataset').value;
-    if (presetId) {
-      const found = datasets.find(d => d.id === presetId);
-      if (found) sel.value = presetId;
-    }
-  } catch(e) {
-    sel.innerHTML = `<option value="">请求失败: ${e.message.slice(0, 30)}</option>`;
-  }
-}
-
-async function createDifyDataset() {
-  const name = prompt('新知识库名称：', '视频知识库');
-  if (!name) return;
-  try {
-    const resp = await fetch('/api/dify/datasets/create', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({name}),
-    }).then(r=>r.json());
-    if (resp.error) { setStatus('error', resp.error); return; }
-    setStatus('done', `✅ 知识库「${resp.name}」已创建并设为默认`);
-    await loadDifyConfig();
-  } catch(e) {
-    setStatus('error', '创建失败: ' + e.message);
-  }
-}
-
-async function saveDifyConfig() {
-  const btn = document.getElementById('btn-dify-save');
-  btn.disabled = true;
-  document.getElementById('dify-test-result').textContent = '';
-  try {
-    const resp = await fetch('/api/dify/config', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        api_base: document.getElementById('dify-base').value.trim(),
-        api_key: document.getElementById('dify-key').value.trim(),
-        dataset_id: document.getElementById('dify-dataset').value,
-      }),
-    }).then(r=>r.json());
-    if (resp.error) { setStatus('error', resp.error); return; }
-    setStatus('done', '✅ Dify 配置已保存');
-    await loadDifyConfig();
-  } catch(e) {
-    setStatus('error', '保存失败: ' + e.message);
-  } finally {
-    btn.disabled = false;
-  }
-}
-
-async function testDifyConfig() {
-  const btn = document.getElementById('btn-dify-test');
-  const result = document.getElementById('dify-test-result');
-  btn.disabled = true;
-  result.textContent = '测试中...';
-  result.style.color = 'var(--text-secondary)';
-  try {
-    // 先保存再测试，保证测试的是当前表单值
-    await fetch('/api/dify/config', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        api_base: document.getElementById('dify-base').value.trim(),
-        api_key: document.getElementById('dify-key').value.trim(),
-        dataset_id: document.getElementById('dify-dataset').value,
-      }),
-    });
-    const resp = await fetch('/api/dify/datasets').then(r=>r.json());
-    if (resp.error) {
-      result.textContent = '❌ ' + resp.error;
-      result.style.color = 'var(--danger)';
-    } else {
-      const n = (resp.datasets || []).length;
-      result.textContent = `✅ 连接成功，可见 ${n} 个知识库`;
-      result.style.color = 'var(--module-1)';
-      await loadDifyConfig();
     }
   } catch(e) {
     result.textContent = '❌ 请求失败: ' + e.message;
