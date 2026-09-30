@@ -1912,7 +1912,7 @@ function closePosterDialog(e) {
 }
 
 // 字数上限与后端 ai_poster 的门禁一致（实测超 80 字错字率明显上升）
-const PK_LIMITS = {title: 12, subtitle: 10, footer: 14, cardT: 6, cardD: 16, total: 80, cardMin: 3, cardMax: 5};
+const PK_LIMITS = {title: 12, subtitle: 10, footer: 14, cardT: 6, cardD: 16, total: 80, cardMin: 3, cardMax: 5, spine: 24};
 
 function pkChars(p) {
   let n = (p.title || '').length + (p.subtitle || '').length + (p.footer || '').length;
@@ -1932,7 +1932,9 @@ function _pkRow(tag, id, val, max, ph) {
 }
 function pkRenderPlan(plan, publish) {
   plan = plan || {}; publish = publish || {};
-  let html = _pkRow('主标题', 'pk-title', plan.title, PK_LIMITS.title, '≤12 字')
+  let html = `<div class="pk-row"><span class="pk-tag">主线</span>`
+    + `<input id="pk-spine" value="${esc(plan.spine || '')}" maxlength="${PK_LIMITS.spine}" placeholder="这条海报讲的一条链（不进图）"></div>`
+    + _pkRow('主标题', 'pk-title', plan.title, PK_LIMITS.title, '≤12 字')
     + _pkRow('副标题', 'pk-subtitle', plan.subtitle, PK_LIMITS.subtitle, '≤10 字，可留空');
   (plan.cards || []).slice(0, PK_LIMITS.cardMax).forEach((c, i) => {
     html += `<div class="pk-row"><span class="pk-tag">卡片${i + 1}</span>`
@@ -1959,7 +1961,7 @@ function pkReadPlan() {
     if (t || d) cards.push({t: t, d: d});
   }
   return {title: g('pk-title'), subtitle: g('pk-subtitle'), cards: cards,
-          footer: g('pk-footer'), style: g('pk-style')};
+          footer: g('pk-footer'), style: g('pk-style'), spine: g('pk-spine')};
 }
 function pkReadPublish() {
   const g = id => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
