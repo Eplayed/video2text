@@ -12,7 +12,8 @@ globs:
 ## 项目定位
 
 抖音短视频/公众号文章 素材采集器 + 自媒体选题索引 + 内容工作台。
-核心链路：采集 → ASR 转写 → AI 加工（标题/摘要/关键词/分类）→ SQLite → Flask 工作台 → Dify 知识库同步。
+核心链路：采集 → ASR 转写 → AI 加工（标题/摘要/关键词/分类）→ SQLite → Flask 工作台 → 图文出图（头条/公众号渠道）。
+（Dify 知识库同步已于 2026-09-30 下线：一条素材都未真正发布过，且 Dify 侧写稿质量不达标）
 同时是**选题/渠道策略的唯一权威源**（`src/content_store.py` 的 `RADAR_CHANNEL_STRATEGY` / `CHANNEL_STRATEGY_GLOBAL`）。
 
 ## 开始前必读（按顺序）

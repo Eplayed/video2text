@@ -4,7 +4,7 @@
 
 Flask==3.1.3                # web/app.py 工作台
 openpyxl==3.1.5             # Excel 读写（采集真相源）
-requests==2.32.3            # 采集 / AI 接口 / Dify 客户端
+requests==2.32.3            # 采集 / AI 接口
 faster-whisper==1.2.1       # ASR 主引擎（CPU 推理）
 openai-whisper==20250625    # ASR 兜底引擎（main.py 内 try 导入）
 playwright==1.40.0          # 图文渲染出图 + 抖音风控兜底开页

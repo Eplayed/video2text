@@ -7,7 +7,7 @@
 ## 项目定位
 
 抖音短视频素材采集器 + 自媒体文章选题索引 + 内容工作台。
-核心链路：视频/文章采集 → ASR 转写 → AI 加工（标题/摘要/关键词/分类）→ SQLite 存储 → Flask 工作台管理 → Dify 知识库同步。
+核心链路：视频/文章采集 → ASR 转写 → AI 加工（标题/摘要/关键词/分类）→ SQLite 存储 → Flask 工作台管理 → 图文出图（头条/公众号渠道）。
 
 2026-06 之后定位进一步扩展：除抖音视频外，还接入微信公众号文章（WeWe RSS）作为素材源；工作台从"查看器"升级为"采集 + 打标 + 生成 + 发布"的一体化面板。
 
@@ -23,9 +23,8 @@ src/
   fetch_user_videos.py   批量获取用户视频
   wechat_fetcher.py      公众号文章抓取（WeWe RSS → 解析 → 入 videos 表，transcript=正文）
   material_store.py      素材工作台导出（Excel/SQLite/JSONL/图片同步）+ 关键帧路径
-  dify_client.py         Dify 知识库 API 客户端（文档级增量同步）
   path_config.py         douyin_parse 解析器路径解析（env → vendor/ → /tmp 兼容）
-web/app.py               Flask 工作台后端（45 个路由，见下）
+web/app.py               Flask 工作台后端（64 个路由，见下）
 src/graphics/            图文渲染内核（Phase 1 抽出）：templates（模板 CSS+渲染）· variants（配色/字体/版式三轴）· skins（皮肤/题材素材）· css_engine（__TOKEN__ 替换）· renderer（Playwright 截图）· package（manifest）· ir（卡片 schema）· channels/{toutiao,wechat}.py（渠道适配器）
 scripts/                 list_candidates（候选查询）· check_variant_tokens（三轴静态检查）· e2e_toutiao_variants / e2e_wechat_variants（图文 e2e，2026-09-30 从 Trae 工作区收编入仓）
 .qoder/skills/           Qoder 项目技能：workbench-restart（安全重启+双确认）· graphics-verify（三线回归）
@@ -41,8 +40,7 @@ vendor/douyin_parse      内置解析器（免依赖 /tmp）
 - AI：`/api/videos/classify`（异步批量分类，`/api/classify/status` 轮询；增量=只补 category/ai_tags 任一为空）、`/api/videos/category`、`/api/ai/config|test`
 - 内容生成：`/api/content/generate|sync|summaries`（生成/重生成/删除 AI 摘要；类型含 game_guide/wechat_material/ai_interview）
 - 策略下发：`/api/strategy/channels`（渠道策略配置，media-workbench 拉取）
-- Dify：`/api/dify/config|datasets|publish`（知识库配置、创建、发布，带 status 轮询）
-- 订阅：`/api/subscriptions`（CRUD、导入、按 ids 批量同步，`/sync/status` 轮询）
+- 订阅：`/api/subscriptions`（CRUD、导入、按 ids 批量同步，`/sync/status` 轮询；分类与标签支持批量设置）
 - 看板：`/api/dashboard`、`/api/stats`、`/api/topics/radar`（支持 channel 渠道策略参数）、`/api/workbench`
 
 ## 最新进展（git 时间线）
@@ -58,6 +56,7 @@ vendor/douyin_parse      内置解析器（免依赖 /tmp）
 - 2026-09-21~24：**头条图文生成链路**——①采集兜底：抖音 Argus 风控拦截纯 API 签名，parser 解析不到 aweme_id 时改用真实 Chromium 打开视频页抓 detail（src/browser_fetch.py + tools/douyin_browser_fetch.js），视频下载 curl 加 --fail/UA 防空文件；②整合稿：content_store 新增 toutiao_mix 类型（单视频/多视频决策化整合，【标题候选/时间线/变化对比/对你的影响/行动建议/风险核查】固定标签六节结构）；③出图：src/toutiao_graphics.py v3——LLM 卡片化整合稿 → playwright 渲染 9:16（1080×1920）竖版信息图 4 张 + 微头条文案，版式参照 2026-09-24 参考图（金渐变衬线大标题/插画主视觉底缘渐隐/圆环图标三面板/双金边横幅，无页码无来源行）；题材+皮双选择：题材决定 LLM 文案点明的游戏与插画素材文件夹（output/toutiao/<题材>图片素材/，更新素材下次生成即生效），皮决定整套调色板与背景（wow 蓝黑金/d4 烬红/poe 青铜/poe2 墨玉绿/自定义 _assets/<名称>_bg.jpg），插画封面取竖构图、内容页取横构图按页轮换，LLM 不可用走本地模板兜底；④前端：生成弹框新增标题输入框（自动代入整理稿标题，可改可留空），超 12 字标题自动降字号防截断
 - 2026-09-25~29：**Phase 1 内核抽取 + 图文三轴**——`src/graphics/` 从 `toutiao_graphics.py` 抽出渠道无关内核（templates/variants/skins/css_engine/renderer/package/ir），`channels/{toutiao,wechat}.py` 两渠道共用同一渲染内核；公众号模板库扩到 6 套（新增 lilac_list 浅紫清单 / cream_gold 奶油金插画，含参考样本拆解文档）；**变体三轴（配色/字体/版式）两渠道全部接线**，manifest 落真实键；头条素材选图支持随机（rng/exclude + 可复现种子 + manifest.assets 追溯）；`scripts/check_variant_tokens.py` 代码化防线（字体/配色轴失效即报错，因三轮「选了不生效」静默失效复盘而生，守则见 `.agents/memories/40-graphics-variants.md`）
 - 2026-09-30：**Qoder 接手准备**——两条图文 e2e（18+14 用例）从 Trae 私有工作区收编进 `scripts/`；新增 `.qoder/skills/workbench-restart`（按端口 PID 安全重启 + py_compile 前置 + PID/接口双确认）与 `.qoder/skills/graphics-verify`（三线回归一条命令）；AGENTS.md 补纪律第 5 条（改 graphics 先读 40 守则、改完跑验证）；`requirements.txt` 依赖钉版；README 项目结构纠偏（已删模块不再列）。业务行为零改动，三线回归 `ALL_OK`，重启实跑 72113→23054
+- 2026-09-30（同日二、三轮）：**订阅页三维分组**——`subscriptions` 新增自定义 `tags` 列（与固定 11 类 `category` 正交：category 喂选题雷达/渠道策略，tags 只做本地分组），来源/分类/标签三维筛选 + 勾选批量设分类/设标签 + 「同步当前筛选」一键整组同步；分类端点由单 id 改批量 `{ids}`。**Dify 知识库同步整体下线**——删 `src/dify_client.py`、6 个 `/api/dify/*` 路由、设置页 RAG 面板与「发布到知识库」按钮（取证：1220 行素材 `dify_document_id` 全为 NULL，一条都没发布过，且 Dify 侧写稿质量不达标）；`videos` 两列按约定保留不删。图文回归三条线 `ALL_OK`，`wechat_material` 固定【标签】分节经实测仍被本地兜底模板正常消费
 
 ## 运营协作现状（2026-09）
 
@@ -65,17 +64,17 @@ vendor/douyin_parse      内置解析器（免依赖 /tmp）
 
 ## 数据与配置
 
-- SQLite 表：`videos`（含 transcript、ai_copy、keywords、分类 category/ai_tags、Dify 同步状态、实体标识 author_sec_uid/source）、`ai_summaries`、`subscriptions`
+- SQLite 表：`videos`（含 transcript、ai_copy、keywords、分类 category/ai_tags、实体标识 author_sec_uid/source；另有 `dify_document_id`/`dify_synced_at` 两列随 Dify 下线保留但不再读写，全表均为 NULL）、`ai_summaries`、`subscriptions`（含自定义分组 tags）
 - `video_index.json`：文章素材索引（v1.1，含 topic/article_score/fact_risk/summary/published/performance/resultScore）。**实体键口径（2026-09-14 起）**：aweme_id 为主键（缺 id 旧条目退回 sheet:row），重建只保留本次扫描到的实体，Excel 清行自动出索引。**已被 gitignore（`*.json`），换机迁移见 DEV-SYNC.md 数据清单**；update_video_index 每次写入前自动备份 `.bak`
 - Excel（output/抖音视频信息.xlsx）是采集数据的真相源，含"是否已发布/处理状态"列供回写；`author_sec_uid`/`source` 为 SQLite 专属字段，Excel 重同步不覆盖
-- 敏感配置在 `config/config.env.local`（已 gitignore）：DOUYIN_SESSIONID、AI key、Dify key
+- 敏感配置在 `config/config.env.local`（已 gitignore）：DOUYIN_SESSIONID、AI key（`DIFY_*` 键随 Dify 下线已不再写入，本机配置里本就没有）
 - 写稿筛选约定见 `CHANGELOG_FOR_AI.md`：优先 article_score A/B、fact_risk 非空必须联网核查
 
 ## 已知注意事项
 
 - ASR 对游戏专有名词易误识别，攻略/BD/数值类内容不能只依赖口播转写
-- 异步任务（分类、Dify 发布、订阅同步）均走"启动 + status 轮询"模式，改动时保持该契约
+- 异步任务（分类、订阅同步）均走"启动 + status 轮询"模式，改动时保持该契约
 - Excel 基础列 A-O，扩展列（选题等级/适合平台等）由索引自动识别
 - 运行中的 web 进程无热重载，改完代码必须重启（15801 端口）
-- 遗留工程债（不阻塞，改采集代码时留意）：web/app.py 三条采集流水线为逐行复制结构，实际位置（2026-09-30 核对，旧文档记的 531/716/1603 已过期）——链接采集 `api_process` 643–741、批量获取 `api_fetch_and_process` 840–967、订阅同步 `api_subscriptions_sync` 2022–2257。三者**不是简单同构**，抽公共层前必须保住这些差异：Excel 打开粒度（P1/P2 每行 load+save，P3 单工作簿循环内多次 save + finally close）、写入列（P1 只写 col1/2，P2/P3 还写 col3 aweme_id，P3 另读 col4 作者回填）、失败处理（P1/P2 回读第 15 列备注累加 error，P3 不看 `ok` 只写订阅 summary）、状态契约（P1/P2 共用 `_task_status`+`/api/status`，P2 多 total/current 且前端依赖；P3 用 `_sub_status`+`/api/subscriptions/sync/status`；冲突码 400 vs 409、返回结构也不同）、`mark_video_source` 来源值（single_link vs subscription）。**_auto_classify_after_sync（330–347）只有 P1/P2 在流程末尾调用，订阅链路 P3 从未调用**（分类靠 2218–2241 的裸 SQL 回填）——统一化会新增打标副作用与 `_db_lock` 争用，属行为变更不是纯重构。传给 process_row 的 ai_config 三条都硬编码 skip。
+- 遗留工程债（不阻塞，改采集代码时留意）：web/app.py 三条采集流水线为逐行复制结构，实际位置（2026-09-30 复核，旧文档记的 531/716/1603 已过期）——链接采集 `api_process` 641–741、批量获取 `api_fetch_and_process` 838–967、订阅同步 `api_subscriptions_sync` 2117–2369。三者**不是简单同构**，抽公共层前必须保住这些差异：Excel 打开粒度（P1/P2 每行 load+save，P3 单工作簿循环内多次 save + finally close）、写入列（P1 只写 col1/2，P2/P3 还写 col3 aweme_id，P3 另读 col4 作者回填）、失败处理（P1/P2 回读第 15 列备注累加 error，P3 不看 `ok` 只写订阅 summary）、状态契约（P1/P2 共用 `_task_status`+`/api/status`，P2 多 total/current 且前端依赖；P3 用 `_sub_status`+`/api/subscriptions/sync/status`；冲突码 400 vs 409、返回结构也不同）、`mark_video_source` 来源值（single_link vs subscription）。**_auto_classify_after_sync（327–344）现三条流水线都在流程末尾调用**（P1 724 / P2 950 / P3 2356；P3 原先只挂在抖音分支内，只勾微信订阅同步时新文章永不打标，2026-09-30 已移到两条分支之外）。P3 另有 2318–2344 的裸 SQL 按订阅预设回填 category/game，与增量打标并存（谁优先由 `content_store.classify_videos` 的 `force=False` 护栏决定：已有 category 不改写，只补缺）。传给 process_row 的 ai_config 三条都硬编码 skip。
 - 依赖钉版见 `requirements.txt`（2026-09-30 新增，按系统 Python 3.9 实测版本；无 venv，ffmpeg / playwright 浏览器内核 / vendor 解析器仍需换机手动准备）

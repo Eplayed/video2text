@@ -147,7 +147,6 @@ video2text/
 │   ├── fetch_user_videos.py# 批量获取用户视频
 │   ├── browser_fetch.py    # 抖音风控兜底（Chromium 抓视频详情）
 │   ├── video_extractor.py  # 视频下载
-│   ├── dify_client.py      # Dify 知识库同步
 │   ├── ffmpeg_probe.py     # 音视频流探测
 │   ├── toutiao_graphics.py # 头条渠道薄封装（转发 src/graphics）
 │   └── graphics/           # 图文渲染内核（templates/variants/skins/channels）
