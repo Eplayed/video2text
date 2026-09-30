@@ -34,9 +34,13 @@ cp config/config.env config/config.env.local
 
 ### 3. 安装依赖
 
+依赖清单见 `requirements.txt`（按 Python 3.9 实测版本钉版）：
+
 ```bash
-pip install openpyxl faster-whisper
+python3 -m pip install -r requirements.txt
 ```
+
+另需手动准备（不在 pip 范围）：`ffmpeg`（ASR 抽音频）、`playwright install chromium`（图文出图 + 抖音风控兜底）、`vendor/douyin_parse` 解析器目录（已 gitignore，换机手动迁移）。
 
 ### 4. 运行
 
@@ -127,23 +131,34 @@ python scripts/list_candidates.py --topic "流放2攻略"
 
 ```text
 video2text/
-├── main.py               # 主程序
+├── main.py                 # CLI 主程序（采集 + ASR + 索引更新）
+├── requirements.txt        # 依赖钉版清单
+├── run_web.sh              # 工作台启动脚本（端口 15801，无热重载）
 ├── scripts/
-│   └── list_candidates.py # 从索引中列出文章候选
-├── src/                  # 核心模块
-│   ├── link_resolver.py  # 抖音短链接解析
-│   ├── video_extractor.py # 视频信息提取
-│   ├── asr.py            # ASR 转写
-│   ├── ai_optimizer.py   # AI 文案优化
-│   ├── browser_fetch.py  # 抖音风控兜底（Chromium 抓视频详情）
-│   └── toutiao_graphics.py # 头条图文生成（9:16 卡片式信息图）
-├── config/
-│   └── config.env        # 配置模板
-├── logs/                 # 日志（已 gitignore）
-├── output/               # 输出目录（已 gitignore）
-├── temp/                 # 临时文件（已 gitignore）
-└── video_index.json      # 视频索引（已 gitignore）
+│   ├── list_candidates.py      # 从索引中列出文章候选
+│   ├── check_variant_tokens.py # 三轴 × 全模板 token 静态检查
+│   ├── e2e_toutiao_variants.py # 头条图文 e2e（18 用例 A–R）
+│   └── e2e_wechat_variants.py  # 公众号图文 e2e（14 用例 W1–W14）
+├── .qoder/skills/          # Qoder 项目技能（workbench-restart / graphics-verify）
+├── src/                    # 核心模块
+│   ├── content_store.py    # SQLite + AI 加工 + 渠道策略权威源
+│   ├── material_store.py   # 素材导出（Excel/SQLite/JSONL/图片）
+│   ├── wechat_fetcher.py   # 公众号文章抓取（WeWe RSS）
+│   ├── fetch_user_videos.py# 批量获取用户视频
+│   ├── browser_fetch.py    # 抖音风控兜底（Chromium 抓视频详情）
+│   ├── video_extractor.py  # 视频下载
+│   ├── dify_client.py      # Dify 知识库同步
+│   ├── ffmpeg_probe.py     # 音视频流探测
+│   ├── toutiao_graphics.py # 头条渠道薄封装（转发 src/graphics）
+│   └── graphics/           # 图文渲染内核（templates/variants/skins/channels）
+├── web/                    # Flask 工作台（app.py + templates/index.html）
+├── vendor/douyin_parse/    # 内置解析器（已 gitignore）
+├── config/                 # 配置模板（config.env.local 已 gitignore）
+├── logs/ output/ temp/     # 运行产物（已 gitignore）
+└── video_index.json        # 视频索引（已 gitignore）
 ```
+
+注：`src/link_resolver.py`、`src/asr.py`、`src/ai_optimizer.py` 已于 2026-09-01 删除，功能由 `main.py` / `content_store.py` 承担。
 
 ## 视频索引
 

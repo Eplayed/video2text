@@ -1,0 +1,14 @@
+# video2text 运行依赖（按系统 Python 3.9 实测版本钉死，非 venv）
+# 装法：python3 -m pip install -r requirements.txt
+# 换机后还需单独准备：ffmpeg（ASR 抽音频）、playwright 浏览器内核、vendor/douyin_parse 解析器目录
+
+Flask==3.1.3                # web/app.py 工作台
+openpyxl==3.1.5             # Excel 读写（采集真相源）
+requests==2.32.3            # 采集 / AI 接口 / Dify 客户端
+faster-whisper==1.2.1       # ASR 主引擎（CPU 推理）
+openai-whisper==20250625    # ASR 兜底引擎（main.py 内 try 导入）
+playwright==1.40.0          # 图文渲染出图 + 抖音风控兜底开页
+pillow==11.3.0              # 素材图片尺寸/比例判定
+
+# 未使用但常被认为需要（确认过仓库内无 import，别误装）：python-docx、pandas
+# vendor/douyin_parse/qt_app.py 需 PySide6，仅解析器自带 GUI 用到，采集主链路不依赖
