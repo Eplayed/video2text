@@ -1440,6 +1440,76 @@ def api_wechat_shot_upload():
     return jsonify({"token": token, "count": len(files)})
 
 
+@app.route("/api/wechat/templates")
+def api_wechat_templates():
+    """模板与三轴预设的权威下发（key + 中文标签）。
+
+    前端历史上自己抄了一份 4 项模板白名单，而渠道已扩到 6 项——选「浅紫清单」「奶油金」
+    会被前端静默回落成 wechat。名单一律以后端 graphics 内核为准，前端不再同步维护。
+    """
+    try:
+        return jsonify({
+            "templates": wechat_graphics.template_choices(),
+            "palettes": [{"key": k, "label": graphics_variants.palette_label(k)}
+                         for k in graphics_variants.PALETTE_KEYS],
+            "fonts": [{"key": k, "label": graphics_variants.font_label(k)}
+                      for k in graphics_variants.FONT_KEYS],
+            "layouts": ([{"key": k, "label": graphics_variants.layout_label(k)}
+                         for k in graphics_variants.LAYOUT_KEYS]
+                        + [{"key": graphics_variants.RANDOM_LAYOUT_KEY, "label": "随机（整包统一）"}]),
+            # 配色轴就绪的模板：未接通的模板选了配色会 no-op，前端据此如实提示而非猜
+            "palette_ready": [k for k in wechat_graphics.TEMPLATE_WHITELIST
+                              if k in graphics_variants.PALETTE_READY_TPLS],
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/wechat/preview", methods=["POST"])
+def api_wechat_preview():
+    """样式预览：按当前「模板 + 配色 + 字体 + 版式」真实渲染固定样例卡。
+
+    不调 LLM、不进发布包，结果按参数哈希缓存在 output/wechat/_previews/<hash>/。
+    旧版预览是离线假样张 JPG，换三轴毫无变化，「选了没效果」只能等成品才知道。
+    """
+    data = request.get_json(force=True) or {}
+    try:
+        out = wechat_graphics.render_preview(
+            template=str(data.get("template") or "wechat"),
+            palette=(data.get("palette") or None),
+            font=(data.get("font") or None),
+            layout=(data.get("layout") or None),
+            pages=data.get("pages") or 1)
+        return jsonify(out)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/wechat/ref-upload", methods=["POST"])
+def api_wechat_ref_upload():
+    """排版参考图上传（后续「逆向拆解排版」的输入），存 output/wechat/_refs/<token>/。
+    与真实截图分目录：参考图不进发布包、不参与 lint，只在 manifest 记 ref_images。"""
+    files = request.files.getlist("files")
+    if not files:
+        return jsonify({"error": "未选择图片"}), 400
+    if len(files) > 20:
+        return jsonify({"error": "一次最多上传 20 张参考图"}), 400
+    ok_ext = {".jpg", ".jpeg", ".png", ".webp"}
+    for f in files:
+        ext = os.path.splitext(f.filename or "")[1].lower()
+        if ext not in ok_ext:
+            return jsonify({"error": "仅支持 jpg/png/webp：%s" % (f.filename or "?")}), 400
+    token = uuid.uuid4().hex[:12]
+    d = OUTPUT_DIR / "wechat" / "_refs" / token
+    d.mkdir(parents=True, exist_ok=True)
+    urls = []
+    for i, f in enumerate(files, 1):
+        name = "%02d%s" % (i, os.path.splitext(f.filename)[1].lower())
+        f.save(d / name)
+        urls.append("/media/wechat/_refs/%s/%s" % (token, name))
+    return jsonify({"token": token, "count": len(files), "urls": urls})
+
+
 @app.route("/api/wechat/generate", methods=["POST"])
 def api_wechat_generate():
     """从 wechat_material 整合稿生成公众号图片消息卡片包。
@@ -1461,6 +1531,7 @@ def api_wechat_generate():
         if up.is_dir():
             exts = {".jpg", ".jpeg", ".png", ".webp"}
             shots = sorted(p for p in up.iterdir() if p.is_file() and p.suffix.lower() in exts)
+    ref_token = str(data.get("ref_token") or "").strip()  # 排版参考图令牌：只在 manifest 记路径
     if not summary_id:
         return jsonify({"error": "缺少 summary_id"}), 400
     if _wx_task_status.get("running"):
@@ -1485,7 +1556,7 @@ def api_wechat_generate():
                                                         progress_cb=cb, theme=theme, title=title,
                                                         template=template, real_screenshots=shots,
                                                         palette=palette or None, font=font or None,
-                                                        layout=layout or None)
+                                                        layout=layout or None, ref_token=ref_token)
             _wx_task_status["package"] = {"id": package["id"], "title": package["title"], "images": len(package["images"])}
             errs = [i for i in (package.get("lint") or []) if i.startswith("error")]
             suffix = "，⚠️ lint 有 %d 条 error 需处理" % len(errs) if errs else ""
@@ -1548,6 +1619,136 @@ def api_wechat_delete(summary_id):
     try:
         ok = wechat_graphics.delete_package(summary_id)
         return jsonify({"success": bool(ok)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ── AI 海报：整理稿 → 出图模型直接画整张海报（含中文文字），出图后 OCR 回读逐字校验 ──
+# 与上面两条 HTML 模板产线互不相干：这里不渲染网页，文字是画进像素的。
+_poster_status = {"running": False, "done": True, "progress": "", "error": "",
+                  "stage": "", "package": None, "plan": None}
+
+
+def _poster_start(stage, fn):
+    """海报任务统一壳。LLM 拆解单次要 3 分钟以上，必须后台跑 + 前端轮询。"""
+    if _poster_status["running"]:
+        return False
+    _poster_status.update({"running": True, "done": False, "progress": "任务排队中...", "error": "",
+                           "stage": stage,
+                           "package": None if stage == "plan" else _poster_status["package"],
+                           "plan": None if stage == "poster" else _poster_status["plan"]})
+
+    def wrapper():
+        try:
+            fn()
+        except ai_poster.PosterError as e:
+            _poster_status["error"] = str(e)        # 可预期失败只给一句话，不刷 traceback
+            _poster_status["progress"] = "生成失败"
+        except Exception:
+            _poster_status["error"] = traceback.format_exc()
+            _poster_status["progress"] = "生成失败"
+        finally:
+            _poster_status["done"] = True
+            _poster_status["running"] = False
+
+    threading.Thread(target=wrapper, daemon=True).start()
+    return True
+
+
+def _poster_get_summary(summary_id):
+    if not summary_id:
+        return None
+    with _db_lock:
+        return content_store.get_summary(DB_PATH, int(summary_id))
+
+
+@app.route("/api/poster/plan", methods=["POST"])
+def api_poster_plan():
+    """只拆解不出图：产出可编辑的文案计划，先审文案再花钱出图。"""
+    data = request.get_json(force=True) or {}
+    summary = _poster_get_summary(data.get("summary_id"))
+    if not summary:
+        return jsonify({"error": "整合稿不存在"}), 404
+    theme = str(data.get("theme") or "").strip()[:30]
+    title = str(data.get("title") or "").strip()[:60]
+
+    def fn():
+        _poster_status["progress"] = "LLM 拆解海报文案（思考型模型约需 3 分钟）..."
+        plan, bad = ai_poster.build_text_plan(summary, _ai_config(), theme=theme, title=title)
+        _poster_status["plan"] = {"plan": plan, "violations": bad,
+                                  "chars": ai_poster.plan_chars(plan),
+                                  "prompt_text": ai_poster.build_prompt_text(plan)}
+        _poster_status["progress"] = ("✅ 文案已拆解（合计 %d 字）" % ai_poster.plan_chars(plan)
+                                      + ("，⚠️ " + "；".join(bad) if bad else ""))
+
+    if not _poster_start("plan", fn):
+        return jsonify({"error": "已有海报任务正在运行"}), 400
+    return jsonify({"status": "started", "summary_id": summary["id"]})
+
+
+@app.route("/api/poster/generate", methods=["POST"])
+def api_poster_generate():
+    """出图。plan 非空＝用前端审改过的文案（不再调 LLM），留空＝现场拆解。"""
+    data = request.get_json(force=True) or {}
+    summary = _poster_get_summary(data.get("summary_id"))
+    if not summary:
+        return jsonify({"error": "整合稿不存在"}), 404
+    theme = str(data.get("theme") or "").strip()[:30]
+    title = str(data.get("title") or "").strip()[:60]
+    ratio = str(data.get("ratio") or "9:16").strip()[:5]
+    plan = data.get("plan") if isinstance(data.get("plan"), dict) else None
+
+    def fn():
+        def cb(msg):
+            _poster_status["progress"] = msg
+        manifest = ai_poster.generate_poster(summary, _ai_config(), theme=theme, title=title,
+                                             ratio=ratio, progress_cb=cb, plan=plan)
+        v = manifest.get("verify") or {}
+        _poster_status["package"] = {"id": manifest["id"], "title": manifest["title"],
+                                     "url": manifest["url"], "chars": manifest["text_chars"],
+                                     "verify_ok": v.get("ok")}
+        _poster_status["plan"] = {"plan": manifest["plan"], "violations": [],
+                                  "chars": manifest["text_chars"],
+                                  "prompt_text": manifest["prompt_text"]}
+        _poster_status["progress"] = "✅ 海报已生成（%d 字）%s" % (
+            manifest["text_chars"],
+            "" if v.get("ok") else "，⚠️ 图面文字校验未通过，发布前人眼复核")
+
+    if not _poster_start("poster", fn):
+        return jsonify({"error": "已有海报任务正在运行"}), 400
+    return jsonify({"status": "started", "summary_id": summary["id"]})
+
+
+@app.route("/api/poster/status")
+def api_poster_status():
+    return jsonify(_poster_status)
+
+
+@app.route("/api/poster/list")
+def api_poster_list():
+    try:
+        items = [{"id": i.get("id"), "title": i.get("title"), "url": i.get("url"),
+                  "chars": i.get("text_chars"), "ratio": i.get("ratio"),
+                  "verify_ok": (i.get("verify") or {}).get("ok"),
+                  "created_at": i.get("created_at")}
+                 for i in ai_poster.list_packages()]
+        return jsonify({"items": items, "total": len(items)})
+    except Exception as e:
+        return jsonify({"error": str(e), "items": [], "total": 0}), 500
+
+
+@app.route("/api/poster/<int:summary_id>")
+def api_poster_detail(summary_id):
+    manifest = ai_poster.get_package(summary_id)
+    if not manifest:
+        return jsonify({"error": "海报不存在"}), 404
+    return jsonify(manifest)
+
+
+@app.route("/api/poster/<int:summary_id>", methods=["DELETE"])
+def api_poster_delete(summary_id):
+    try:
+        return jsonify({"success": bool(ai_poster.delete_package(summary_id))})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -2114,7 +2315,8 @@ def api_subscriptions_sync():
                             DB_PATH, "抖音视频数据", rows, "subscription",
                             author_sec_uid=sub["sec_uid"],
                         )
-                    # 订阅设了分类 → 新视频自动打上（AI 分类只补 category 为空的，不会覆盖）
+                    # 订阅设了分类 → 新视频自动打上。AI 增量分类不会改写已有 category
+                    # （写回口径见 content_store.classify_videos 的 force=False 分支）
                     cat_note = ""
                     if sub.get("category"):
                         with _db_lock:

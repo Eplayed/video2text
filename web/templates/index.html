@@ -349,6 +349,20 @@ textarea{resize:vertical;min-height:84px}
 .pill.wx{background:color-mix(in srgb,var(--module-1) 16%,transparent);color:var(--module-1);font-weight:800}
 .s-wx{margin-top:8px;display:flex;align-items:center;justify-content:center;gap:6px;font-size:12.5px;font-weight:800;color:var(--module-1);background:color-mix(in srgb,var(--module-1) 9%,transparent);border:1px solid color-mix(in srgb,var(--module-1) 32%,transparent);border-radius:8px;padding:8px 10px;cursor:pointer;transition:all .12s}
 .s-wx:hover{background:var(--module-1);color:#fff}
+.s-poster{margin-top:8px;display:flex;align-items:center;justify-content:center;gap:6px;font-size:12.5px;font-weight:800;color:var(--module-5);background:color-mix(in srgb,var(--module-5) 9%,transparent);border:1px solid color-mix(in srgb,var(--module-5) 32%,transparent);border-radius:8px;padding:8px 10px;cursor:pointer;transition:all .12s}
+.s-poster:hover{background:var(--module-5);color:#fff}
+.pk-hint{font-size:12px;line-height:1.7;color:var(--text-secondary);background:var(--surface-nested);border:1px solid var(--border);border-radius:8px;padding:9px 11px;margin-bottom:12px}
+.pk-count{font-size:12.5px;font-weight:800;margin:10px 0}
+.pk-count.bad{color:var(--danger)}
+.pk-count.ok{color:#07c160}
+.pk-row{display:flex;gap:8px;margin:6px 0;align-items:center}
+.pk-row .pk-tag{flex:0 0 62px;font-size:12px;color:var(--text-tertiary)}
+.pk-row input{flex:1}
+.pk-img{max-width:340px;width:100%;border-radius:10px;border:1px solid var(--border);display:block;margin:14px 0 6px}
+.pk-verify{font-size:12.5px;line-height:1.75;border-radius:8px;padding:10px 12px;margin-top:8px}
+.pk-verify.pass{background:color-mix(in srgb,#07c160 10%,transparent);color:#07c160;font-weight:700}
+.pk-verify.fail{background:color-mix(in srgb,var(--danger) 10%,transparent);color:var(--danger);font-weight:700}
+.pk-verify.mild{background:var(--surface-nested);color:var(--text-secondary)}
 .wx-card .s-meta .wx-imgs{color:var(--module-1);font-weight:700}
 .wx-img.real img{outline:2px solid var(--module-1);outline-offset:-2px}
 .wx-img.real .lb{background:rgba(111,143,106,.86)}
@@ -1004,6 +1018,32 @@ textarea{resize:vertical;min-height:84px}
       </div>
     </div>
 
+    <!-- AI 海报弹窗：整图由出图模型绘制（文字画进像素），出图后视觉模型回读逐字校验 -->
+    <div class="modal-overlay" id="pk-overlay" onclick="closePosterDialog(event)">
+      <div class="modal-box" style="max-width:860px" onclick="event.stopPropagation()">
+        <button class="close-btn" onclick="closePosterDialog()"><span data-icon="close" class="ic14"></span></button>
+        <div class="tt-gen-title">🎨 AI 海报</div>
+        <div class="tt-gen-sub">整合稿 #<span id="pk-id"></span> · 与 HTML 模板产线不同：文字由出图模型直接画进像素，出图后自动回读逐字比对</div>
+        <div class="tt-gen-field">
+          <div style="display:flex;gap:10px">
+            <select id="pk-ratio" style="flex:0 0 240px">
+              <option value="9:16" selected>竖版 9:16（小红书 / 抖音图文）</option>
+              <option value="3:4">竖版 3:4（公众号图片消息）</option>
+              <option value="1:1">方形 1:1</option>
+            </select>
+            <input id="pk-theme" placeholder="题材（可选，例：Agent 面试 / AI 工具实测）" style="flex:1">
+          </div>
+        </div>
+        <div style="display:flex;gap:10px;margin:14px 0">
+          <button class="btn ghost sm" onclick="posterPlan()">① AI 拆解文案</button>
+          <button class="btn sm" style="background:var(--module-5);border-color:var(--module-5);color:#fff" onclick="posterGenerate()">② 出图并校验</button>
+        </div>
+        <div class="pk-hint">先「①拆解」拿到可编辑文案（思考型模型约 3 分钟），改完再「②出图」，避免拿不合心的文案白花一次出图。字数门禁 <b>80 字</b>：超了直接拒绝出图，因为字越多错字率越高。</div>
+        <div id="pk-plan"></div>
+        <div id="pk-result"></div>
+      </div>
+    </div>
+
     <!-- 公众号图文生成配置弹窗 -->
     <div class="modal-overlay" id="wx-gen-overlay" onclick="closeWechatGenDialog(event)">
       <div class="modal-box" onclick="event.stopPropagation()">
@@ -1026,7 +1066,7 @@ textarea{resize:vertical;min-height:84px}
           <input id="wx-gen-title" placeholder="图文标题">
         </div>
         <div class="tt-gen-field">
-          <label>图文模板<small>（白名单 6 套，越界自动回落「公众号信号格」）</small></label>
+          <label>图文模板<small>（名单由后端 graphics 内核下发，与渠道白名单同源；换模板即时重渲染预览）</small></label>
           <select id="wx-gen-tpl" onchange="updateWxTplPreview()">
             <option value="wechat" selected>公众号信号格 · 结构化教程流（默认 · 零游戏背景）</option>
             <option value="minimal">极简清单 · 浅色知识卡</option>
@@ -1047,18 +1087,24 @@ textarea{resize:vertical;min-height:84px}
           </div>
         </div>
         <div class="tt-gen-field">
-          <label>配色 / 字体 / 版式 <small>（预设闭集：配色只对「信号格 / 经典卡片 / 浅紫清单 / 奶油金」生效，极简清单与杂志大片未接通配色轴；字体与版式对白名单 6 套模板全部生效）</small></label>
+          <label>排版参考图<small>（可选：上传你想模仿的图文样张，随包记进 manifest.ref_images，供后续「逆向拆解排版」取用；不进发布包、不参与出图）</small></label>
+          <div class="tt-guide-drop" onclick="document.getElementById('wx-ref-files').click()">📎 点击选择参考图（最多 20 张 · jpg / png / webp）</div>
+          <input type="file" id="wx-ref-files" accept=".jpg,.jpeg,.png,.webp" multiple hidden>
+          <div class="tt-guide-thumbs" id="wx-ref-thumbs"></div>
+        </div>
+        <div class="tt-gen-field">
+          <label>配色 / 字体 / 版式 <small>（三轴预设闭集，名单与配色轴生效范围均由后端 graphics 内核下发；换任一轴下方预览即时重渲染）</small></label>
           <div style="display:flex;gap:10px">
-            <select id="wx-gen-palette" style="flex:1">
+            <select id="wx-gen-palette" style="flex:1" onchange="updateWxTplPreview()">
               <option value="gold_night" selected>默认配色（信号格微信绿 / 经典鎏金）</option>
               <option value="ember_forge">熔火暖橙（经典为赤金）</option>
               <option value="arcane_dusk">暮光紫（经典为奥术）</option>
             </select>
-            <select id="wx-gen-font" style="flex:1">
+            <select id="wx-gen-font" style="flex:1" onchange="updateWxTplPreview()">
               <option value="serif" selected>默认字体（信号格黑体 / 经典衬线）</option>
               <option value="heavy">硬朗黑体（标题重黑）</option>
             </select>
-            <select id="wx-gen-layout" style="flex:1">
+            <select id="wx-gen-layout" style="flex:1" onchange="updateWxTplPreview()">
               <option value="default" selected>经典排布（现状默认）</option>
               <option value="hero_first">主视觉先行（瓦片/大图置顶）</option>
               <option value="summary_first">要点先行（摘要上浮）</option>
@@ -1833,9 +1879,148 @@ async function deleteToutiaoPackage(id) {
   } catch (e) { alert('删除失败: ' + e.message); }
 }
 
+// ── AI 海报：整图由出图模型绘制（文字画进像素），出图后视觉模型回读逐字校验 ──
+let _pkId = null;
+let _pkLast = null;
+
+function openPosterDialog(id) {
+  _pkId = id;
+  _pkLast = null;
+  document.getElementById('pk-id').textContent = id;
+  document.getElementById('pk-plan').innerHTML = '';
+  document.getElementById('pk-result').innerHTML = '';
+  document.getElementById('pk-theme').value = '';
+  document.getElementById('pk-overlay').classList.add('show');
+}
+function closePosterDialog(e) {
+  if (e && e.target !== e.currentTarget) return;
+  document.getElementById('pk-overlay').classList.remove('show');
+}
+
+// 字数上限与后端 ai_poster 的门禁一致（实测超 80 字错字率明显上升）
+const PK_LIMITS = {title: 12, subtitle: 10, footer: 14, cardT: 6, cardD: 16, total: 80, cardMin: 3, cardMax: 5};
+
+function pkChars(p) {
+  let n = (p.title || '').length + (p.subtitle || '').length + (p.footer || '').length;
+  (p.cards || []).forEach(c => { n += (c.t || '').length + (c.d || '').length; });
+  return n;
+}
+function pkProblems(p) {
+  const bad = [];
+  if (!p.title) bad.push('主标题不能为空');
+  if ((p.cards || []).length < PK_LIMITS.cardMin) bad.push('卡片至少 ' + PK_LIMITS.cardMin + ' 张');
+  if (pkChars(p) > PK_LIMITS.total) bad.push('合计超 ' + PK_LIMITS.total + ' 字');
+  return bad;
+}
+function _pkRow(tag, id, val, max, ph) {
+  return `<div class="pk-row"><span class="pk-tag">${tag}</span>`
+    + `<input id="${id}" value="${esc(val || '')}" maxlength="${max}" placeholder="${ph}" oninput="pkCount()"></div>`;
+}
+function pkRenderPlan(plan) {
+  plan = plan || {};
+  let html = _pkRow('主标题', 'pk-title', plan.title, PK_LIMITS.title, '≤12 字')
+    + _pkRow('副标题', 'pk-subtitle', plan.subtitle, PK_LIMITS.subtitle, '≤10 字，可留空');
+  (plan.cards || []).slice(0, PK_LIMITS.cardMax).forEach((c, i) => {
+    html += `<div class="pk-row"><span class="pk-tag">卡片${i + 1}</span>`
+      + `<input id="pk-ct-${i}" value="${esc(c.t || '')}" maxlength="${PK_LIMITS.cardT}" placeholder="标题 ≤6 字" oninput="pkCount()">`
+      + `<input id="pk-cd-${i}" value="${esc(c.d || '')}" maxlength="${PK_LIMITS.cardD}" placeholder="说明 ≤16 字" oninput="pkCount()"></div>`;
+  });
+  html += _pkRow('尾注', 'pk-footer', plan.footer, PK_LIMITS.footer, '合规转述声明')
+    + `<div class="pk-row"><span class="pk-tag">画面风格</span><input id="pk-style" value="${esc(plan.style || '')}" maxlength="120" placeholder="配色 / 材质 / 装饰一句话"></div>`
+    + '<div class="pk-count" id="pk-count"></div>';
+  document.getElementById('pk-plan').innerHTML = html;
+  pkCount();
+}
+function pkReadPlan() {
+  const g = id => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
+  const cards = [];
+  for (let i = 0; i < PK_LIMITS.cardMax; i++) {
+    const t = g('pk-ct-' + i), d = g('pk-cd-' + i);
+    if (t || d) cards.push({t: t, d: d});
+  }
+  return {title: g('pk-title'), subtitle: g('pk-subtitle'), cards: cards,
+          footer: g('pk-footer'), style: g('pk-style')};
+}
+function pkCount() {
+  const el = document.getElementById('pk-count');
+  if (!el) return;
+  const p = pkReadPlan(), bad = pkProblems(p);
+  el.className = 'pk-count ' + (bad.length ? 'bad' : 'ok');
+  el.textContent = `合计 ${pkChars(p)} / ${PK_LIMITS.total} 字 · ${p.cards.length} 张卡片`
+    + (bad.length ? '　⚠️ ' + bad.join('；') : '　✅ 可出图');
+}
+async function posterPlan() {
+  if (!_pkId) { alert('请先选择整合稿'); return; }
+  const body = {summary_id: _pkId, theme: document.getElementById('pk-theme').value.trim()};
+  const r = await fetch('/api/poster/plan', {method: 'POST',
+    headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)}).then(x => x.json());
+  if (r.error) { setStatus('error', r.error); return; }
+  pollPoster('plan');
+}
+async function posterGenerate() {
+  if (!_pkId) { alert('请先选择整合稿'); return; }
+  const hasPlan = !!document.getElementById('pk-title');
+  const plan = hasPlan ? pkReadPlan() : null;
+  if (plan) {
+    const bad = pkProblems(plan);
+    if (bad.length && !confirm('文案不合格（' + bad.join('；') + '）。\n后端会直接拒绝出图，仍要提交？')) return;
+  }
+  if (!confirm('出图？约 30-60 秒，随后自动回读校验。已有海报会被覆盖。')) return;
+  const body = {summary_id: _pkId, ratio: document.getElementById('pk-ratio').value,
+                theme: document.getElementById('pk-theme').value.trim(), plan: plan};
+  const r = await fetch('/api/poster/generate', {method: 'POST',
+    headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)}).then(x => x.json());
+  if (r.error) { setStatus('error', r.error); return; }
+  pollPoster('poster');
+}
+function pollPoster(stage) {
+  const box = document.getElementById('pk-result');
+  box.innerHTML = '<div class="pk-verify mild">⏳ 任务已提交，等待中…</div>';
+  const poll = async () => {
+    let st;
+    try { st = await fetch('/api/poster/status').then(r => r.json()); }
+    catch (e) { setTimeout(poll, 3000); return; }
+    if (st.running) {
+      box.innerHTML = `<div class="pk-verify mild">⏳ ${esc(st.progress || '处理中...')}</div>`;
+      setTimeout(poll, 2000); return;
+    }
+    if (st.error) {
+      box.innerHTML = `<div class="pk-verify fail">✗ ${esc(String(st.error).split('\n')[0])}</div>`;
+      setStatus('error', '海报任务失败'); return;
+    }
+    setStatus('done', st.progress || '完成');
+    if (st.plan && st.plan.plan) pkRenderPlan(st.plan.plan);
+    if (stage === 'poster' && st.package && st.package.id) renderPosterResult(st.package.id);
+    else box.innerHTML = `<div class="pk-verify pass">✅ ${esc(st.progress || '文案已就绪，可编辑后出图')}</div>`;
+  };
+  setTimeout(poll, 1200);
+}
+async function renderPosterResult(id) {
+  const m = await fetch('/api/poster/' + id).then(r => r.json());
+  _pkLast = m;
+  const v = m.verify || {};
+  let cls = 'mild', txt = '本次未做回读校验，请人眼核对图面文字';
+  if (v.ok === true) {
+    cls = 'pass';
+    txt = `✅ 回读校验通过：${(m.plan.cards || []).length} 张卡片 + 标题尾注，共 ${m.text_chars} 字逐字一致`;
+  } else if (v.ok === false) {
+    cls = 'fail';
+    txt = `✗ 图面文字与文案不一致，缺失：${(v.missing || []).join('、') || '（未知）'}——别发布，改文案或重出`;
+  }
+  document.getElementById('pk-result').innerHTML =
+    `<img class="pk-img" src="${m.url}?t=${Date.now()}" onclick="window.open('${m.url}','_blank')" title="点击看原图">`
+    + `<div class="pk-verify ${cls}">${esc(txt)}</div>`
+    + '<div style="display:flex;gap:8px;margin-top:10px">'
+    + '<button class="btn ghost sm" onclick="copyPosterPrompt()">复制出图提示词</button>'
+    + '<button class="btn ghost sm" onclick="window.open(\'' + m.url + '\',\'_blank\')">看原图</button></div>';
+}
+function copyPosterPrompt() {
+  if (_pkLast) copyText(_pkLast.prompt_text || '');
+}
+
 // ── 公众号图文（图片消息形态 · 底稿可选：留空＝转载模式，填写＝亲测模式） ──
+// 模板/三轴名单不在前端写死，统一由 /api/wechat/templates 下发（见 loadWxAxisOptions）
 const WX_DRAFT_MIN = 300;
-const WX_TPL_WHITELIST = ['wechat', 'minimal', 'classic', 'magazine'];
 
 async function loadWechatList() {
   const grid = document.getElementById('grid-wechat');
@@ -1927,6 +2112,32 @@ async function revealWechatFolder() {
 // ── 生成弹窗 ──
 let _wxGenTargetId = null;
 let _wxShotFiles = [];
+let _wxRefFiles = [];
+// 模板与三轴名单由后端 /api/wechat/templates 下发（权威源＝graphics 内核）。
+// 前端曾自己抄过一份 4 项模板白名单，渠道扩到 6 套后选新模板仍被静默回落成 wechat。
+let _wxTplChoices = [];
+let _wxAxisChoices = {palettes: [], fonts: [], layouts: [], paletteReady: []};
+let _wxPreviewTimer = null;
+let _wxPreviewSeq = 0;
+let _wxPreviewImages = [];
+
+async function loadWxAxisOptions() {
+  if (_wxTplChoices.length) return;
+  const d = await fetch('/api/wechat/templates').then(r => r.json());
+  if (!d.templates || !d.templates.length) throw new Error(d.error || '模板名单加载失败');
+  _wxTplChoices = d.templates;
+  _wxAxisChoices = {palettes: d.palettes || [], fonts: d.fonts || [], layouts: d.layouts || [],
+                    paletteReady: d.palette_ready || []};
+  const fill = (id, items, defKey) => {
+    const sel = document.getElementById(id);
+    if (!sel || !items.length) return;
+    sel.innerHTML = items.map(o => `<option value="${o.key}"${o.key === defKey ? ' selected' : ''}>${o.label}${o.fit ? ' · ' + o.fit : ''}</option>`).join('');
+  };
+  fill('wx-gen-tpl', _wxTplChoices, 'wechat');
+  fill('wx-gen-palette', _wxAxisChoices.palettes, 'gold_night');
+  fill('wx-gen-font', _wxAxisChoices.fonts, 'serif');
+  fill('wx-gen-layout', _wxAxisChoices.layouts, 'default');
+}
 
 function openWechatGenDialog(id) {
   _wxGenTargetId = id;
@@ -1938,13 +2149,18 @@ function openWechatGenDialog(id) {
   }).catch(() => {});
   document.getElementById('wx-gen-draft').value = '';
   document.getElementById('wx-gen-theme').value = '';
-  document.getElementById('wx-gen-tpl').value = 'wechat';
   _wxShotFiles = [];
+  _wxRefFiles = [];
   _wxShotRender();
+  _wxRefRender();
   wxDraftCount();
-  updateWxTplPreview();
   document.getElementById('wx-gen-overlay').classList.add('show');
   document.getElementById('wx-gen-draft').focus();
+  loadWxAxisOptions().then(updateWxTplPreview).catch(e => {
+    // 拉不到名单时退回静态 option，只如实提示，不静默改用户选的模板
+    document.getElementById('wx-tpl-preview-hint').textContent = '模板名单加载失败：' + e.message;
+    updateWxTplPreview();
+  });
 }
 
 function closeWechatGenDialog(e) {
@@ -1965,25 +2181,70 @@ function wxDraftCount() {
   return n;
 }
 
-function wxTplPreviewData() {
-  const key = document.getElementById('wx-gen-tpl').value;
-  const m = TT_TPL_PREVIEW[key] || {};
-  return {key, label: m.label || key, hint: m.hint || '',
-          cover: `/static/assets/tpl_previews/${key}/img1.jpg`,
-          pages: [1, 2, 3, 4].map(i => `/static/assets/tpl_previews/${key}/img${i}.jpg`)};
+function wxTplLabel(key) {
+  const t = _wxTplChoices.filter(o => o.key === key)[0];
+  return t ? t.label : key;
 }
+function wxAxisLabel(items, key) {
+  const o = (items || []).filter(x => x.key === key)[0];
+  return o ? o.label : key;
+}
+function wxCurrentAxes() {
+  const v = id => { const el = document.getElementById(id); return el ? el.value : ''; };
+  return {template: v('wx-gen-tpl'), palette: v('wx-gen-palette'),
+          font: v('wx-gen-font'), layout: v('wx-gen-layout')};
+}
+
+// 四轴任一变更都重渲染预览；防抖 + 序号守卫（只认最后一次请求的结果）
 function updateWxTplPreview() {
-  const d = wxTplPreviewData();
-  document.getElementById('wx-tpl-preview-img').src = d.cover;
-  document.getElementById('wx-tpl-preview-name').textContent = d.label;
-  document.getElementById('wx-tpl-preview-hint').textContent = d.hint;
+  clearTimeout(_wxPreviewTimer);
+  _wxPreviewTimer = setTimeout(() => renderWxPreview(1), 300);
 }
+
+async function renderWxPreview(pages) {
+  const seq = ++_wxPreviewSeq;
+  const ax = wxCurrentAxes();
+  const imgEl = document.getElementById('wx-tpl-preview-img');
+  const nameEl = document.getElementById('wx-tpl-preview-name');
+  const hintEl = document.getElementById('wx-tpl-preview-hint');
+  const want = pages > 1 ? 4 : 1;
+  if (hintEl) hintEl.textContent = '正在按当前配色/字体/版式真实渲染预览...';
+  const body = {template: ax.template, palette: ax.palette, font: ax.font, layout: ax.layout, pages: want};
+  try {
+    const r = await fetch('/api/wechat/preview', {method: 'POST',
+      headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)}).then(x => x.json());
+    if (seq !== _wxPreviewSeq) return _wxPreviewImages;   // 已被更新的请求取代
+    if (r.error) { if (hintEl) hintEl.textContent = '预览失败：' + r.error; return null; }
+    _wxPreviewImages = r.images || [];
+    if (imgEl && _wxPreviewImages.length) imgEl.src = _wxPreviewImages[0];
+    const p = r.params || {};
+    if (nameEl) nameEl.textContent = wxTplLabel(p.template) + (r.cached ? '' : ' · 新渲染');
+    if (hintEl) {
+      hintEl.textContent = `配色「${wxAxisLabel(_wxAxisChoices.palettes, p.palette)}」· `
+        + `字体「${wxAxisLabel(_wxAxisChoices.fonts, p.font)}」· `
+        + `版式「${wxAxisLabel(_wxAxisChoices.layouts, p.layout)}」—— 与成品同一套渲染管线，所见即所得`;
+    }
+    return _wxPreviewImages;
+  } catch (e) {
+    if (seq === _wxPreviewSeq && hintEl) hintEl.textContent = '预览请求失败：' + e.message;
+    return null;
+  }
+}
+
 function openWxTplPages() {
-  const d = wxTplPreviewData();
-  document.getElementById('wx-tpl-pages-title').textContent = `🖼 ${d.label} · 4 页示例`;
-  document.getElementById('wx-tpl-pages-row').innerHTML =
-    d.pages.map(u => `<img src="${u}" onclick="window.open('${u}','_blank')" title="点击看原图">`).join('');
+  const ax = wxCurrentAxes();
+  const titleEl = document.getElementById('wx-tpl-pages-title');
+  const rowEl = document.getElementById('wx-tpl-pages-row');
+  titleEl.textContent = `🖼 ${wxTplLabel(ax.template)} · 4 页真实渲染示例`;
+  rowEl.innerHTML = '<div style="padding:24px;color:var(--text-secondary);font-size:13px">正在渲染 4 页示例，约需几秒...</div>';
   document.getElementById('wx-tpl-pages-overlay').classList.add('show');
+  renderWxPreview(4).then(imgs => {
+    if (!imgs || !imgs.length) {
+      rowEl.innerHTML = '<div style="padding:24px;color:var(--danger);font-size:13px">渲染失败，请看服务端日志</div>';
+      return;
+    }
+    rowEl.innerHTML = imgs.map(u => `<img src="${u}" onclick="window.open('${u}','_blank')" title="点击看原图">`).join('');
+  });
 }
 function closeWxTplPages(e) {
   if (e && e.target !== e.currentTarget) return;
@@ -2038,6 +2299,40 @@ async function wxShotUpload() {
 }
 document.getElementById('wx-shot-files').addEventListener('change', e => wxShotPick(e.target));
 
+// ── 排版参考图上传（后续「逆向拆解排版」的输入，不进发布包） ──
+function _wxRefRender() {
+  const box = document.getElementById('wx-ref-thumbs');
+  if (!box) return;
+  const n = _wxRefFiles.length;
+  const hint = n ? `<div style="width:100%;font-size:12px;color:var(--text-secondary)">已选 ${n} 张参考图，生成时随包记进 manifest.ref_images（不参与本次出图）</div>` : '';
+  box.innerHTML = hint + _wxRefFiles.map((f, i) => `
+    <div class="tt-guide-thumb">
+      <img src="${URL.createObjectURL(f)}">
+      <div class="tg-ops">
+        <button title="移除" onclick="wxRefRemove(${i})">✕</button>
+      </div>
+    </div>`).join('');
+}
+function wxRefPick(input) {
+  const ok = [...input.files].filter(f => /\.(jpe?g|png|webp)$/i.test(f.name));
+  if (ok.length < input.files.length) alert('已跳过非图片文件（仅支持 jpg/png/webp）');
+  for (const f of ok) {
+    if (_wxRefFiles.length >= 20) { alert('最多上传 20 张参考图'); break; }
+    _wxRefFiles.push(f);
+  }
+  input.value = '';
+  _wxRefRender();
+}
+function wxRefRemove(i) { _wxRefFiles.splice(i, 1); _wxRefRender(); }
+async function wxRefUpload() {
+  const fd = new FormData();
+  _wxRefFiles.forEach(f => fd.append('files', f));
+  const resp = await fetch('/api/wechat/ref-upload', {method: 'POST', body: fd}).then(r => r.json());
+  if (resp.error) throw new Error(resp.error);
+  return resp.token;
+}
+document.getElementById('wx-ref-files').addEventListener('change', e => wxRefPick(e.target));
+
 async function confirmWechatGen() {
   const id = _wxGenTargetId;
   if (!id) return;
@@ -2048,8 +2343,9 @@ async function confirmWechatGen() {
   const theme = document.getElementById('wx-gen-theme').value.trim();
   const title = document.getElementById('wx-gen-title').value.trim();
   const tplEl = document.getElementById('wx-gen-tpl');
-  const tpl = WX_TPL_WHITELIST.indexOf(tplEl.value) >= 0 ? tplEl.value : 'wechat';
-  const tplLabel = tplEl.selectedOptions[0].textContent.split(' ')[0];
+  // 不做前端白名单拦截：名单本就来自后端，越界由渠道适配器回落并在 manifest 落真实键
+  const tpl = tplEl.value;
+  const tplLabel = wxTplLabel(tpl);
   // 变体三轴：值与文案都取自下拉，未知值后端一律回落默认（＝现状）
   const palEl = document.getElementById('wx-gen-palette');
   const palette = palEl.value;
@@ -2065,18 +2361,25 @@ async function confirmWechatGen() {
     try { shotToken = await wxShotUpload(); }
     catch (e) { setStatus('error', '真实截图上传失败: ' + e.message); return; }
   }
+  let refToken = null;
+  if (_wxRefFiles.length) {
+    try { refToken = await wxRefUpload(); }
+    catch (e) { setStatus('error', '参考图上传失败: ' + e.message); return; }
+  }
   closeWechatGenDialog();
   const modeLine = isRepost ? '\n模式：转载（整理公开分享内容，观点归原作者）' : `\n模式：亲测（底稿 ${draft.length} 字）`;
   const shotLine = shotToken ? `\n真实截图：${_wxShotFiles.length} 张（已上传）` : (isRepost ? '' : '\n真实截图：0 张（lint 将报 error）');
-  // 配色轴只对已登记 tokens 的模板生效；选了非默认配色又挑了未接通模板时如实告知，避免"改了没变"
-  const palNote = (palette !== 'gold_night' && tpl !== 'wechat' && tpl !== 'classic')
+  const refLine = refToken ? `\n参考图：${_wxRefFiles.length} 张（只记进 manifest，不参与出图）` : '';
+  // 配色轴只对后端登记的就绪模板生效；未接通时如实告知，避免"改了没变"（就绪名单来自 /api/wechat/templates）
+  const palReady = _wxAxisChoices.paletteReady;
+  const palNote = (palette !== 'gold_night' && palReady.length && palReady.indexOf(tpl) < 0)
     ? '（该模板未接通配色轴，本次仍按默认色出图）' : '';
-  if (!confirm(`生成公众号图文？\n标题：${title || '（按整合稿标题）'}\n模板：${tplLabel}\n配色：${palLabel}${palNote}\n字体：${fontLabel}\n版式：${layoutLabel}\n题材：${theme || '自动'}${modeLine}${shotLine}\n已有产物会被覆盖。`)) return;
+  if (!confirm(`生成公众号图文？\n标题：${title || '（按整合稿标题）'}\n模板：${tplLabel}\n配色：${palLabel}${palNote}\n字体：${fontLabel}\n版式：${layoutLabel}\n题材：${theme || '自动'}${modeLine}${shotLine}${refLine}\n已有产物会被覆盖。`)) return;
   setStatus('running', '正在生成公众号图文...');
   try {
     const resp = await fetch('/api/wechat/generate', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({summary_id: id, author_draft: draft, theme, title, template: tpl, shot_token: shotToken, palette, font, layout})
+      body: JSON.stringify({summary_id: id, author_draft: draft, theme, title, template: tpl, shot_token: shotToken, palette, font, layout, ref_token: refToken})
     }).then(r=>r.json());
     if (resp.error) { setStatus('error', resp.error); return; }
     pollWechatStatus();
@@ -2206,6 +2509,8 @@ function renderSummaries(items) {
       ? `<div class="s-tt" onclick="event.stopPropagation();openToutiaoGenDialog(${item.id})">🔥 生成头条图文</div>` : '';
     const wxBtn = item.summary_type === 'wechat_material'
       ? `<div class="s-wx" onclick="event.stopPropagation();openWechatGenDialog(${item.id})">💬 生成公众号图文</div>` : '';
+    // 海报走独立产线，任何类型的整理稿都能出图（不像头条/公众号各自绑定一种整合稿）
+    const pkBtn = `<div class="s-poster" onclick="event.stopPropagation();openPosterDialog(${item.id})">🎨 AI 海报</div>`;
     return `<div class="summary-card" onclick="openSummary(${item.id})">
       <div class="s-del" title="删除" onclick="event.stopPropagation();deleteSummary(${item.id})">${iconSvg('close', 12)}</div>
       <div class="s-author">${esc(item.author||'')} ${typeLabel}</div>
@@ -2216,7 +2521,7 @@ function renderSummaries(items) {
         <span>${esc(item.model||'')}</span>
         <span>${esc(item.updated_at||'')}</span>
       </div>
-      ${ttBtn}${wxBtn}
+      ${ttBtn}${wxBtn}${pkBtn}
     </div>`;
   }).join('');
 }
@@ -2404,6 +2709,7 @@ async function openSummary(id) {
     <a href="${esc(data.video_url||'#')}" target="_blank"><button class="btn sm">▶ 观看原视频</button></a>
     ${data.summary_type === 'toutiao_mix' ? `<button class="btn sm" style="background:var(--module-3);border-color:var(--module-3);color:#fff" onclick="closeModal();openToutiaoGenDialog(${id})">🔥 生成头条图文</button>` : ''}
     ${data.summary_type === 'wechat_material' ? `<button class="btn sm" style="background:var(--module-1);border-color:var(--module-1);color:#fff" onclick="closeModal();openWechatGenDialog(${id})">💬 生成公众号图文</button>` : ''}
+    <button class="btn sm" style="background:var(--module-5);border-color:var(--module-5);color:#fff" onclick="closeModal();openPosterDialog(${id})">🎨 AI 海报</button>
     <button class="btn ghost sm" onclick="regenerateSummary(${id})">🔄 重新生成</button>
     <button class="btn ghost sm" onclick="deleteSummary(${id})">🗑 删除</button>
     ${data.summary_type === 'ai_interview' ? '<button class="btn ghost sm" onclick="copyQuestionBankJSON()">复制题库JSON</button>' : ''}

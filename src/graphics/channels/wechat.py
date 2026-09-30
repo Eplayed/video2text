@@ -10,6 +10,7 @@
 （digest/keyword_reply/source_note）放 manifest 顶层，不进卡片。
 Python 3.9 兼容：不用 match / X|Y 语法。
 """
+import hashlib
 import json
 import re
 import shutil
@@ -64,6 +65,180 @@ def _assets_dir():
     if (shared / "neutral_bg.jpg").exists():
         return shared
     return own
+
+
+# ── 四轴解析 + 整组渲染：generate_graphics 与 render_preview 共用同一套管线 ──
+# 两条入口若各算一遍 CSS/配图，就会出现「预览一个样、成品另一个样」，
+# 也正是 40-graphics-variants 记的那类「选了不生效」静默失效的温床。
+def _resolve_axes(template="wechat", palette=None, font=None, layout=None, skin="", theme=""):
+    """把「模板 + 配色/字体/版式三轴 + 皮」解析成渲染所需的一切。
+
+    越界值一律回落默认（与历史行为一致）；layout 传 "random" 时在此抽定一个真实键，
+    由调用方写进 manifest / 回填给前端，保证「看到的就是出的」。
+    """
+    tpl_key = template if template in TEMPLATE_WHITELIST else "wechat"
+    tpl = templates._TEMPLATES[tpl_key]
+    assets_dir = _assets_dir()
+    skin_key, skin_uri = skins.resolve_skin(skin, assets_dir)
+    # 变体三轴（2026-09-29 接入，与头条线共用同一套 variants 内核与预设闭集）：
+    #   配色轴＝皮调色板覆盖 + 模板 token 覆盖，wechat 信号格换的是信号色家族
+    #           （微信绿/熔火暖橙/暮光紫），纸面保持浅底深字白卡；未接通模板自动 no-op；
+    #   版式轴＝覆盖片段追加到构建好的 CSS 末尾（flex order 重排，HTML 结构不动）；
+    #   字体轴＝必须把 tpl_key 传进 apply_font：wechat/minimal 全篇只有黑体栈，
+    #           没有 Songti 可替换，靠预设的「按模板追加片段」才真实生效。
+    palette_key, font_key = variants.resolve_keys(palette, font)
+    if layout == variants.RANDOM_LAYOUT_KEY:
+        layout_key = variants.pick_random_layout()
+    else:
+        layout_key = variants.resolve_layout(layout)
+    pal = variants.resolve_palette(skin_key, palette_key, tpl_key)
+    extra_tokens = dict(css_engine._tpl_tokens(tpl_key, skin_key))
+    extra_tokens.update(variants.palette_tokens(tpl_key, palette_key))
+    css = css_engine._build_css(tpl["css"], pal, skin_uri, assets_dir,
+                                extra_tokens, CANVAS_W, CANVAS_H)
+    layout_extra = variants.layout_css(tpl_key, layout_key)
+    if layout_extra:
+        css += "\n/* layout:%s */\n%s" % (layout_key, layout_extra)
+    css = variants.apply_font(css, font_key, tpl_key)
+    theme_imgs = skins._theme_image_paths(theme, skin_key, OUTPUT_DIR)
+    return {"tpl_key": tpl_key, "tpl": tpl, "css": css,
+            "palette_key": palette_key, "font_key": font_key, "layout_key": layout_key,
+            "skin_key": skin_key, "skin_uri": skin_uri,
+            "assets_dir": assets_dir, "theme_imgs": theme_imgs,
+            "cover_img": skins._pick_cover_image(theme_imgs)}
+
+
+def _render_cards(cards, axes, out_dir, url_prefix, brand=""):
+    """按已解析的四轴渲染整组卡片，返回 images 元数据列表（一次起浏览器跑完全部卡）。"""
+    tpl_key, tpl, css = axes["tpl_key"], axes["tpl"], axes["css"]
+    skin_key, skin_uri, cover_img = axes["skin_key"], axes["skin_uri"], axes["cover_img"]
+    assets_dir, theme_imgs = axes["assets_dir"], axes["theme_imgs"]
+    total = len(cards)
+    # 零图片依赖模板（纯 CSS 装饰）：强制不取 hero，从根上杜绝游戏背景图兜底渗入
+    no_hero_tpls = ("wechat", "lilac_list")
+    images = []
+    from playwright.sync_api import sync_playwright
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": CANVAS_W, "height": CANVAS_H})
+        for idx, card in enumerate(cards, 1):
+            kind = card.get("kind") or "list"
+            ctx = {"brand": brand, "idx": idx, "total": total, "skin_key": skin_key, "canvas_h": CANVAS_H}
+            if kind == "cover" and idx == 1:
+                if tpl_key in no_hero_tpls:
+                    hero = None
+                elif tpl_key == "cream_gold":
+                    # 奶油金封面右半幅插画位：只吃题材插画图，无素材则 None → 模板降级金色装饰块
+                    hero = cover_img.as_uri() if cover_img is not None else None
+                else:
+                    hero = skins._hero_uri(card, cover_img, skin_uri, assets_dir)
+            else:
+                if tpl_key in no_hero_tpls or tpl_key == "cream_gold":
+                    hero = None  # cream_gold 内页满幅，不占插画位
+                else:
+                    band = skins._pick_band_image(theme_imgs, idx)
+                    hero = skins._hero_uri(card, band, skin_uri, assets_dir)
+            html_path = out_dir / ("img%d.html" % idx)
+            png_path = out_dir / ("img%d.png" % idx)
+            html_path.write_text(tpl["cover"](card, css, hero, ctx) if (kind == "cover" and idx == 1)
+                                 else tpl["list"](card, css, hero, ctx), encoding="utf-8")
+            renderer.render_card_html(page, html_path, png_path, CANVAS_W, CANVAS_H)
+            images.append({"file": png_path.name, "label": "卡片%d" % idx,
+                           "url": "%s/%s" % (url_prefix, png_path.name),
+                           "source": "template"})
+        browser.close()
+    return images
+
+
+# 前端下拉/预览的适用场景说明从模板 hint 里抽，避免再抄一份会过期的清单
+_FIT_RE = re.compile(r"专为「([^」]+)」")
+_STYLE_RE = re.compile(r"——([^，]+)")
+
+
+def template_choices():
+    """模板下拉的唯一权威源：白名单 + 中文名 + 一句适用场景（取自模板 hint）。
+
+    历史上前端自己抄了一份 4 项白名单，而渠道已是 6 项——选新模板被静默回落成 wechat。
+    新增模板只改 TEMPLATE_WHITELIST 与 _TEMPLATES，前端不再需要同步。
+    """
+    out = []
+    for key in TEMPLATE_WHITELIST:
+        hint = templates._TEMPLATES[key].get("hint") or ""
+        fit = _FIT_RE.search(hint) or _STYLE_RE.search(hint)
+        out.append({"key": key, "label": templates._TEMPLATES[key]["label"],
+                    "fit": fit.group(1) if fit else ""})
+    return out
+
+
+# ── 样式预览：固定样例文案 + 真实四轴渲染（不调 LLM、不进发布包） ──
+PREVIEW_DIR = OUTPUT_DIR / "_previews"
+PREVIEW_PAGES = 4
+
+_PREV_COVER = {
+    "kind": "cover", "bg": "neutral", "badge": "公众号",
+    "title": "3 个工具省下半周活", "subtitle": "内容整理自公开分享",
+    "timeline_label": "本期看点", "timeline": "据称搜完就能直接用",
+    "hooks": [
+        {"t": "一键出图", "d": "传图就出稿，不用调参数"},
+        {"t": "免费额度", "d": "每天送 20 次，超出再收费"},
+        {"t": "本地跑", "d": "断网也能用，素材不外传"},
+        {"t": "踩坑提示", "d": "首批注册要等审核，别赶交付"},
+    ],
+}
+_PREV_LISTS = [
+    {"kind": "list", "title": "先说结论怎么选", "section": "结论", "icon": "论",
+     "items": [
+         {"name": "要出图", "desc": "选一键出图那个，模板最多", "tag": "强推"},
+         {"name": "要保密", "desc": "选能在本地跑的版本", "tag": ""},
+         {"name": "赶时间", "desc": "先用免费额度试一轮", "tag": "免费"},
+     ]},
+    {"kind": "list", "title": "上手三步", "section": "步骤", "icon": "步",
+     "items": [
+         {"name": "注册", "desc": "邮箱登录，领每日额度", "tag": ""},
+         {"name": "传素材", "desc": "原图直接拖进去", "tag": ""},
+         {"name": "导出", "desc": "选尺寸导出成品", "tag": ""},
+     ]},
+    {"kind": "list", "title": "网友提醒的坑", "section": "风险", "icon": "险",
+     "items": [
+         {"name": "价格", "desc": "额度政策可能调整，以官网为准", "tag": ""},
+         {"name": "版权", "desc": "商用前先确认授权范围", "tag": ""},
+         {"name": "效果", "desc": "复杂图仍要人工回修", "tag": ""},
+     ],
+     "note": {"title": "提醒", "text": "内容整理自公开分享，功能与价格可能调整，以官方最新说明为准。"}},
+]
+PREVIEW_SAMPLES = [_PREV_COVER] + _PREV_LISTS
+
+
+def render_preview(template="wechat", palette=None, font=None, layout=None,
+                   pages=1, skin="", theme=""):
+    """用固定样例文案按当前四轴出预览图，结果按参数哈希缓存。
+
+    存在的意义：旧版预览是离线假样张 JPG，换配色/字体/版式毫无变化，
+    「选了没效果」只能等 3 分钟后看成品才知道。这里出的就是真实渲染结果。
+    """
+    axes = _resolve_axes(template, palette, font, layout, skin, theme)
+    try:
+        pages = int(pages)
+    except (TypeError, ValueError):
+        pages = 1
+    pages = max(1, min(pages, PREVIEW_PAGES))
+    key_src = "|".join([axes["tpl_key"], axes["palette_key"], axes["font_key"],
+                        axes["layout_key"], skin or "", str(pages)])
+    tag = hashlib.sha1(key_src.encode("utf-8")).hexdigest()[:16]
+    out_dir = PREVIEW_DIR / tag
+    url_prefix = "/media/wechat/_previews/%s" % tag
+    cached = all((out_dir / ("img%d.png" % i)).exists() for i in range(1, pages + 1))
+    if not cached:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        _render_cards([dict(c) for c in PREVIEW_SAMPLES[:pages]], axes, out_dir, url_prefix,
+                      brand=(theme or "").strip()[:12])
+    return {
+        "images": ["%s/img%d.png" % (url_prefix, i) for i in range(1, pages + 1)],
+        "params": {"template": axes["tpl_key"], "palette": axes["palette_key"],
+                   "font": axes["font_key"], "layout": axes["layout_key"], "pages": pages},
+        "cached": cached,
+    }
 
 
 # ── LLM 卡片化（公众号版） ──
@@ -320,7 +495,7 @@ def lint_package(manifest, out_dir):
 
 def generate_graphics(summary, ai_config, author_draft="", progress_cb=None,
                       theme="", skin="", title="", template="wechat", real_screenshots=None,
-                      palette=None, font=None, layout=None):
+                      palette=None, font=None, layout=None, ref_token=""):
     """主入口：wechat_material 整合稿 → manifest dict（落盘 output/wechat/<summary_id>/）。
 
     两种模式（由 author_draft 是否为空自动判定）：
@@ -340,11 +515,12 @@ def generate_graphics(summary, ai_config, author_draft="", progress_cb=None,
     layout:           str 版式预设键（variants.LAYOUT_KEYS 闭集）；None/未知回落默认 default（现状）；
                       传 "random"（variants.RANDOM_LAYOUT_KEY）＝本次生成随机抽一个真实预设，
                       整包统一，抽中的真实键写进 manifest.layout。
+    ref_token:        str 排版参考图令牌（/api/wechat/ref-upload 返回）；只在 manifest 记 ref_images
+                      指回 output/wechat/_refs/<token>/，不复制进包、不参与出图——它是下一步
+                      「逆向拆解排版」的输入，不是发布素材。
     """
     draft = (author_draft or "").strip()
     is_repost = not draft
-    tpl_key = template if template in TEMPLATE_WHITELIST else "wechat"
-    tpl = templates._TEMPLATES[tpl_key]
     summary_id = int(summary["id"])
     if (title or "").strip():
         summary = dict(summary)
@@ -356,30 +532,13 @@ def generate_graphics(summary, ai_config, author_draft="", progress_cb=None,
         if progress_cb:
             progress_cb(msg)
 
-    assets_dir = _assets_dir()
-    skin_key, skin_uri = skins.resolve_skin(skin, assets_dir)
-    # 变体三轴（2026-09-29 接入，与头条线共用同一套 variants 内核与预设闭集）：
-    #   配色轴＝皮调色板覆盖 + 模板 token 覆盖，wechat 信号格换的是信号色家族
-    #           （微信绿/熔火暖橙/暮光紫），纸面保持浅底深字白卡；未接通模板自动 no-op；
-    #   版式轴＝覆盖片段追加到构建好的 CSS 末尾（flex order 重排，HTML 结构不动）；
-    #   字体轴＝必须把 tpl_key 传进 apply_font：wechat/minimal 全篇只有黑体栈，
-    #           没有 Songti 可替换，靠预设的「按模板追加片段」才真实生效。
-    palette_key, font_key = variants.resolve_keys(palette, font)
-    if layout == variants.RANDOM_LAYOUT_KEY:
-        layout_key = variants.pick_random_layout()
-    else:
-        layout_key = variants.resolve_layout(layout)
-    palette = variants.resolve_palette(skin_key, palette_key, tpl_key)
-    extra_tokens = dict(css_engine._tpl_tokens(tpl_key, skin_key))
-    extra_tokens.update(variants.palette_tokens(tpl_key, palette_key))
-    css = css_engine._build_css(tpl["css"], palette, skin_uri, assets_dir,
-                                extra_tokens, CANVAS_W, CANVAS_H)
-    layout_extra = variants.layout_css(tpl_key, layout_key)
-    if layout_extra:
-        css += "\n/* layout:%s */\n%s" % (layout_key, layout_extra)
-    css = variants.apply_font(css, font_key, tpl_key)
-    theme_imgs = skins._theme_image_paths(theme, skin_key, OUTPUT_DIR)
-    cover_img = skins._pick_cover_image(theme_imgs)
+    axes = _resolve_axes(template, palette, font, layout, skin, theme)
+    tpl_key, tpl = axes["tpl_key"], axes["tpl"]
+    skin_key = axes["skin_key"]
+    skin_uri = axes["skin_uri"]
+    palette_key = axes["palette_key"]
+    font_key = axes["font_key"]
+    layout_key = axes["layout_key"]
 
     _pg("LLM 卡片化素材（模板：%s）..." % tpl["label"])
     data = _llm_cards(summary, draft, ai_config, theme, tpl_key)
@@ -399,43 +558,9 @@ def generate_graphics(summary, ai_config, author_draft="", progress_cb=None,
         for card in cards:
             card["bg"] = "skin"
     total = len(cards)
-    images = []
     _pg("渲染 %d 张卡片（模板：%s，画布 %dx%d）..." % (total, tpl["label"], CANVAS_W, CANVAS_H))
-    from playwright.sync_api import sync_playwright
-
-    with sync_playwright() as p:
-        browser = p.chromium.launch()
-        page = browser.new_page(viewport={"width": CANVAS_W, "height": CANVAS_H})
-        brand = (theme or "").strip()[:12]
-        # 零图片依赖模板（纯 CSS 装饰）：强制不取 hero，从根上杜绝游戏背景图兜底渗入
-        no_hero_tpls = ("wechat", "lilac_list")
-        for idx, card in enumerate(cards, 1):
-            kind = card.get("kind") or "list"
-            ctx = {"brand": brand, "idx": idx, "total": total, "skin_key": skin_key, "canvas_h": CANVAS_H}
-            if kind == "cover" and idx == 1:
-                if tpl_key in no_hero_tpls:
-                    hero = None
-                elif tpl_key == "cream_gold":
-                    # 奶油金封面右半幅插画位：只吃题材插画图，无素材则 None → 模板降级金色装饰块
-                    hero = cover_img.as_uri() if cover_img is not None else None
-                else:
-                    hero = skins._hero_uri(card, cover_img, skin_uri, assets_dir)
-                html = tpl["cover"](card, css, hero, ctx)
-            else:
-                if tpl_key in no_hero_tpls or tpl_key == "cream_gold":
-                    hero = None  # cream_gold 内页满幅，不占插画位
-                else:
-                    band = skins._pick_band_image(theme_imgs, idx)
-                    hero = skins._hero_uri(card, band, skin_uri, assets_dir)
-                html = tpl["list"](card, css, hero, ctx)
-            html_path = out_dir / ("img%d.html" % idx)
-            png_path = out_dir / ("img%d.png" % idx)
-            html_path.write_text(html, encoding="utf-8")
-            renderer.render_card_html(page, html_path, png_path, CANVAS_W, CANVAS_H)
-            images.append({"file": png_path.name, "label": "卡片%d" % idx,
-                           "url": "/media/wechat/%d/%s" % (summary_id, png_path.name),
-                           "source": "template"})
-        browser.close()
+    images = _render_cards(cards, axes, out_dir, "/media/wechat/%d" % summary_id,
+                           brand=(theme or "").strip()[:12])
 
     # 真实截图：复制进包，manifest 标 source=real_screenshot（发布清单核验用，铁律 ≥2 张）
     for src in (real_screenshots or []):
@@ -447,6 +572,16 @@ def generate_graphics(summary, ai_config, author_draft="", progress_cb=None,
         images.append({"file": dst.name, "label": "真实截图%d" % (len(images) - total + 1),
                        "url": "/media/wechat/%d/%s" % (summary_id, dst.name),
                        "source": "real_screenshot"})
+
+    # 排版参考图：只记路径供后续「逆向拆解排版」取用，不复制进包（免得混进发布素材）
+    ref_images = []
+    if ref_token and re.fullmatch(r"[0-9a-f]{12}", ref_token):
+        ref_dir = OUTPUT_DIR / "_refs" / ref_token
+        if ref_dir.is_dir():
+            ref_exts = {".jpg", ".jpeg", ".png", ".webp"}
+            ref_images = ["/media/wechat/_refs/%s/%s" % (ref_token, p.name)
+                          for p in sorted(ref_dir.iterdir())
+                          if p.is_file() and p.suffix.lower() in ref_exts]
 
     manifest = {
         "id": summary_id,
@@ -468,6 +603,7 @@ def generate_graphics(summary, ai_config, author_draft="", progress_cb=None,
         "palette": palette_key,
         "font": font_key,
         "layout": layout_key,
+        "ref_images": ref_images,
         "canvas": "%dx%d" % (CANVAS_W, CANVAS_H),
         "summary_type": summary.get("summary_type", ""),
         "checklist": list(_CHECKLIST),
