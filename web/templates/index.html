@@ -1862,21 +1862,6 @@ async function confirmToutiaoGen() {
   }
 }
 
-async function generateToutiaoGraphics(summaryId) {
-  if (!confirm('从整合稿生成头条图文（信息图 + 微头条文案）？已有产物会被覆盖。')) return;
-  setStatus('running', '正在生成头条图文...');
-  try {
-    const resp = await fetch('/api/toutiao/generate', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({summary_id: summaryId})
-    }).then(r=>r.json());
-    if (resp.error) { setStatus('error', resp.error); return; }
-    pollToutiaoStatus(summaryId);
-  } catch (e) {
-    setStatus('error', '请求失败: ' + e.message);
-  }
-}
-
 function pollToutiaoStatus(summaryId) {
   const poll = async () => {
     let st;
