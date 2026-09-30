@@ -14,6 +14,8 @@
 
 **验证**：`py_compile` 全过；JS `node --check` 过；`graphics-verify` 三条线 ALL_OK（`gate.py` 改过）；门禁 5 项离线判定（含 status 主判据与指纹兜底各一条负向）全对；发布字段离线打桩验证通过。`content_store.py` 采用 hunk 级暂存提交，未夹带并发的 `classify_videos` 改动。
 
+**补：海报弹窗样式回归（同日用户实测报出）。** 本文件里的弹窗样式是**按 overlay id 作用域**写的（`#tt-gen-overlay .modal-box`、`#wx-gen-overlay .modal-box`），新增 `#pk-overlay` 时漏了对应规则，导致海报弹窗退化成无背景、无内边距、不滚动的裸容器，且「② 出图」只在顶部、编辑完长文案后要滚回顶部找。修复：补 `#pk-overlay .modal-box` 规则（640px / max-height 92vh / overflow auto），`.pk-tag` 标签色从 `--text-tertiary` 提到 `--text-secondary` 并加粗，动作条在文案编辑区末尾再放一份。实测弹窗 computed 样式与两个动作条均已生效。
+
 
 ## 2026-09-30（补五）：出图门禁——LLM 失败不再静默降级出垃圾图
 

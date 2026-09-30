@@ -330,6 +330,8 @@ textarea{resize:vertical;min-height:84px}
 #wx-gen-overlay .modal-box,#wx-tpl-pages-overlay .modal-box{position:relative;background:var(--surface-card);border-radius:var(--radius-sheet);box-shadow:var(--shadow-overlay);max-width:92vw;max-height:92vh;overflow-y:auto;padding:24px 26px}
 #wx-gen-overlay .modal-box{width:520px}
 #wx-tpl-pages-overlay .modal-box{width:auto;max-width:94vw}
+/* 弹窗样式是按 id 作用域写的：漏了这一条，AI 海报弹窗会退化成无背景无内边距的裸容器 */
+#pk-overlay .modal-box{position:relative;background:var(--surface-card);border-radius:var(--radius-sheet);box-shadow:var(--shadow-overlay);width:640px;max-width:92vw;max-height:92vh;overflow-y:auto;padding:24px 26px}
 #wx-gen-overlay .close-btn,#wx-tpl-pages-overlay .close-btn{position:absolute;top:14px;right:14px}
 .wx-draft-area{width:100%;min-height:170px;border:1px solid var(--border-input);border-radius:var(--radius-control);background:var(--surface-nested);padding:12px 14px;font-family:var(--font);font-size:13px;line-height:1.75;color:var(--text);resize:vertical}
 .wx-draft-area:focus{outline:none;border-color:var(--module-1)}
@@ -356,17 +358,19 @@ textarea{resize:vertical;min-height:84px}
 .pk-count.bad{color:var(--danger)}
 .pk-count.ok{color:#07c160}
 .pk-row{display:flex;gap:8px;margin:6px 0;align-items:center}
-.pk-row .pk-tag{flex:0 0 62px;font-size:12px;color:var(--text-tertiary)}
-.pk-row input{flex:1}
+.pk-row .pk-tag{flex:0 0 66px;font-size:12.5px;font-weight:600;color:var(--text-secondary)}
+.pk-row input{flex:1;min-width:0}
 .pk-img{max-width:340px;width:100%;border-radius:10px;border:1px solid var(--border);display:block;margin:14px 0 6px}
 .pk-verify{font-size:12.5px;line-height:1.75;border-radius:8px;padding:10px 12px;margin-top:8px}
 .pk-verify.pass{background:color-mix(in srgb,#07c160 10%,transparent);color:#07c160;font-weight:700}
 .pk-verify.fail{background:color-mix(in srgb,var(--danger) 10%,transparent);color:var(--danger);font-weight:700}
 .pk-verify.mild{background:var(--surface-nested);color:var(--text-secondary)}
-.pk-sub{font-size:12px;font-weight:800;color:var(--text-secondary);margin:14px 0 6px;letter-spacing:.5px}
-.pk-ta{flex:1;min-height:76px;font-size:12.5px;line-height:1.7;font-family:inherit}
+.pk-sub{font-size:12.5px;font-weight:800;color:var(--text-secondary);margin:16px 0 6px;letter-spacing:.5px}
+.pk-ta{flex:1;min-width:0;min-height:76px;font-size:12.5px;line-height:1.7}
 .pk-pub{white-space:pre-wrap;word-break:break-word;font-family:inherit;font-size:12.5px;line-height:1.75;background:var(--surface-nested);border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin:0;max-height:240px;overflow:auto}
 .pk-ck{margin:0;padding-left:20px;font-size:12px;line-height:1.85;color:var(--text-secondary)}
+.pk-actions{display:flex;gap:10px;margin:16px 0 4px}
+.pk-actions .btn{flex:0 0 auto}
 .wx-card .s-meta .wx-imgs{color:var(--module-1);font-weight:700}
 .wx-img.real img{outline:2px solid var(--module-1);outline-offset:-2px}
 .wx-img.real .lb{background:rgba(111,143,106,.86)}
@@ -1029,6 +1033,7 @@ textarea{resize:vertical;min-height:84px}
         <div class="tt-gen-title">🎨 AI 海报</div>
         <div class="tt-gen-sub">整合稿 #<span id="pk-id"></span> · 与 HTML 模板产线不同：文字由出图模型直接画进像素，出图后自动回读逐字比对</div>
         <div class="tt-gen-field">
+          <label>画面比例 / 题材<small>（比例决定出图尺寸；题材进 prompt，让模型知道往哪个方向画）</small></label>
           <div style="display:flex;gap:10px">
             <select id="pk-ratio" style="flex:0 0 240px">
               <option value="9:16" selected>竖版 9:16（小红书 / 抖音图文）</option>
@@ -1038,12 +1043,17 @@ textarea{resize:vertical;min-height:84px}
             <input id="pk-theme" placeholder="题材（可选，例：Agent 面试 / AI 工具实测）" style="flex:1">
           </div>
         </div>
-        <div style="display:flex;gap:10px;margin:14px 0">
+        <div class="pk-actions">
           <button class="btn ghost sm" onclick="posterPlan()">① AI 拆解文案</button>
           <button class="btn sm" style="background:var(--module-5);border-color:var(--module-5);color:#fff" onclick="posterGenerate()">② 出图并校验</button>
         </div>
         <div class="pk-hint">先「①拆解」拿到可编辑文案（思考型模型约 3 分钟），改完再「②出图」，避免拿不合心的文案白花一次出图。字数门禁 <b>80 字</b>：超了直接拒绝出图，因为字越多错字率越高。<br>成本与限流：出图 <b>0.5 元/张</b>、模型 <b>RPM=2</b>（每分钟最多 2 次），客户端已自动节流与退避重试，批量 20 张要约 10 分钟。</div>
         <div id="pk-plan"></div>
+        <!-- 文案编辑区末尾再放一次动作条：改完就在眼前，不用滚回顶部找按钮 -->
+        <div class="pk-actions">
+          <button class="btn ghost sm" onclick="posterPlan()">① 重新拆解</button>
+          <button class="btn sm" style="background:var(--module-5);border-color:var(--module-5);color:#fff" onclick="posterGenerate()">② 出图并校验</button>
+        </div>
         <div id="pk-result"></div>
       </div>
     </div>
