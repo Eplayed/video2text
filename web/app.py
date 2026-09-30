@@ -1711,17 +1711,22 @@ def api_poster_generate():
     plan = data.get("plan") if isinstance(data.get("plan"), dict) else None
     publish = data.get("publish") if isinstance(data.get("publish"), dict) else None
     force = bool(data.get("force"))      # 骨架稿人工复核后的显式放行
+    try:
+        copies = int(data.get("copies") or 1)
+    except (TypeError, ValueError):
+        copies = 1
 
     def fn():
         def cb(msg):
             _poster_status["progress"] = msg
         manifest = ai_poster.generate_poster(summary, _ai_config(), theme=theme, title=title,
                                              ratio=ratio, progress_cb=cb, plan=plan,
-                                             publish=publish, force=force)
+                                             publish=publish, force=force, copies=copies)
         v = manifest.get("verify") or {}
         errs = [i for i in (manifest.get("lint") or []) if i.startswith("error")]
         _poster_status["package"] = {"id": manifest["id"], "title": manifest["title"],
                                      "url": manifest["url"], "chars": manifest["text_chars"],
+                                     "copies": manifest.get("copies") or 1,
                                      "verify_ok": v.get("ok"), "lint": manifest.get("lint") or []}
         _poster_status["plan"] = {"plan": manifest["plan"], "publish": manifest["publish"],
                                   "violations": errs, "chars": manifest["text_chars"],
@@ -1759,6 +1764,21 @@ def api_poster_detail(summary_id):
     if not manifest:
         return jsonify({"error": "海报不存在"}), 404
     return jsonify(manifest)
+
+
+@app.route("/api/poster/<int:summary_id>/pick", methods=["POST"])
+def api_poster_pick(summary_id):
+    """多张候选里人工改选一张当要发布的那张（复制成 poster.png，发布清单随之重算）。"""
+    data = request.get_json(force=True) or {}
+    try:
+        m = ai_poster.choose_candidate(summary_id, data.get("index"))
+        return jsonify({"success": True, "chosen": m.get("chosen"), "url": m.get("url"),
+                        "verify_ok": (m.get("verify") or {}).get("ok"),
+                        "lint": m.get("lint") or []})
+    except ai_poster.PosterError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/poster/<int:summary_id>", methods=["DELETE"])

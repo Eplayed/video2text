@@ -371,6 +371,13 @@ textarea{resize:vertical;min-height:84px}
 .pk-ck{margin:0;padding-left:20px;font-size:12px;line-height:1.85;color:var(--text-secondary)}
 .pk-actions{display:flex;gap:10px;margin:16px 0 4px}
 .pk-actions .btn{flex:0 0 auto}
+.pk-cands{display:flex;gap:10px;flex-wrap:wrap;margin:12px 0 6px}
+.pk-cand{flex:0 0 auto;width:158px;border:2px solid var(--border);border-radius:10px;overflow:hidden;cursor:pointer;background:var(--surface-card)}
+.pk-cand:hover{border-color:var(--module-5)}
+.pk-cand.on{border-color:var(--module-5);box-shadow:0 0 0 3px color-mix(in srgb,var(--module-5) 22%,transparent)}
+.pk-cand img{display:block;width:100%;height:230px;object-fit:cover;object-position:top}
+.pk-cand-t{font-size:11.5px;font-weight:700;text-align:center;padding:5px 0;color:var(--text-secondary)}
+.pk-cand.on .pk-cand-t{color:var(--module-5)}
 .wx-card .s-meta .wx-imgs{color:var(--module-1);font-weight:700}
 .wx-img.real img{outline:2px solid var(--module-1);outline-offset:-2px}
 .wx-img.real .lb{background:rgba(111,143,106,.86)}
@@ -1035,10 +1042,14 @@ textarea{resize:vertical;min-height:84px}
         <div class="tt-gen-field">
           <label>画面比例 / 题材<small>（比例决定出图尺寸；题材进 prompt，让模型知道往哪个方向画）</small></label>
           <div style="display:flex;gap:10px">
-            <select id="pk-ratio" style="flex:0 0 240px">
+            <select id="pk-ratio" style="flex:0 0 220px">
               <option value="9:16" selected>竖版 9:16（小红书 / 抖音图文）</option>
               <option value="3:4">竖版 3:4（公众号图片消息）</option>
               <option value="1:1">方形 1:1</option>
+            </select>
+            <select id="pk-copies" style="flex:0 0 150px" title="AI 出图每次好坏不一样，多出几张挑一张比反复重出省事">
+              <option value="1" selected>出 1 张</option>
+              <option value="3">出 3 张挑 1 张</option>
             </select>
             <input id="pk-theme" placeholder="题材（可选，例：Agent 面试 / AI 工具实测）" style="flex:1">
           </div>
@@ -1992,12 +2003,16 @@ async function posterGenerate(force) {
     const bad = pkProblems(plan);
     if (bad.length && !confirm('文案不合格（' + bad.join('；') + '）。\n后端会直接拒绝出图，仍要提交？')) return;
   }
+  const copiesEl = document.getElementById('pk-copies');
+  const copies = copiesEl ? parseInt(copiesEl.value) || 1 : 1;
   const tip = force ? '这条整合稿被判定为规则版骨架。\n确认你已人工复核过拆解出的文案、仍要出图？'
-                    : '出图？约 20-60 秒 + 一次回读校验，0.5 元/张。已有海报会被覆盖。';
+                    : (copies > 1 ? `出 ${copies} 张挑 1 张？约 2-3 分钟、${(copies * 0.5).toFixed(1)} 元。已有海报会被覆盖。`
+                                  : '出图？约 20-60 秒 + 一次回读校验，0.5 元/张。已有海报会被覆盖。');
   if (!confirm(tip)) return;
   const body = {summary_id: _pkId, ratio: document.getElementById('pk-ratio').value,
                 theme: document.getElementById('pk-theme').value.trim(),
-                plan: plan, publish: plan ? pkReadPublish() : null, force: !!force};
+                plan: plan, publish: plan ? pkReadPublish() : null,
+                force: !!force, copies: copies};
   const r = await fetch('/api/poster/generate', {method: 'POST',
     headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)}).then(x => x.json());
   if (r.error) { setStatus('error', r.error); return; }
@@ -2046,8 +2061,21 @@ async function renderPosterResult(id) {
   const warns = (m.lint || []).filter(s => !s.startsWith('error'));
   const pub = pkPublishText(m);
   const ck = (m.checklist || []).map(s => `<li>${esc(s)}</li>`).join('');
+  let imgHtml;
+  if (m.copies > 1 && (m.candidates || []).length > 1) {
+    imgHtml = '<div class="pk-cands">' + m.candidates.map(c => {
+      const v = c.verify || {};
+      const on = c.index === m.chosen;
+      return `<div class="pk-cand${on ? ' on' : ''}" onclick="posterPick(${c.index})" title="点一下选这张">`
+        + `<img src="${c.url}?t=${Date.now()}" alt="候选${c.index}">`
+        + `<div class="pk-cand-t">${v.ok ? '字全对' : (v.ok === false ? '有缺字' : '未校验')}${on ? ' · 已选' : ' · 选它'}</div></div>`;
+    }).join('') + '</div>'
+      + '<div class="pk-hint">这几张是同一份文案画出来的，只差好不好看。点一下就算选定，发布取的就是这张。</div>';
+  } else {
+    imgHtml = `<img class="pk-img" src="${m.url}?t=${Date.now()}" onclick="window.open('${m.url}','_blank')" title="点击看原图">`;
+  }
   document.getElementById('pk-result').innerHTML =
-    `<img class="pk-img" src="${m.url}?t=${Date.now()}" onclick="window.open('${m.url}','_blank')" title="点击看原图">`
+    imgHtml
     + `<div class="pk-verify ${cls}">${esc(txt)}</div>`
     + (warns.length ? `<div class="pk-verify mild">${warns.map(esc).join('<br>')}</div>` : '')
     + `<div class="pk-sub">发布文案（约 ${m.text_chars} 字上图，配文另计；估算成本 ${m.cost_yuan_estimate} 元/张）</div>`
@@ -2057,6 +2085,14 @@ async function renderPosterResult(id) {
     + '<button class="btn sm" style="background:var(--module-5);border-color:var(--module-5);color:#fff" onclick="copyPosterPublish()">复制发布文案</button>'
     + '<button class="btn ghost sm" onclick="copyPosterPrompt()">复制出图提示词</button>'
     + '<button class="btn ghost sm" onclick="window.open(\'' + m.url + '\',\'_blank\')">看原图</button></div>';
+}
+async function posterPick(index) {
+  if (!_pkId) return;
+  const r = await fetch('/api/poster/' + _pkId + '/pick', {method: 'POST',
+    headers: {'Content-Type': 'application/json'}, body: JSON.stringify({index: index})}).then(x => x.json());
+  if (r.error) { setStatus('error', r.error); return; }
+  setStatus('done', '已选定第 ' + r.chosen + ' 张');
+  renderPosterResult(_pkId);
 }
 function pkPublishText(m) {
   return ['标题：' + (m.title || ''),

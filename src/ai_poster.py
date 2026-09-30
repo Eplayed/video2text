@@ -17,6 +17,7 @@ Python 3.9 兼容：不用 match / X|Y 语法。
 import base64
 import json
 import re
+import shutil
 import time
 from datetime import datetime
 from pathlib import Path
@@ -42,6 +43,10 @@ MAX_TOTAL_CHARS = 80
 TITLE_MAX, SUBTITLE_MAX, FOOTER_MAX = 12, 10, 14
 CARD_TITLE_MAX, CARD_DESC_MAX, CARD_MIN, CARD_MAX = 6, 16, 3, 5
 SPINE_MAX = 24              # 主线一句话：只在 UI 里给人看，不进图、不计字数
+
+# 一次出多张让人挑：AI 出图有方差，并行采样比反复重出省时间也省钱
+MAX_COPIES = 3
+COPIES_NOTE = "模型限流每分钟 2 张，出 3 张约需 2-3 分钟"
 
 # 发布文案（不进图、只给发布页用）的独立字数档：不受图面 80 字预算约束
 COPY_MIN, COPY_MAX = 120, 260
@@ -398,8 +403,56 @@ def verify_image(png_bytes, plan, ai_config, timeout=120):
 
 
 # ── 编排 ──
+def pick_best(candidates):
+    """多张里挑最好的一张：回读通过的优先，其次缺字少的，再按出图顺序。"""
+    def _rank(c):
+        v = c.get("verify") or {}
+        return (0 if v.get("ok") else (1 if v.get("ok") is None else 2),
+                len(v.get("missing") or []), c.get("index") or 99)
+    return sorted(candidates, key=_rank)[0]
+
+
+def build_lint(pub, check, overrode):
+    """发布包告警：error 代表这张图别发，warn 代表要人补一手。"""
+    issues = lint_publish(pub)
+    if not pub.get("copy_text"):
+        issues.append("warn: 配文为空，发布页需手写")
+    if not pub.get("digest"):
+        issues.append("warn: 摘要为空（公众号发布页要 ≤%d 字）" % DIGEST_MAX)
+    if check.get("ok") is False:
+        issues.insert(0, "error: 图面文字回读未通过，缺：" + "、".join(check.get("missing") or []))
+    elif check.get("ok") is None:
+        issues.append("warn: 本次未做回读校验，发布前必须人眼核对图面文字")
+    if overrode:
+        issues.insert(0, "warn: 整合稿是规则版骨架，本次由人工显式放行出图，发布前务必核对数字与时间线")
+    return issues
+
+
+def choose_candidate(summary_id, index):
+    """人工在多张候选里改选一张：把它复制成 poster.png（发布取图用的就是这张）。"""
+    m = get_package(summary_id)
+    if not m:
+        raise PosterError("海报不存在，无法改选")
+    cands = m.get("candidates") or []
+    picked = [c for c in cands if str(c.get("index")) == str(index)]
+    if not picked:
+        raise PosterError("没有这张候选（可选编号：%s）"
+                          % "、".join(str(c.get("index")) for c in cands))
+    src = OUTPUT_DIR / str(summary_id) / picked[0]["file"]
+    if not src.exists():
+        raise PosterError("候选图片文件已丢失：%s" % picked[0]["file"])
+    shutil.copyfile(src, OUTPUT_DIR / str(summary_id) / "poster.png")
+    m["chosen"] = picked[0]["index"]
+    m["verify"] = picked[0]["verify"]
+    m["lint"] = build_lint(m.get("publish") or {}, picked[0]["verify"], bool(m.get("draft_override")))
+    (OUTPUT_DIR / str(summary_id) / "manifest.json").write_text(
+        json.dumps(m, ensure_ascii=False, indent=2), encoding="utf-8")
+    return m
+
+
 def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
-                    progress_cb=None, do_verify=True, plan=None, publish=None, force=False):
+                    progress_cb=None, do_verify=True, plan=None, publish=None, force=False,
+                    copies=1):
     """整理稿 → 海报一张。返回 manifest dict（已落盘 output/poster/<summary_id>/）。
 
     plan / publish 非空时跳过 LLM 拆解（前端审改过文案再出图走这条）：plan 是要画进图的
@@ -409,6 +462,9 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
     force=True 放行 status=draft 的骨架稿。海报线与 HTML 卡片线不同：这里永远有一次 LLM
     提炼在中间，骨架稿只要底层转写有料就能出好文案（实测 61 号那篇超时稿，价格与时间线
     数字全对），所以门禁做成「默认拦、人工复核后可显式放行」，而不是一刀切。
+
+    copies=2/3 时一次出多张候选（poster_1.png…），自动把回读最干净的一张复制成 poster.png
+    当默认，人工可在前端改选。AI 出图有方差，并行挑比反复重出省时间。
     """
     _require_ai(ai_config)
     if ratio not in SIZES:
@@ -440,35 +496,42 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
     chars = plan_chars(plan)
 
     prompt_text = build_prompt_text(plan, ratio)
-    _pg("出图模型绘制海报（%s，约 20-60 秒）..." % SIZES[ratio])
-    png, usage = generate_image(prompt_text, SIZES[ratio], ai_config)
-    (out_dir / "poster.png").write_bytes(png)
     (out_dir / "prompt.txt").write_text(prompt_text + "\n", encoding="utf-8")
+    try:
+        n = int(copies)
+    except (TypeError, ValueError):
+        n = 1
+    n = max(1, min(n, MAX_COPIES))
 
-    check = {"skipped": True, "ok": None, "missing": [], "extra": "", "transcript": ""}
-    if do_verify:
-        _pg("回读校验图面文字...")
-        try:
-            check = verify_image(png, plan, ai_config)
-        except Exception as e:
-            check = {"skipped": True, "ok": None, "error": str(e)[:200],
+    candidates, usage = [], {}
+    for i in range(1, n + 1):
+        _pg("出图 %d/%d（%s）..." % (i, n, COPIES_NOTE if n > 1 else "约 20-60 秒"))
+        png, usage = generate_image(prompt_text, SIZES[ratio], ai_config)
+        fname = "poster.png" if n == 1 else ("poster_%d.png" % i)
+        (out_dir / fname).write_bytes(png)
+        v = {"skipped": True, "ok": None, "missing": [], "extra": "", "transcript": ""}
+        if do_verify:
+            _pg("回读校验第 %d 张的图面文字..." % i)
+            try:
+                v = verify_image(png, plan, ai_config)
+            except Exception as e:
+                v = {"skipped": True, "ok": None, "error": str(e)[:200],
                      "missing": [], "extra": "", "transcript": ""}
+        candidates.append({"index": i, "file": fname,
+                           "url": "/media/poster/%d/%s" % (summary_id, fname),
+                           "verify": v, "bytes": len(png)})
+
+    # 多张时自动挑一张当默认（poster.png 永远是"当前选中的那张"，列表页与发布取图不用改）
+    best = pick_best(candidates)
+    if n > 1:
+        shutil.copyfile(out_dir / best["file"], out_dir / "poster.png")
+    check = best["verify"]
 
     copy_text = pub.get("copy_text") or ""
     if copy_text and COMPLIANCE_NOTE[:10] not in copy_text:
         copy_text = copy_text.rstrip() + "\n\n" + COMPLIANCE_NOTE
 
-    issues = lint_publish(pub)
-    if not pub.get("copy_text"):
-        issues.append("warn: 配文为空，发布页需手写")
-    if not pub.get("digest"):
-        issues.append("warn: 摘要为空（公众号发布页要 ≤%d 字）" % DIGEST_MAX)
-    if check.get("ok") is False:
-        issues.insert(0, "error: 图面文字回读未通过，缺：" + "、".join(check.get("missing") or []))
-    elif check.get("ok") is None:
-        issues.append("warn: 本次未做回读校验，发布前必须人眼核对图面文字")
-    if overrode:
-        issues.insert(0, "warn: 整合稿是规则版骨架，本次由人工显式放行出图，发布前务必核对数字与时间线")
+    issues = build_lint(pub, check, overrode)
 
     manifest = {
         "id": summary_id,
@@ -487,6 +550,9 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
         "text_chars": chars,
         "image": "poster.png",
         "url": "/media/poster/%d/poster.png" % summary_id,
+        "candidates": candidates,
+        "chosen": best["index"],
+        "copies": n,
         "image_model": IMAGE_MODEL,
         "ocr_model": OCR_MODEL,
         "usage": usage,
@@ -504,7 +570,8 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
     (out_dir / "manifest.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     errs = [i for i in issues if i.startswith("error")]
-    _pg("✅ 海报已生成" + ("" if errs else "（发布文案与清单已就绪）"))
+    _pg("✅ 海报已生成" + ("" if errs else "（发布文案与清单已就绪）")
+        + ("，共 %d 张，点图换选" % n if n > 1 else ""))
     return manifest
 
 
