@@ -1681,11 +1681,12 @@ def api_poster_plan():
 
     def fn():
         _poster_status["progress"] = "LLM 拆解海报文案（思考型模型约需 3 分钟）..."
-        plan, publish, bad = ai_poster.build_text_plan(summary, _ai_config(), theme=theme, title=title)
+        plan, publish, bad, notes = ai_poster.build_text_plan(summary, _ai_config(), theme=theme, title=title)
         _poster_status["plan"] = {"plan": plan, "publish": publish, "violations": bad,
-                                  "chars": ai_poster.plan_chars(plan),
+                                  "notes": notes, "chars": ai_poster.plan_chars(plan),
                                   "prompt_text": ai_poster.build_prompt_text(plan)}
         _poster_status["progress"] = ("✅ 文案已拆解（合计 %d 字）" % ai_poster.plan_chars(plan)
+                                      + ("；自动压缩：" + "、".join(notes) if notes else "")
                                       + ("，⚠️ " + "；".join(bad) if bad else ""))
 
     if not _poster_start("plan", fn):

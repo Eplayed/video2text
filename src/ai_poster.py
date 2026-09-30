@@ -153,8 +153,9 @@ def lint_publish(pub):
 def build_text_plan(summary, ai_config, theme="", title=""):
     """调 LLM 产出文案计划 + 发布文案，并逐字段裁到字数线内。
 
-    返回 (plan, publish, violations)：plan 是要画进图里的文字（violations 非空即拒绝出图），
-    publish 是发布页用的配文/摘要/关键词回复/来源说明（只软校验）。
+    返回 (plan, publish, violations, notes)：plan 是要画进图里的文字（超预算先经 fit_plan
+    自动收敛，violations 非空才拒绝出图），publish 是发布页用的配文/摘要/关键词回复/
+    来源说明（只软校验），notes 记录自动压缩动了哪几处。
     """
     api_key, api_base, model = _require_ai(ai_config)
     import openai
@@ -183,7 +184,8 @@ def build_text_plan(summary, ai_config, theme="", title=""):
             "cards": cards,
             "footer": _clip(data.get("footer") or "内容整理自公开分享", FOOTER_MAX),
             "style": str(data.get("style") or "深色质感背景，金色细边框，信息卡片纵向排列").strip()[:120]}
-    return plan, _clip_publish(data.get("publish")), lint_plan(plan)
+    plan, notes = fit_plan(plan)
+    return plan, _clip_publish(data.get("publish")), lint_plan(plan), notes
 
 
 def plan_chars(plan):
@@ -212,6 +214,49 @@ def lint_plan(plan):
         bad.append("合计 %d 字，超过安全线 %d 字（字数越多错字率越高，请删条目而不是缩字号）"
                    % (total, MAX_TOTAL_CHARS))
     return bad
+
+
+def fit_plan(plan, limit=MAX_TOTAL_CHARS):
+    """超预算时按价值高低确定性收敛，返回 (plan, notes)。
+
+    模型实测经常多写十几个字（90 字 vs 80 线），直接判死等于让用户白等一次
+    3 分钟的拆解。压缩顺序＝先砍末位卡片 → 再截最长说明 → 再削副标题与尾注，
+    主标题与卡片标题最后动；全程不再调模型。收敛不了才交回 violations 报错。
+    """
+    notes = []
+    start = plan_chars(plan)
+    # 第 0 步：先把每个字段各自裁到单条上限，让本函数不依赖调用方已做过裁剪
+    plan["title"] = _clip(plan.get("title"), TITLE_MAX)
+    plan["subtitle"] = _clip(plan.get("subtitle"), SUBTITLE_MAX)
+    plan["footer"] = _clip(plan.get("footer"), FOOTER_MAX)
+    for c in plan.get("cards") or []:
+        c["t"], c["d"] = _clip(c.get("t"), CARD_TITLE_MAX), _clip(c.get("d"), CARD_DESC_MAX)
+    if start <= limit:
+        return plan, notes
+    while plan_chars(plan) > limit and len(plan["cards"]) > CARD_MIN:
+        dropped = plan["cards"].pop()
+        notes.append("删掉末位卡片「%s」以压字数" % (dropped.get("t") or dropped.get("d")))
+    for _ in range(24):
+        over = plan_chars(plan) - limit
+        if over <= 0:
+            break
+        cands = [c for c in plan["cards"] if len(c.get("d") or "") > 6]
+        if not cands:
+            break
+        c = max(cands, key=lambda x: len(x["d"]))
+        c["d"] = c["d"][:max(6, len(c["d"]) - over)]
+        notes.append("截短卡片「%s」的说明" % c.get("t"))
+    for key, label in (("subtitle", "副标题"), ("footer", "尾注")):
+        over = plan_chars(plan) - limit
+        if over > 0 and len(plan.get(key) or "") > 2:
+            plan[key] = (plan.get(key) or "")[:max(2, len(plan[key]) - over)]
+            notes.append("截短%s" % label)
+    left = plan_chars(plan) - limit
+    if left > 0:
+        notes.append("仍超 %d 字，需人工删条目" % left)
+    elif notes:
+        notes.append("已从 %d 字压到 %d 字，发布前请复核文案是否还完整" % (start, plan_chars(plan)))
+    return plan, notes
 
 
 def build_prompt_text(plan, ratio="9:16"):
@@ -362,9 +407,10 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
     started = datetime.now()
     if plan is None:
         _pg("LLM 拆解海报文案...")
-        plan, llm_publish, bad = build_text_plan(summary, ai_config, theme=theme, title=title)
+        plan, llm_publish, bad, notes = build_text_plan(summary, ai_config, theme=theme, title=title)
     else:
-        llm_publish, bad = None, lint_plan(plan)
+        # 手改过的文案不做自动压缩：那是用户显式输入，超线就明确报错让他自己删
+        llm_publish, bad, notes = None, lint_plan(plan), []
     if bad:
         raise PosterError("文案不合格：" + "；".join(bad))
     pub = _clip_publish(publish or llm_publish or {})
@@ -420,6 +466,7 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
         "ocr_model": OCR_MODEL,
         "usage": usage,
         "cost_yuan_estimate": PRICE_PER_IMAGE_YUAN,
+        "auto_notes": notes,
         "verify": check,
         "source_title": summary.get("title") or "",
         "theme": (theme or "").strip(),
