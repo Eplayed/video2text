@@ -22,6 +22,7 @@ from pathlib import Path
 
 import requests
 
+from .graphics import gate as draft_gate
 from .graphics import package as pkg_store
 from .graphics.channels.toutiao import _parse_json
 
@@ -253,6 +254,10 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
     _require_ai(ai_config)
     if ratio not in SIZES:
         ratio = "9:16"
+    # 判据与头条/公众号共用 gate（规则版骨架稿拿去出图，只会产出「格式正确但内容空洞」的海报）
+    blockers = draft_gate.draft_blockers(summary)
+    if blockers:
+        raise PosterError("整合稿不合格：" + "；".join(blockers) + "。请先重新生成整合稿再出海报。")
     summary_id = int(summary["id"])
     out_dir = OUTPUT_DIR / str(summary_id)
     out_dir.mkdir(parents=True, exist_ok=True)

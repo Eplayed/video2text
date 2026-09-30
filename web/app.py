@@ -13,6 +13,7 @@ import main as collector  # main.py
 from src import content_store, material_store, toutiao_graphics, ai_poster
 from src.graphics.channels import wechat as wechat_graphics
 from src.graphics import variants as graphics_variants
+from src.graphics.gate import GraphicsGateError
 from src.path_config import find_parser_dir, ensure_parser_on_path, get_cookie_path
 
 # ── 路径 ──
@@ -1352,6 +1353,9 @@ def api_toutiao_generate():
                                                           layout=layout or None)
             _tt_task_status["package"] = {"id": package["id"], "title": package["title"], "images": len(package["images"])}
             _tt_task_status["progress"] = "✅ 已生成 %d 张信息图，可复制文案发布" % len(package["images"])
+        except GraphicsGateError as e:
+            _tt_task_status["error"] = str(e)          # 门禁拒绝：一行说清，不刷 traceback
+            _tt_task_status["progress"] = "生成失败"
         except Exception:
             _tt_task_status["error"] = traceback.format_exc()
             _tt_task_status["progress"] = "生成失败"
@@ -1561,6 +1565,9 @@ def api_wechat_generate():
             errs = [i for i in (package.get("lint") or []) if i.startswith("error")]
             suffix = "，⚠️ lint 有 %d 条 error 需处理" % len(errs) if errs else ""
             _wx_task_status["progress"] = "✅ 已生成 %d 张卡片，可复制文案人工发布%s" % (len(package["images"]), suffix)
+        except GraphicsGateError as e:
+            _wx_task_status["error"] = str(e)          # 门禁拒绝：一行说清，不刷 traceback
+            _wx_task_status["progress"] = "生成失败"
         except Exception:
             _wx_task_status["error"] = traceback.format_exc()
             _wx_task_status["progress"] = "生成失败"

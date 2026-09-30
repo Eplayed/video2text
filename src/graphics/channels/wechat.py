@@ -17,7 +17,7 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 
-from .. import skins, css_engine, templates, renderer, package, ir, variants
+from .. import skins, css_engine, templates, renderer, package, ir, variants, gate
 from .base import ChannelAdapter
 # 借用头条线的 JSON 容错解析与【标签】切段（两者均渠道无关，Phase 3 视情上移内核）
 from .toutiao import _parse_json, _split_tags
@@ -326,8 +326,13 @@ def _build_cards_prompt(summary, author_draft, theme="", template="classic"):
 
 
 def _llm_cards(summary, author_draft, ai_config, theme="", template="classic"):
-    """调 LLM 把素材转卡片 JSON；失败返回 None（静默降级到本地兜底，不阻断出图）。"""
-    if not ai_config or not ai_config.get("api_key") or ai_config.get("method") == "skip":
+    """调 LLM 把素材转卡片 JSON。
+
+    未配置 AI → 返回 None，由调用方走本地兜底（项目纪律：不阻断，e2e 也依赖这条路径）。
+    已配置但失败 → 抛 GraphicsGateError。2026-09-30 那组「5 张垃圾卡片」就是这里
+    `except Exception: return None` 把 402 欠费吞掉、再拿规则版骨架兜底出图造成的。
+    """
+    if not gate.ai_usable(ai_config):
         return None
     try:
         import openai
@@ -346,12 +351,14 @@ def _llm_cards(summary, author_draft, ai_config, theme="", template="classic"):
         )
         text = resp.choices[0].message.content
         data = _parse_json(text)
-        cards = data.get("cards") or []
-        if len(cards) >= 2 and data.get("copy_text"):
-            return data
-        return None
-    except Exception:
-        return None
+    except Exception as e:
+        raise gate.GraphicsGateError("卡片化模型调用失败（模型 %s）：%s"
+                                     % (ai_config.get("model") or "?", gate.brief_error(e)))
+    cards = (data or {}).get("cards") or []
+    if len(cards) < 2 or not (data or {}).get("copy_text"):
+        raise gate.GraphicsGateError("模型返回的卡片不合格（cards=%d、copy_text 缺失），已拒绝出图"
+                                     % len(cards))
+    return data
 
 
 def _items_from_lines(lines, limit=5):
@@ -521,6 +528,7 @@ def generate_graphics(summary, ai_config, author_draft="", progress_cb=None,
     """
     draft = (author_draft or "").strip()
     is_repost = not draft
+    gate.assert_draft_generatable(summary, "公众号图文")
     summary_id = int(summary["id"])
     if (title or "").strip():
         summary = dict(summary)
@@ -546,7 +554,7 @@ def generate_graphics(summary, ai_config, author_draft="", progress_cb=None,
     if data:
         model = ai_config.get("model") or "llm"
     else:
-        _pg("LLM 不可用，走本地模板兜底...")
+        _pg("未配置 AI，走本地模板兜底（成品需人工核对）...")
         data = _fallback_cards(summary, draft)
 
     cards = data.get("cards") or []

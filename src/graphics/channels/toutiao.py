@@ -14,7 +14,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from .. import skins, css_engine, templates, renderer, package, ir, variants
+from .. import skins, css_engine, templates, renderer, package, ir, variants, gate
 from .base import ChannelAdapter
 
 # ── 头条渠道目录 / 画布常量（原 toutiao_graphics.py L22-26）──
@@ -92,8 +92,13 @@ def _build_cards_prompt(summary, theme="", template="classic"):
 
 
 def _llm_cards(summary, ai_config, theme="", template="classic"):
-    """调 LLM 把整合稿转卡片 JSON；失败返回 None。"""
-    if not ai_config or not ai_config.get("api_key") or ai_config.get("method") == "skip":
+    """调 LLM 把整合稿转卡片 JSON。
+
+    未配置 AI → 返回 None，由调用方走本地兜底（项目纪律：不阻断，e2e 也依赖这条路径）。
+    已配置但失败 → 抛 GraphicsGateError，不许拿兜底图冒充成品
+    （2026-09-30 公众号线就因吞掉 402 欠费而产出 5 张垃圾卡片）。
+    """
+    if not gate.ai_usable(ai_config):
         return None
     try:
         import openai
@@ -112,12 +117,14 @@ def _llm_cards(summary, ai_config, theme="", template="classic"):
         )
         text = resp.choices[0].message.content
         data = _parse_json(text)
-        cards = data.get("cards") or []
-        if len(cards) >= 2 and data.get("copy_text"):
-            return data
-        return None
-    except Exception:
-        return None
+    except Exception as e:
+        raise gate.GraphicsGateError("卡片化模型调用失败（模型 %s）：%s"
+                                     % (ai_config.get("model") or "?", gate.brief_error(e)))
+    cards = (data or {}).get("cards") or []
+    if len(cards) < 2 or not (data or {}).get("copy_text"):
+        raise gate.GraphicsGateError("模型返回的卡片不合格（cards=%d、copy_text 缺失），已拒绝出图"
+                                     % len(cards))
+    return data
 
 
 def _parse_json(text):
@@ -224,6 +231,7 @@ def generate_graphics(summary, ai_config, progress_cb=None, theme="", skin="wow"
     """
     tpl_key = template if template in templates._TEMPLATES else "classic"
     tpl = templates._TEMPLATES[tpl_key]
+    gate.assert_draft_generatable(summary, "头条图文")
     summary_id = int(summary["id"])
     if (title or "").strip():
         summary = dict(summary)
@@ -273,7 +281,7 @@ def generate_graphics(summary, ai_config, progress_cb=None, theme="", skin="wow"
     if data:
         model = ai_config.get("model") or "llm"
     else:
-        _pg("LLM 不可用，走本地模板兜底...")
+        _pg("未配置 AI，走本地模板兜底（成品需人工核对）...")
         data = _fallback_cards(summary)
 
     cards = data.get("cards") or []
