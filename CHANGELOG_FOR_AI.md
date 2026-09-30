@@ -2,6 +2,27 @@
 
 更新时间：2026-09-30
 
+## 2026-09-30（补四）：图文两条产线——模板地基修复 + 新增「AI 海报」出图产线（含 OCR 回读校验）
+
+用户从「刚生成的公众号图文内容质量很差、写的不对」出发，最终明确**否决 HTML 模板渲染成品**，改要「整张海报交给出图模型画」。本轮两件事。
+
+**A. 公众号图文线的地基（HTML 产线仍在使用，未删）**
+
+- 起因取证：`output/wechat/60` 那组垃圾稿的根因**不是模板也不是 prompt**，是 DeepSeek 欠费（`/user/balance` 返回 `is_available:false`）→ 整合稿与卡片化两层同时掉到本地兜底，`_llm_cards` 的 `except Exception: return None` 把 402 静默吞掉，错误串「[AI生成失败…Error code: 402]」被印进读者可见卡片。
+- 修了一处静默失效：前端 `WX_TPL_WHITELIST` 只抄了 4 项、渠道已扩到 6 项，选「浅紫清单/奶油金」会被**前端**回落成 wechat。现改为 `GET /api/wechat/templates` 由后端下发模板与三轴名单（含 `palette_ready`），前端不再同步维护名单。
+- 新增 `POST /api/wechat/preview`：用固定样例文案按当前四轴**真实渲染**预览（`render_preview`），替掉原来不随配色/字体/版式变化的离线假样张 JPG；产物按参数哈希缓存在 `output/wechat/_previews/<hash>/`。为此把 `generate_graphics` 的四轴解析与整组渲染抽成 `_resolve_axes` / `_render_cards` 两条入口共用。
+- 新增 `POST /api/wechat/ref-upload`（排版参考图 → `output/wechat/_refs/<token>/`，只在 manifest 记 `ref_images`，不进发布包不参与出图），为后续「逆向拆解排版」备料。
+
+**B. 新产线 `src/ai_poster.py`：整理稿 → 整张海报由出图模型画出来**
+
+- **出图后端零新增成本**：现有 `config.env.local` 那个千问聚合 key 就带图像模型（列表含 `qwen-image-max` / `qwen-image-3.0` / `qwen-image-edit-max` / `wan2.7-image` / `z-image-turbo`），**不用租 GPU、不用装 ComfyUI**（本机 Intel 核显 1.5GB 也跑不动能渲染中文的那批模型）。
+- 通路三条硬事实（踩出来的）：必须走百炼原生 `POST {root}/api/v1/services/aigc/multimodal-generation/generation` + `X-DashScope-Async: disable`；OpenAI 形状的 `/images/generations` 对这些模型是 404；`wan2.7-image` 异步被拒。**尺寸上限 1664×1664，9:16 只能 936×1664**，传 1024×1792 直接 InvalidParameter。返回的是 OSS 临时链接，必须当场下载。
+- 三段式：① LLM 按固定 JSON 拆解文案计划 → ② **字数硬门禁**（合计 ≤80、主标题 ≤12、卡片说明 ≤16、卡片 3-5 张，越界直接 `PosterError` 拒绝出图，不靠 prompt 祈祷）→ ③ 出图后 `qwen3-vl-flash` **回读逐字校验**，比对前剥空白与标点（模型常把主标题排成两行）。这一步是整条链路唯一的质检位；`qwen-vl-ocr` 只回坐标框，不能用。
+- 工作台入口：整理稿卡片与详情弹窗都有「🎨 AI 海报」；`/api/poster/plan`（只拆解、可手改文案）、`/api/poster/generate`（带 plan 则不再调 LLM）、`/status`、`/list`、`/<id>`、DELETE。产物 `output/poster/<id>/{poster.png,prompt.txt,manifest.json}`。
+- 验证：`scripts/e2e_ai_poster.py 58` → ALL_OK（79 字、4 卡片、回读逐字一致）；浏览器实测弹窗拆解→出图→校验全通；`graphics-verify` 三条线在 A 部分重构后全绿。
+- **仍未做**：① 单张实际扣费金额未核（要去聚合站账单看），② 稳定率未做多样本统计（目前 2 张全对，样本太小），③ 手改文案后未做「只重出图不重校验」的开关，④ 海报未接发布检查清单/关键词回复等公众号包级字段，⑤ A 部分那两处「LLM 失败静默降级出垃圾图」的门禁**还没修**，只是这次靠 lint warn 暴露出来。
+
+
 ## 2026-09-30（补三）：微信公众号名回填 + fetch_rss 作者回落（接上一轮「更新缺失」）
 
 用户追问：「localhost:8001 可以拉取数据了吗？我订阅的 5 个公众号，今天的数据就一篇」。取证结论：
@@ -23,6 +44,8 @@
 - **验证**：`py_compile` 过；`/workbench-restart` 两次（55026→61936→62997，`/api/stats` 200）；只勾微信订阅同步两轮——第一轮 `AI 打标 58/58`、第二轮 `AI 打标 30/30`（清历史欠账），新入库 7 条 `ai_tags` 全部补齐且 `category` 仍逐条保持订阅预设的「游戏攻略」（33/33 未被子节点名覆盖，验证护栏有效）；`/api/videos` sources `wechat=33`、缺标签 0；浏览器实测订阅页 4 行微信订阅正常渲染，第 44 号显示新提示「无新文章；1 篇全文未就绪（魔兽世界无限将延续时光服2小时团），下次同步自动重试」。
 - **并发提示（同日上午）**：本轮改动与「Dify 知识库下线」的改动落在**同一个 `web/app.py`** 上（对方 12:20–12:21 重写、12:24:40 自行重启，PID 62997→65215）。已确认这三处在下线后的新版本里仍成立：`_auto_classify_after_sync()` 位于 `if wechat_subs:`(2023) 与 `if douyin_subs:`(2072) **两分支之外**、`_sub_status["result"]`(2230) 之前，`pending_note` 与 `[videos]` 日志均在位；该运行实例自证 `/api/videos` sources `wechat=33`、微信缺 tags 0。**提交必须按关注点拆两笔**（Dify 下线 / 微信订阅打标与未就绪提示），谁后提交谁做 hunk 级 `git add -p`，别把对方未验证的半成品一起 commit。
 - **仍未做**：那 1 篇全文未就绪的文章要等 WeWe RSS 侧重新抓取补全才会入库（本地无法强推）；`wechat_fetcher` 无「强制重取全文」入口，如需可加 `?mode=full` 重试；订阅页 WeWe RSS 占位文案仍写 `localhost:4000`（实际部署在 8001，仅提示文字）。
+
+
 
 ## 2026-09-30：Qoder 接手准备——AI 资产摸底、e2e 收编入仓、两个项目技能、依赖钉版
 
