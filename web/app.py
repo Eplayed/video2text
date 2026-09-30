@@ -184,8 +184,10 @@ def api_videos():
                     "dify_synced_at": r["dify_synced_at"] or "",
                     "summary_type": "",
                 })
-        except Exception:
-            pass
+        except Exception as e:
+            # 原先是裸 pass：这里一旦抛错（列缺失/DB 锁），素材库的微信文章整块消失且无痕迹，
+            # 表现就是「公众号有更新但工作台看不到」。保留降级不阻断抖音列表，但必须留日志。
+            print(f"[videos] 微信文章追加失败（素材库将看不到微信内容）: {e}", flush=True)
     # 来源标识统一：微信文章 vs 抖音，前端卡片徽章/筛选用
     for v in videos:
         v["source"] = "wechat" if v.get("sheet") == "微信文章" else "douyin"
@@ -2071,11 +2073,19 @@ def api_subscriptions_sync():
                             summary.append(f"{name}: {result['error']}")
                             continue
                         new_articles = result["articles"]
+                        # 全文未就绪的条目不入库、下次同步重试。必须回显，否则界面显示
+                        # 「无新文章」，用户以为订阅没更新（本次排查的实际报障）。
+                        pending = result.get("skipped") or []
+                        pending_note = ""
+                        if pending:
+                            shown = "、".join((t or "无标题")[:16] for t in pending[:2])
+                            pending_note = "；%d 篇全文未就绪（%s%s），下次同步自动重试" % (
+                                len(pending), shown, "…" if len(pending) > 2 else "")
                         if not new_articles:
                             with _db_lock:
                                 content_store.update_subscription_sync(
-                                    DB_PATH, sub["id"], 0, "无新文章")
-                            summary.append(f"{name}: 无新文章")
+                                    DB_PATH, sub["id"], 0, "无新文章" + pending_note)
+                            summary.append(f"{name}: 无新文章{pending_note}")
                             continue
                         with _db_lock:
                             inserted = content_store.insert_wechat_articles(
@@ -2087,9 +2097,9 @@ def api_subscriptions_sync():
                         with _db_lock:
                             content_store.update_subscription_sync(
                                 DB_PATH, sub["id"], len(inserted),
-                                f"新增 {len(inserted)} 篇文章{cat_note}",
+                                f"新增 {len(inserted)} 篇文章{cat_note}{pending_note}",
                                 author=sub.get("author") or "")
-                        summary.append(f"{name}: 新增 {len(inserted)} 篇文章{cat_note}")
+                        summary.append(f"{name}: 新增 {len(inserted)} 篇文章{cat_note}{pending_note}")
                     except Exception as e:
                         with _db_lock:
                             content_store.update_subscription_sync(
@@ -2244,6 +2254,15 @@ def api_subscriptions_sync():
                             DB_PATH, sub["id"], pm["count"],
                             f"新增 {pm['count']} 条并已转写{cat_note}", author=pm["new_author"])
                     summary.append(f"{name}: 新增 {pm['count']} 条{cat_note}")
+
+            # 同步入库后补 AI 增量打标：只补缺口（订阅链路新行自带 category 但缺 ai_tags，
+            # 选题雷达依赖 ai_tags）。必须放在两条分支之外——原先挂在抖音分支里，
+            # 只勾微信订阅同步时新文章一条标都不打，雷达/渠道策略侧就等于「没有更新」。
+            # AI 未配置时静默跳过，打标失败不算同步失败
+            _sub_status["progress"] = "AI 自动打标..."
+            _cls = _auto_classify_after_sync()
+            if _cls.get("classified"):
+                summary.append(f"AI 打标 {_cls['classified']}/{_cls['total']} 条")
 
             _sub_status["result"] = summary
             _sub_status["progress"] = "✅ 订阅同步完成：" + "；".join(summary)

@@ -205,20 +205,25 @@ def sync_wechat_feed(
         timeout: HTTP timeout
 
     Returns:
-        {"articles": [...], "error": ""}
+        {"articles": [...], "skipped": [...], "error": ""}
+        skipped 为「feed 里有、但正文尚未抓到」的文章标题列表（WeWe RSS 全文抓取失败时
+        content 与 description 都只剩标题）。这类条目不入库、也不记链接，下次同步会重试；
+        必须回传给调用方显示，否则界面只报「无新文章」，看起来就像订阅没更新。
     """
     try:
         items = fetch_rss(feed_url, timeout)
     except Exception as e:
-        return {"articles": [], "error": f"RSS 拉取失败: {e}"}
+        return {"articles": [], "skipped": [], "error": f"RSS 拉取失败: {e}"}
 
     new_articles: list[dict[str, str]] = []
+    skipped: list[str] = []
     for item in items:
         link = item["link"]
         if link in existing_links:
             continue
         text = _strip_tags(item["html"])
         if not text or len(text) < 50:
+            skipped.append(item["title"])
             continue
         # 用 URL hash 做 aweme_id（用于去重）
         aweme_id = hashlib.md5(link.encode()).hexdigest()[:16]
@@ -231,4 +236,4 @@ def sync_wechat_feed(
             "transcript": text,
         })
 
-    return {"articles": new_articles, "error": ""}
+    return {"articles": new_articles, "skipped": skipped, "error": ""}
