@@ -58,6 +58,13 @@ def fetch_rss(feed_url: str, timeout: int = 30) -> list[dict[str, str]]:
     xml_text = _fetch_url(feed_url, timeout)
     root = ET.fromstring(xml_text)
 
+    # WeWe RSS 的 <item> 不带 <author>，公众号名只在 <channel><title>（Atom 在 <feed><title>）。
+    # 此前只读 item 级 author → 入库的微信文章 author 恒为空，素材库看不出是哪个号更的，
+    # 按作者/topic 筛选也永远命中不到，表现就是「公众号有更新但工作台找不到」。
+    channel_node = root.find("channel")
+    feed_title = ((channel_node.findtext("title") if channel_node is not None else None)
+                  or root.findtext("title") or "").strip()
+
     # RSS 2.0: /rss/channel/item
     # Atom: /feed/entry
     items: list[dict[str, str]] = []
@@ -70,7 +77,8 @@ def fetch_rss(feed_url: str, timeout: int = 30) -> list[dict[str, str]]:
     for item in root.findall(".//item"):
         title = (item.findtext("title") or "").strip()
         link = (item.findtext("link") or "").strip()
-        author = (item.findtext("author") or item.findtext("dc:creator", namespaces=ns) or "").strip()
+        author = (item.findtext("author") or item.findtext("dc:creator", namespaces=ns)
+                  or feed_title).strip()
         pub_date = _parse_date(item.findtext("pubDate") or "")
         # content:encoded has full HTML
         html = ""
@@ -98,6 +106,7 @@ def fetch_rss(feed_url: str, timeout: int = 30) -> list[dict[str, str]]:
             link = link_el.get("href", "") if link_el is not None else ""
             author_el = entry.find("atom:author/atom:name", namespaces=ns_atom)
             author = author_el.text.strip() if author_el is not None and author_el.text else ""
+            author = author or feed_title
             pub_date = _parse_date(entry.findtext("atom:published", namespaces=ns_atom) or "")
             html = entry.findtext("atom:content", namespaces=ns_atom) or ""
             if title and link:
