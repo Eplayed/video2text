@@ -1982,7 +1982,7 @@ async function posterPlan() {
   if (r.error) { setStatus('error', r.error); return; }
   pollPoster('plan');
 }
-async function posterGenerate() {
+async function posterGenerate(force) {
   if (!_pkId) { alert('请先选择整合稿'); return; }
   const hasPlan = !!document.getElementById('pk-title');
   const plan = hasPlan ? pkReadPlan() : null;
@@ -1990,10 +1990,12 @@ async function posterGenerate() {
     const bad = pkProblems(plan);
     if (bad.length && !confirm('文案不合格（' + bad.join('；') + '）。\n后端会直接拒绝出图，仍要提交？')) return;
   }
-  if (!confirm('出图？约 30-60 秒，随后自动回读校验。已有海报会被覆盖。')) return;
+  const tip = force ? '这条整合稿被判定为规则版骨架。\n确认你已人工复核过拆解出的文案、仍要出图？'
+                    : '出图？约 20-60 秒 + 一次回读校验，0.5 元/张。已有海报会被覆盖。';
+  if (!confirm(tip)) return;
   const body = {summary_id: _pkId, ratio: document.getElementById('pk-ratio').value,
                 theme: document.getElementById('pk-theme').value.trim(),
-                plan: plan, publish: plan ? pkReadPublish() : null};
+                plan: plan, publish: plan ? pkReadPublish() : null, force: !!force};
   const r = await fetch('/api/poster/generate', {method: 'POST',
     headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)}).then(x => x.json());
   if (r.error) { setStatus('error', r.error); return; }
@@ -2011,13 +2013,19 @@ function pollPoster(stage) {
       setTimeout(poll, 2000); return;
     }
     if (st.error) {
-      box.innerHTML = `<div class="pk-verify fail">✗ ${esc(String(st.error).split('\n')[0])}</div>`;
+      const msg = String(st.error).split('\n')[0];
+      // 骨架稿被拦：给一次显式放行的出口，而不是让人去改数据
+      const override = msg.indexOf('整合稿不合格') >= 0
+        ? '<div style="margin-top:8px"><button class="btn ghost sm" onclick="posterGenerate(true)">仍然出图（我已人工复核文案）</button></div>' : '';
+      box.innerHTML = `<div class="pk-verify fail">✗ ${esc(msg)}</div>` + override;
       setStatus('error', '海报任务失败'); return;
     }
     setStatus('done', st.progress || '完成');
     if (st.plan && st.plan.plan) pkRenderPlan(st.plan.plan, st.plan.publish);
-    if (stage === 'poster' && st.package && st.package.id) renderPosterResult(st.package.id);
-    else box.innerHTML = `<div class="pk-verify pass">✅ ${esc(st.progress || '文案已就绪，可编辑后出图')}</div>`;
+    if (stage === 'poster' && st.package && st.package.id) { renderPosterResult(st.package.id); return; }
+    const warn = (stage === 'plan' && st.plan && st.plan.draft_warning)
+      ? `<div class="pk-verify mild">⚠️ ${esc(st.plan.draft_warning)}——文案照拆不误，但出图那一步会先拦你一次，复核后点「仍然出图」放行。</div>` : '';
+    box.innerHTML = `<div class="pk-verify pass">✅ ${esc(st.progress || '文案已就绪，可编辑后出图')}</div>` + warn;
   };
   setTimeout(poll, 1200);
 }

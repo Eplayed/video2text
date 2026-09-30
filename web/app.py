@@ -1682,8 +1682,12 @@ def api_poster_plan():
     def fn():
         _poster_status["progress"] = "LLM 拆解海报文案（思考型模型约需 3 分钟）..."
         plan, publish, bad, notes = ai_poster.build_text_plan(summary, _ai_config(), theme=theme, title=title)
+        # 骨架稿不在这里拦：拆解本身就能判断这份素材有没有料，拦在②会让用户白等 3 分钟。
+        # 只把风险随结果一起回给前端，出图那一步再决定是否放行。
+        warning = "；".join(ai_poster.draft_gate.draft_blockers(summary))
         _poster_status["plan"] = {"plan": plan, "publish": publish, "violations": bad,
                                   "notes": notes, "chars": ai_poster.plan_chars(plan),
+                                  "draft_warning": warning,
                                   "prompt_text": ai_poster.build_prompt_text(plan)}
         _poster_status["progress"] = ("✅ 文案已拆解（合计 %d 字）" % ai_poster.plan_chars(plan)
                                       + ("；自动压缩：" + "、".join(notes) if notes else "")
@@ -1706,12 +1710,14 @@ def api_poster_generate():
     ratio = str(data.get("ratio") or "9:16").strip()[:5]
     plan = data.get("plan") if isinstance(data.get("plan"), dict) else None
     publish = data.get("publish") if isinstance(data.get("publish"), dict) else None
+    force = bool(data.get("force"))      # 骨架稿人工复核后的显式放行
 
     def fn():
         def cb(msg):
             _poster_status["progress"] = msg
         manifest = ai_poster.generate_poster(summary, _ai_config(), theme=theme, title=title,
-                                             ratio=ratio, progress_cb=cb, plan=plan, publish=publish)
+                                             ratio=ratio, progress_cb=cb, plan=plan,
+                                             publish=publish, force=force)
         v = manifest.get("verify") or {}
         errs = [i for i in (manifest.get("lint") or []) if i.startswith("error")]
         _poster_status["package"] = {"id": manifest["id"], "title": manifest["title"],

@@ -382,20 +382,26 @@ def verify_image(png_bytes, plan, ai_config, timeout=120):
 
 # ── 编排 ──
 def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
-                    progress_cb=None, do_verify=True, plan=None, publish=None):
+                    progress_cb=None, do_verify=True, plan=None, publish=None, force=False):
     """整理稿 → 海报一张。返回 manifest dict（已落盘 output/poster/<summary_id>/）。
 
     plan / publish 非空时跳过 LLM 拆解（前端审改过文案再出图走这条）：plan 是要画进图的
     文字仍过字数硬门禁，publish 是发布页文案只做软校验。两者都不落模型自由发挥——
     模型只负责画字与排版，写什么由拆解那一步定、由人改。
+
+    force=True 放行 status=draft 的骨架稿。海报线与 HTML 卡片线不同：这里永远有一次 LLM
+    提炼在中间，骨架稿只要底层转写有料就能出好文案（实测 61 号那篇超时稿，价格与时间线
+    数字全对），所以门禁做成「默认拦、人工复核后可显式放行」，而不是一刀切。
     """
     _require_ai(ai_config)
     if ratio not in SIZES:
         ratio = "9:16"
-    # 判据与头条/公众号共用 gate（规则版骨架稿拿去出图，只会产出「格式正确但内容空洞」的海报）
+    # 判据与头条/公众号共用 gate；海报线允许人工复核后 force 放行
     blockers = draft_gate.draft_blockers(summary)
-    if blockers:
-        raise PosterError("整合稿不合格：" + "；".join(blockers) + "。请先重新生成整合稿再出海报。")
+    overrode = bool(force and blockers)
+    if blockers and not force:
+        raise PosterError("整合稿不合格：" + "；".join(blockers)
+                          + "。若你已复核过拆解出的文案，可点「仍然出图」放行。")
     summary_id = int(summary["id"])
     out_dir = OUTPUT_DIR / str(summary_id)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -444,6 +450,8 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
         issues.insert(0, "error: 图面文字回读未通过，缺：" + "、".join(check.get("missing") or []))
     elif check.get("ok") is None:
         issues.append("warn: 本次未做回读校验，发布前必须人眼核对图面文字")
+    if overrode:
+        issues.insert(0, "warn: 整合稿是规则版骨架，本次由人工显式放行出图，发布前务必核对数字与时间线")
 
     manifest = {
         "id": summary_id,
@@ -467,6 +475,7 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
         "usage": usage,
         "cost_yuan_estimate": PRICE_PER_IMAGE_YUAN,
         "auto_notes": notes,
+        "draft_override": overrode,
         "verify": check,
         "source_title": summary.get("title") or "",
         "theme": (theme or "").strip(),
