@@ -370,7 +370,18 @@ textarea{resize:vertical;min-height:84px}
 .pk-ta{flex:1;min-width:0;min-height:76px;font-size:12.5px;line-height:1.7}
 .pk-pub{white-space:pre-wrap;word-break:break-word;font-family:inherit;font-size:12.5px;line-height:1.75;background:var(--surface-nested);border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin:0;max-height:240px;overflow:auto}
 .pk-ck{margin:0;padding-left:20px;font-size:12px;line-height:1.85;color:var(--text-secondary)}
-.pk-actions{display:flex;gap:10px;margin:16px 0 4px}
+/* 一条设置栏 + 一条带序号的动作栏：把"该点什么"变成看得见的顺序 */
+.pk-bar{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;margin:14px 0 2px}
+.pk-bar label{display:flex;flex-direction:column;gap:4px;font-size:11.5px;font-weight:700;color:var(--text-secondary)}
+.pk-bar select{font-size:12.5px;font-weight:400;padding:6px 8px;max-width:230px}
+.pk-bar input{font-size:12.5px;font-weight:400;padding:6px 8px}
+.pk-bar .pk-grow{flex:1;min-width:130px}
+.pk-bar .pk-grow input{width:100%;box-sizing:border-box}
+.pk-bar .pk-check{flex-direction:row;align-items:center;gap:5px;padding-bottom:7px;white-space:nowrap}
+.pk-one{font-size:12px;line-height:1.7;color:var(--text-secondary);margin:2px 0 4px}
+.pk-one b{color:var(--text)}
+.pk-actions{display:flex;gap:10px;margin:12px 0 4px}
+.pk-go{background:var(--module-5);border-color:var(--module-5);color:#fff;font-weight:700}
 .pk-actions .btn{flex:0 0 auto}
 .pk-cands{display:flex;gap:10px;flex-wrap:wrap;margin:12px 0 6px}
 .pk-cand{flex:0 0 auto;width:158px;border:2px solid var(--border);border-radius:10px;overflow:hidden;cursor:pointer;background:var(--surface-card)}
@@ -386,7 +397,7 @@ textarea{resize:vertical;min-height:84px}
 .pk-rv-i.hi{color:#07c160;border-color:color-mix(in srgb,#07c160 35%,transparent)}
 .pk-rv-i.lo{color:var(--danger);border-color:color-mix(in srgb,var(--danger) 35%,transparent)}
 .pk-rv-s{font-size:13px;font-weight:800}
-/* 五步操作卡：可折叠，收起状态记在 localStorage，学会之后不必一直占地方 */
+/* 三步操作卡：可折叠，收起状态记在 localStorage，学会之后不必一直占地方 */
 .pk-guide{font-size:12px;line-height:1.85;color:var(--text-secondary);background:var(--surface-nested);border:1px solid var(--border);border-radius:8px;padding:0 0 2px;margin-bottom:12px}
 .pk-guide>summary{cursor:pointer;font-size:12.5px;font-weight:800;color:var(--module-5);padding:9px 12px;list-style:none;user-select:none}
 .pk-guide>summary::-webkit-details-marker{display:none}
@@ -1054,63 +1065,46 @@ textarea{resize:vertical;min-height:84px}
 
     <!-- AI 海报弹窗：整图由出图模型绘制（文字画进像素），出图后视觉模型回读逐字校验 -->
     <div class="modal-overlay" id="pk-overlay" onclick="closePosterDialog(event)">
-      <div class="modal-box" style="max-width:860px" onclick="event.stopPropagation()">
+      <div class="modal-box" style="width:880px;max-width:94vw" onclick="event.stopPropagation()">
         <button class="close-btn" onclick="closePosterDialog()"><span data-icon="close" class="ic14"></span></button>
         <div class="tt-gen-title">🎨 AI 海报</div>
-        <div class="tt-gen-sub">整合稿 #<span id="pk-id"></span> · 与 HTML 模板产线不同：底图由出图模型现画。默认「程序排字」＝模型画没有字的底图、中文由程序用真字体排上去，字不会错；「模型画字」＝整张交给模型，出图后回读逐字比对。两种都会再打一次视觉评审分</div>
-        <div class="tt-gen-field">
-          <label>画面比例 / 张数 / 题材<small>（比例决定出图尺寸；题材进 prompt，让模型知道往哪个方向画）</small></label>
-          <div style="display:flex;gap:10px">
-            <select id="pk-ratio" style="flex:0 0 220px">
-              <option value="9:16" selected>竖版 9:16（小红书 / 抖音图文）</option>
-              <option value="3:4">竖版 3:4（公众号图片消息）</option>
-              <option value="1:1">方形 1:1</option>
-            </select>
-            <select id="pk-copies" style="flex:0 0 150px" title="AI 出图每次好坏不一样，多出几张挑一张比反复重出省事">
-              <option value="1" selected>出 1 张</option>
-              <option value="3">出 3 张挑 1 张</option>
-            </select>
-            <input id="pk-theme" placeholder="题材（可选，例：Agent 面试 / AI 工具实测）" style="flex:1">
-          </div>
-        </div>
-        <div class="tt-gen-field">
-          <label>画面风格预设<small>（钉死的配方：画风词 + 配色 + 卡片材质都固定，不再每次自己发挥。拆解前先选好，配图会照这个方向想）</small></label>
-          <div style="display:flex;gap:10px;align-items:center">
-            <select id="pk-mode-top" style="flex:0 0 230px" onchange="pkApplyLimits(true)"
-                    title="程序排字＝模型只画没有字的底图，中文用真字体排上去，不会有错字；模型画字＝整张交给模型，风格更统一但会写错字">
-              <option value="typeset" selected>程序排字（推荐，字不会错）</option>
-              <option value="model">模型画字（会错字，仅对比用）</option>
-            </select>
-            <select id="pk-style-key-top" style="flex:1" onchange="pkSyncStyle(this.value)"><option value="">载入中…</option></select>
-            <label style="display:flex;align-items:center;gap:5px;font-size:12px;flex:0 0 auto">
-              <input type="checkbox" id="pk-review" checked style="flex:0 0 auto">出图后做视觉评审
-            </label>
-          </div>
+        <div class="tt-gen-sub">整合稿 #<span id="pk-id"></span> · 底图 AI 现画，中文由程序排版</div>
+        <div class="pk-bar">
+          <label>比例<select id="pk-ratio">
+            <option value="9:16" selected>9:16 小红书</option>
+            <option value="3:4">3:4 公众号</option>
+            <option value="1:1">1:1 方形</option>
+          </select></label>
+          <label>张数<select id="pk-copies" title="同一份文案画几次好坏不一样，多出几张挑比不满意重出省事">
+            <option value="1" selected>1 张</option>
+            <option value="3">3 张挑 1</option>
+          </select></label>
+          <label>风格<select id="pk-style-key-top" onchange="pkSyncStyle(this.value)"><option value="">载入中…</option></select></label>
+          <label class="pk-grow">题材<input id="pk-theme" placeholder="选填，例：魔兽怀旧服 塔卡"></label>
+          <label class="pk-check"><input type="checkbox" id="pk-review" checked>出图后打分</label>
         </div>
         <div class="pk-actions">
-          <button class="btn ghost sm" onclick="posterPlan()">① AI 拆解文案</button>
-          <button class="btn ghost sm" onclick="posterPreview()" title="0 元、当场出：用出图时同一个排版函数先看版面">🔍 先看版面（免费）</button>
-          <button class="btn sm" style="background:var(--module-5);border-color:var(--module-5);color:#fff" onclick="posterGenerate()">② 出图并校验</button>
+          <button class="btn ghost sm" onclick="posterPlan()">① 拆文案</button>
+          <button class="btn ghost sm" onclick="posterPreview()" title="不花钱、当场出：用出图时同一个排版函数先看版面">② 看版面 · 免费</button>
+          <button class="btn sm pk-go" onclick="posterGenerate()">③ 出图 · 0.5 元/张</button>
         </div>
-        <div class="pk-hint">先「①拆解」拿到可编辑文案（快速档约 20-60 秒，结果里会写明用的哪个模型），改完再「②出图」，避免拿不合心的文案白花一次出图。<br><b>默认走「程序排字」</b>：出图模型只画一张<b>没有字的底图</b>，中文由程序用系统真字体排上去。所以字不会写错、不会漏、不会多，字数上限 200 字只是"版面放得下"，可以把数值、条件、坑都留在图上。<br>另一个选项「模型画字」是把整张图（含字）交给模型，风格更统一，但实测 63 字就开始改写文案、画错笔画、把提示词里的「」框也画上，所以字数被钉死在 64，只建议用来对比。<br><b>「🔍 先看版面（免费）」不调任何付费接口</b>：占位底图 + 同一个排版函数，当场出，用来确认字放不放得下、配色对不对。改文案之后多点几次不花钱，只有想要一张新插画才需要点「② 出图」。<br>成本与限流：出图 <b>0.5 元/张</b>、模型 <b>RPM=2</b>（每分钟最多 2 次），客户端已自动节流与退避重试，批量 20 张要约 10 分钟。视觉评审走便宜的视觉模型，只花时间不额外花钱。</div>
-        <!-- 五步操作卡：放在动作条正下方，第一次用不必去别处找说明；收过一次就记住，不长期占地方 -->
+        <div class="pk-one">字由程序排版，不会错字也不会漏，200 字上限只是版面放得下。<b>改完文案多点几次②，一次都不花钱。</b></div>
+        <!-- 三步操作卡：只在第一次用得着，收过一次就记住，不长期占地方 -->
         <details class="pk-guide" id="pk-guide" open>
-          <summary>怎么用 · 五步出图</summary>
+          <summary>怎么用 · 三步</summary>
           <ol>
-            <li><b>先选后拆。</b>排版方式：<b>默认「程序排字」别动</b>（模型只画没有字的底图，中文由程序排，字不会错，能写到 200 字）；「模型画字」只在对风格要求极高时用，上限 64 字且会写错。比例：小红书/抖音图文选 9:16，公众号图片消息选 3:4。张数：建议「出 3 张挑 1 张」（1.5 元、约 2-3 分钟，同一份底图风格每次不一样，一次挑比不满意重出省）。题材：填具体一点，例「魔兽怀旧服 塔卡攻略」，不填也能出但会偏。风格四选一：<b>攻略/版本/装备数值</b>→游戏史诗风；<b>工具实测/软件对比</b>→工具测评风；<b>经验总结/避坑清单/教程</b>→清单笔记风；<b>只有一个观点</b>→极简杂志风。「出图后做视觉评审」保持勾着。</li>
-            <li><b>点「① AI 拆解文案」，等 20-60 秒。</b>先看「主线」那一句读起来成不成链——散的就直接点「① 重新拆解」，别拿着散文案花钱出图。再看字数行：程序排字模式下<b>不用为省字砍内容</b>，数值、条件、时间、坑都留在图上；只有超过 200 字才会被压，压完会写"已从 X 字压到 Y 字"。</li>
-            <li><b>手工改三处，改完点「🔍 先看版面（免费）」。</b>① 主标题要有钩子（"5步速通学习法"远好过"面试学习方法"）；② 每张卡片讲清一件事，说明写成完整一句话而不堆词；③「主视觉」那栏必须是<b>有具体形体的东西</b>——"盔甲战士站在高塔顶端仰视空中发光的 3600"画得出来，"科技感拉满"画不出来。预览 <b>0 元、当场出</b>，用的就是出图时同一个排版函数，字号、折行、卡片位置、配色都是真的，只有上面那块灰框出图时会被插画替换。改一次文案点一次，不用花钱试。</li>
-            <li><b>点「② 出图并校验」，看两个数。</b>程序排字模式下第一行永远是 ✅（字由代码落，不存在错字），只需留意有没有"版面放不下被截断"的提示；模型画字模式下写 ✗ 的别发。第二种数是<b>视觉评审</b>，满分 25，<b>18 分以下</b>会提示换一张或重出。出 3 张时下面每张标着"字已排好 + 分数"，点小图就换选，系统已默认挑分数最高的那张。</li>
-            <li><b>点「复制发布文案」。</b>标题/摘要/配文/关键词回复/来源说明已拼好，直接去后台粘。配文末尾的合规尾注别删；数字、版本、价格自己核一手来源；后台记得勾「内容由 AI 生成」。</li>
+            <li><b>① 拆文案</b>（约 30 秒）：拿到可编辑文案。先看「主线」那句成不成链，散了就重新拆，别拿着散文案花钱。</li>
+            <li><b>② 看版面</b>（免费）：字号、折行、卡片放不放得下、配色都是真的，只有上面那块灰框出图时会被插画替换。改一次文案点一次。</li>
+            <li><b>③ 出图</b>（0.5 元/张）：AI 现画底图，出完自动打分，满分 25、18 以下会建议换一张或重出。出 3 张时点小图就换选。</li>
           </ol>
-          <div class="pk-guide-f">被「整合稿不合格」挡住：说明这条当初 AI 加工失败、只剩骨架。素材本身有料就能出好图，但你得先自己确认拆解出来的数字和时间线没瞎写，再点「仍然出图」放行。产物在 <code>output/poster/整理稿编号/</code>，<code>poster.png</code> 就是你选定的那张，<code>prompt.txt</code> 是这次的完整提示词——哪张满意就把那句留着当参考。</div>
+          <div class="pk-guide-f">风格四选一：攻略/数值→游戏史诗风 · 工具实测→工具测评风 · 清单避坑→清单笔记风 · 单观点→极简杂志风。被「整合稿不合格」挡住＝这条当初转写失败只剩骨架，自己核过数字再点「仍然出图」。发之前记得勾后台的「内容由 AI 生成」。</div>
         </details>
         <div id="pk-plan"></div>
         <!-- 文案编辑区末尾再放一次动作条：改完就在眼前，不用滚回顶部找按钮 -->
         <div class="pk-actions">
-          <button class="btn ghost sm" onclick="posterPlan()">① 重新拆解</button>
-          <button class="btn ghost sm" onclick="posterPreview()">🔍 先看版面（免费）</button>
-          <button class="btn sm" style="background:var(--module-5);border-color:var(--module-5);color:#fff" onclick="posterGenerate()">② 出图并校验</button>
+          <button class="btn ghost sm" onclick="posterPlan()">① 重新拆文案</button>
+          <button class="btn ghost sm" onclick="posterPreview()">② 看版面 · 免费</button>
+          <button class="btn sm pk-go" onclick="posterGenerate()">③ 出图 · 0.5 元/张</button>
         </div>
         <div id="pk-result"></div>
       </div>
@@ -1974,7 +1968,7 @@ function openPosterDialog(id) {
   pkGuideInit();
   loadPosterStyles();
 }
-// 五步操作卡：默认展开，收过一次就记住——学会之后不必每次挡在动作条下面。
+// 三步操作卡：默认展开，收过一次就记住——学会之后不必每次挡在动作条下面。
 // 每次开弹窗都按存的状态摆一次，否则同一页面里收起再开还是摊开的，记了个寂寞。
 const PK_GUIDE_KEY = 'posterGuideOpen';
 function pkGuideInit() {
@@ -2007,17 +2001,10 @@ const PK_BY_MODE = {
   model:   {title: 12, subtitle: 10, footer: 14, cardT: 6, cardD: 10, total: 64}
 };
 const PK_LIMITS = Object.assign({}, PK_BASE, PK_BY_MODE.typeset);
-function pkTextMode() {
-  const el = document.getElementById('pk-mode-top');
-  return el ? el.value : 'typeset';
-}
-function pkApplyLimits(redraw) {
-  const src = (_pkLimitsByMode && _pkLimitsByMode[pkTextMode()]) || PK_BY_MODE[pkTextMode()];
+function pkTextMode() { return 'typeset'; }
+function pkApplyLimits() {
+  const src = (_pkLimitsByMode && _pkLimitsByMode.typeset) || PK_BY_MODE.typeset;
   Object.keys(PK_BY_MODE.typeset).forEach(k => { PK_LIMITS[k] = (src && src[k]) || PK_BY_MODE.typeset[k]; });
-  if (redraw && document.getElementById('pk-title')) {
-    // 换模式后输入框的 maxlength 得跟着重建，否则程序排字模式下仍被 10 字卡住
-    pkRenderPlan(_pkLastPlan || null, _pkLastPublish || null);
-  }
 }
 // 风格预设名单由后端下发（配方原文只有一份，前端抄一遍必然漂移）
 let _pkStyles = [];
@@ -2034,11 +2021,11 @@ async function loadPosterStyles() {
     _pkStyles = d.items || [];
     _pkLimitsByMode = d.limitsByMode || null;
     if (d.limits) Object.keys(d.limits).forEach(k => { PK_LIMITS[k] = d.limits[k]; });
-    pkApplyLimits(false);
+    pkApplyLimits();
   } catch (e) { _pkStyles = []; }
   const sel = document.getElementById('pk-style-key-top');
   if (sel && _pkStyles.length) {
-    sel.innerHTML = _pkStyles.map(s => `<option value="${s.key}">${esc(s.label)}｜${esc(s.when)}</option>`).join('');
+    sel.innerHTML = _pkStyles.map(s => `<option value="${s.key}" title="${esc(s.when)}">${esc(s.label)}</option>`).join('');
     sel.value = 'tool_review';
   } else if (sel) { sel.innerHTML = '<option value="">名单载入失败，出图仍可用默认风格</option>'; }
   return _pkStyles;
@@ -2072,15 +2059,6 @@ function pkProblems(p) {
   if (!p.title) bad.push('主标题不能为空');
   if ((p.cards || []).length < PK_LIMITS.cardMin) bad.push('卡片至少 ' + PK_LIMITS.cardMin + ' 张');
   if (pkChars(p) > PK_LIMITS.total) bad.push('合计超 ' + PK_LIMITS.total + ' 字');
-  return bad;
-}
-// 画面侧只提不拦：缺配图照样能出图，只是大概率又是一张空文字框，值得单独说一句
-function pkVisualHints(p) {
-  const bad = [];
-  if (!(p.scene || '').trim()) bad.push('没写主视觉');
-  const cards = p.cards || [];
-  const n = cards.filter(c => (c.v || '').trim()).length;
-  if (cards.length && n < Math.min(2, cards.length)) bad.push(n + '/' + cards.length + ' 张卡片没配画面');
   return bad;
 }
 function _pkRow(tag, id, val, max, ph) {
@@ -2140,12 +2118,9 @@ function pkCount() {
   const el = document.getElementById('pk-count');
   if (!el) return;
   const p = pkReadPlan(), bad = pkProblems(p);
-  const hint = pkTextMode() === 'typeset' ? [] : pkVisualHints(p);
-  el.className = 'pk-count ' + (bad.length ? 'bad' : (hint.length ? 'mild' : 'ok'));
-  el.textContent = `合计 ${pkChars(p)} / ${PK_LIMITS.total} 字 · ${p.cards.length} 张卡片 · `
-    + (pkTextMode() === 'typeset' ? '程序排字，上限只看版面放得下' : '模型画字，上限是错字率安全线')
-    + (bad.length ? '　⚠️ ' + bad.join('；')
-                  : '　✅ 可出图' + (hint.length ? '　⚠️ 画面偏空：' + hint.join('；') : ''));
+  el.className = 'pk-count ' + (bad.length ? 'bad' : 'ok');
+  el.textContent = `合计 ${pkChars(p)} / ${PK_LIMITS.total} 字 · ${p.cards.length} 张卡片`
+    + (bad.length ? '　⚠️ ' + bad.join('；') : '　✅ 可出图');
 }
 async function posterPlan() {
   if (!_pkId) { alert('请先选择整合稿'); return; }
@@ -2162,13 +2137,6 @@ async function posterPlan() {
 // 换轨之后版面是代码算的、跟出图无关，所以折行/字号/卡片放不放得下都能在花钱前看到。
 async function posterPreview() {
   if (!document.getElementById('pk-title')) { setStatus('error', '先点「① AI 拆解文案」拿到文案'); return; }
-  if (pkTextMode() !== 'typeset') {
-    // 提示写进结果区而不是顶部状态条：人这时候眼睛在弹窗里，状态条太小看不见
-    document.getElementById('pk-result').innerHTML =
-      '<div class="pk-verify mild">版面预览只在「程序排字」模式下有意义——「模型画字」那张的版式是模型即兴画的，'
-      + '预览看不到真效果。把上方「排版方式」切回程序排字再点。</div>';
-    return;
-  }
   const box = document.getElementById('pk-result');
   box.innerHTML = '<div class="pk-verify mild">⏳ 正在按当前文案排一张免费预览…</div>';
   const body = {plan: pkReadPlan(), ratio: document.getElementById('pk-ratio').value};
@@ -2196,9 +2164,6 @@ async function posterGenerate(force) {
   if (plan) {
     const bad = pkProblems(plan);
     if (bad.length && !confirm('文案不合格（' + bad.join('；') + '）。\n后端会直接拒绝出图，仍要提交？')) return;
-    const hint = pkVisualHints(plan);
-    if (hint.length && !confirm('画面计划偏空（' + hint.join('；') + '）。\n'
-        + '这样多半又会出一张几乎没有插画的图。仍要出图？')) return;
   }
   const copiesEl = document.getElementById('pk-copies');
   const copies = copiesEl ? parseInt(copiesEl.value) || 1 : 1;
@@ -2305,7 +2270,7 @@ async function renderPosterResult(id) {
     + `<div class="pk-verify ${cls}">${esc(txt)}</div>`
     + pkReviewHtml(m.review)
     + (warns.length ? `<div class="pk-verify mild">${warns.map(esc).join('<br>')}</div>` : '')
-    + `<div class="pk-sub">发布文案（${m.text_chars} 字上图，${m.text_mode === 'typeset' ? '程序排字' : '模型画字'}；估算成本 ${m.cost_yuan_estimate} 元/张 · 风格 ${esc(m.style_label || m.style_key || '未指定')}）</div>`
+    + `<div class="pk-sub">发布文案（${m.text_chars} 字上图 · 风格 ${esc(m.style_label || m.style_key || '未指定')}）</div>`
     + `<pre class="pk-pub">${esc(pub)}</pre>`
     + `<div class="pk-sub">发布前逐条人工过</div><ul class="pk-ck">${ck}</ul>`
     + '<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">'
