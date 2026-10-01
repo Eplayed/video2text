@@ -357,6 +357,7 @@ textarea{resize:vertical;min-height:84px}
 .pk-count{font-size:12.5px;font-weight:800;margin:10px 0}
 .pk-count.bad{color:var(--danger)}
 .pk-count.ok{color:#07c160}
+.pk-count.mild{color:var(--text-secondary)}
 .pk-row{display:flex;gap:8px;margin:6px 0;align-items:center}
 .pk-row .pk-tag{flex:0 0 66px;font-size:12.5px;font-weight:600;color:var(--text-secondary)}
 .pk-row input{flex:1;min-width:0}
@@ -378,6 +379,13 @@ textarea{resize:vertical;min-height:84px}
 .pk-cand img{display:block;width:100%;height:230px;object-fit:cover;object-position:top}
 .pk-cand-t{font-size:11.5px;font-weight:700;text-align:center;padding:5px 0;color:var(--text-secondary)}
 .pk-cand.on .pk-cand-t{color:var(--module-5)}
+.pk-row-sub .pk-tag{visibility:hidden}
+.pk-vis{font-size:12px;color:var(--text-secondary)}
+.pk-rv{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 2px}
+.pk-rv-i{font-size:11.5px;font-weight:700;border-radius:6px;padding:3px 8px;background:var(--surface-nested);border:1px solid var(--border);color:var(--text-secondary)}
+.pk-rv-i.hi{color:#07c160;border-color:color-mix(in srgb,#07c160 35%,transparent)}
+.pk-rv-i.lo{color:var(--danger);border-color:color-mix(in srgb,var(--danger) 35%,transparent)}
+.pk-rv-s{font-size:13px;font-weight:800}
 .wx-card .s-meta .wx-imgs{color:var(--module-1);font-weight:700}
 .wx-img.real img{outline:2px solid var(--module-1);outline-offset:-2px}
 .wx-img.real .lb{background:rgba(111,143,106,.86)}
@@ -1038,9 +1046,9 @@ textarea{resize:vertical;min-height:84px}
       <div class="modal-box" style="max-width:860px" onclick="event.stopPropagation()">
         <button class="close-btn" onclick="closePosterDialog()"><span data-icon="close" class="ic14"></span></button>
         <div class="tt-gen-title">🎨 AI 海报</div>
-        <div class="tt-gen-sub">整合稿 #<span id="pk-id"></span> · 与 HTML 模板产线不同：文字由出图模型直接画进像素，出图后自动回读逐字比对</div>
+        <div class="tt-gen-sub">整合稿 #<span id="pk-id"></span> · 与 HTML 模板产线不同：文字由出图模型直接画进像素，出图后自动回读逐字比对 + 视觉评审打分</div>
         <div class="tt-gen-field">
-          <label>画面比例 / 题材<small>（比例决定出图尺寸；题材进 prompt，让模型知道往哪个方向画）</small></label>
+          <label>画面比例 / 张数 / 题材<small>（比例决定出图尺寸；题材进 prompt，让模型知道往哪个方向画）</small></label>
           <div style="display:flex;gap:10px">
             <select id="pk-ratio" style="flex:0 0 220px">
               <option value="9:16" selected>竖版 9:16（小红书 / 抖音图文）</option>
@@ -1054,11 +1062,20 @@ textarea{resize:vertical;min-height:84px}
             <input id="pk-theme" placeholder="题材（可选，例：Agent 面试 / AI 工具实测）" style="flex:1">
           </div>
         </div>
+        <div class="tt-gen-field">
+          <label>画面风格预设<small>（钉死的配方：画风词 + 配色 + 卡片材质都固定，不再每次自己发挥。拆解前先选好，配图会照这个方向想）</small></label>
+          <div style="display:flex;gap:10px;align-items:center">
+            <select id="pk-style-key-top" style="flex:1" onchange="pkSyncStyle(this.value)"><option value="">载入中…</option></select>
+            <label style="display:flex;align-items:center;gap:5px;font-size:12px;flex:0 0 auto">
+              <input type="checkbox" id="pk-review" checked style="flex:0 0 auto">出图后做视觉评审
+            </label>
+          </div>
+        </div>
         <div class="pk-actions">
           <button class="btn ghost sm" onclick="posterPlan()">① AI 拆解文案</button>
           <button class="btn sm" style="background:var(--module-5);border-color:var(--module-5);color:#fff" onclick="posterGenerate()">② 出图并校验</button>
         </div>
-        <div class="pk-hint">先「①拆解」拿到可编辑文案（快速档约 20-60 秒，结果里会写明用的哪个模型），改完再「②出图」，避免拿不合心的文案白花一次出图。字数门禁 <b>80 字</b>：超了直接拒绝出图，因为字越多错字率越高。<br>成本与限流：出图 <b>0.5 元/张</b>、模型 <b>RPM=2</b>（每分钟最多 2 次），客户端已自动节流与退避重试，批量 20 张要约 10 分钟。</div>
+        <div class="pk-hint">先「①拆解」拿到可编辑文案（快速档约 20-60 秒，结果里会写明用的哪个模型），改完再「②出图」，避免拿不合心的文案白花一次出图。<br>字数门禁 <b>64 字</b>：超了直接拒绝出图。这条线是带画面计划重测出来的——62 字连出 2 张逐字全对，79 字那张把主标题和三条说明整段画丢了；字越多、画面越满，错字率越高。<br>画面占比靠"主视觉 + 每条卡片的配图"两栏撑起来，那两栏只告诉模型画什么、<b>不会写成图上的字</b>，所以不占合计字数预算。<br>成本与限流：出图 <b>0.5 元/张</b>、模型 <b>RPM=2</b>（每分钟最多 2 次），客户端已自动节流与退避重试，批量 20 张要约 10 分钟。回读与评审走便宜的视觉模型，只花时间不额外花钱。</div>
         <div id="pk-plan"></div>
         <!-- 文案编辑区末尾再放一次动作条：改完就在眼前，不用滚回顶部找按钮 -->
         <div class="pk-actions">
@@ -1924,14 +1941,55 @@ function openPosterDialog(id) {
   document.getElementById('pk-result').innerHTML = '';
   document.getElementById('pk-theme').value = '';
   document.getElementById('pk-overlay').classList.add('show');
+  loadPosterStyles();
 }
 function closePosterDialog(e) {
   if (e && e.target !== e.currentTarget) return;
   document.getElementById('pk-overlay').classList.remove('show');
 }
 
-// 字数上限与后端 ai_poster 的门禁一致（实测超 80 字错字率明显上升）
-const PK_LIMITS = {title: 12, subtitle: 10, footer: 14, cardT: 6, cardD: 16, total: 80, cardMin: 3, cardMax: 5, spine: 24};
+// 字数上限与后端 ai_poster 的门禁一致；/api/poster/styles 会把真值下发覆盖这里的兜底值。
+// scene / cardVis 不进图、不占合计预算，只告诉模型"这条该画什么"。
+const PK_LIMITS = {title: 12, subtitle: 10, footer: 14, cardT: 6, cardD: 16, total: 64,
+                   cardMin: 3, cardMax: 5, spine: 24, scene: 48, cardVis: 24};
+// 风格预设名单由后端下发（配方原文只有一份，前端抄一遍必然漂移）
+let _pkStyles = [];
+function pkStyle(key) {
+  for (let i = 0; i < _pkStyles.length; i++) if (_pkStyles[i].key === key) return _pkStyles[i];
+  return null;
+}
+async function loadPosterStyles() {
+  if (_pkStyles.length) return _pkStyles;
+  try {
+    const d = await fetch('/api/poster/styles').then(r => r.json());
+    _pkStyles = d.items || [];
+    if (d.limits) Object.keys(d.limits).forEach(k => { PK_LIMITS[k] = d.limits[k]; });
+  } catch (e) { _pkStyles = []; }
+  const sel = document.getElementById('pk-style-key-top');
+  if (sel && _pkStyles.length) {
+    sel.innerHTML = _pkStyles.map(s => `<option value="${s.key}">${esc(s.label)}｜${esc(s.when)}</option>`).join('');
+    sel.value = 'tool_review';
+  } else if (sel) { sel.innerHTML = '<option value="">名单载入失败，出图仍可用默认风格</option>'; }
+  return _pkStyles;
+}
+function pkStyleKey() {
+  const sel = document.getElementById('pk-style-key-top');
+  return sel ? sel.value : '';
+}
+function pkSyncStyle(v) {          // 顶部下拉改了：让文案区里那段配方说明跟着换
+  const box = document.getElementById('pk-style-text');
+  if (box) box.textContent = pkStyleText();
+  const free = document.getElementById('pk-style-free-row');
+  if (free) free.style.display = (v === 'auto') ? 'flex' : 'none';
+}
+function pkStyleText() {
+  const s = pkStyle(pkStyleKey());
+  if (!s || s.key === 'auto') {
+    const el = document.getElementById('pk-style');
+    return (el && el.value.trim()) || '（出图时由这句自由描述决定）';
+  }
+  return s.preset;
+}
 
 function pkChars(p) {
   let n = (p.title || '').length + (p.subtitle || '').length + (p.footer || '').length;
@@ -1945,23 +2003,41 @@ function pkProblems(p) {
   if (pkChars(p) > PK_LIMITS.total) bad.push('合计超 ' + PK_LIMITS.total + ' 字');
   return bad;
 }
+// 画面侧只提不拦：缺配图照样能出图，只是大概率又是一张空文字框，值得单独说一句
+function pkVisualHints(p) {
+  const bad = [];
+  if (!(p.scene || '').trim()) bad.push('没写主视觉');
+  const cards = p.cards || [];
+  const n = cards.filter(c => (c.v || '').trim()).length;
+  if (cards.length && n < Math.min(2, cards.length)) bad.push(n + '/' + cards.length + ' 张卡片没配画面');
+  return bad;
+}
 function _pkRow(tag, id, val, max, ph) {
   return `<div class="pk-row"><span class="pk-tag">${tag}</span>`
     + `<input id="${id}" value="${esc(val || '')}" maxlength="${max}" placeholder="${ph}" oninput="pkCount()"></div>`;
 }
 function pkRenderPlan(plan, publish) {
   plan = plan || {}; publish = publish || {};
+  if (pkStyleKey() !== (plan.style_key || '')) {
+    const top = document.getElementById('pk-style-key-top');
+    if (top && pkStyle(plan.style_key)) top.value = plan.style_key;
+  }
   let html = `<div class="pk-row"><span class="pk-tag">主线</span>`
     + `<input id="pk-spine" value="${esc(plan.spine || '')}" maxlength="${PK_LIMITS.spine}" placeholder="这条海报讲的一条链（不进图）"></div>`
+    + _pkRow('主视觉', 'pk-scene', plan.scene, PK_LIMITS.scene, '要画成什么场景（不进图，例：熔岩城墙头上法师举起发光卷轴）')
     + _pkRow('主标题', 'pk-title', plan.title, PK_LIMITS.title, '≤12 字')
     + _pkRow('副标题', 'pk-subtitle', plan.subtitle, PK_LIMITS.subtitle, '≤10 字，可留空');
   (plan.cards || []).slice(0, PK_LIMITS.cardMax).forEach((c, i) => {
     html += `<div class="pk-row"><span class="pk-tag">卡片${i + 1}</span>`
       + `<input id="pk-ct-${i}" value="${esc(c.t || '')}" maxlength="${PK_LIMITS.cardT}" placeholder="标题 ≤6 字" oninput="pkCount()">`
-      + `<input id="pk-cd-${i}" value="${esc(c.d || '')}" maxlength="${PK_LIMITS.cardD}" placeholder="说明 ≤16 字" oninput="pkCount()"></div>`;
+      + `<input id="pk-cd-${i}" value="${esc(c.d || '')}" maxlength="${PK_LIMITS.cardD}" placeholder="说明 ≤16 字" oninput="pkCount()"></div>`
+      + `<div class="pk-row pk-row-sub"><span class="pk-tag">配图</span>`
+      + `<input id="pk-cv-${i}" class="pk-vis" value="${esc(c.v || '')}" maxlength="${PK_LIMITS.cardVis}" placeholder="这一条画什么（不进图，要有形体：仪表/岔路/警示牌）"></div>`;
   });
   html += _pkRow('尾注', 'pk-footer', plan.footer, PK_LIMITS.footer, '合规转述声明')
-    + `<div class="pk-row"><span class="pk-tag">画面风格</span><input id="pk-style" value="${esc(plan.style || '')}" maxlength="120" placeholder="配色 / 材质 / 装饰一句话"></div>`
+    + `<div class="pk-row"><span class="pk-tag">风格配方</span><div id="pk-style-text" class="pk-pub" style="margin:0;max-height:76px">${esc(pkStyleText())}</div></div>`
+    + `<div class="pk-row" id="pk-style-free-row" style="display:${pkStyleKey() === 'auto' ? 'flex' : 'none'}">`
+    + `<span class="pk-tag">自由风格</span><input id="pk-style" value="${esc(plan.style || '')}" maxlength="120" placeholder="仅「自由发挥」时生效：配色 / 材质 / 装饰一句话"></div>`
     + '<div class="pk-count" id="pk-count"></div>';
   // 发布页文案：不进图，所以不占 80 字预算，但同样是 AI 起草、人可改
   html += '<div class="pk-sub">发布页文案（不进图，随包一起给你复制走）</div>'
@@ -1977,10 +2053,11 @@ function pkReadPlan() {
   const cards = [];
   for (let i = 0; i < PK_LIMITS.cardMax; i++) {
     const t = g('pk-ct-' + i), d = g('pk-cd-' + i);
-    if (t || d) cards.push({t: t, d: d});
+    if (t || d) cards.push({t: t, d: d, v: g('pk-cv-' + i)});
   }
   return {title: g('pk-title'), subtitle: g('pk-subtitle'), cards: cards,
-          footer: g('pk-footer'), style: g('pk-style'), spine: g('pk-spine')};
+          footer: g('pk-footer'), style: g('pk-style'), spine: g('pk-spine'),
+          scene: g('pk-scene'), style_key: pkStyleKey()};
 }
 function pkReadPublish() {
   const g = id => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
@@ -1990,14 +2067,18 @@ function pkReadPublish() {
 function pkCount() {
   const el = document.getElementById('pk-count');
   if (!el) return;
-  const p = pkReadPlan(), bad = pkProblems(p);
-  el.className = 'pk-count ' + (bad.length ? 'bad' : 'ok');
+  const p = pkReadPlan(), bad = pkProblems(p), hint = pkVisualHints(p);
+  el.className = 'pk-count ' + (bad.length ? 'bad' : (hint.length ? 'mild' : 'ok'));
   el.textContent = `合计 ${pkChars(p)} / ${PK_LIMITS.total} 字 · ${p.cards.length} 张卡片`
-    + (bad.length ? '　⚠️ ' + bad.join('；') : '　✅ 可出图');
+    + (bad.length ? '　⚠️ ' + bad.join('；')
+                  : '　✅ 可出图' + (hint.length ? '　⚠️ 画面偏空：' + hint.join('；') : ''));
 }
 async function posterPlan() {
   if (!_pkId) { alert('请先选择整合稿'); return; }
-  const body = {summary_id: _pkId, theme: document.getElementById('pk-theme').value.trim()};
+  const body = {summary_id: _pkId,
+                theme: document.getElementById('pk-theme').value.trim(),
+                ratio: document.getElementById('pk-ratio').value,
+                style_key: pkStyleKey()};
   const r = await fetch('/api/poster/plan', {method: 'POST',
     headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)}).then(x => x.json());
   if (r.error) { setStatus('error', r.error); return; }
@@ -2010,9 +2091,14 @@ async function posterGenerate(force) {
   if (plan) {
     const bad = pkProblems(plan);
     if (bad.length && !confirm('文案不合格（' + bad.join('；') + '）。\n后端会直接拒绝出图，仍要提交？')) return;
+    const hint = pkVisualHints(plan);
+    if (hint.length && !confirm('画面计划偏空（' + hint.join('；') + '）。\n'
+        + '这样多半又会出一张几乎没有插画的图。仍要出图？')) return;
   }
   const copiesEl = document.getElementById('pk-copies');
   const copies = copiesEl ? parseInt(copiesEl.value) || 1 : 1;
+  const reviewEl = document.getElementById('pk-review');
+  const review = reviewEl ? !!reviewEl.checked : true;
   const tip = force ? '这条整合稿被判定为规则版骨架。\n确认你已人工复核过拆解出的文案、仍要出图？'
                     : (copies > 1 ? `出 ${copies} 张挑 1 张？约 2-3 分钟、${(copies * 0.5).toFixed(1)} 元。已有海报会被覆盖。`
                                   : '出图？约 20-60 秒 + 一次回读校验，0.5 元/张。已有海报会被覆盖。');
@@ -2020,7 +2106,7 @@ async function posterGenerate(force) {
   const body = {summary_id: _pkId, ratio: document.getElementById('pk-ratio').value,
                 theme: document.getElementById('pk-theme').value.trim(),
                 plan: plan, publish: plan ? pkReadPublish() : null,
-                force: !!force, copies: copies};
+                force: !!force, copies: copies, review: review};
   const r = await fetch('/api/poster/generate', {method: 'POST',
     headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)}).then(x => x.json());
   if (r.error) { setStatus('error', r.error); return; }
@@ -2054,6 +2140,22 @@ function pollPoster(stage) {
   };
   setTimeout(poll, 1200);
 }
+// 视觉评审：回读管"字对不对"，这个管"好不好看"，两句话分开说，别混成一个通过/不通过
+function pkReviewHtml(rv) {
+  if (!rv || rv.skipped) {
+    return '<div class="pk-verify mild">未做视觉评审'
+      + (rv && rv.error ? '：' + esc(String(rv.error).split('\n')[0]) : '') + '</div>';
+  }
+  const chips = (rv.items || []).map(i => {
+    const cls = i.score >= 4 ? 'hi' : (i.score <= 2 ? 'lo' : '');
+    return `<span class="pk-rv-i ${cls}">${esc(i.label)} ${i.score || '-'}/5</span>`;
+  }).join('');
+  const head = (rv.ok ? '✅' : '⚠️') + ` 视觉评审 ${rv.score}/${rv.full} 分`
+    + (rv.visual_pct ? '，画面约占 ' + rv.visual_pct + '%' : '')
+    + (rv.note ? '　' + esc(rv.note) : '');
+  return `<div class="pk-verify ${rv.ok ? 'pass' : 'mild'}">${head}</div>`
+    + `<div class="pk-rv">${chips}</div>`;
+}
 async function renderPosterResult(id) {
   const m = await fetch('/api/poster/' + id).then(r => r.json());
   _pkLast = m;
@@ -2066,27 +2168,30 @@ async function renderPosterResult(id) {
     cls = 'fail';
     txt = `✗ 图面文字与文案不一致，缺失：${(v.missing || []).join('、') || '（未知）'}——别发布，改文案或重出`;
   }
-  const warns = (m.lint || []).filter(s => !s.startsWith('error'));
+  const warns = (m.lint || []).filter(s => !s.startsWith('error') && !s.startsWith('info:'));
   const pub = pkPublishText(m);
   const ck = (m.checklist || []).map(s => `<li>${esc(s)}</li>`).join('');
   let imgHtml;
   if (m.copies > 1 && (m.candidates || []).length > 1) {
     imgHtml = '<div class="pk-cands">' + m.candidates.map(c => {
-      const v = c.verify || {};
+      const cv = c.verify || {}, cr = c.review || {};
       const on = c.index === m.chosen;
       return `<div class="pk-cand${on ? ' on' : ''}" onclick="posterPick(${c.index})" title="点一下选这张">`
         + `<img src="${c.url}?t=${Date.now()}" alt="候选${c.index}">`
-        + `<div class="pk-cand-t">${v.ok ? '字全对' : (v.ok === false ? '有缺字' : '未校验')}${on ? ' · 已选' : ' · 选它'}</div></div>`;
+        + `<div class="pk-cand-t">${cv.ok ? '字全对' : (cv.ok === false ? '有缺字' : '未校验')}`
+        + (cr.score ? ' · ' + cr.score + '/' + cr.full + '分' : '')
+        + (on ? ' · 已选' : ' · 选它') + '</div></div>';
     }).join('') + '</div>'
-      + '<div class="pk-hint">这几张是同一份文案画出来的，只差好不好看。点一下就算选定，发布取的就是这张。</div>';
+      + '<div class="pk-hint">这几张是同一份文案画出来的，只差好不好看。分数由视觉模型按固定五项打，点一下就算选定，发布取的就是这张。</div>';
   } else {
     imgHtml = `<img class="pk-img" src="${m.url}?t=${Date.now()}" onclick="window.open('${m.url}','_blank')" title="点击看原图">`;
   }
   document.getElementById('pk-result').innerHTML =
     imgHtml
     + `<div class="pk-verify ${cls}">${esc(txt)}</div>`
+    + pkReviewHtml(m.review)
     + (warns.length ? `<div class="pk-verify mild">${warns.map(esc).join('<br>')}</div>` : '')
-    + `<div class="pk-sub">发布文案（约 ${m.text_chars} 字上图，配文另计；估算成本 ${m.cost_yuan_estimate} 元/张）</div>`
+    + `<div class="pk-sub">发布文案（约 ${m.text_chars} 字上图，配文另计；估算成本 ${m.cost_yuan_estimate} 元/张 · 风格 ${esc(m.style_label || m.style_key || '未指定')}）</div>`
     + `<pre class="pk-pub">${esc(pub)}</pre>`
     + `<div class="pk-sub">发布前逐条人工过</div><ul class="pk-ck">${ck}</ul>`
     + '<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">'

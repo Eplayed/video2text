@@ -5,12 +5,15 @@
 文字由出图模型直接画进像素。三段式，缺一不可：
 
   1) LLM 拆解：把整理稿压成「主标题 + 副标题 + N 张卡片 + 尾注」文案计划，
-     并过字数硬门禁。总字数是实测出来的安全线（60 字全对、超 80 字开始出错），
-     所以钉在代码里，不靠 prompt 祈祷。
-  2) 出图：百炼原生 multimodal-generation 端点，prompt 逐字点名要渲染的文本。
+     并过字数硬门禁。总字数是实测出来的安全线，不是拍脑袋：带完整画面计划时
+     62 字连出 2 张全对、79 字那张直接丢掉主标题，所以线钉在 64，不靠 prompt 祈祷。
+     拆解同时产出**画面计划**（主视觉 + 每条卡片该画什么）与**风格预设键**：
+     只有文字没有画面的计划，模型只能画空框，图面占比实测接近 0。
+  2) 出图：百炼原生 multimodal-generation 端点。prompt 把「要逐字渲染的文字」和
+     「只用来构图的画面描述」分成两块写，否则模型会把画面描述也当文字画上去。
      返回的是 OSS 临时链接，必须当场下载，否则过期拿不到图。
-  3) OCR 回读：视觉模型转录图面文字，与文案计划逐字比对。
-     没有这一步，「图面写错字」只能靠人眼发现——而这是整条链路唯一的质检位。
+  3) 质检两问，各司其职：OCR 回读只答「字对不对」，视觉评审只答「好不好看」。
+     少任何一个都发现不了问题：字全对但一张空文字框的图照样能发出去。
 
 Python 3.9 兼容：不用 match / X|Y 语法。
 """
@@ -39,34 +42,145 @@ SIZES = {"9:16": "936*1664", "3:4": "1248*1664", "1:1": "1664*1664"}
 RATIO_LABEL = {"9:16": "竖版 9:16", "3:4": "竖版 3:4", "1:1": "方形 1:1"}
 
 # 字数纪律（超限即拒绝出图，不是警告）
-MAX_TOTAL_CHARS = 80
+# 80 字是"prompt 里几乎没有画面要求"时测出来的线。加了 scene / 卡片配图之后重测：
+# 62 字连出 2 张逐字全对（评审 23/25、画面占比 65%），79 字那一张直接把主标题和三条
+# 说明整段丢掉。模型要分算力去画画面，字数安全线只能跟着往下挪。
+MAX_TOTAL_CHARS = 64
 TITLE_MAX, SUBTITLE_MAX, FOOTER_MAX = 12, 10, 14
-CARD_TITLE_MAX, CARD_DESC_MAX, CARD_MIN, CARD_MAX = 6, 16, 3, 5
+# 单条说明的长度比总字数更容易出错：实测 4 张卡片、说明 7-8 字时连出 2 张逐字全对；
+# 同样 64 字总量但说明写到 11-13 字，那三行直接退化成"伪汉字"乱码。所以把单条压到 10 字。
+CARD_TITLE_MAX, CARD_DESC_MAX, CARD_MIN, CARD_MAX = 6, 10, 3, 5
 SPINE_MAX = 24              # 主线一句话：只在 UI 里给人看，不进图、不计字数
+# 画面计划（scene / 每条卡片的 v）与 spine 同理：只喂给出图模型，不落成图面文字，
+# 所以不占合计字数预算。没有这一栏，模型只会画一排空文字框——那是我们的图"土"的第一原因。
+SCENE_MAX, CARD_VIS_MAX = 48, 24
+VISUAL_MIN = 2              # 至少几条卡片给了画面描述，少于这个数提示人工补
 
 # 一次出多张让人挑：AI 出图有方差，并行采样比反复重出省时间也省钱
 MAX_COPIES = 3
 COPIES_NOTE = "模型限流每分钟 2 张，出 3 张约需 2-3 分钟"
 
-# 发布文案（不进图、只给发布页用）的独立字数档：不受图面 80 字预算约束
+# 发布文案（不进图、只给发布页用）的独立字数档：不受图面合计字数预算约束
 COPY_MIN, COPY_MAX = 120, 260
 DIGEST_MAX = 120
 KEYWORD_MAX, SOURCE_MAX = 30, 50
+
+# 出图后视觉评审的五项 rubric（详见 review_image）：回读管"字对不对"，这里管"好不好看"
+REVIEW_ITEMS = [("overflow", "文字完整"), ("hierarchy", "层级清晰"), ("visual", "画面占比"),
+                ("contrast", "可读性"), ("polish", "精致度")]
+REVIEW_PASS = 18            # 五项满分 25，低于这个分不建议直接发
 
 # 合规尾注：图是 AI 画的、文字是 AI 写的，转述声明必须随配文一起发
 COMPLIANCE_NOTE = "本文由 AI 辅助整理归纳，内容源自公开分享，观点与结论归原作者，如有侵权请联系删除。"
 
 # 海报版发布检查清单：平台侧动作 AI 替不了，逐条人工过
 CHECKLIST = [
-    "图内文字已过 OCR 回读校验（manifest.verify.ok = true），未通过别发",
+    "图内文字已过回读校验（manifest.verify.ok = true），未通过别发",
+    "视觉评审已过（manifest.review）：低于 %d 分或画面占比低于 40%% 时先换候选/换风格重出，别硬发" % REVIEW_PASS,
     "数字/版本/价格类信息人工核对一手来源（ASR 与模型都可能出错）",
     "「文章设置」勾选「内容由 AI 生成」（2025-09-01 起强制，平台不自动标注）",
     "图片消息无「声明原创」入口（平台未开放图片原创），勿找该按钮、勿群发后补标",
     "配文保留文末合规尾注，勿删；正文禁外链",
     "尺寸与平台匹配：9:16 小红书/抖音图文、3:4 公众号图片消息、1:1 通用封面",
-    "发布后 72 小时回填数据，便于回看哪种风格有效",
+    "发布后 72 小时回填数据，便于回看哪种风格预设、哪种画面占比有效",
 ]
 
+
+# ── 风格预设库 ──
+# 原来只让模型自由发挥一句"深色影院质感"，所以十次出图十个样、每次都像临时拼的。
+# 这里把风格钉成四套固定配方：每套都写死画风词 + 配色 + 卡片材质 + 主视觉该往哪走，
+# 拆解时让模型从里挑一个（可人工改），出图 prompt 直接取用配方原文。
+# key 会落进 manifest.plan.style_key，改名等于改历史数据，新增可以、删除要三思。
+STYLE_PRESETS = {
+    "game_epic": {
+        "label": "游戏史诗风（写实插画 · 暗色氛围）",
+        "when": "游戏攻略、版本解读、装备/数值向",
+        "scene": "占画面五成以上的写实游戏主视觉：一个角色或一处场景在单一强光源下，背景压暗只做氛围",
+        "card_visual": "每张卡片左端配一个道具特写小图（武器/徽章/地图/药水瓶），不许留空框",
+        "style": ("写实厚涂游戏原画风中文信息图，电影级布光，深灰蓝夜色背景 #161b26 配单一暖金强光源 #c8963c，"
+                  "画面上半部是一整幅占版面五成的游戏场景或角色插画，卡片做成带烧蚀边缘的黑铁石板，"
+                  "石板之间用金色雕花细线分隔，主标题用厚重中文黑体配金色描边但笔画必须清晰可读，"
+                  "严禁扁平卡通矢量风、严禁纯白底、严禁左右对称的商务模板感"),
+    },
+    "tool_review": {
+        "label": "工具测评风（界面感 · 冷色科技）",
+        "when": "AI 工具实测、软件对比、效率清单",
+        "scene": "占画面五成的主视觉：一台斜视角屏幕里跑出界面光效，周围浮着几个发光的接口节点",
+        "card_visual": "每张卡片配一枚线性发光图标（终端/齿轮/闪电/盾牌），卡片做成悬浮的毛玻璃面板",
+        "style": ("高级科技感中文信息图，深蓝紫渐变底 #0e1230 到 #1a1040，点缀青蓝高光 #4fd1ff 与紫色 #8b5cf6，"
+                  "画面上半部是一幅占版面五成的产品界面氛围插画（斜视角悬浮屏幕、发光数据流、玻璃质感面板），"
+                  "卡片做成半透明毛玻璃圆角面板带细霓虹描边和内发光，主标题是粗中文无衬线字体带冷光渐变，"
+                  "整体像高端发布会主视觉，严禁廉价蓝白渐变、严禁真人照片拼贴、严禁纯文字排版"),
+    },
+    "checklist": {
+        "label": "清单笔记风（纸质手账 · 暖色亲和）",
+        "when": "经验总结、避坑清单、教程要点",
+        "scene": "占画面五成的主视觉：一张摊开的笔记本或桌面俯拍插画，笔、贴纸、咖啡杯散在其间",
+        "card_visual": "每条卡片前面画一个手绘勾选框或小标记，配一枚相关物件插画（便签/尺子/警示牌）",
+        "style": ("精致手账风中文信息图，暖米色纸纹背景 #f5efe3，主色墨黑 #2b2b2b 配砖红 #d9694a 与苔绿 #6b8e5a，"
+                  "画面上半部是一幅占版面五成的俯拍桌面插画（摊开的笔记本、笔、贴纸、咖啡杯），"
+                  "卡片做成贴在纸上的小便签卡带轻微投影和手撕边，标题用清晰规整的中文粗黑体（严禁手写体），"
+                  "点缀手绘下划线和小图标，严禁冷色科技风、严禁玻璃质感、严禁纯黑底"),
+    },
+    "minimal": {
+        "label": "极简杂志风（大留白 · 强对比）",
+        "when": "观点短文、单点结论、封面级标题党",
+        "scene": "占画面五成的主视觉：一个被高度风格化的单一主体（一扇门/一枚棋子/一台机器），大面积纯色包围",
+        "card_visual": "每张卡片只放一个大号几何符号或单色剪影，宁少勿多，靠体量不靠细节",
+        "style": ("高端杂志版式中文信息图，大面积留白配单一强调色（正红 #d92b2b 或深墨绿），"
+                  "画面上半部是一幅占版面五成的高度风格化单主体插画（剪影/几何构成/强轮廓），"
+                  "卡片是极细分割线隔开的纯排版区块，靠字号体量差拉层级（主标题极大、说明极小），"
+                  "主标题用超粗中文无衬线，留白充足、栅格严整，严禁装饰堆砌、严禁渐变、严禁花哨边框"),
+    },
+    "auto": {
+        "label": "自由发挥（沿用拆解写的那句风格）",
+        "when": "上面四套都不合题材时",
+        "scene": "",
+        "card_visual": "",
+        "style": "",
+    },
+}
+STYLE_ORDER = ["game_epic", "tool_review", "checklist", "minimal", "auto"]
+DEFAULT_STYLE_KEY = "tool_review"
+# 字体这条不写进各套配方、单独挂：风格词里全是"质感/雕花/氛围"，模型很容易顺手把中文
+# 写成手写体或艺术字，而实测手写体的逐字准确率明显更低（主标题整块消失过一次）。
+TYPE_RULE = ("图上的中文一律用清晰规整的中文黑体或无衬线字体，字号够大、笔画干净，"
+             "禁用手写体、草书、艺术字变形与笔画粘连")
+
+
+def style_choices():
+    """给前端下拉用：配方原文也一起回，让人在出图前就看见这次到底会按哪套词去画。"""
+    out = []
+    for k in STYLE_ORDER:
+        p = STYLE_PRESETS[k]
+        out.append({"key": k, "label": p["label"], "when": p["when"],
+                    "preset": (p["style"] or "（沿用手写的风格描述）"),
+                    "scene": p["scene"] or ""})
+    return out
+
+
+def _preset(plan):
+    return STYLE_PRESETS.get((plan or {}).get("style_key") or "") or {}
+
+
+def resolve_style_text(plan):
+    """出图用的风格原文：命中预设就用配方原文（钉死、不许漂移），auto/未知键才回落到自由填写。
+
+    两条路都要补一句字体硬约束。实测手账那版把标题写成"手写感中文粗体"后，主标题整块
+    消失、卡片标题被复制成两个"重点"——出图模型画规整黑体的逐字准确率明显高于手写体。
+    """
+    p = _preset(plan)
+    base = p.get("style") or (plan or {}).get("style") or "深色质感背景，金色细边框，信息卡片纵向排列"
+    return base + "。" + TYPE_RULE
+
+
+def style_plan_prompt():
+    """拼进拆解 prompt 的预设清单：让模型自己挑风格键，而不是自己编一句风格。"""
+    lines = []
+    for k in STYLE_ORDER:
+        p = STYLE_PRESETS[k]
+        lines.append('  - "%s"：%s（适用：%s）' % (k, p["label"], p["when"]))
+    return "\n".join(lines)
 
 class PosterError(Exception):
     """链路可预期失败（AI 未配置 / 字数越界 / 出图端点报错），消息可直接展示给用户。"""
@@ -111,18 +225,30 @@ _PLAN_PROMPT = """你是自媒体图文编辑。下面这份素材多半**已经
   砍掉单纯罗列的名词、重复修饰和与主题无关的边角料。
 
 铁律三·字数硬约束（多一个字都不合格）：
-主标题 ≤12 字；副标题 ≤10 字；每张卡片标题 ≤6 字、说明 ≤16 字；尾注 ≤14 字；
-卡片 3-5 张；全部文字合计 ≤80 字。宁可少一张卡片把主线讲完整，也不要多一张卡片讲半句。
+主标题 ≤12 字；副标题 ≤10 字；每张卡片标题 ≤6 字、说明 ≤10 字；尾注 ≤14 字；
+卡片 3-5 张；全部文字合计 ≤__TOTAL__ 字。宁可少一张卡片把主线讲完整，也不要多一张卡片讲半句。
 中文标点计入字数；不要出现英文单词或 markdown 符号；
 **价格、天数、日期一律保持素材里的阿拉伯数字**（写 388 不写三八八），中文数字反而更占字数也更难读。
 
+铁律四·画面纪律（这一条决定海报是"一张插画"还是"一屏文字框"，与字数同样重要）：
+- scene：先想一个能代表本篇的**主视觉画面**（≤48 字），要求是一个看得见的场景或物件，
+  例如"一个法师在熔岩城墙头举起发光的卷轴"，不要写"科技感""高级感"这类形容词。
+- 每张卡片必须给 v（≤24 字）：这一条**该画成什么**——具体角色、道具、动作或场景，
+  要能被画出来。"重要""高效""方便"这种没有形体的词一律不合格；讲数值就画仪表/天平/钱，
+  讲风险就画断裂/警示，讲选择就画岔路/对比。
+- scene 与 v 只喂给画图模型看，不会被写成图上的字，所以不占上面那条合计预算，但同样要贴着素材事实。
+- 从下面这几套风格预设里挑**一个最贴本篇题材的**填进 style_key（只能填键名，不要自己编风格描述）：
+__STYLES__
+__STYLE_FIXED__
 输出 JSON（键固定，值为字符串或对象数组）：
 {
   "title": "主标题",
   "subtitle": "副标题",
-  "cards": [{"t": "卡片标题", "d": "卡片说明"}],
+  "cards": [{"t": "卡片标题", "d": "卡片说明", "v": "这一条画什么"}],
   "footer": "合规转述声明，例：内容整理自公开分享",
-  "style": "画面风格一句话，描述配色/材质/装饰，例：深色影院质感背景，金色雕花边框，卡片做成票根造型",
+  "style_key": "上面风格预设之一的键名",
+  "style": "仅当 style_key 为 auto 时填写一句自由风格描述，否则留空字符串",
+  "scene": "主视觉画面描述",
   "spine": "一句话说清这条主线（≤24字，不画进海报，只用来检查结构是否成链）",
   "publish": {
     "copy_text": "发布页配文，120-260 字纯文本：钩子开头 1-2 句 + 要点 3-5 条（每条一行，用「· 」开头）+ 收尾引导 1 句。不要 markdown 符号。",
@@ -132,7 +258,8 @@ _PLAN_PROMPT = """你是自媒体图文编辑。下面这份素材多半**已经
   }
 }
 
-spine 与 publish 里的文字不会画进海报，所以不占上面 80 字的预算；但同样只能用素材里的事实。
+spine、scene、每张卡片的 v、style_key 与 publish 里的文字都不会画进海报，所以不占合计字数预算；
+但同样只能用素材里的事实。
 
 素材：
 __CONTENT__"""
@@ -149,7 +276,7 @@ def _clip_ws(text, limit):
 
 
 def _clip_publish(raw):
-    """发布文案单独裁切：它不进图，所以不受图面 80 字预算约束。"""
+    """发布文案单独裁切：它不进图，所以不受图面合计字数预算约束。"""
     raw = raw if isinstance(raw, dict) else {}
     return {"copy_text": re.sub(r"[ \t]+", " ", str(raw.get("copy_text") or "")).strip()[:COPY_MAX],
             "digest": _clip_ws(raw.get("digest"), DIGEST_MAX),
@@ -170,12 +297,29 @@ def lint_publish(pub):
     return bad
 
 
-def build_text_plan(summary, ai_config, theme="", title=""):
+def style_fixed_prompt(style_key):
+    """用户已在下拉里锁定风格时，把这套配法的画面方向塞进拆解 prompt。
+
+    不塞的话模型会按自己那套联想写 scene/v：实测选"清单笔记风"却写出"能量核心脉动"，
+    风格与配图对不上，画出来自然别扭。
+    """
+    p = STYLE_PRESETS.get(style_key or "") or {}
+    if not p.get("label") or style_key == "auto":
+        return ""
+    return ("\n本篇风格已由人工指定为 \"%s\"（%s），style_key 必须填这个键，"
+            "scene 与各卡片的 v 都要按这个方向的画面来想：%s。"
+            % (style_key, p["label"], p.get("scene") or ""))
+
+
+def build_text_plan(summary, ai_config, theme="", title="", style_key=""):
     """调 LLM 产出文案计划 + 发布文案，并逐字段裁到字数线内。
 
     返回 (plan, publish, violations, notes)：plan 是要画进图里的文字（超预算先经 fit_plan
     自动收敛，violations 非空才拒绝出图），publish 是发布页用的配文/摘要/关键词回复/
     来源说明（只软校验），notes 记录自动压缩动了哪几处。
+
+    style_key 显式传入且合法时直接盖掉模型选的风格：用户在弹窗里点过下拉，
+    就不该再被模型自由发挥改回去。
     """
     api_key, api_base, model = _require_ai(ai_config)
     import openai
@@ -184,6 +328,9 @@ def build_text_plan(summary, ai_config, theme="", title=""):
                            timeout=300, max_retries=1)
     prompt = (_PLAN_PROMPT
               .replace("__THEME__", (theme or "未指定，按素材自判").strip())
+              .replace("__STYLES__", style_plan_prompt())
+              .replace("__TOTAL__", str(MAX_TOTAL_CHARS))
+              .replace("__STYLE_FIXED__", style_fixed_prompt(style_key))
               .replace("{{DATE}}", datetime.now().strftime("%m月%d日"))
               .replace("__CONTENT__", (summary.get("content") or "")[:8000]))
     resp = client.chat.completions.create(
@@ -198,24 +345,47 @@ def build_text_plan(summary, ai_config, theme="", title=""):
             continue
         t, d = _clip(c.get("t"), CARD_TITLE_MAX), _clip(c.get("d"), CARD_DESC_MAX)
         if t or d:
-            cards.append({"t": t, "d": d})
+            cards.append({"t": t, "d": d, "v": _clip_ws(c.get("v"), CARD_VIS_MAX)})
+    key = str(style_key if style_key in STYLE_PRESETS else data.get("style_key") or "").strip()
+    if key not in STYLE_PRESETS:
+        key = DEFAULT_STYLE_KEY
     plan = {"title": _clip(title or data.get("title") or summary.get("title"), TITLE_MAX),
             "subtitle": _clip(data.get("subtitle"), SUBTITLE_MAX),
             "cards": cards,
             "footer": _clip(data.get("footer") or "内容整理自公开分享", FOOTER_MAX),
-            # spine 只用来让人一眼判断「这条主线成不成链」，不画进海报、不计入 80 字预算
+            # spine 只用来让人一眼判断「这条主线成不成链」，不画进海报、不计入字数预算
             "spine": _clip_ws(data.get("spine"), SPINE_MAX),
-            "style": str(data.get("style") or "深色质感背景，金色细边框，信息卡片纵向排列").strip()[:120]}
+            # scene 与卡片的 v 同理：只喂给出图模型，不当成图面文字，所以也不占字数预算
+            "scene": _clip_ws(data.get("scene"), SCENE_MAX),
+            "style_key": key,
+            "style": str(data.get("style") or "").strip()[:120]}
     plan, notes = fit_plan(plan)
     return plan, _clip_publish(data.get("publish")), lint_plan(plan), notes
 
 
 def plan_chars(plan):
-    """海报上要渲染的总字数（不含风格描述——那部分模型不落成文字）。"""
+    """海报上要渲染的总字数。
+
+    风格描述、主视觉与卡片配图（style / scene / cards[].v）都不算：它们只告诉模型
+    "该画什么"，不会被落成图上的字，所以不占字数安全预算。
+    """
     n = len(plan.get("title") or "") + len(plan.get("subtitle") or "") + len(plan.get("footer") or "")
     for c in plan.get("cards") or []:
         n += len(c.get("t") or "") + len(c.get("d") or "")
     return n
+
+
+def lint_visual(plan):
+    """画面侧软校验：不阻断出图，只提醒"这张图大概又是空文字框"。"""
+    bad = []
+    cards = plan.get("cards") or []
+    with_vis = [c for c in cards if (c.get("v") or "").strip()]
+    if not (plan.get("scene") or "").strip():
+        bad.append("没写主视觉（scene），模型只会画一排文字框")
+    if cards and len(with_vis) < min(VISUAL_MIN, len(cards)):
+        bad.append("%d 张卡片里只有 %d 张配了画面，建议每条都能画出一个具体物件"
+                   % (len(cards), len(with_vis)))
+    return bad
 
 
 def lint_plan(plan):
@@ -251,8 +421,12 @@ def fit_plan(plan, limit=MAX_TOTAL_CHARS):
     plan["title"] = _clip(plan.get("title"), TITLE_MAX)
     plan["subtitle"] = _clip(plan.get("subtitle"), SUBTITLE_MAX)
     plan["footer"] = _clip(plan.get("footer"), FOOTER_MAX)
+    plan["scene"] = _clip_ws(plan.get("scene"), SCENE_MAX)
+    if not plan.get("style_key"):
+        plan["style_key"] = DEFAULT_STYLE_KEY
     for c in plan.get("cards") or []:
         c["t"], c["d"] = _clip(c.get("t"), CARD_TITLE_MAX), _clip(c.get("d"), CARD_DESC_MAX)
+        c["v"] = _clip_ws(c.get("v"), CARD_VIS_MAX)
     if start <= limit:
         return plan, notes
     while plan_chars(plan) > limit and len(plan["cards"]) > CARD_MIN:
@@ -282,16 +456,58 @@ def fit_plan(plan, limit=MAX_TOTAL_CHARS):
 
 
 def build_prompt_text(plan, ratio="9:16"):
-    """组装出图 prompt：要渲染的文字逐条点名 + 明令不得增删，模型才不会自己编文案。"""
-    lines = ["一张%s中文信息长图海报，%s。" % (RATIO_LABEL.get(ratio, "竖版 9:16"), plan["style"]),
-             "海报必须逐字渲染以下简体中文，不得增删改任何字符，不要出现其它文字：",
-             "主标题：%s" % plan["title"]]
+    """组装出图 prompt：画面要求与要渲染的文字**分成两块**写。
+
+    分块是必须的：早期版本把两者混在一起说"渲染以下内容"，模型会把画面描述
+    也当文案画上去，或者反过来因为文字太多而放弃画插画（实测图面占比接近 0）。
+    所以这里明确标注哪些字要逐字画、哪些只是构图说明、并给出画面占比下限。
+    """
+    preset = _preset(plan)
+    # 要渲染的字一律用「」框住：实测直接写"卡片1标题：X 说明：Y"，模型会把"说明："
+    # 这两个字也当成文案画到图上。框起来 + 明令只画框内的字，才分得清哪是指令哪是内容。
+    text_lines = ["主标题区：「%s」" % plan["title"]]
     if plan.get("subtitle"):
-        lines.append("副标题：%s" % plan["subtitle"])
+        text_lines.append("副标题区：「%s」" % plan["subtitle"])
     for i, c in enumerate(plan.get("cards") or [], 1):
-        lines.append("卡片%d标题：%s 说明：%s" % (i, c.get("t") or "", c.get("d") or ""))
+        text_lines.append("卡片%d标题区：「%s」 说明区：「%s」"
+                          % (i, c.get("t") or "", c.get("d") or ""))
     if plan.get("footer"):
-        lines.append("尾注小灰字：%s" % plan["footer"])
+        text_lines.append("尾注区：「%s」" % plan["footer"])
+    lines = ["一张%s中文信息图海报。" % RATIO_LABEL.get(ratio, "竖版 9:16"),
+             "",
+             "【画风与配色 · 严格执行】",
+             resolve_style_text(plan)]
+    scene = (plan.get("scene") or "").strip() or (preset.get("scene") or "").strip()
+    card_visual = (preset.get("card_visual") or "").strip()
+    visuals = []
+    if scene:
+        visuals.append("主视觉：%s" % scene)
+    for i, c in enumerate(plan.get("cards") or [], 1):
+        v = (c.get("v") or "").strip()
+        if v:
+            visuals.append("卡片%d配图：%s" % (i, v))
+    if visuals:
+        lines += ["",
+                  "【画面构成 · 下面这些只是要画出来的图像，一个字都不许写成文字放到图上】",
+                  "\n".join("- " + x for x in visuals)]
+        if card_visual:
+            lines.append("- 配图样式：%s" % card_visual)
+    lines += ["- 插画与图标合计要占住整张图 50%% 以上的面积，%s"
+              % ("上半幅留给主视觉插画，文字卡片压在下半幅" if ratio in ("9:16", "3:4")
+                 else "左侧留给主视觉插画，文字卡片排在右侧"),
+              "- 严禁画成一整页纯文字排版，严禁只有空边框没有图像",
+              # 实测两次翻车方式：插画里的简历/信封被顺手写上字；三张卡片标题全被复制成主标题
+              "- 插画里的纸张、屏幕、招牌、信封一律用色块和线条表示，不许出现任何文字或字母",
+              "- 每张卡片的标题与说明都各不相同，卡片标题严禁重复主标题里的字样"]
+    lines += ["",
+              "【必须逐字渲染的简体中文 · 只画「」里面的字，「」本身和「主标题区/说明区」这类位置名一律不要画"
+              " · 不得增删改任何字符 · 除此之外不得出现任何其它文字】",
+              "\n".join(text_lines),
+              "",
+              "【版面骨架 · 上面每一行都要占住自己那块位置，一条不许少、一条不许重复】",
+              "- 最上方留出主标题区（字号最大）与副标题区（次之），两块都不能省",
+              "- 中部是卡片区，每张卡片只出现一次自己的标题和说明，严禁两张卡片写同一句",
+              "- 最下方留出尾注小灰字区，字号最小但必须存在"]
     return "\n".join(lines)
 
 
@@ -402,17 +618,97 @@ def verify_image(png_bytes, plan, ai_config, timeout=120):
             "transcript": transcript.strip()}
 
 
+# ── 4. 出图后视觉评审：只答"好不好看"，与回读校验互补 ──
+# 回读校验能查出"字画错了"，查不出"字全对但一张空文字框"。竞品图文的差距几乎全在
+# 后者：画面占比、层级、对比度。所以再挂一道视觉模型打分，把主观差距变成可比较的数字，
+# 也让人在多张候选里挑得有依据，而不是凭一眼感觉。
+_REVIEW_PROMPT = """你在评审一张由 AI 画出来的中文信息图海报（图上的中文文字是画进像素的，不是排版的）。
+按下面五项逐条打分，只能给 1-5 的整数，1 分很差、5 分很好：
+- overflow 文字完整：有没有字被裁掉、糊成一团、超出边框、出现乱码或假字
+- hierarchy 层级清晰：能不能一眼看出先看哪里；主标题/卡片/尾注是否分明
+- visual 画面占比：除文字外有没有真正的插画或图标（不是空边框），估算它占整张图的百分比
+- contrast 可读性：文字与背景对比够不够，有没有浅字压浅底、细字压花纹
+- polish 精致度：有没有明显 AI 味、廉价拼贴感、元素歪斜或比例失调
+再判断 publishable：作为自媒体图文封面，这张图现在能不能直接发出去。
+worst 填这五项里最差那一项的英文键名。note 用不超过 40 个中文字说最该改什么。
+只输出 JSON，不要任何解释：
+{"overflow":n,"hierarchy":n,"visual":n,"contrast":n,"polish":n,"visual_pct":n,"worst":"键名","note":"一句话","publishable":true}"""
+
+
+def _review_json(text):
+    """评审要的是 JSON，但视觉模型常包一层 ```json，交给 _parse_json 兜住。"""
+    return _parse_json(text)
+
+
+def _pct(v):
+    """模型给的画面占比：只取数字，越界或给不上就当 0（0 表示"没估出来"）。"""
+    m = re.search(r"\d+", str(v if v is not None else ""))
+    if not m:
+        return 0
+    return max(0, min(100, int(m.group())))
+
+
+def review_image(png_bytes, ai_config, timeout=120):
+    """视觉模型按固定 rubric 打分，返回 {ok, score, items, visual_pct, worst, note}。
+
+    ok 直接采用模型给的 publishable，score 用总分兜底（模型漏给 publishable 时
+    按 REVIEW_PASS 判），这样前端只认一个字段。
+    """
+    api_key, api_base, _ = _require_ai(ai_config)
+    import openai
+
+    client = openai.OpenAI(api_key=api_key, base_url=api_base or "https://api.openai.com/v1",
+                           timeout=timeout, max_retries=1)
+    b64 = base64.b64encode(png_bytes).decode()
+    resp = client.chat.completions.create(
+        model=OCR_MODEL,
+        messages=[{"role": "user", "content": [
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64," + b64}},
+            {"type": "text", "text": _REVIEW_PROMPT}]}],
+        max_tokens=500)
+    data = _review_json(resp.choices[0].message.content or "")
+
+    def _n(v):
+        try:
+            return max(1, min(5, int(v)))
+        except (TypeError, ValueError):
+            return 0
+
+    items = [{"key": k, "label": lb, "score": _n(data.get(k))} for k, lb in REVIEW_ITEMS]
+    scored = [i for i in items if i["score"]]
+    if not scored:
+        # 一项都没给分＝模型没按格式回，不能当成"这张图 0 分"，那样会污染候选排序
+        raise PosterError("视觉评审没拿到有效分数（模型没按 JSON 回话）")
+    total = sum(i["score"] for i in items)
+    worst = sorted(scored, key=lambda x: x["score"])[:1]
+    pub = data.get("publishable")
+    ok = bool(pub) if isinstance(pub, bool) else (total >= REVIEW_PASS and len(scored) == len(items))
+    return {"ok": ok, "score": total, "full": len(items) * 5,
+            "items": items,
+            "visual_pct": _pct(data.get("visual_pct")),
+            "worst": (worst[0]["key"] if worst else ""),
+            "note": _clip_ws(data.get("note"), 60),
+            "model": OCR_MODEL}
+
+
 # ── 编排 ──
 def pick_best(candidates):
-    """多张里挑最好的一张：回读通过的优先，其次缺字少的，再按出图顺序。"""
+    """多张里挑最好的一张：字先要对，再看视觉评审分，最后按出图顺序。
+
+    顺序不能反：回读没过=内容错，再好看也不能发；回读都过了才轮到"好不好看"决定。
+    """
     def _rank(c):
         v = c.get("verify") or {}
+        r = c.get("review") or {}
         return (0 if v.get("ok") else (1 if v.get("ok") is None else 2),
-                len(v.get("missing") or []), c.get("index") or 99)
+                len(v.get("missing") or []),
+                -(int(r.get("score") or 0)),
+                0 if r.get("ok") else 1,
+                c.get("index") or 99)
     return sorted(candidates, key=_rank)[0]
 
 
-def build_lint(pub, check, overrode):
+def build_lint(pub, check, overrode, review=None):
     """发布包告警：error 代表这张图别发，warn 代表要人补一手。"""
     issues = lint_publish(pub)
     if not pub.get("copy_text"):
@@ -423,6 +719,17 @@ def build_lint(pub, check, overrode):
         issues.insert(0, "error: 图面文字回读未通过，缺：" + "、".join(check.get("missing") or []))
     elif check.get("ok") is None:
         issues.append("warn: 本次未做回读校验，发布前必须人眼核对图面文字")
+    review = review or {}
+    if review.get("skipped"):
+        issues.append("warn: 本次未做视觉评审（好不好看没人判过），错误原因：%s"
+                      % (review.get("error") or "已跳过"))
+    elif review:
+        head = "视觉评审 %s/%s 分" % (review.get("score"), review.get("full"))
+        if not review.get("ok"):
+            issues.append("warn: %s 偏低，建议换一张候选或重出——%s" % (head, review.get("note") or ""))
+        else:
+            issues.append("info: %s 可发；最弱项 %s，%s"
+                          % (head, review.get("worst") or "?", review.get("note") or ""))
     if overrode:
         issues.insert(0, "warn: 整合稿是规则版骨架，本次由人工显式放行出图，发布前务必核对数字与时间线")
     return issues
@@ -444,7 +751,9 @@ def choose_candidate(summary_id, index):
     shutil.copyfile(src, OUTPUT_DIR / str(summary_id) / "poster.png")
     m["chosen"] = picked[0]["index"]
     m["verify"] = picked[0]["verify"]
-    m["lint"] = build_lint(m.get("publish") or {}, picked[0]["verify"], bool(m.get("draft_override")))
+    m["review"] = picked[0].get("review") or {}
+    m["lint"] = build_lint(m.get("publish") or {}, picked[0]["verify"],
+                           bool(m.get("draft_override")), m["review"])
     (OUTPUT_DIR / str(summary_id) / "manifest.json").write_text(
         json.dumps(m, ensure_ascii=False, indent=2), encoding="utf-8")
     return m
@@ -452,7 +761,7 @@ def choose_candidate(summary_id, index):
 
 def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
                     progress_cb=None, do_verify=True, plan=None, publish=None, force=False,
-                    copies=1):
+                    copies=1, do_review=True):
     """整理稿 → 海报一张。返回 manifest dict（已落盘 output/poster/<summary_id>/）。
 
     plan / publish 非空时跳过 LLM 拆解（前端审改过文案再出图走这条）：plan 是要画进图的
@@ -517,21 +826,31 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
             except Exception as e:
                 v = {"skipped": True, "ok": None, "error": str(e)[:200],
                      "missing": [], "extra": "", "transcript": ""}
+        r = {"skipped": True, "ok": None}
+        if do_review:
+            _pg("视觉评审第 %d 张好不好看..." % i)
+            try:
+                r = review_image(png, ai_config)
+            except Exception as e:
+                r = {"skipped": True, "ok": None, "error": str(e)[:200]}
         candidates.append({"index": i, "file": fname,
                            "url": "/media/poster/%d/%s" % (summary_id, fname),
-                           "verify": v, "bytes": len(png)})
+                           "verify": v, "review": r, "bytes": len(png)})
 
     # 多张时自动挑一张当默认（poster.png 永远是"当前选中的那张"，列表页与发布取图不用改）
     best = pick_best(candidates)
     if n > 1:
         shutil.copyfile(out_dir / best["file"], out_dir / "poster.png")
     check = best["verify"]
+    review = best.get("review") or {}
 
     copy_text = pub.get("copy_text") or ""
     if copy_text and COMPLIANCE_NOTE[:10] not in copy_text:
         copy_text = copy_text.rstrip() + "\n\n" + COMPLIANCE_NOTE
 
-    issues = build_lint(pub, check, overrode)
+    issues = build_lint(pub, check, overrode, review)
+    for w in lint_visual(plan):
+        issues.append("warn: " + w)
 
     manifest = {
         "id": summary_id,
@@ -548,6 +867,9 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
         "ratio": ratio,
         "size": SIZES[ratio],
         "text_chars": chars,
+        "style_key": plan.get("style_key") or "",
+        "style_label": (STYLE_PRESETS.get(plan.get("style_key") or "") or {}).get("label", ""),
+        "scene": plan.get("scene") or "",
         "image": "poster.png",
         "url": "/media/poster/%d/poster.png" % summary_id,
         "candidates": candidates,
@@ -560,6 +882,7 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
         "auto_notes": notes,
         "draft_override": overrode,
         "verify": check,
+        "review": review,
         "source_title": summary.get("title") or "",
         "theme": (theme or "").strip(),
         "checklist": list(CHECKLIST),
@@ -570,7 +893,8 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
     (out_dir / "manifest.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     errs = [i for i in issues if i.startswith("error")]
-    _pg("✅ 海报已生成" + ("" if errs else "（发布文案与清单已就绪）")
+    score = ("，评审 %s/%s 分" % (review.get("score"), review.get("full"))) if review.get("score") else ""
+    _pg("✅ 海报已生成" + ("" if errs else "（发布文案与清单已就绪）") + score
         + ("，共 %d 张，点图换选" % n if n > 1 else ""))
     return manifest
 

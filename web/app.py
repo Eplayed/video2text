@@ -1696,19 +1696,24 @@ def api_poster_plan():
         return jsonify({"error": "整合稿不存在"}), 404
     theme = str(data.get("theme") or "").strip()[:30]
     title = str(data.get("title") or "").strip()[:60]
+    # 用户在下拉里点过风格就别让模型再改回去：显式选择优先于自由发挥
+    style_key = str(data.get("style_key") or "").strip()[:20]
+    ratio = str(data.get("ratio") or "9:16").strip()[:5]   # 只影响预览 prompt 的版式描述
 
     def fn():
         cfg = _fast_config()
         _poster_status["progress"] = "LLM 拆解海报文案（模型：%s）..." % (cfg.get("model") or "?")
-        plan, publish, bad, notes = ai_poster.build_text_plan(summary, cfg, theme=theme, title=title)
+        plan, publish, bad, notes = ai_poster.build_text_plan(summary, cfg, theme=theme, title=title,
+                                                              style_key=style_key)
         # 骨架稿不在这里拦：拆解本身就能判断这份素材有没有料，拦在这里会让人白等一次拆解。
         # 只把风险随结果一起回给前端，出图那一步再决定是否放行。
         warning = "；".join(ai_poster.draft_gate.draft_blockers(summary))
         _poster_status["plan"] = {"plan": plan, "publish": publish, "violations": bad,
                                   "notes": notes, "chars": ai_poster.plan_chars(plan),
+                                  "visual": ai_poster.lint_visual(plan),
                                   "model": cfg.get("model") or "",
                                   "draft_warning": warning,
-                                  "prompt_text": ai_poster.build_prompt_text(plan)}
+                                  "prompt_text": ai_poster.build_prompt_text(plan, ratio)}
         _poster_status["progress"] = ("✅ 文案已拆解（合计 %d 字 · 模型 %s）"
                                       % (ai_poster.plan_chars(plan), cfg.get("model") or "?")
                                       + ("；自动压缩：" + "、".join(notes) if notes else "")
@@ -1732,6 +1737,7 @@ def api_poster_generate():
     plan = data.get("plan") if isinstance(data.get("plan"), dict) else None
     publish = data.get("publish") if isinstance(data.get("publish"), dict) else None
     force = bool(data.get("force"))      # 骨架稿人工复核后的显式放行
+    do_review = data.get("review") is not False   # 默认做视觉评审，前端可关掉省十几秒
     try:
         copies = int(data.get("copies") or 1)
     except (TypeError, ValueError):
@@ -1742,18 +1748,22 @@ def api_poster_generate():
             _poster_status["progress"] = msg
         manifest = ai_poster.generate_poster(summary, _fast_config(), theme=theme, title=title,
                                              ratio=ratio, progress_cb=cb, plan=plan,
-                                             publish=publish, force=force, copies=copies)
+                                             publish=publish, force=force, copies=copies,
+                                             do_review=do_review)
         v = manifest.get("verify") or {}
+        rv = manifest.get("review") or {}
         errs = [i for i in (manifest.get("lint") or []) if i.startswith("error")]
         _poster_status["package"] = {"id": manifest["id"], "title": manifest["title"],
                                      "url": manifest["url"], "chars": manifest["text_chars"],
                                      "copies": manifest.get("copies") or 1,
-                                     "verify_ok": v.get("ok"), "lint": manifest.get("lint") or []}
+                                     "verify_ok": v.get("ok"), "review": rv,
+                                     "lint": manifest.get("lint") or []}
         _poster_status["plan"] = {"plan": manifest["plan"], "publish": manifest["publish"],
                                   "violations": errs, "chars": manifest["text_chars"],
                                   "prompt_text": manifest["prompt_text"]}
-        _poster_status["progress"] = "✅ 海报已生成（%d 字）%s" % (
-            manifest["text_chars"],
+        score = ("，视觉评审 %s/%s 分" % (rv.get("score"), rv.get("full"))) if rv.get("score") else ""
+        _poster_status["progress"] = "✅ 海报已生成（%d 字）%s%s" % (
+            manifest["text_chars"], score,
             "" if v.get("ok") else "，⚠️ 图面文字校验未通过，发布前人眼复核")
 
     if not _poster_start("poster", fn):
@@ -1764,6 +1774,19 @@ def api_poster_generate():
 @app.route("/api/poster/status")
 def api_poster_status():
     return jsonify(_poster_status)
+
+
+@app.route("/api/poster/styles")
+def api_poster_styles():
+    """风格预设名单由后端下发：配方原文只有一份，前端不抄一遍才不会漂移。"""
+    return jsonify({"items": ai_poster.style_choices(),
+                    "limits": {"scene": ai_poster.SCENE_MAX, "cardVis": ai_poster.CARD_VIS_MAX,
+                               "total": ai_poster.MAX_TOTAL_CHARS, "title": ai_poster.TITLE_MAX,
+                               "subtitle": ai_poster.SUBTITLE_MAX, "footer": ai_poster.FOOTER_MAX,
+                               "cardT": ai_poster.CARD_TITLE_MAX, "cardD": ai_poster.CARD_DESC_MAX,
+                               "cardMin": ai_poster.CARD_MIN, "cardMax": ai_poster.CARD_MAX,
+                               "spine": ai_poster.SPINE_MAX},
+                    "reviewPass": ai_poster.REVIEW_PASS})
 
 
 @app.route("/api/poster/list")
