@@ -107,7 +107,25 @@ def _ai_config():
         api_key = collector.config_get(config, "OPENAI_API_KEY") or collector.config_get(config, "AI_API_KEY")
         api_base = collector.config_get(config, "AI_API_BASE", "https://api.openai.com/v1")
         model = collector.config_get(config, "AI_MODEL", "gpt-4o-mini")
-    return {"method": method, "api_key": api_key, "api_base": api_base, "model": model}
+    cfg = {"method": method, "api_key": api_key, "api_base": api_base, "model": model,
+           "fast_model": collector.config_get(config, "AI_MODEL_FAST", "")}
+    return cfg
+
+
+def _fast_config():
+    """拆解与卡片化走「快速模型」：这类活是照抄压缩，不需要主模型深思。
+
+    实测同一条素材：主模型 qwen3.8-max 拆解约 180 秒，deepseek-v4-flash 33 秒且上图
+    字数更守规矩（71 字 vs 超线）；qwen-plus 只要 9.7 秒、便宜五倍，但会把上图文字
+    写到 98 字（超 80 线，会被自动压缩砍掉一张卡）。
+    没配 AI_MODEL_FAST 时原样返回主配置，行为零变化。
+    """
+    cfg = _ai_config()
+    fast = (cfg.get("fast_model") or "").strip()
+    if fast:
+        cfg = dict(cfg)
+        cfg["model"] = fast
+    return cfg
 
 # ── API: 视频列表 ──
 def _first_markdown_image(text: str) -> str:
@@ -1346,7 +1364,7 @@ def api_toutiao_generate():
             def cb(msg):
                 _tt_task_status["progress"] = msg
             _tt_task_status["progress"] = "LLM 卡片化整合稿..."
-            package = toutiao_graphics.generate_graphics(summary, _ai_config(), progress_cb=cb,
+            package = toutiao_graphics.generate_graphics(summary, _fast_config(), progress_cb=cb,
                                                           theme=theme, skin=skin, title=title,
                                                           template=template, guide_images=guide_imgs,
                                                           palette=palette or None, font=font or None,
@@ -1556,7 +1574,7 @@ def api_wechat_generate():
         try:
             def cb(msg):
                 _wx_task_status["progress"] = msg
-            package = wechat_graphics.generate_graphics(summary, _ai_config(), author_draft=author_draft,
+            package = wechat_graphics.generate_graphics(summary, _fast_config(), author_draft=author_draft,
                                                         progress_cb=cb, theme=theme, title=title,
                                                         template=template, real_screenshots=shots,
                                                         palette=palette or None, font=font or None,
@@ -1681,7 +1699,7 @@ def api_poster_plan():
 
     def fn():
         _poster_status["progress"] = "LLM 拆解海报文案（思考型模型约需 3 分钟）..."
-        plan, publish, bad, notes = ai_poster.build_text_plan(summary, _ai_config(), theme=theme, title=title)
+        plan, publish, bad, notes = ai_poster.build_text_plan(summary, _fast_config(), theme=theme, title=title)
         # 骨架稿不在这里拦：拆解本身就能判断这份素材有没有料，拦在②会让用户白等 3 分钟。
         # 只把风险随结果一起回给前端，出图那一步再决定是否放行。
         warning = "；".join(ai_poster.draft_gate.draft_blockers(summary))
@@ -1719,7 +1737,7 @@ def api_poster_generate():
     def fn():
         def cb(msg):
             _poster_status["progress"] = msg
-        manifest = ai_poster.generate_poster(summary, _ai_config(), theme=theme, title=title,
+        manifest = ai_poster.generate_poster(summary, _fast_config(), theme=theme, title=title,
                                              ratio=ratio, progress_cb=cb, plan=plan,
                                              publish=publish, force=force, copies=copies)
         v = manifest.get("verify") or {}
@@ -1840,6 +1858,7 @@ def api_ai_config_get():
         "api_key_masked": _mask_key(key),
         "api_base": base,
         "model": model,
+        "fast_model": collector.config_get(config, "AI_MODEL_FAST", ""),
     })
 
 
@@ -1861,6 +1880,8 @@ def api_ai_config_save():
             return jsonify({"error": "请填写 API Key"}), 400
         base = (data.get("api_base") or "").strip()
         model = (data.get("model") or "").strip()
+        # 快速模型：拆解与卡片化用；留空＝跟主模型一样。必须是同一个接口下调得到的模型名
+        updates["AI_MODEL_FAST"] = (data.get("fast_model") or "").strip()
         if method == "deepseek":
             updates["DEEPSEEK_API_KEY"] = api_key
             updates["DEEPSEEK_API_BASE"] = base

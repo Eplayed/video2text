@@ -1215,6 +1215,14 @@ textarea{resize:vertical;min-height:84px}
               <div class="hint">留空使用默认模型</div>
             </div>
           </div>
+          <div class="form-row two">
+            <div class="form-group">
+              <label>快速模型（省钱省时用）</label>
+              <input id="ai-model-fast" type="text" placeholder="例：deepseek-v4-flash">
+              <div class="hint">海报拆解、图文卡片化走这一档（照抄压缩的活不需要主模型深思，实测快 5 倍）；留空＝跟主模型一样。必须是同一个接口下调得到的模型名</div>
+            </div>
+            <div class="form-group"></div>
+          </div>
           <div style="display:flex;gap:10px;align-items:center">
             <button class="btn" id="btn-ai-save" onclick="saveAiConfig()"><span data-icon="check" class="ic14"></span>保存配置</button>
             <button class="btn ghost" id="btn-ai-test" onclick="testAiConfig()"><span data-icon="bolt" class="ic14"></span>测试连接</button>
@@ -3197,6 +3205,8 @@ async function loadAiConfig() {
   document.getElementById('ai-key-hint').textContent = c.has_key ? '已保存 Key：' + c.api_key_masked : '尚未配置';
   document.getElementById('ai-base').value = c.api_base || '';
   document.getElementById('ai-model').value = c.model || '';
+  const fastEl = document.getElementById('ai-model-fast');
+  if (fastEl) fastEl.value = c.fast_model || '';
   const labels = {skip:'未接入 AI，生成走本地模板', deepseek:'已接入 DeepSeek', openai:'已接入 OpenAI 兼容接口'};
   const st = document.getElementById('ai-status');
   st.textContent = labels[c.method] || labels.skip;
@@ -3228,11 +3238,13 @@ function updateAiPlaceholders() {
 }
 
 function aiConfigBody() {
+  const fastEl = document.getElementById('ai-model-fast');
   return {
     method: document.getElementById('ai-method').value,
     api_key: document.getElementById('ai-key').value.trim(),
     api_base: document.getElementById('ai-base').value.trim(),
     model: document.getElementById('ai-model').value.trim(),
+    fast_model: fastEl ? fastEl.value.trim() : '',
   };
 }
 

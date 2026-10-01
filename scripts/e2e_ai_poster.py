@@ -23,13 +23,20 @@ def load_ai_config():
     text = ENV_PATH.read_text(encoding="utf-8") if ENV_PATH.exists() else ""
     kv = dict(re.findall(r"^([A-Z_]+)\s*=\s*(.*)$", text, re.M))
     method = (kv.get("AI_METHOD") or "skip").strip()
+    fast = (kv.get("AI_MODEL_FAST") or "").strip()
     if method == "deepseek":
         return {"method": method, "api_key": (kv.get("DEEPSEEK_API_KEY") or "").strip(),
                 "api_base": (kv.get("DEEPSEEK_API_BASE") or "https://api.deepseek.com").strip(),
-                "model": (kv.get("DEEPSEEK_MODEL") or "deepseek-chat").strip()}
+                "model": (kv.get("DEEPSEEK_MODEL") or "deepseek-chat").strip(), "fast_model": fast}
     return {"method": method, "api_key": (kv.get("OPENAI_API_KEY") or kv.get("AI_API_KEY") or "").strip(),
             "api_base": (kv.get("AI_API_BASE") or "https://api.openai.com/v1").strip(),
-            "model": (kv.get("AI_MODEL") or "gpt-4o-mini").strip()}
+            "model": (kv.get("AI_MODEL") or "gpt-4o-mini").strip(), "fast_model": fast}
+
+
+def work_config(cfg):
+    """对齐生产：拆解这类活走快速档（web/app.py 的 _fast_config 同一套规则）。"""
+    fast = (cfg.get("fast_model") or "").strip()
+    return dict(cfg, model=fast) if fast else cfg
 
 
 def pick_summary(conn, sid):
@@ -49,8 +56,8 @@ def main():
     if not summary:
         print("FAIL 找不到整合稿（%s）" % (sid or "最新 wechat_material"))
         return 1
-    ai_config = load_ai_config()
-    print("整合稿 #%s《%s》 模型=%s" % (summary["id"], summary["title"][:30], ai_config["model"]))
+    ai_config = work_config(load_ai_config())
+    print("整合稿 #%s《%s》 拆解模型=%s" % (summary["id"], summary["title"][:30], ai_config["model"]))
 
     manifest = ai_poster.generate_poster(
         summary, ai_config, progress_cb=lambda m: print("  ·", m))
