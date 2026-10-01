@@ -1876,6 +1876,51 @@ def api_poster_pick(summary_id):
         return jsonify({"error": str(e)}), 500
 
 
+# ── 我的模板：把满意的成品收编成可复用的风格（数据在 config/poster_templates.json）──
+@app.route("/api/poster/templates")
+def api_poster_templates():
+    try:
+        from src import poster_templates as pt
+        items = [{"key": it.get("key"), "name": it.get("name"), "parent": it.get("parent"),
+                  "source_summary_id": it.get("source_summary_id"),
+                  "has_base": bool(it.get("base_image")), "created_at": it.get("created_at")}
+                 for it in pt.all_templates()]
+        return jsonify({"items": items, "total": len(items)})
+    except Exception as e:
+        return jsonify({"error": str(e), "items": [], "total": 0}), 500
+
+
+@app.route("/api/poster/<int:summary_id>/save-template", methods=["POST"])
+def api_poster_save_template(summary_id):
+    """收编当前这张海报为模板。reuse_base=True 时连底图一起存，之后换文案出图 0 元。"""
+    data = request.get_json(force=True) or {}
+    m = ai_poster.get_package(summary_id)
+    if not m:
+        return jsonify({"error": "这条整合稿还没出过图，先出一次再收编"}), 400
+    try:
+        from src import poster_templates as pt
+        it = pt.save_from_package(m, name=str(data.get("name") or ""),
+                                 reuse_base=data.get("reuse_base") is not False)
+        return jsonify({"success": True, "key": it["key"], "name": it["name"],
+                        "has_base": bool(it["base_image"])})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/poster/templates/<key>/rename", methods=["POST"])
+def api_poster_template_rename(key):
+    data = request.get_json(force=True) or {}
+    from src import poster_templates as pt
+    it = pt.rename(key, str(data.get("name") or ""))
+    return jsonify({"success": bool(it), "name": (it or {}).get("name")})
+
+
+@app.route("/api/poster/templates/<key>", methods=["DELETE"])
+def api_poster_template_delete(key):
+    from src import poster_templates as pt
+    return jsonify({"success": bool(pt.delete(key))})
+
+
 @app.route("/api/poster/<int:summary_id>/reveal", methods=["POST"])
 def api_poster_reveal(summary_id):
     """出图之后直接在访达里定位到那张图，省掉"图存哪了"这一问。"""

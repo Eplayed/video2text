@@ -171,18 +171,43 @@ TYPE_RULE = ("图上的中文一律用清晰规整的中文黑体或无衬线字
 
 
 def style_choices():
-    """给前端下拉用：配方原文也一起回，让人在出图前就看见这次到底会按哪套词去画。"""
+    """给前端下拉用：内置四套 + 用户自己收编的模板，走同一份名单。"""
     out = []
     for k in STYLE_ORDER:
         p = STYLE_PRESETS[k]
         out.append({"key": k, "label": p["label"], "when": p["when"],
                     "preset": (p["style"] or "（沿用手写的风格描述）"),
-                    "scene": p["scene"] or ""})
+                    "scene": p["scene"] or "", "builtin": True, "has_base": False})
+    for k, p in _user_presets().items():
+        out.append({"key": k, "label": "★ " + p["label"], "when": p["when"],
+                    "preset": p["mood"] or "（沿用父风格的画风口）",
+                    "scene": p["scene"], "builtin": False, "has_base": _has_base(k)})
     return out
 
 
+def _has_base(key):
+    try:
+        from . import poster_templates
+        return bool(poster_templates.base_image_path(key))
+    except Exception:
+        return False
+
+
+def _user_presets():
+    """用户模板（收编过的成品）。整条链路挂掉也不能影响内置四套，所以吞异常。"""
+    try:
+        from . import poster_templates
+        return {it["key"]: poster_templates.preset(it["key"])
+                for it in poster_templates.all_templates() if it.get("key")}
+    except Exception:
+        return {}
+
+
 def _preset(plan):
-    return STYLE_PRESETS.get((plan or {}).get("style_key") or "") or {}
+    k = (plan or {}).get("style_key") or ""
+    if k in STYLE_PRESETS:
+        return STYLE_PRESETS[k]
+    return _user_presets().get(k) or {}
 
 
 def resolve_style_text(plan):
@@ -202,6 +227,9 @@ def style_plan_prompt():
     for k in STYLE_ORDER:
         p = STYLE_PRESETS[k]
         lines.append('  - "%s"：%s（适用：%s）' % (k, p["label"], p["when"]))
+    for k, p in _user_presets().items():
+        lines.append('  - "%s"：%s（适用：%s；这是用户自己收编的模板，选它就用它记下的主视觉方向）'
+                     % (k, p["label"], p["when"]))
     return "\n".join(lines)
 
 class PosterError(Exception):
@@ -388,8 +416,9 @@ def build_text_plan(summary, ai_config, theme="", title="", style_key="", text_m
         t, d = _clip(c.get("t"), lim["cardT"]), _clip(c.get("d"), lim["cardD"])
         if t or d:
             cards.append({"t": t, "d": d, "v": _clip_ws(c.get("v"), CARD_VIS_MAX)})
-    key = str(style_key if style_key in STYLE_PRESETS else data.get("style_key") or "").strip()
-    if key not in STYLE_PRESETS:
+    valid = set(STYLE_PRESETS) | set(_user_presets())
+    key = str(style_key if style_key in valid else data.get("style_key") or "").strip()
+    if key not in valid:
         key = DEFAULT_STYLE_KEY
     plan = {"title": _clip(title or data.get("title") or summary.get("title"), lim["title"]),
             "subtitle": _clip(data.get("subtitle"), lim["subtitle"]),
@@ -604,6 +633,37 @@ def build_art_prompt(plan, ratio="9:16"):
              "- 上面列出的道具只画外形（仪表盘、日历、卷轴、剑、面板），不许在上面标数字或文字标签",
              "- 下部区域是一块连续的背景，禁止画成带边框的卡片或网格"]
     return "\n".join([l for l in lines if l is not None])
+
+
+def check_base_numbers(base_png, plan, ai_config):
+    """复用底图时专设的一道提醒：底图是上一期那张，插画里可能写着上一期的数字。
+
+    我们排上去的字由代码保证不会错，但模型在插画里顺手写的数字管不着——实测这张
+    388 的底图里就烙着 3600 / 10.8 / 10.22 / 5168。换一期内容时那些数很可能已经变了，
+    而版面自检和回读都查不出它（那些字不在文案里，本来就不该一致）。
+    所以这里只比数字：底图里出现、整份文案里却找不到的，列出来提醒人看一眼。
+    """
+    try:
+        v = verify_image(base_png, plan, ai_config)
+    except Exception:
+        return []
+    # 只扫 transcript，别扫 extra：extra 是把命中的文案从整段里抠掉后剩下的残渣，
+    # 中间没有分隔符（"20018层360010.8..."），拿它比数字只会报出一串没人看得懂的乱码。
+    blob = v.get("transcript") or ""
+    want = json.dumps(plan, ensure_ascii=False)
+    return sorted({n for n in re.findall(r"\d{2,}", blob) if n not in want})
+
+
+def template_base(style_key):
+    """模板带来的底图字节。有它就跳过出图，换文案复用同一张底图，成本 0 元。"""
+    if not style_key or style_key in STYLE_PRESETS:
+        return None
+    try:
+        from . import poster_templates
+        path = poster_templates.base_image_path(style_key)
+        return path.read_bytes() if path else None
+    except Exception:
+        return None
 
 
 def typeset_poster(png_bytes, plan, ratio="9:16"):
@@ -942,10 +1002,24 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
         n = 1
     n = max(1, min(n, MAX_COPIES))
 
+    # 带底图的模板：换文案时复用那张已经验收的底图，不再出图。同一张底图多出几张
+    # 只会得到完全一样的成品，所以这里强制单张。
+    tpl_base = template_base(plan.get("style_key")) if text_mode == "typeset" else None
+    stale_nums = []
+    if tpl_base:
+        n = 1
+        _pg("复用模板底图（0 元，不再出图）...")
+        if do_verify:
+            _pg("核对底图里有没有上一期留下的数字...")
+            stale_nums = check_base_numbers(tpl_base, plan, ai_config)
+
     candidates, usage = [], {}
     for i in range(1, n + 1):
-        _pg("出图 %d/%d（%s）..." % (i, n, COPIES_NOTE if n > 1 else "约 20-60 秒"))
-        raw, usage = generate_image(prompt_text, SIZES[ratio], ai_config)
+        if tpl_base:
+            raw = tpl_base
+        else:
+            _pg("出图 %d/%d（%s）..." % (i, n, COPIES_NOTE if n > 1 else "约 20-60 秒"))
+            raw, usage = generate_image(prompt_text, SIZES[ratio], ai_config)
         fname = "poster.png" if n == 1 else ("poster_%d.png" % i)
         v = {"skipped": True, "ok": None, "missing": [], "extra": "", "transcript": ""}
         ts_chk = None
@@ -993,6 +1067,10 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
     issues = build_lint(pub, check, overrode, review, ts_chk)
     for w in lint_visual(plan):
         issues.append("warn: " + w)
+    if stale_nums:
+        issues.append("warn: 这张底图里带着文案里没有的数字 %s——是上一期烙进插画的，"
+                      "换内容时确认它们还对不对；不对就换一套不带底图的风格重出一张"
+                      % "、".join(stale_nums[:6]))
 
     manifest = {
         "id": summary_id,
@@ -1010,7 +1088,7 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
         "size": SIZES[ratio],
         "text_chars": chars,
         "style_key": plan.get("style_key") or "",
-        "style_label": (STYLE_PRESETS.get(plan.get("style_key") or "") or {}).get("label", ""),
+        "style_label": _preset(plan).get("label", ""),
         "scene": plan.get("scene") or "",
         "image": "poster.png",
         "url": "/media/poster/%d/poster.png" % summary_id,
@@ -1022,7 +1100,9 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
         "image_model": IMAGE_MODEL,
         "ocr_model": OCR_MODEL,
         "usage": usage,
-        "cost_yuan_estimate": PRICE_PER_IMAGE_YUAN,
+        "cost_yuan_estimate": 0 if tpl_base else PRICE_PER_IMAGE_YUAN,
+        "base_reused": bool(tpl_base),
+        "base_stale_numbers": stale_nums,
         "auto_notes": notes,
         "draft_override": overrode,
         "verify": check,
@@ -1038,7 +1118,8 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
         json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     errs = [i for i in issues if i.startswith("error")]
     score = ("，评审 %s/%s 分" % (review.get("score"), review.get("full"))) if review.get("score") else ""
-    _pg("✅ 海报已生成" + ("" if errs else "（发布文案与清单已就绪）") + score
+    _pg(("✅ 海报已生成（复用模板底图，这次没花出图钱）" if tpl_base
+         else "✅ 海报已生成" + ("" if errs else "（发布文案与清单已就绪）")) + score
         + ("，共 %d 张，点图换选" % n if n > 1 else ""))
     return manifest
 

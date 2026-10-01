@@ -108,7 +108,20 @@ DEFAULT_SKIN = "tool_review"
 
 
 def skin_for(style_key):
-    return TYPE_SKINS.get(style_key) or TYPE_SKINS[DEFAULT_SKIN]
+    """内置四套查不到就当用户模板查一遍——模板和内置走同一条排版路径，
+    不然"我的模板"只能预览、出图时又掉回默认皮肤。"""
+    s = TYPE_SKINS.get(style_key)
+    if s:
+        return s
+    if style_key:
+        try:
+            from . import poster_templates
+            s = poster_templates.skin(style_key)
+            if s:
+                return s
+        except Exception:
+            pass
+    return TYPE_SKINS[DEFAULT_SKIN]
 
 
 _ASCII_RUN = re.compile(r"[0-9A-Za-z]+(?:\s*[.%+\-/：:]\s*[0-9A-Za-z]+)*")

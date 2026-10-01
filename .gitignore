@@ -9,6 +9,9 @@ build/
 # 本地配置（包含 Cookie/API Key）
 config/config.env
 config/config.env.local
+# 用户自己收编的海报模板：是运行数据，换机时手动迁移，不入库
+config/poster_templates.json
+config/poster_templates/
 
 # 生成的索引数据
 *.json
