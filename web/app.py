@@ -1655,7 +1655,7 @@ _poster_status = {"running": False, "done": True, "progress": "", "error": "",
 
 
 def _poster_start(stage, fn):
-    """海报任务统一壳。LLM 拆解单次要 3 分钟以上，必须后台跑 + 前端轮询。"""
+    """海报任务统一壳。拆解与出图都是几十秒到几分钟的活，必须后台跑 + 前端轮询。"""
     if _poster_status["running"]:
         return False
     _poster_status.update({"running": True, "done": False, "progress": "任务排队中...", "error": "",
@@ -1698,16 +1698,19 @@ def api_poster_plan():
     title = str(data.get("title") or "").strip()[:60]
 
     def fn():
-        _poster_status["progress"] = "LLM 拆解海报文案（思考型模型约需 3 分钟）..."
-        plan, publish, bad, notes = ai_poster.build_text_plan(summary, _fast_config(), theme=theme, title=title)
-        # 骨架稿不在这里拦：拆解本身就能判断这份素材有没有料，拦在②会让用户白等 3 分钟。
+        cfg = _fast_config()
+        _poster_status["progress"] = "LLM 拆解海报文案（模型：%s）..." % (cfg.get("model") or "?")
+        plan, publish, bad, notes = ai_poster.build_text_plan(summary, cfg, theme=theme, title=title)
+        # 骨架稿不在这里拦：拆解本身就能判断这份素材有没有料，拦在这里会让人白等一次拆解。
         # 只把风险随结果一起回给前端，出图那一步再决定是否放行。
         warning = "；".join(ai_poster.draft_gate.draft_blockers(summary))
         _poster_status["plan"] = {"plan": plan, "publish": publish, "violations": bad,
                                   "notes": notes, "chars": ai_poster.plan_chars(plan),
+                                  "model": cfg.get("model") or "",
                                   "draft_warning": warning,
                                   "prompt_text": ai_poster.build_prompt_text(plan)}
-        _poster_status["progress"] = ("✅ 文案已拆解（合计 %d 字）" % ai_poster.plan_chars(plan)
+        _poster_status["progress"] = ("✅ 文案已拆解（合计 %d 字 · 模型 %s）"
+                                      % (ai_poster.plan_chars(plan), cfg.get("model") or "?")
                                       + ("；自动压缩：" + "、".join(notes) if notes else "")
                                       + ("，⚠️ " + "；".join(bad) if bad else ""))
 
