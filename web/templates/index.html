@@ -2276,7 +2276,15 @@ async function renderPosterResult(id) {
     + '<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">'
     + '<button class="btn sm" style="background:var(--module-5);border-color:var(--module-5);color:#fff" onclick="copyPosterPublish()">复制发布文案</button>'
     + '<button class="btn ghost sm" onclick="copyPosterPrompt()">复制出图提示词</button>'
-    + '<button class="btn ghost sm" onclick="window.open(\'' + m.url + '\',\'_blank\')">看原图</button></div>';
+    + '<button class="btn ghost sm" onclick="window.open(\'' + m.url + '\',\'_blank\')">看原图</button>'
+    + '<button class="btn ghost sm" onclick="posterReveal(' + m.id + ')" title="在访达里定位这张图">📁 打开文件夹</button></div>';
+}
+async function posterReveal(id) {
+  let r;
+  try { r = await fetch('/api/poster/' + id + '/reveal', {method: 'POST'}).then(x => x.json()); }
+  catch (e) { r = {error: e.message}; }
+  if (r.error) { setStatus('error', r.error); return; }
+  setStatus('done', '已在访达里打开 ' + r.path);
 }
 async function posterPick(index) {
   if (!_pkId) return;

@@ -1876,6 +1876,17 @@ def api_poster_pick(summary_id):
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/poster/<int:summary_id>/reveal", methods=["POST"])
+def api_poster_reveal(summary_id):
+    """出图之后直接在访达里定位到那张图，省掉"图存哪了"这一问。"""
+    try:
+        return jsonify({"success": True, "path": ai_poster.reveal_folder(summary_id)})
+    except ai_poster.PosterError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/poster/<int:summary_id>", methods=["DELETE"])
 def api_poster_delete(summary_id):
     try:

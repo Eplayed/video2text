@@ -1043,6 +1043,29 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
     return manifest
 
 
+def reveal_folder(summary_id=0):
+    """在系统文件管理器里打开海报所在目录（有 poster.png 就选中它）。
+
+    这个接口只可能跑在本机：工作台监听 127.0.0.1，路径由整数 id 拼出来，
+    没有用户可控的字符串进来，所以不存在路径穿越。
+    """
+    import subprocess
+    import sys as _sys
+    d = OUTPUT_DIR / str(int(summary_id)) if summary_id else OUTPUT_DIR
+    if not d.exists():
+        raise PosterError("还没有这个目录：先出一次图再点")
+    target = (d / "poster.png") if (summary_id and (d / "poster.png").exists()) else d
+    path = str(target)
+    if _sys.platform == "darwin":
+        cmd = ["open", "-R", path] if target.is_file() else ["open", path]
+    elif _sys.platform.startswith("win"):
+        cmd = ["explorer", "/select," + path] if target.is_file() else ["explorer", path]
+    else:
+        cmd = ["xdg-open", str(target.parent if target.is_file() else target)]
+    subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return str(d)
+
+
 def list_packages():
     return pkg_store.list_packages(OUTPUT_DIR)
 
