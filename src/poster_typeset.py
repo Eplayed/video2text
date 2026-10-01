@@ -70,7 +70,8 @@ TYPE_SKINS = {
         "panel": "#0d131e", "panel_alpha": 168, "stroke": "#c8963c", "stroke_alpha": 165,
         "bg_top": "#1c2434", "bg_bot": "#0a0e16",
         "radius": 12, "gap": 0.020,
-        "bottom": "暗色云雾与极淡的石纹底纹，四角有微弱余烬光点"
+        "bottom": "暗色云雾与极淡的石纹底纹，四角有微弱余烬光点",
+        "layout": "stack", "art_floor": 0.50, "art_cap": 0.74
     },
     "tool_review": {
         "title_face": "sans_bold", "body_face": "sans_book",
@@ -79,7 +80,8 @@ TYPE_SKINS = {
         "panel": "#101a33", "panel_alpha": 150, "stroke": "#4fd1ff", "stroke_alpha": 120,
         "bg_top": "#141a3c", "bg_bot": "#070a1c",
         "radius": 22, "gap": 0.020,
-        "bottom": "深蓝紫渐变与极淡的网格光点，越往下越暗"
+        "bottom": "深蓝紫渐变与极淡的网格光点，越往下越暗",
+        "layout": "grid2", "art_floor": 0.42, "art_cap": 0.70
     },
     "checklist": {
         "title_face": "sans_bold", "body_face": "sans_book",
@@ -88,7 +90,8 @@ TYPE_SKINS = {
         "panel": "#fffdf6", "panel_alpha": 214, "stroke": "#d9694a", "stroke_alpha": 90,
         "bg_top": "#f7f2e6", "bg_bot": "#e8dfcb",
         "radius": 8, "gap": 0.022,
-        "bottom": "暖米色纸纹底，带极淡的纤维质感"
+        "bottom": "暖米色纸纹底，带极淡的纤维质感",
+        "layout": "list", "art_floor": 0.26, "art_cap": 0.52
     },
     "minimal": {
         "title_face": "sans_bold", "body_face": "sans_book",
@@ -97,7 +100,8 @@ TYPE_SKINS = {
         "panel": "#ffffff", "panel_alpha": 226, "stroke": "#d92b2b", "stroke_alpha": 0,
         "bg_top": "#fbfbfa", "bg_bot": "#ececea",
         "radius": 0, "gap": 0.026,
-        "bottom": "干净的纯色留白，不要任何纹理"
+        "bottom": "干净的纯色留白，不要任何纹理",
+        "layout": "hero", "art_floor": 0.32, "art_cap": 0.58
     },
 }
 DEFAULT_SKIN = "tool_review"
@@ -192,58 +196,96 @@ def _panel_overlay(box, skin):
     return ov, (x0, y0)
 
 
-def _card_boxes(cards, W, H, m, inner, gap, cards_bottom, skin):
-    """按内容量排卡片网格：2 列、奇数末张通栏、行高取该行最需要的那张、整块贴底。
+def _rows_for(n, layout):
+    """把卡片切成行。版式之间真正的差别就在这一步＋字号，只换颜色等于没换。
 
-    返回 (方框列表, 卡片区顶部 y)。顶部 y 会换算成比例回给出图 prompt——
-    告诉模型"下面这块只画暗色氛围、别画具体东西"，两边共用同一个算法才不会错位。
+    stack / list：每条占一整行，读起来像步骤清单。
+    grid2：两列并排，条数多时最省地方。
+    hero：第一条通栏放大当结论，其余两列当支撑。
     """
-    n = len(cards)
-    two_col = n > 2
-    rows = ((n + 1) // 2) if two_col else n
+    if n <= 0:
+        return []
+    if layout in ("stack", "list"):
+        return [[i] for i in range(n)]
+    rows, i = [], 0
+    if layout == "hero":
+        rows.append([0])
+        i = 1
+    while i < n:
+        if i + 1 < n:
+            rows.append([i, i + 1])
+            i += 2
+        else:
+            rows.append([i])
+            i += 1
+    return rows
+
+
+def _card_need(c, H, skin, cw, gutter, hero):
+    """量一张卡片要多高：先按标称字号折行，行高＝标题 + 说明各行。"""
+    pad = int(min(cw, H * 0.16) * 0.115)
+    aw = max(40, cw - 2 * pad - gutter)
+    t_size = int(H * (0.036 if hero else 0.0255))
+    d_size = int(H * (0.0255 if hero else 0.0205))
+    h = pad
+    ct = (c.get("t") or "").strip()
+    cd = (c.get("d") or "").strip()
+    if ct:
+        _, _, s = _fit_lines(ct, skin["title_face"], t_size, aw, 1, min_size=int(H * 0.017))
+        h += int(s * 1.45)
+    if cd:
+        _, lines, s = _fit_lines(cd, skin["body_face"], d_size, aw, 6, min_size=int(H * 0.0150))
+        h += len(lines) * int(s * 1.30)
+    return h + pad
+
+
+def _card_boxes(cards, W, H, m, inner, gap, cards_bottom, skin):
+    """按版式与内容量算卡片方框。返回 (方框 dict 列表, 卡片区顶部 y)。
+
+    顶部 y 会换算成比例回给出图 prompt——告诉模型"下面这块只画底纹、别画具体东西"，
+    两边共用同一个算法才不会错位。插画占比被皮肤的 art_floor / art_cap 夹住：
+    游戏史诗风至少要一半画面给插画，清单笔记风最多只给一半，不然四套风格出一样的构图。
+    """
+    layout = skin.get("layout", "grid2")
     col_w = (inner - gap) / 2.0
-    widths = []
-    for i in range(n):
-        full = (not two_col) or (n % 2 == 1 and i == n - 1)
-        widths.append(inner if full else col_w)
-    # 先按标称字号量每张卡片要多高
-    needs = []
-    for c, cw in zip(cards, widths):
-        pad = int(min(cw, H * 0.16) * 0.115)
-        avail_w = cw - 2 * pad
-        ct, cd = (c.get("t") or "").strip(), (c.get("d") or "").strip()
-        h = pad
-        if ct:
-            _, lines, size = _fit_lines(ct, skin["title_face"], int(H * 0.0255),
-                                        avail_w, 1, min_size=int(H * 0.017))
-            h += int(size * 1.45)
-        if cd:
-            _, lines, size = _fit_lines(cd, skin["body_face"], int(H * 0.0205),
-                                        avail_w, 6, min_size=int(H * 0.0150))
-            h += len(lines) * int(size * 1.30)
-        needs.append(h + pad)
-    row_need = []
-    for r in range(rows):
-        idxs = [r * 2, r * 2 + 1] if two_col else [r]
-        row_need.append(max(needs[i] for i in idxs if i < n))
-    block = sum(row_need) + gap * (rows - 1)
-    avail = cards_bottom - int(H * 0.40)
-    if block > avail and block > 0:
-        k = avail / float(block)
-        row_need = [max(int(H * 0.075), int(h * k)) for h in row_need]
-        block = sum(row_need) + gap * (rows - 1)
+    gutter = int(W * 0.115) if layout == "list" else 0
+    rows = _rows_for(len(cards), layout)
+    if not rows:
+        return [], int(H * float(skin.get("art_floor", 0.5)))
+
+    def width_of(row):
+        return inner if len(row) == 1 else col_w
+
+    needs = [max(_card_need(cards[i], H, skin, width_of(row), gutter,
+                            layout == "hero" and i == 0) for i in row)
+             for row in rows]
+    block = sum(needs) + gap * (len(rows) - 1)
+    lo = int(H * float(skin.get("art_floor", 0.50)))   # 插画至少占这么多 → 卡片区不能顶得比这更高
+    hi = int(H * float(skin.get("art_cap", 0.72)))     # 插画至多占这么多 → 卡片区不能缩到比这更低
     top = cards_bottom - block
+    if top < lo:                       # 卡片要的地方比插画下限还大：压行高，让字号自己回退
+        room = cards_bottom - lo - gap * (len(rows) - 1)
+        if room > 0 and sum(needs) > 0:
+            k = room / float(sum(needs))
+            needs = [max(int(H * 0.062), int(h * k)) for h in needs]
+        top = lo
+        block = sum(needs) + gap * (len(rows) - 1)
+    elif top > hi:                     # 卡片太矮、插画会超标：多出来的高度摊成行间距，不把面板拉成空壳
+        extra = top - hi
+        if len(rows) > 1:
+            gap = int(gap + min(gap * 1.6, extra / float(len(rows) - 1)))
+        top = hi
+
     boxes, y = [], top
-    for r in range(rows):
-        idxs = [r * 2, r * 2 + 1] if two_col else [r]
-        for i in idxs:
-            if i >= n:
-                continue
-            full = (not two_col) or (n % 2 == 1 and i == n - 1)
-            x0 = m if full else m + (i % 2) * (col_w + gap)
+    for r, row in enumerate(rows):
+        full = len(row) == 1
+        for slot, i in enumerate(row):
+            x0 = m if full else m + slot * (col_w + gap)
             x1 = (m + inner) if full else (x0 + col_w)
-            boxes.append((int(x0), int(y), int(x1), int(y + row_need[r])))
-        y += row_need[r] + gap
+            boxes.append({"i": i, "x0": int(x0), "y0": int(y), "x1": int(x1),
+                          "y1": int(y + needs[r]), "hero": layout == "hero" and i == 0,
+                          "gutter": gutter, "layout": layout})
+        y += needs[r] + gap
     return boxes, int(top)
 
 
@@ -277,10 +319,13 @@ def typeset(base_png, plan, ratio="9:16"):
     gap = int(W * skin["gap"])
     boxes, cards_top = _card_boxes(cards, W, H, m, inner, gap, cards_bottom, skin)
 
-    # ── 第二遍：贴底板 ──
-    for box in boxes:
-        ov, pos = _panel_overlay(box, skin)
+    # ── 第二遍：贴底板（清单风再补一条左侧色带，靠它而不是靠面板边框撑"第几条"）──
+    for b in boxes:
+        ov, pos = _panel_overlay((b["x0"], b["y0"], b["x1"], b["y1"]), skin)
         img.paste(ov, pos, ov)
+        if b["gutter"]:
+            draw.rectangle((b["x0"], b["y0"], b["x0"] + max(3, int(W * 0.007)), b["y1"]),
+                           fill=_rgb(skin["accent"]))
 
     # ── 第三遍：写字。标题压在插画上靠描边保可读，卡片字压在底板上靠对比度保可读 ──
     # 主标题先按"必须一行"去缩字号，缩到下限还放不下才允许折第二行：
@@ -308,26 +353,31 @@ def typeset(base_png, plan, ratio="9:16"):
                        max(1, int(s_size * 0.08)))
             y += int(s_size * 1.30)
 
-    for idx, ((x0, y0, x1, y1), c) in enumerate(zip(boxes, cards)):
-        pad = int(min(x1 - x0, y1 - y0) * 0.115)
-        cx, cy = x0 + pad, y0 + pad
-        cw = (x1 - x0) - 2 * pad
+    for b in boxes:
+        c = cards[b["i"]]
+        pad = int(min(b["x1"] - b["x0"], b["y1"] - b["y0"]) * 0.115)
+        cx, cy = b["x0"] + pad + b["gutter"], b["y0"] + pad
+        cw = (b["x1"] - b["x0"]) - 2 * pad - b["gutter"]
+        hero = b["hero"]
+        if b["gutter"]:
+            nf = _font(skin["title_face"], int(H * 0.030))
+            _draw_text(draw, (b["x0"] + pad, cy), "%02d" % (b["i"] + 1), nf, _rgb(skin["accent"]))
         ct = (c.get("t") or "").strip()
         cd = (c.get("d") or "").strip()
         if ct:
-            tf, tfl, ts = _fit_lines(ct, skin["title_face"], int(H * 0.0255), cw, 1,
+            tf, tfl, ts = _fit_lines(ct, skin["title_face"],
+                                     int(H * (0.036 if hero else 0.0255)), cw, 1,
                                      min_size=int(H * 0.017))
             _draw_text(draw, (cx, cy), tfl[0], tf, _rgb(skin["accent"]))
             cy += int(ts * 1.45)
         if cd:
-            avail = max(int(H * 0.026), y1 - pad - cy)
-            df, dfl, ds = _fit_lines(cd, skin["body_face"], int(H * 0.0205), cw,
+            avail = max(int(H * 0.026), b["y1"] - pad - cy)
+            df, dfl, ds = _fit_lines(cd, skin["body_face"],
+                                     int(H * (0.0255 if hero else 0.0205)), cw,
                                      5, min_size=int(H * 0.0150), max_h=avail)
-            if len(_wrap(cd, _font(skin["body_face"], int(H * 0.0150)), cw)) * H * 0.0150 * 1.3 > avail:
-                problems.append("第 %d 张卡片说明放不下，已按最小字号截断" % (idx + 1))
             for ln in dfl:
-                if cy + ds * 1.30 > y1 - int(pad * 0.35):
-                    problems.append("第 %d 张卡片说明放不下，已截到最后可读的一行" % (idx + 1))
+                if cy + ds * 1.30 > b["y1"] - int(pad * 0.35):
+                    problems.append("第 %d 张卡片说明放不下，已截到最后可读的一行" % (b["i"] + 1))
                     break
                 _draw_text(draw, (cx, cy), ln, df, _rgb(skin["ink"]))
                 cy += int(ds * 1.30)
