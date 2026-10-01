@@ -1089,16 +1089,17 @@ textarea{resize:vertical;min-height:84px}
         </div>
         <div class="pk-actions">
           <button class="btn ghost sm" onclick="posterPlan()">① AI 拆解文案</button>
+          <button class="btn ghost sm" onclick="posterPreview()" title="0 元、当场出：用出图时同一个排版函数先看版面">🔍 先看版面（免费）</button>
           <button class="btn sm" style="background:var(--module-5);border-color:var(--module-5);color:#fff" onclick="posterGenerate()">② 出图并校验</button>
         </div>
-        <div class="pk-hint">先「①拆解」拿到可编辑文案（快速档约 20-60 秒，结果里会写明用的哪个模型），改完再「②出图」，避免拿不合心的文案白花一次出图。<br><b>默认走「程序排字」</b>：出图模型只画一张<b>没有字的底图</b>，中文由程序用系统真字体排上去。所以字不会写错、不会漏、不会多，字数上限 200 字只是"版面放得下"，可以把数值、条件、坑都留在图上。<br>另一个选项「模型画字」是把整张图（含字）交给模型，风格更统一，但实测 63 字就开始改写文案、画错笔画、把提示词里的「」框也画上，所以字数被钉死在 64，只建议用来对比。<br>成本与限流：出图 <b>0.5 元/张</b>、模型 <b>RPM=2</b>（每分钟最多 2 次），客户端已自动节流与退避重试，批量 20 张要约 10 分钟。视觉评审走便宜的视觉模型，只花时间不额外花钱。</div>
+        <div class="pk-hint">先「①拆解」拿到可编辑文案（快速档约 20-60 秒，结果里会写明用的哪个模型），改完再「②出图」，避免拿不合心的文案白花一次出图。<br><b>默认走「程序排字」</b>：出图模型只画一张<b>没有字的底图</b>，中文由程序用系统真字体排上去。所以字不会写错、不会漏、不会多，字数上限 200 字只是"版面放得下"，可以把数值、条件、坑都留在图上。<br>另一个选项「模型画字」是把整张图（含字）交给模型，风格更统一，但实测 63 字就开始改写文案、画错笔画、把提示词里的「」框也画上，所以字数被钉死在 64，只建议用来对比。<br><b>「🔍 先看版面（免费）」不调任何付费接口</b>：占位底图 + 同一个排版函数，当场出，用来确认字放不放得下、配色对不对。改文案之后多点几次不花钱，只有想要一张新插画才需要点「② 出图」。<br>成本与限流：出图 <b>0.5 元/张</b>、模型 <b>RPM=2</b>（每分钟最多 2 次），客户端已自动节流与退避重试，批量 20 张要约 10 分钟。视觉评审走便宜的视觉模型，只花时间不额外花钱。</div>
         <!-- 五步操作卡：放在动作条正下方，第一次用不必去别处找说明；收过一次就记住，不长期占地方 -->
         <details class="pk-guide" id="pk-guide" open>
           <summary>怎么用 · 五步出图</summary>
           <ol>
             <li><b>先选后拆。</b>排版方式：<b>默认「程序排字」别动</b>（模型只画没有字的底图，中文由程序排，字不会错，能写到 200 字）；「模型画字」只在对风格要求极高时用，上限 64 字且会写错。比例：小红书/抖音图文选 9:16，公众号图片消息选 3:4。张数：建议「出 3 张挑 1 张」（1.5 元、约 2-3 分钟，同一份底图风格每次不一样，一次挑比不满意重出省）。题材：填具体一点，例「魔兽怀旧服 塔卡攻略」，不填也能出但会偏。风格四选一：<b>攻略/版本/装备数值</b>→游戏史诗风；<b>工具实测/软件对比</b>→工具测评风；<b>经验总结/避坑清单/教程</b>→清单笔记风；<b>只有一个观点</b>→极简杂志风。「出图后做视觉评审」保持勾着。</li>
             <li><b>点「① AI 拆解文案」，等 20-60 秒。</b>先看「主线」那一句读起来成不成链——散的就直接点「① 重新拆解」，别拿着散文案花钱出图。再看字数行：程序排字模式下<b>不用为省字砍内容</b>，数值、条件、时间、坑都留在图上；只有超过 200 字才会被压，压完会写"已从 X 字压到 Y 字"。</li>
-            <li><b>手工改三处，这一步决定成品。</b>① 主标题要有钩子（"5步速通学习法"远好过"面试学习方法"）；② 每张卡片讲清一件事，说明写成完整一句话而不堆词；③「主视觉」那栏必须是<b>有具体形体的东西</b>——"盔甲战士站在高塔顶端仰视空中发光的 3600"画得出来，"科技感拉满"画不出来。程序排字模式下每张卡片的「配图」只当主视觉的道具线索用，不影响文字位置。</li>
+            <li><b>手工改三处，改完点「🔍 先看版面（免费）」。</b>① 主标题要有钩子（"5步速通学习法"远好过"面试学习方法"）；② 每张卡片讲清一件事，说明写成完整一句话而不堆词；③「主视觉」那栏必须是<b>有具体形体的东西</b>——"盔甲战士站在高塔顶端仰视空中发光的 3600"画得出来，"科技感拉满"画不出来。预览 <b>0 元、当场出</b>，用的就是出图时同一个排版函数，字号、折行、卡片位置、配色都是真的，只有上面那块灰框出图时会被插画替换。改一次文案点一次，不用花钱试。</li>
             <li><b>点「② 出图并校验」，看两个数。</b>程序排字模式下第一行永远是 ✅（字由代码落，不存在错字），只需留意有没有"版面放不下被截断"的提示；模型画字模式下写 ✗ 的别发。第二种数是<b>视觉评审</b>，满分 25，<b>18 分以下</b>会提示换一张或重出。出 3 张时下面每张标着"字已排好 + 分数"，点小图就换选，系统已默认挑分数最高的那张。</li>
             <li><b>点「复制发布文案」。</b>标题/摘要/配文/关键词回复/来源说明已拼好，直接去后台粘。配文末尾的合规尾注别删；数字、版本、价格自己核一手来源；后台记得勾「内容由 AI 生成」。</li>
           </ol>
@@ -1108,6 +1109,7 @@ textarea{resize:vertical;min-height:84px}
         <!-- 文案编辑区末尾再放一次动作条：改完就在眼前，不用滚回顶部找按钮 -->
         <div class="pk-actions">
           <button class="btn ghost sm" onclick="posterPlan()">① 重新拆解</button>
+          <button class="btn ghost sm" onclick="posterPreview()">🔍 先看版面（免费）</button>
           <button class="btn sm" style="background:var(--module-5);border-color:var(--module-5);color:#fff" onclick="posterGenerate()">② 出图并校验</button>
         </div>
         <div id="pk-result"></div>
@@ -2155,6 +2157,37 @@ async function posterPlan() {
     headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)}).then(x => x.json());
   if (r.error) { setStatus('error', r.error); return; }
   pollPoster('plan');
+}
+// 免费版面预览：占位底图 + 出图时同一个排版函数。
+// 换轨之后版面是代码算的、跟出图无关，所以折行/字号/卡片放不放得下都能在花钱前看到。
+async function posterPreview() {
+  if (!document.getElementById('pk-title')) { setStatus('error', '先点「① AI 拆解文案」拿到文案'); return; }
+  if (pkTextMode() !== 'typeset') {
+    // 提示写进结果区而不是顶部状态条：人这时候眼睛在弹窗里，状态条太小看不见
+    document.getElementById('pk-result').innerHTML =
+      '<div class="pk-verify mild">版面预览只在「程序排字」模式下有意义——「模型画字」那张的版式是模型即兴画的，'
+      + '预览看不到真效果。把上方「排版方式」切回程序排字再点。</div>';
+    return;
+  }
+  const box = document.getElementById('pk-result');
+  box.innerHTML = '<div class="pk-verify mild">⏳ 正在按当前文案排一张免费预览…</div>';
+  const body = {plan: pkReadPlan(), ratio: document.getElementById('pk-ratio').value};
+  let r;
+  try {
+    r = await fetch('/api/poster/preview', {method: 'POST',
+      headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)}).then(x => x.json());
+  } catch (e) { r = {error: e.message}; }
+  if (r.error) { box.innerHTML = '<div class="pk-verify fail">✗ ' + esc(r.error) + '</div>'; return; }
+  const bad = (r.check && r.check.problems) || [];
+  box.innerHTML = '<img class="pk-img" src="' + r.url + '?t=' + Date.now() + '" '
+    + 'onclick="window.open(\'' + r.url + '\',\'_blank\')" title="点击看原图">'
+    + '<div class="pk-verify ' + (bad.length ? 'fail' : 'pass') + '">'
+    + (bad.length ? '⚠️ 版面放不下：' + bad.join('；')
+                  : '✅ 版面放得下：' + r.chars + ' 字 · ' + (r.check.cards || 0) + ' 张卡片')
+    + '</div>'
+    + '<div class="pk-hint">这张预览 <b>0 元、当场出</b>，用的就是出图时同一个排版函数——字号、折行、卡片位置、配色都是真的。'
+    + '只有上面那块灰框在出图时会被 AI 插画替换掉，插画画得好不好只有真出图才知道。<b>改完文案再点一次，不花钱。</b></div>';
+  setStatus('done', bad.length ? '预览已出，但版面有提示' : '预览已出，版面没问题');
 }
 async function posterGenerate(force) {
   if (!_pkId) { alert('请先选择整合稿'); return; }

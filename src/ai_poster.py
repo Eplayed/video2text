@@ -612,6 +612,23 @@ def typeset_poster(png_bytes, plan, ratio="9:16"):
     return ts.typeset(png_bytes, plan, ratio)
 
 
+def preview_typeset(plan, ratio="9:16"):
+    """不花钱的版面预览：占位底图 + 真排版函数，尺寸与配色都和成品一致。
+
+    为什么值得单独做一个入口：换轨之后"版面"是代码算的，跟出图没关系，
+    所以折行、字号、卡片放不放得下、配色对不对，全都能在花钱之前看到。
+    看不到的一件事是插画本身画得好不好——那只能出图。
+    返回 (png 字节, 版面自检 dict)。
+    """
+    from . import poster_typeset as ts
+    if ratio not in SIZES:
+        ratio = "9:16"
+    w, h = _canvas_px(ratio)
+    frac = ts.text_zone_ratio(plan, (w, h))
+    base = ts.placeholder_base(plan.get("style_key"), w, h, frac)
+    return ts.typeset(base, plan, ratio)
+
+
 # ── 2. 出图 ──
 # 官方口径（阿里云百炼 qwen-image-max）：0.5 元/张、限流 RPM=2。
 # 实测连发 5 张时第 5 张必撞 "Requests rate limit exceeded"，所以这里既退避也节流。

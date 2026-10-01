@@ -68,6 +68,7 @@ TYPE_SKINS = {
         "title": "#f2dfa6", "title_stroke": "#1a1108",
         "ink": "#f0eadd", "muted": "#b3a894", "accent": "#c8963c",
         "panel": "#0d131e", "panel_alpha": 168, "stroke": "#c8963c", "stroke_alpha": 165,
+        "bg_top": "#1c2434", "bg_bot": "#0a0e16",
         "radius": 12, "gap": 0.020,
         "bottom": "暗色云雾与极淡的石纹底纹，四角有微弱余烬光点"
     },
@@ -76,6 +77,7 @@ TYPE_SKINS = {
         "title": "#eaf6ff", "title_stroke": "#0a1020",
         "ink": "#e9f2ff", "muted": "#9fb2cc", "accent": "#4fd1ff",
         "panel": "#101a33", "panel_alpha": 150, "stroke": "#4fd1ff", "stroke_alpha": 120,
+        "bg_top": "#141a3c", "bg_bot": "#070a1c",
         "radius": 22, "gap": 0.020,
         "bottom": "深蓝紫渐变与极淡的网格光点，越往下越暗"
     },
@@ -84,6 +86,7 @@ TYPE_SKINS = {
         "title": "#2b2b2b", "title_stroke": "#f7f2e6",
         "ink": "#2f2d29", "muted": "#7d766b", "accent": "#d9694a",
         "panel": "#fffdf6", "panel_alpha": 214, "stroke": "#d9694a", "stroke_alpha": 90,
+        "bg_top": "#f7f2e6", "bg_bot": "#e8dfcb",
         "radius": 8, "gap": 0.022,
         "bottom": "暖米色纸纹底，带极淡的纤维质感"
     },
@@ -92,6 +95,7 @@ TYPE_SKINS = {
         "title": "#1a1a1a", "title_stroke": "#ffffff",
         "ink": "#1a1a1a", "muted": "#8b8b8b", "accent": "#d92b2b",
         "panel": "#ffffff", "panel_alpha": 226, "stroke": "#d92b2b", "stroke_alpha": 0,
+        "bg_top": "#fbfbfa", "bg_bot": "#ececea",
         "radius": 0, "gap": 0.026,
         "bottom": "干净的纯色留白，不要任何纹理"
     },
@@ -357,3 +361,29 @@ def text_zone_ratio(plan, canvas_wh):
         return 0.62
     _boxes, top = _card_boxes(cards, W, H, m, inner, gap, cards_bottom, skin)
     return max(0.30, min(0.86, top / float(H)))
+
+def placeholder_base(style_key, W, H, art_frac=0.6):
+    """按风格预设的配色生成一张占位底图，给"免费预览"用。
+
+    预览要值不值 5 毛钱，取决于它和成品像不像：尺寸 1:1、配色取同一套皮肤、
+    分区用同一个 text_zone_ratio，所以版面上看到的就是出图后会看到的样子。
+    唯一缺的是插画内容本身——那块只画一个浅色框和一句说明。
+    """
+    skin = skin_for(style_key)
+    top, bot = _rgb(skin.get("bg_top", "#1a1a1a")), _rgb(skin.get("bg_bot", "#0a0a0a"))
+    img = Image.new("RGB", (int(W), int(H)), top)
+    d = ImageDraw.Draw(img, "RGBA")
+    for y in range(int(H)):                      # 纵向渐变，越往下越接近卡片底
+        r = y / float(max(1, H - 1))
+        d.line([(0, y), (W, y)], fill=tuple(int(top[i] * (1 - r) + bot[i] * r) for i in range(3)))
+    ay = int(H * max(0.25, min(0.85, art_frac)))
+    box = (int(W * 0.05), int(H * 0.03), int(W * 0.95), ay - int(H * 0.02))
+    d.rounded_rectangle(box, radius=18, outline=(128, 128, 128, 90), width=2)
+    f = _font(skin["body_face"], max(14, int(H * 0.018)))
+    tip = "这块是 AI 插画区 · 出图时才生成"
+    tw = f.getlength(tip)
+    d.text(((W - tw) / 2.0, (box[1] + box[3]) / 2.0 - H * 0.01), tip, font=f,
+           fill=_rgb(skin["muted"]))
+    b = io.BytesIO()
+    img.save(b, format="PNG")
+    return b.getvalue()

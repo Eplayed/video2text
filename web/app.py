@@ -1783,6 +1783,43 @@ def api_poster_generate():
     return jsonify({"status": "started", "summary_id": summary["id"]})
 
 
+@app.route("/api/poster/preview", methods=["POST"])
+def api_poster_preview():
+    """版面预览：占位底图 + 真排版，当场返回，不调任何付费接口。
+
+    故意不做字数拦截——预览的意义就是让人看见"这么写版面会爆"，
+    所以越界照样出图，只把版面自检的问题原样回给前端。
+    """
+    data = request.get_json(force=True) or {}
+    plan = data.get("plan") if isinstance(data.get("plan"), dict) else None
+    if not plan or not (plan.get("title") or "").strip():
+        return jsonify({"error": "还没有可预览的文案，先点「① AI 拆解文案」"}), 400
+    ratio = str(data.get("ratio") or "9:16").strip()[:5]
+    try:
+        png, chk = ai_poster.preview_typeset(plan, ratio)
+        key = hashlib.sha1(png).hexdigest()[:16]
+        out_dir = OUTPUT_DIR / "poster" / "_preview"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / (key + ".png")).write_bytes(png)
+        _prune_previews(out_dir)
+        return jsonify({"url": "/media/poster/_preview/%s.png" % key,
+                        "check": chk, "chars": ai_poster.plan_chars(plan),
+                        "cost_yuan": 0})
+    except Exception as e:
+        return jsonify({"error": str(e)[:300]}), 500
+
+
+def _prune_previews(out_dir, keep=24):
+    """预览图按内容哈希存，改一次文案就多一张；留最近 24 张，其余删掉。
+    这些是纯中间产物，攒在 output/ 里没人看也没人清。"""
+    try:
+        files = sorted(out_dir.glob("*.png"), key=lambda f: f.stat().st_mtime, reverse=True)
+        for f in files[keep:]:
+            f.unlink()
+    except Exception:
+        pass
+
+
 @app.route("/api/poster/status")
 def api_poster_status():
     return jsonify(_poster_status)
