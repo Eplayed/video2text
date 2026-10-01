@@ -119,6 +119,47 @@ def save_from_package(manifest, name="", reuse_base=True):
     return entry
 
 
+def save_from_draft(raw, ref_url=""):
+    """把一份拆解草稿（人在表单上改过的原始值）存成模板。
+
+    派生规则只有一份：poster_breakdown.normalize()。前端只传表单原值，不在那边重算
+    配色和占比，否则深浅翻转那套逻辑迟早两边对不上。
+    草稿里没有底图：外部参考图不能当底图用（那是别人的画），所以这类模板出图时
+    一律按画风口现画一张，0.5 元/张。参考图只留个地址给人对着看。
+    """
+    from . import poster_breakdown
+    draft = poster_breakdown.normalize(raw)
+    key = "d_%s" % uuid.uuid4().hex[:8]
+    skin = dict(draft["skin"])
+    entry = {
+        "key": key,
+        "name": (draft.get("name") or "拆出来的模板").strip()[:24],
+        "parent": draft.get("parent"),
+        "source_summary_id": None,
+        "mood": (draft.get("mood") or "").strip()[:200],
+        "scene_hint": (draft.get("mood") or "").strip()[:120],
+        "card_visual": "",
+        "skin": skin,
+        "ratio": "9:16",
+        "base_image": None,
+        "ref_image": ref_url or "",
+        "confidence": draft.get("confidence") or "mid",
+        "created_at": _now(),
+    }
+    items = _read()
+    items.insert(0, entry)
+    _write(items[:MAX_TEMPLATES])
+    return entry
+
+
+def _layout_keys():
+    from . import poster_typeset as ts
+    return {"stack", "grid2", "list", "hero"}
+
+
+_LAYOUTS = {"stack", "grid2", "list", "hero"}
+
+
 def poster_dir(summary_id):
     return ROOT / "output" / "poster" / str(int(summary_id))
 

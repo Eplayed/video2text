@@ -108,7 +108,10 @@ def _ai_config():
         api_base = collector.config_get(config, "AI_API_BASE", "https://api.openai.com/v1")
         model = collector.config_get(config, "AI_MODEL", "gpt-4o-mini")
     cfg = {"method": method, "api_key": api_key, "api_base": api_base, "model": model,
-           "fast_model": collector.config_get(config, "AI_MODEL_FAST", "")}
+           "fast_model": collector.config_get(config, "AI_MODEL_FAST", ""),
+           # 看图那类活（拆参考图做模板）单独一档，默认走 qwen3-vl-flash；
+           # 以后想换更强的视觉模型只改配置里的 AI_MODEL_VISION，不用动代码
+           "vision_model": collector.config_get(config, "AI_MODEL_VISION", "")}
     return cfg
 
 
@@ -1795,6 +1798,10 @@ def api_poster_preview():
     if not plan or not (plan.get("title") or "").strip():
         return jsonify({"error": "还没有可预览的文案，先点「① AI 拆解文案」"}), 400
     ratio = str(data.get("ratio") or "9:16").strip()[:5]
+    # 草稿预览：派生规则只有 normalize() 一份，前端只传表单原值
+    if isinstance(data.get("draft"), dict) and data.get("draft"):
+        from src import poster_breakdown
+        plan["_skin"] = poster_breakdown.normalize(data["draft"])["skin"]
     try:
         png, chk = ai_poster.preview_typeset(plan, ratio)
         key = hashlib.sha1(png).hexdigest()[:16]
@@ -1888,6 +1895,57 @@ def api_poster_templates():
         return jsonify({"items": items, "total": len(items)})
     except Exception as e:
         return jsonify({"error": str(e), "items": [], "total": 0}), 500
+
+
+@app.route("/api/poster/breakdown", methods=["POST"])
+def api_poster_breakdown():
+    """拆一张外部参考图文 → 模板草稿。看图必须用视觉模型，deepseek 那档看不见图。
+
+    草稿不直接落盘：模型给的配色、占比、版式都会错，先回给前端让人改，
+    改完点免费预览立刻看到，确认没问题再调 save-draft 存。
+    """
+    f = request.files.get("file")
+    if not f:
+        return jsonify({"error": "没收到图片"}), 400
+    ext = os.path.splitext(f.filename or "")[1].lower()
+    if ext not in {".jpg", ".jpeg", ".png", ".webp"}:
+        return jsonify({"error": "只支持 jpg/png/webp"}), 400
+    blob = f.read()
+    if len(blob) > 8 * 1024 * 1024:
+        return jsonify({"error": "图片超过 8MB，压一下再传"}), 400
+    token = uuid.uuid4().hex[:10]
+    d = OUTPUT_DIR / "poster" / "_refs" / token
+    d.mkdir(parents=True, exist_ok=True)
+    name = "ref%s" % (ext if ext != ".jpeg" else ".jpg")
+    (d / name).write_bytes(blob)
+    ref_url = "/media/poster/_refs/%s/%s" % (token, name)
+    try:
+        from src import poster_breakdown
+        cfg = _ai_config()          # 拆解用主档模型名，视觉档单独可配
+        model = (cfg.get("vision_model") or poster_breakdown.DEFAULT_VISION_MODEL)
+        raw = poster_breakdown.breakdown(blob, cfg, model=model)
+        return jsonify({"draft": raw, "ref_url": ref_url, "model": model,
+                        "layouts": poster_breakdown.LAYOUTS,
+                        "panels": poster_breakdown.PANEL_STYLES,
+                        "faces": poster_breakdown.TITLE_FACES})
+    except Exception as e:
+        return jsonify({"error": "拆解失败：%s" % str(e)[:200], "ref_url": ref_url}), 500
+
+
+@app.route("/api/poster/save-draft", methods=["POST"])
+def api_poster_save_draft():
+    """把改过的草稿存成模板。"""
+    data = request.get_json(force=True) or {}
+    draft = data.get("draft") if isinstance(data.get("draft"), dict) else None
+    if not draft:
+        return jsonify({"error": "没有草稿"}), 400
+    try:
+        from src import poster_templates as pt
+        it = pt.save_from_draft(draft, str(data.get("ref_url") or ""))
+        return jsonify({"success": True, "key": it["key"], "name": it["name"],
+                        "has_base": False})
+    except Exception as e:
+        return jsonify({"error": str(e)[:200]}), 500
 
 
 @app.route("/api/poster/<int:summary_id>/save-template", methods=["POST"])

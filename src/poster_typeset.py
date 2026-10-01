@@ -302,7 +302,7 @@ def _card_boxes(cards, W, H, m, inner, gap, cards_bottom, skin):
     return boxes, int(top)
 
 
-def typeset(base_png, plan, ratio="9:16"):
+def typeset(base_png, plan, ratio="9:16", skin=None):
     """把 plan 里的中文排到 AI 底图上。返回 (png 字节, 版面自检 dict)。
 
     base_png 是出图模型给的**无字底图**字节；plan 走 ai_poster 的文案计划形状
@@ -313,7 +313,7 @@ def typeset(base_png, plan, ratio="9:16"):
     """
     img = Image.open(io.BytesIO(base_png)).convert("RGB")
     W, H = img.size
-    skin = skin_for((plan or {}).get("style_key"))
+    skin = _resolve_skin((plan or {}).get("style_key"), skin)
     draw = ImageDraw.Draw(img, "RGBA")
     m = int(W * 0.062)
     inner = W - 2 * m
@@ -409,11 +409,11 @@ def typeset(base_png, plan, ratio="9:16"):
         "engine": "pil-typeset", "skin": (plan or {}).get("style_key") or DEFAULT_SKIN,
     }
 
-def text_zone_ratio(plan, canvas_wh):
+def text_zone_ratio(plan, canvas_wh, skin=None):
     """卡片区从画面高度的哪一段开始（0~1）。出图 prompt 用同一个数留白，
     排版和画面才不会一个让了地方另一个不知道。"""
     W, H = canvas_wh
-    skin = skin_for((plan or {}).get("style_key"))
+    skin = _resolve_skin((plan or {}).get("style_key"), skin)
     m = int(W * 0.062)
     inner = W - 2 * m
     gap = int(W * skin["gap"])
@@ -425,14 +425,19 @@ def text_zone_ratio(plan, canvas_wh):
     _boxes, top = _card_boxes(cards, W, H, m, inner, gap, cards_bottom, skin)
     return max(0.30, min(0.86, top / float(H)))
 
-def placeholder_base(style_key, W, H, art_frac=0.6):
+def _resolve_skin(style_key, skin):
+    """外部显式塞了皮肤就用它——拆参考图那条路上草稿还没落盘，但得先能预览。"""
+    return skin if isinstance(skin, dict) and skin.get("layout") else skin_for(style_key)
+
+
+def placeholder_base(style_key, W, H, art_frac=0.6, skin=None):
     """按风格预设的配色生成一张占位底图，给"免费预览"用。
 
     预览要值不值 5 毛钱，取决于它和成品像不像：尺寸 1:1、配色取同一套皮肤、
     分区用同一个 text_zone_ratio，所以版面上看到的就是出图后会看到的样子。
     唯一缺的是插画内容本身——那块只画一个浅色框和一句说明。
     """
-    skin = skin_for(style_key)
+    skin = _resolve_skin(style_key, skin)
     top, bot = _rgb(skin.get("bg_top", "#1a1a1a")), _rgb(skin.get("bg_bot", "#0a0a0a"))
     img = Image.new("RGB", (int(W), int(H)), top)
     d = ImageDraw.Draw(img, "RGBA")

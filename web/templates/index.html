@@ -386,6 +386,16 @@ textarea{resize:vertical;min-height:84px}
 .pk-tpl i{font-style:normal;font-size:10px;color:var(--text-secondary);border:1px solid var(--border);border-radius:4px;padding:0 3px}
 .pk-tpl u{text-decoration:none;cursor:pointer;padding:0 4px;color:var(--text-tertiary)}
 .pk-tpl u:hover{color:var(--danger)}
+.pk-tpl.pk-tpl-add b{color:var(--text-secondary)}
+.pk-break{border:1px solid var(--border);border-radius:8px;background:var(--surface-nested);padding:12px 14px;margin:0 0 10px}
+.pk-break .pk-row{margin:5px 0}
+.pk-break textarea{flex:1;min-width:0;min-height:56px;font-size:12px;line-height:1.65;font-family:inherit}
+.pk-break input[type=color]{width:38px;height:26px;padding:1px;border:1px solid var(--border-input);border-radius:5px;background:none}
+.pk-break input[type=range]{flex:1;min-width:120px}
+.bd-grid{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:8px 0}
+.bd-note{font-size:11.5px;line-height:1.7;color:var(--text-secondary);border-left:3px solid var(--module-5);padding:2px 0 2px 9px;margin:8px 0}
+.bd-thumb{width:96px;border-radius:6px;border:1px solid var(--border);display:block}
+.bd-prev{width:150px;border-radius:8px;border:1px solid var(--border);cursor:pointer}
 .pk-one b{color:var(--text)}
 .pk-actions{display:flex;gap:10px;margin:12px 0 4px}
 .pk-go{background:var(--module-5);border-color:var(--module-5);color:#fff;font-weight:700}
@@ -1096,6 +1106,7 @@ textarea{resize:vertical;min-height:84px}
           <button class="btn sm pk-go" onclick="posterGenerate()">③ 出图 · 0.5 元/张</button>
         </div>
         <div class="pk-tpls" id="pk-tpls" style="display:none"></div>
+        <div class="pk-break" id="pk-break" style="display:none"></div>
         <div class="pk-one">字由程序排版，不会错字也不会漏，200 字上限只是版面放得下。<b>改完文案多点几次②，一次都不花钱。</b></div>
         <!-- 三步操作卡：只在第一次用得着，收过一次就记住，不长期占地方 -->
         <details class="pk-guide" id="pk-guide" open>
@@ -2299,13 +2310,13 @@ async function loadPosterTemplates() {
   let d;
   try { d = await fetch('/api/poster/templates').then(r => r.json()); } catch (e) { return; }
   const items = d.items || [];
-  if (!items.length) { el.style.display = 'none'; el.innerHTML = ''; return; }
   el.style.display = 'flex';
   el.innerHTML = '<span class="pk-tpls-t">我的模板</span>' + items.map(t =>
     '<span class="pk-tpl"><b onclick="pkUseTemplate(\'' + t.key + '\')" title="选它并立刻看版面">' + esc(t.name) + '</b>'
     + (t.has_base ? '<i title="含底图：换文案出图不再花钱">底图</i>' : '')
     + '<u title="改名" onclick="pkRenameTemplate(\'' + t.key + '\')">✎</u>'
-    + '<u title="删除" onclick="pkDeleteTemplate(\'' + t.key + '\')">✕</u></span>').join('');
+    + '<u title="删除" onclick="pkDeleteTemplate(\'' + t.key + '\')">✕</u></span>').join('')
+    + '<span class="pk-tpl pk-tpl-add"><b onclick="pkBreakOpen()">＋ 拆参考图做模板</b></span>';
 }
 function pkUseTemplate(key) {
   const s = document.getElementById('pk-style-key-top');
@@ -2325,6 +2336,123 @@ async function pkDeleteTemplate(key) {
   await fetch('/api/poster/templates/' + key, {method: 'DELETE'});
   await loadPosterStyles(true);
   loadPosterTemplates();
+}
+// ── 拆外部参考图 → 模板草稿 ──
+// 看图必须用视觉模型（deepseek 那档看不见图）；它给的配色和占比都会错，
+// 所以这里只填一张能改的表单，改一点就免费预览一次，确认了才落盘。
+let _bd = null, _bdRef = '', _bdMeta = {};
+function pkBreakOpen() {
+  const el = document.getElementById('pk-break');
+  el.style.display = 'block';
+  if (_bd) { pkBreakRender(); return; }
+  el.innerHTML = '<div class="pk-sub">拆一张别人的图文做模板</div>'
+    + '<div class="pk-hint">传一张参考图，视觉模型会看它的<b>配色、版式、插画占比、画风口</b>，'
+    + '填成下面这张能改的表单。它一定会有看错的地方，所以改完就点一次免费预览，不花钱。'
+    + '<br>注意：参考图本身不会被用成你的底图（那是别人的画），存下来的是配方，出图时现画。</div>'
+    + '<div class="pk-actions" style="margin-top:6px">'
+    + '<label class="btn ghost sm" style="cursor:pointer">选图片<input type="file" accept="image/*" style="display:none" onchange="pkBreakUpload(event)"></label>'
+    + '<button class="btn ghost sm" onclick="pkBreakCancel()">收起</button></div>';
+}
+function pkBreakCancel() { document.getElementById('pk-break').style.display = 'none'; }
+async function pkBreakUpload(ev) {
+  const f = ev.target.files[0];
+  if (!f) return;
+  const el = document.getElementById('pk-break');
+  el.innerHTML = '<div class="pk-verify mild">⏳ 视觉模型正在看这张图，约 10-20 秒…</div>';
+  const fd = new FormData();
+  fd.append('file', f);
+  let r;
+  try { r = await fetch('/api/poster/breakdown', {method: 'POST', body: fd}).then(x => x.json()); }
+  catch (e) { r = {error: e.message}; }
+  if (r.error) {
+    el.innerHTML = '<div class="pk-verify fail">✗ ' + esc(r.error) + '</div>'
+      + '<div class="pk-actions"><label class="btn ghost sm" style="cursor:pointer">换一张<input type="file" accept="image/*" style="display:none" onchange="pkBreakUpload(event)"></label></div>';
+    return;
+  }
+  _bd = r.draft || {}; _bdRef = r.ref_url || ''; _bdMeta = {layouts: r.layouts, panels: r.panels, faces: r.faces};
+  pkBreakRender();
+  pkBreakPreview();
+}
+function _bdOpt(obj, cur) {
+  let h = '';
+  Object.keys(obj || {}).forEach(k => {
+    h += '<option value="' + k + '"' + (k === cur ? ' selected' : '') + '>' + esc(obj[k]) + '</option>';
+  });
+  return h;
+}
+function pkBreakRender() {
+  const d = _bd, pal = d.palette || {};
+  const el = document.getElementById('pk-break');
+  el.innerHTML = '<div class="pk-sub">拆解结果 · 下面每一项都能改，改完点「预览」立刻看</div>'
+    + '<div style="display:flex;gap:12px;align-items:flex-start">'
+    + (_bdRef ? '<img class="bd-thumb" src="' + _bdRef + '" title="参考原图">' : '')
+    + '<div style="flex:1;min-width:0">'
+    + '<div class="pk-row"><span class="pk-tag">模板名</span><input id="bd-name" value="' + esc(d.name || '') + '" maxlength="12" placeholder="≤10字，一眼认出什么感觉"></div>'
+    + '<div class="pk-row"><span class="pk-tag">画风口</span><textarea id="bd-mood" maxlength="200" placeholder="给底图用的画风描述：写实还是插画、光怎么打、背景什么材质">' + esc(d.mood || '') + '</textarea></div>'
+    + '</div></div>'
+    + '<div class="pk-row"><span class="pk-tag">版式</span><select id="bd-layout" onchange="pkBreakPreview()">' + _bdOpt(_bdMeta.layouts, d.layout) + '</select>'
+    + '<span class="pk-tag" style="flex:0 0 auto">插画占比</span><input id="bd-share" type="range" min="20" max="80" step="2" value="' + Math.round((d.art_share || 0.55) * 100) + '" oninput="document.getElementById(&#39;bd-share-t&#39;).textContent=this.value+&#39;%&#39;;pkBreakPreview()" style="flex:1">'
+    + '<b id="bd-share-t" style="font-size:12px;flex:0 0 42px">' + Math.round((d.art_share || 0.55) * 100) + '%</b></div>'
+    + '<div class="pk-row"><span class="pk-tag">卡片底板</span><select id="bd-panel" onchange="pkBreakPreview()">' + _bdOpt(_bdMeta.panels, d.panel_style) + '</select>'
+    + '<span class="pk-tag" style="flex:0 0 auto">标题字体</span><select id="bd-face" onchange="pkBreakPreview()">' + _bdOpt(_bdMeta.faces, d.title_face) + '</select></div>'
+    + '<div class="bd-grid"><span class="pk-tag">配色</span>'
+    + '<label>背景<input type="color" id="bd-bg" value="' + esc(pal.bg || '#141a26') + '" oninput="pkBreakPreview()"></label>'
+    + '<label>卡片<input type="color" id="bd-pal" value="' + esc(pal.panel || '#0d131e') + '" oninput="pkBreakPreview()"></label>'
+    + '<label>强调<input type="color" id="bd-accent" value="' + esc(pal.accent || '#c8963c') + '" oninput="pkBreakPreview()"></label>'
+    + '<label>正文<input type="color" id="bd-ink" value="' + esc(pal.ink || '#e8e2d5') + '" oninput="pkBreakPreview()"></label></div>'
+    + '<div class="bd-note">模型自评把握：<b>' + esc(d.confidence || '未知') + '</b>　' + esc(d.notes || '')
+    + '　<span style="opacity:.75">（深浅背景会自动翻转文字色，不用你管）</span></div>'
+    + '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">'
+    + '<div id="bd-prevbox" style="flex:0 0 auto"></div>'
+    + '<div class="pk-actions" style="flex:1;margin:0">'
+    + '<button class="btn ghost sm" onclick="pkBreakPreview()">预览 · 免费</button>'
+    + '<button class="btn sm pk-go" onclick="pkBreakSave()">存为模板</button>'
+    + '<button class="btn ghost sm" onclick="pkBreakCancel()">收起</button></div></div>';
+}
+function bdDraft() {
+  const g = id => { const e = document.getElementById(id); return e ? e.value : ''; };
+  return {name: g('bd-name').trim(), mood: g('bd-mood').trim(), layout: g('bd-layout'),
+          art_share: (parseInt(g('bd-share'), 10) || 55) / 100, panel_style: g('bd-panel'),
+          title_face: g('bd-face'),
+          palette: {bg: g('bd-bg'), panel: g('bd-pal'), accent: g('bd-accent'), ink: g('bd-ink')}};
+}
+function bdDemoPlan() {
+  const cur = document.getElementById('pk-title') ? pkReadPlan() : null;
+  if (cur && cur.title) return cur;
+  return {title: "这套风格拿来讲什么", subtitle: "副标题一句话",
+          cards: [{t: "第一条要点", d: "说明写成一句完整的话，长一点也没关系"},
+                  {t: "第二条要点", d: "这里放依据或者算账的那一步"},
+                  {t: "第三条要点", d: "这里放坑、限制或者注意事项"}],
+          footer: "内容整理自公开分享", style_key: "", scene: "", spine: ""};
+}
+async function pkBreakPreview() {
+  const box = document.getElementById('bd-prevbox');
+  if (!box || !_bd) return;
+  box.innerHTML = '<span class="pk-verify mild" style="padding:4px 8px">排版中…</span>';
+  const body = {plan: bdDemoPlan(), ratio: document.getElementById('pk-ratio').value, draft: bdDraft()};
+  let r;
+  try { r = await fetch('/api/poster/preview', {method: 'POST',
+    headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)}).then(x => x.json()); }
+  catch (e) { r = {error: e.message}; }
+  if (r.error) { box.innerHTML = '<span class="pk-verify fail" style="padding:4px 8px">✗ ' + esc(r.error) + '</span>'; return; }
+  const bad = (r.check && r.check.problems) || [];
+  box.innerHTML = '<img class="bd-prev" src="' + r.url + '?t=' + Date.now() + '" '
+    + 'onclick="window.open(\'' + r.url + '\',\'_blank\')" title="点击看大图">'
+    + (bad.length ? '<div style="font-size:11px;color:var(--danger);max-width:150px">' + esc(bad[0]) + '</div>' : '');
+}
+async function pkBreakSave() {
+  if (!_bd) return;
+  let r;
+  try {
+    r = await fetch('/api/poster/save-draft', {method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({draft: bdDraft(), ref_url: _bdRef})}).then(x => x.json());
+  } catch (e) { r = {error: e.message}; }
+  if (r.error) { setStatus('error', r.error); return; }
+  await loadPosterStyles(true);
+  loadPosterTemplates();
+  pkBreakCancel();
+  setStatus('done', '已存为模板：' + r.name + '（在「风格」下拉里选它；出图时按画风口现画底图，0.5 元/张）');
 }
 async function posterSaveTemplate(id) {
   const name = prompt('给这套风格起个名字（之后在「风格」下拉里能选到它）', '我的模板');

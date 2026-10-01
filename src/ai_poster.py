@@ -602,7 +602,7 @@ def build_art_prompt(plan, ratio="9:16"):
     """
     from . import poster_typeset as ts
     preset = _preset(plan)
-    frac = ts.text_zone_ratio(plan, _canvas_px(ratio))
+    frac = ts.text_zone_ratio(plan, _canvas_px(ratio), (plan or {}).get("_skin"))
     skin = ts.skin_for(plan.get("style_key"))
     art_pct, zone_pct = int(round(frac * 100)), int(round((1 - frac) * 100))
     scene = (plan.get("scene") or "").strip() or (preset.get("scene") or "").strip()
@@ -684,9 +684,10 @@ def preview_typeset(plan, ratio="9:16"):
     if ratio not in SIZES:
         ratio = "9:16"
     w, h = _canvas_px(ratio)
-    frac = ts.text_zone_ratio(plan, (w, h))
-    base = ts.placeholder_base(plan.get("style_key"), w, h, frac)
-    return ts.typeset(base, plan, ratio)
+    skin = plan.get("_skin") if isinstance(plan.get("_skin"), dict) else None
+    frac = ts.text_zone_ratio(plan, (w, h), skin)
+    base = ts.placeholder_base(plan.get("style_key"), w, h, frac, skin)
+    return ts.typeset(base, plan, ratio, skin)
 
 
 # ── 2. 出图 ──
