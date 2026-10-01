@@ -1,10 +1,12 @@
 # -*- coding: utf-8 -*-
-"""AI 海报链路 e2e：整理稿 → LLM 拆解 → 出图 → OCR 回读校验，全链路跑一条真实素材。
+"""AI 海报链路 e2e：整理稿 → LLM 拆解 → 出图 → 回读校验 + 视觉评审，全链路跑一条真实素材。
 
 用法：
     python3 scripts/e2e_ai_poster.py [summary_id]     # 默认取最新的 wechat_material 整合稿
+    python3 scripts/e2e_ai_poster.py [id] plan        # 只跑拆解，不花钱出图
 退出码 0 且末行 ALL_OK 才算通过。会往 output/poster/<id>/ 写产物并保留（供人眼复核）。
 """
+import json
 import re
 import sqlite3
 import sys
@@ -50,6 +52,7 @@ def pick_summary(conn, sid):
 
 def main():
     sid = sys.argv[1] if len(sys.argv) > 1 else ""
+    plan_only = len(sys.argv) > 2 and sys.argv[2] == "plan"
     conn = sqlite3.connect(str(DB_PATH))
     conn.row_factory = sqlite3.Row
     summary = pick_summary(conn, sid)
@@ -58,6 +61,17 @@ def main():
         return 1
     ai_config = work_config(load_ai_config())
     print("整合稿 #%s《%s》 拆解模型=%s" % (summary["id"], summary["title"][:30], ai_config["model"]))
+
+    if plan_only:
+        plan, publish, bad, notes = ai_poster.build_text_plan(summary, ai_config)
+        print(json.dumps(plan, ensure_ascii=False, indent=2))
+        print("violations=%s notes=%s visual=%s" % (bad, notes, ai_poster.lint_visual(plan)))
+        print("---- PROMPT ----\n%s" % ai_poster.build_prompt_text(plan))
+        if bad:
+            print("FAIL 文案不合格")
+            return 1
+        print("ALL_OK")
+        return 0
 
     manifest = ai_poster.generate_poster(
         summary, ai_config, progress_cb=lambda m: print("  ·", m))
@@ -71,11 +85,28 @@ def main():
         errs.append("poster.png 未落盘")
     if manifest["text_chars"] > ai_poster.MAX_TOTAL_CHARS:
         errs.append("字数门禁失效：%d 字 > %d" % (manifest["text_chars"], ai_poster.MAX_TOTAL_CHARS))
+    # 画面计划与风格键：这两个空了就等于退回"一屏文字框"，必须一起断言
+    if manifest["plan"].get("style_key") not in ai_poster.STYLE_PRESETS:
+        errs.append("style_key 不在预设库里：%r" % manifest["plan"].get("style_key"))
+    if not (manifest["plan"].get("scene") or "").strip():
+        errs.append("拆解没产出主视觉 scene")
+    if not [c for c in manifest["plan"]["cards"] if (c.get("v") or "").strip()]:
+        errs.append("拆解没给任何卡片配图 v")
     v = manifest.get("verify") or {}
     if v.get("ok") is not True:
-        errs.append("OCR 回读未通过：missing=%s extra=%s" % (v.get("missing"), v.get("extra")))
+        errs.append("回读校验未通过：missing=%s extra=%s" % (v.get("missing"), v.get("extra")))
     if v.get("skipped"):
-        print("  ! OCR 校验被跳过（%s），本次仅出图，需人眼复核" % v.get("error", "未启用"))
+        print("  ! 回读校验被跳过（%s），本次仅出图，需人眼复核" % v.get("error", "未启用"))
+    r = manifest.get("review") or {}
+    if r.get("skipped"):
+        errs.append("视觉评审没跑成：%s" % (r.get("error") or "已跳过"))
+    elif int(r.get("score") or 0) < ai_poster.REVIEW_PASS:
+        errs.append("视觉评审 %s/%s 低于可发线 %d（最弱 %s：%s）"
+                    % (r.get("score"), r.get("full"), ai_poster.REVIEW_PASS,
+                       r.get("worst"), r.get("note")))
+    print("回读=%s 评审=%s/%s 画面%s%% 风格=%s"
+          % (v.get("ok"), r.get("score"), r.get("full"), r.get("visual_pct"),
+             manifest.get("style_label") or manifest.get("style_key")))
 
     if errs:
         print("FAIL " + "；".join(errs))
