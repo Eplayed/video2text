@@ -2129,7 +2129,10 @@ def api_ai_test():
 # 订阅（作者主页增量同步）
 # ════════════════════════════════════════════════════════════════
 
-_sub_status = {"running": False, "progress": "", "done": True, "error": "", "result": None}
+# new_items：这轮真正进了素材库的条目（标题+作者+来源）。同步完只显示"新增 N 篇"的话，
+# 用户只能去上千条列表里自己翻，翻不到就以为没同步——这次报障就是这么来的。
+_sub_status = {"running": False, "progress": "", "done": True, "error": "", "result": None,
+               "new_items": []}
 
 
 def _read_cookie_from_file() -> str:
@@ -2373,7 +2376,8 @@ def api_subscriptions_sync():
 
     def run():
         import time
-        _sub_status.update(running=True, done=False, error="", progress="准备同步...", result=None)
+        _sub_status.update(running=True, done=False, error="", progress="准备同步...",
+                           result=None, new_items=[])
         try:
             with _db_lock:
                 subs = content_store.list_subscriptions(DB_PATH)
@@ -2440,6 +2444,11 @@ def api_subscriptions_sync():
                                 f"新增 {len(inserted)} 篇文章{cat_note}{pending_note}",
                                 author=sub.get("author") or "")
                         summary.append(f"{name}: 新增 {len(inserted)} 篇文章{cat_note}{pending_note}")
+                        _sub_status["new_items"] += [
+                            {"kind": "wechat", "author": name,
+                             "title": (a.get("title") or "").strip(),
+                             "published_at": (a.get("published_at") or "")[:10]}
+                            for a in inserted]
                     except Exception as e:
                         with _db_lock:
                             content_store.update_subscription_sync(
@@ -2566,6 +2575,7 @@ def api_subscriptions_sync():
                     # 订阅设了分类 → 新视频自动打上。AI 增量分类不会改写已有 category
                     # （写回口径见 content_store.classify_videos 的 force=False 分支）
                     cat_note = ""
+                    new_titles = []
                     if sub.get("category"):
                         with _db_lock:
                             conn = content_store.connect(DB_PATH)
@@ -2573,10 +2583,11 @@ def api_subscriptions_sync():
                                 marked = 0
                                 for r0 in rows:
                                     r = conn.execute(
-                                        "SELECT id FROM videos WHERE source_sheet = ? AND source_row = ?",
+                                        "SELECT id, title FROM videos WHERE source_sheet = ? AND source_row = ?",
                                         ("抖音视频数据", r0),
                                     ).fetchone()
                                     if r:
+                                        new_titles.append((r["title"] or "").strip())
                                         # 非游戏攻略分类不带 game
                                         g = sub.get("game") or ""
                                         if sub["category"] != "游戏攻略":
@@ -2595,6 +2606,9 @@ def api_subscriptions_sync():
                             DB_PATH, sub["id"], pm["count"],
                             f"新增 {pm['count']} 条并已转写{cat_note}", author=pm["new_author"])
                     summary.append(f"{name}: 新增 {pm['count']} 条{cat_note}")
+                    _sub_status["new_items"] += [
+                        {"kind": "douyin", "author": pm["new_author"] or name, "title": tt,
+                         "published_at": ""} for tt in new_titles if tt]
 
             # 同步入库后补 AI 增量打标：只补缺口（订阅链路新行自带 category 但缺 ai_tags，
             # 选题雷达依赖 ai_tags）。必须放在两条分支之外——原先挂在抖音分支里，

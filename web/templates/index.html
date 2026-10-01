@@ -389,6 +389,10 @@ textarea{resize:vertical;min-height:84px}
 .pk-tpl.pk-tpl-add b{color:var(--text-secondary)}
 .pk-break{border:1px solid var(--border);border-radius:8px;background:var(--surface-nested);padding:12px 14px;margin:0 0 10px}
 .pk-break .pk-row{margin:5px 0}
+.sub-st-new{margin-top:6px;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--surface-nested);color:var(--text-secondary);font-weight:400}
+.sub-st-i{font-size:12px;line-height:1.75;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sub-st-i span{display:inline-block;min-width:30px;font-size:10.5px;font-weight:700;color:var(--module-3)}
+.sub-st-more,.sub-st-none{font-size:11.5px;color:var(--text-tertiary);margin-top:3px;line-height:1.7}
 .pk-break textarea{flex:1;min-width:0;min-height:56px;font-size:12px;line-height:1.65;font-family:inherit}
 .pk-break input[type=color]{width:38px;height:26px;padding:1px;border:1px solid var(--border-input);border-radius:5px;background:none}
 .pk-break input[type=range]{flex:1;min-width:120px}
@@ -4269,16 +4273,45 @@ function startSubPolling() {
   }, 3000);
 }
 
+// 同步完只说"新增 N 篇"是不够的：上千条列表里翻不到，用户就会判定"没同步到素材库"。
+// 所以把这一轮真正入库的条目标题列出来，并给一个带着来源筛选跳过去的按钮。
+function gotoLibrary(kind) {
+  _activeSource = kind;
+  switchPage('videos');
+}
 function showSubStatus(st) {
   const box = document.getElementById('sub-status');
   if (!box) return;
-  if (st.running || st.progress || st.error) {
+  const items = st.new_items || [];
+  if (st.running) {
     box.style.display = 'block';
-    box.textContent = st.error ? '❌ ' + st.error : (st.progress || '');
-    box.style.color = st.error ? 'var(--module-5)' : 'var(--module-2)';
-  } else {
-    box.style.display = 'none';
+    box.style.color = 'var(--module-2)';
+    box.textContent = st.progress || '';
+    return;
   }
+  if (!items.length && !st.error && !st.progress) { box.style.display = 'none'; return; }
+  box.style.display = 'block';
+  const head = st.error ? '❌ ' + esc(st.error)
+    : (String(st.progress || '同步完成').indexOf('✅') === 0 ? esc(st.progress) : '✅ ' + esc(st.progress || '同步完成'));
+  let html = '<div class="' + (st.error ? 'sub-st-err' : 'sub-st-ok') + '">' + head + '</div>';
+  if (items.length) {
+    const kinds = {};
+    items.forEach(it => { kinds[it.kind] = (kinds[it.kind] || 0) + 1; });
+    html += '<div class="sub-st-new"><b>这一轮进了素材库 ' + items.length + ' 条：</b>'
+      + items.slice(0, 12).map(it => '<div class="sub-st-i"><span>' + (it.kind === 'wechat' ? '微信' : '抖音')
+        + '</span>' + esc(it.author || '') + '　' + esc((it.title || '（无标题）').slice(0, 46))
+        + (it.published_at ? '　' + esc(it.published_at) : '') + '</div>').join('')
+      + (items.length > 12 ? '<div class="sub-st-more">另有 ' + (items.length - 12) + ' 条未列出</div>' : '')
+      + '<div style="display:flex;gap:8px;margin-top:7px">'
+      + (kinds.wechat ? '<button class="btn ghost sm" onclick="gotoLibrary(\'wechat\')">去素材库看微信</button>' : '')
+      + (kinds.douyin ? '<button class="btn ghost sm" onclick="gotoLibrary(\'douyin\')">去素材库看抖音</button>' : '')
+      + '</div></div>';
+  } else if (!st.error) {
+    html += '<div class="sub-st-none">这一轮没有新增。上游每个号每次只看最新一篇，确实没新东西就是"无新文章"；'
+      + '提示里带"全文未就绪"的，是上游还没抓到正文，下次同步会自动重试。</div>';
+  }
+  box.style.color = st.error ? 'var(--module-5)' : 'var(--module-2)';
+  box.innerHTML = html;
 }
 
 async function deleteSubscriptionItem(id) {
