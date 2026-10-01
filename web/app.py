@@ -1699,12 +1699,13 @@ def api_poster_plan():
     # 用户在下拉里点过风格就别让模型再改回去：显式选择优先于自由发挥
     style_key = str(data.get("style_key") or "").strip()[:20]
     ratio = str(data.get("ratio") or "9:16").strip()[:5]   # 只影响预览 prompt 的版式描述
+    text_mode = str(data.get("text_mode") or ai_poster.DEFAULT_TEXT_MODE).strip()[:10]
 
     def fn():
         cfg = _fast_config()
         _poster_status["progress"] = "LLM 拆解海报文案（模型：%s）..." % (cfg.get("model") or "?")
         plan, publish, bad, notes = ai_poster.build_text_plan(summary, cfg, theme=theme, title=title,
-                                                              style_key=style_key)
+                                                              style_key=style_key, text_mode=text_mode)
         # 骨架稿不在这里拦：拆解本身就能判断这份素材有没有料，拦在这里会让人白等一次拆解。
         # 只把风险随结果一起回给前端，出图那一步再决定是否放行。
         warning = "；".join(ai_poster.draft_gate.draft_blockers(summary))
@@ -1713,7 +1714,9 @@ def api_poster_plan():
                                   "visual": ai_poster.lint_visual(plan),
                                   "model": cfg.get("model") or "",
                                   "draft_warning": warning,
-                                  "prompt_text": ai_poster.build_prompt_text(plan, ratio)}
+                                  "prompt_text": (ai_poster.build_art_prompt(plan, ratio)
+                                                  if text_mode == "typeset"
+                                                  else ai_poster.build_prompt_text(plan, ratio))}
         _poster_status["progress"] = ("✅ 文案已拆解（合计 %d 字 · 模型 %s）"
                                       % (ai_poster.plan_chars(plan), cfg.get("model") or "?")
                                       + ("；自动压缩：" + "、".join(notes) if notes else "")
@@ -1738,6 +1741,7 @@ def api_poster_generate():
     publish = data.get("publish") if isinstance(data.get("publish"), dict) else None
     force = bool(data.get("force"))      # 骨架稿人工复核后的显式放行
     do_review = data.get("review") is not False   # 默认做视觉评审，前端可关掉省十几秒
+    text_mode = str(data.get("text_mode") or ai_poster.DEFAULT_TEXT_MODE).strip()[:10]
     try:
         copies = int(data.get("copies") or 1)
     except (TypeError, ValueError):
@@ -1749,22 +1753,30 @@ def api_poster_generate():
         manifest = ai_poster.generate_poster(summary, _fast_config(), theme=theme, title=title,
                                              ratio=ratio, progress_cb=cb, plan=plan,
                                              publish=publish, force=force, copies=copies,
-                                             do_review=do_review)
+                                             do_review=do_review, text_mode=text_mode)
         v = manifest.get("verify") or {}
         rv = manifest.get("review") or {}
+        ts_chk = manifest.get("typeset") or {}
         errs = [i for i in (manifest.get("lint") or []) if i.startswith("error")]
         _poster_status["package"] = {"id": manifest["id"], "title": manifest["title"],
                                      "url": manifest["url"], "chars": manifest["text_chars"],
                                      "copies": manifest.get("copies") or 1,
                                      "verify_ok": v.get("ok"), "review": rv,
+                                     "text_mode": manifest.get("text_mode"),
+                                     "typeset_problems": ts_chk.get("problems") or [],
                                      "lint": manifest.get("lint") or []}
         _poster_status["plan"] = {"plan": manifest["plan"], "publish": manifest["publish"],
                                   "violations": errs, "chars": manifest["text_chars"],
                                   "prompt_text": manifest["prompt_text"]}
         score = ("，视觉评审 %s/%s 分" % (rv.get("score"), rv.get("full"))) if rv.get("score") else ""
-        _poster_status["progress"] = "✅ 海报已生成（%d 字）%s%s" % (
-            manifest["text_chars"], score,
-            "" if v.get("ok") else "，⚠️ 图面文字校验未通过，发布前人眼复核")
+        if manifest.get("text_mode") == "typeset":
+            warn = ("，⚠️ 版面提示：" + "；".join(ts_chk.get("problems") or [])) if ts_chk.get("problems") else ""
+            _poster_status["progress"] = "✅ 海报已生成（%d 字，字由程序排版、不存在错字）%s%s" % (
+                manifest["text_chars"], score, warn)
+        else:
+            _poster_status["progress"] = "✅ 海报已生成（%d 字）%s%s" % (
+                manifest["text_chars"], score,
+                "" if v.get("ok") else "，⚠️ 图面文字校验未通过，发布前人眼复核")
 
     if not _poster_start("poster", fn):
         return jsonify({"error": "已有海报任务正在运行"}), 400
@@ -1780,10 +1792,12 @@ def api_poster_status():
 def api_poster_styles():
     """风格预设名单由后端下发：配方原文只有一份，前端不抄一遍才不会漂移。"""
     return jsonify({"items": ai_poster.style_choices(),
+                    "modes": [{"key": "typeset", "label": "程序排字（推荐，字不会错）"},
+                              {"key": "model", "label": "模型画字（整张交给模型，风格更统一但会错字）"}],
+                    # 两套预算按模式分开下发：程序排字看版面、模型画字看错字率，
+                    # 前端自己写死一份迟早会跟后端对不上
+                    "limitsByMode": {"typeset": ai_poster.TS_LIMITS, "model": ai_poster.MD_LIMITS},
                     "limits": {"scene": ai_poster.SCENE_MAX, "cardVis": ai_poster.CARD_VIS_MAX,
-                               "total": ai_poster.MAX_TOTAL_CHARS, "title": ai_poster.TITLE_MAX,
-                               "subtitle": ai_poster.SUBTITLE_MAX, "footer": ai_poster.FOOTER_MAX,
-                               "cardT": ai_poster.CARD_TITLE_MAX, "cardD": ai_poster.CARD_DESC_MAX,
                                "cardMin": ai_poster.CARD_MIN, "cardMax": ai_poster.CARD_MAX,
                                "spine": ai_poster.SPINE_MAX},
                     "reviewPass": ai_poster.REVIEW_PASS})

@@ -51,9 +51,26 @@ TITLE_MAX, SUBTITLE_MAX, FOOTER_MAX = 12, 10, 14
 # 同样 64 字总量但说明写到 11-13 字，那三行直接退化成"伪汉字"乱码。所以把单条压到 10 字。
 CARD_TITLE_MAX, CARD_DESC_MAX, CARD_MIN, CARD_MAX = 6, 10, 3, 5
 SPINE_MAX = 24              # 主线一句话：只在 UI 里给人看，不进图、不计字数
+
+# 两种排版模式。typeset＝模型只画没有字的底图、中文由程序用真字体排上去（默认）；
+# model＝整张交给模型画字，留着做对比用。
+# 为什么默认换成前者：模型同时画插画和写中文时两件事抢同一份算力，实测 63 字那张
+# 插画最好但把"比上赛季"多写一个"个"、"10月8开启"改写成"10月8日"、赛字笔画画错、
+# 连提示词里的「」框都画上去了。字交给程序排，这五类问题一次性消失，字数上限也
+# 从"正确性问题"降级成"版面放得下"，信息量才能做回竞品那种密度。
+TEXT_MODES = ("typeset", "model")
+DEFAULT_TEXT_MODE = "typeset"
+# 程序排字这套预算只受版面约束：200 字在 9:16 上实测放得下（5 张卡片、说明 40 字）
+TS_LIMITS = {"total": 200, "title": 16, "subtitle": 22, "cardT": 8, "cardD": 40, "footer": 24}
+MD_LIMITS = {"total": MAX_TOTAL_CHARS, "title": TITLE_MAX, "subtitle": SUBTITLE_MAX,
+             "cardT": CARD_TITLE_MAX, "cardD": CARD_DESC_MAX, "footer": FOOTER_MAX}
+
+
+def limits_for(text_mode):
+    return dict(TS_LIMITS if text_mode == "typeset" else MD_LIMITS)
 # 画面计划（scene / 每条卡片的 v）与 spine 同理：只喂给出图模型，不落成图面文字，
 # 所以不占合计字数预算。没有这一栏，模型只会画一排空文字框——那是我们的图"土"的第一原因。
-SCENE_MAX, CARD_VIS_MAX = 48, 24
+SCENE_MAX, CARD_VIS_MAX = 48, 30
 VISUAL_MIN = 2              # 至少几条卡片给了画面描述，少于这个数提示人工补
 
 # 一次出多张让人挑：AI 出图有方差，并行采样比反复重出省时间也省钱
@@ -75,7 +92,8 @@ COMPLIANCE_NOTE = "本文由 AI 辅助整理归纳，内容源自公开分享，
 
 # 海报版发布检查清单：平台侧动作 AI 替不了，逐条人工过
 CHECKLIST = [
-    "图内文字已过回读校验（manifest.verify.ok = true），未通过别发",
+    "图内文字已核对：程序排字模式由代码落字、不会错，只需看版面提示有没有截断；"
+    "模型画字模式必须 manifest.verify.ok = true，未通过别发",
     "视觉评审已过（manifest.review）：低于 %d 分或画面占比低于 40%% 时先换候选/换风格重出，别硬发" % REVIEW_PASS,
     "数字/版本/价格类信息人工核对一手来源（ASR 与模型都可能出错）",
     "「文章设置」勾选「内容由 AI 生成」（2025-09-01 起强制，平台不自动标注）",
@@ -96,6 +114,7 @@ STYLE_PRESETS = {
         "label": "游戏史诗风（写实插画 · 暗色氛围）",
         "when": "游戏攻略、版本解读、装备/数值向",
         "scene": "占画面五成以上的写实游戏主视觉：一个角色或一处场景在单一强光源下，背景压暗只做氛围",
+        "mood": "写实厚涂游戏原画风，电影级布光，深灰蓝夜色背景 #161b26 配单一暖金强光源 #c8963c，整体像魔兽资料集封面，严禁扁平卡通矢量风、严禁纯白底、严禁左右对称的商务模板感",
         "card_visual": "每张卡片左端配一个道具特写小图（武器/徽章/地图/药水瓶），不许留空框",
         "style": ("写实厚涂游戏原画风中文信息图，电影级布光，深灰蓝夜色背景 #161b26 配单一暖金强光源 #c8963c，"
                   "画面上半部是一整幅占版面五成的游戏场景或角色插画，卡片做成带烧蚀边缘的黑铁石板，"
@@ -106,6 +125,7 @@ STYLE_PRESETS = {
         "label": "工具测评风（界面感 · 冷色科技）",
         "when": "AI 工具实测、软件对比、效率清单",
         "scene": "占画面五成的主视觉：一台斜视角屏幕里跑出界面光效，周围浮着几个发光的接口节点",
+        "mood": "高级科技感插画，深蓝紫渐变底 #0e1230 到 #1a1040，点缀青蓝高光 #4fd1ff 与紫色 #8b5cf6，斜视角悬浮屏幕、发光数据流、玻璃质感体块，整体像高端发布会主视觉，严禁廉价蓝白渐变、严禁真人照片拼贴",
         "card_visual": "每张卡片配一枚线性发光图标（终端/齿轮/闪电/盾牌），卡片做成悬浮的毛玻璃面板",
         "style": ("高级科技感中文信息图，深蓝紫渐变底 #0e1230 到 #1a1040，点缀青蓝高光 #4fd1ff 与紫色 #8b5cf6，"
                   "画面上半部是一幅占版面五成的产品界面氛围插画（斜视角悬浮屏幕、发光数据流、玻璃质感面板），"
@@ -116,6 +136,7 @@ STYLE_PRESETS = {
         "label": "清单笔记风（纸质手账 · 暖色亲和）",
         "when": "经验总结、避坑清单、教程要点",
         "scene": "占画面五成的主视觉：一张摊开的笔记本或桌面俯拍插画，笔、贴纸、咖啡杯散在其间",
+        "mood": "精致手账插画风，暖米色纸纹背景 #f5efe3，主色墨黑 #2b2b2b 配砖红 #d9694a 与苔绿 #6b8e5a，俯拍桌面、纸胶带与手撕边质感，点缀手绘下划线，严禁冷色科技风、严禁纯黑底",
         "card_visual": "每条卡片前面画一个手绘勾选框或小标记，配一枚相关物件插画（便签/尺子/警示牌）",
         "style": ("精致手账风中文信息图，暖米色纸纹背景 #f5efe3，主色墨黑 #2b2b2b 配砖红 #d9694a 与苔绿 #6b8e5a，"
                   "画面上半部是一幅占版面五成的俯拍桌面插画（摊开的笔记本、笔、贴纸、咖啡杯），"
@@ -126,6 +147,7 @@ STYLE_PRESETS = {
         "label": "极简杂志风（大留白 · 强对比）",
         "when": "观点短文、单点结论、封面级标题党",
         "scene": "占画面五成的主视觉：一个被高度风格化的单一主体（一扇门/一枚棋子/一台机器），大面积纯色包围",
+        "mood": "高端杂志插画版式，大面积留白配单一强调色（正红 #d92b2b 或深墨绿），高度风格化的单主体构图，几何感强、栅格严整，严禁装饰堆砌、严禁渐变、严禁花哨边框",
         "card_visual": "每张卡片只放一个大号几何符号或单色剪影，宁少勿多，靠体量不靠细节",
         "style": ("高端杂志版式中文信息图，大面积留白配单一强调色（正红 #d92b2b 或深墨绿），"
                   "画面上半部是一幅占版面五成的高度风格化单主体插画（剪影/几何构成/强轮廓），"
@@ -224,10 +246,11 @@ _PLAN_PROMPT = """你是自媒体图文编辑。下面这份素材多半**已经
 - 优先保留**带推理链的信息**（为什么值、怎么算出来的、什么条件才成立），
   砍掉单纯罗列的名词、重复修饰和与主题无关的边角料。
 
-铁律三·字数硬约束（多一个字都不合格）：
-主标题 ≤12 字；副标题 ≤10 字；每张卡片标题 ≤6 字、说明 ≤10 字；尾注 ≤14 字；
-卡片 3-5 张；全部文字合计 ≤__TOTAL__ 字。宁可少一张卡片把主线讲完整，也不要多一张卡片讲半句。
-中文标点计入字数；不要出现英文单词或 markdown 符号；
+铁律三·篇幅纪律：
+主标题 ≤__TITLE__ 字；副标题 ≤__SUB__ 字；每张卡片标题 ≤__CT__ 字、说明 ≤__CD__ 字；尾注 ≤__FOOT__ 字；
+卡片 3-5 张；全部文字合计 ≤__TOTAL__ 字。
+__DENSITY__
+中文标点计入字数；不要出现 markdown 符号；
 **价格、天数、日期一律保持素材里的阿拉伯数字**（写 388 不写三八八），中文数字反而更占字数也更难读。
 
 铁律四·画面纪律（这一条决定海报是"一张插画"还是"一屏文字框"，与字数同样重要）：
@@ -297,6 +320,21 @@ def lint_publish(pub):
     return bad
 
 
+# 两种模式对"写多少"的取向完全相反，所以铁律三的后半句分开写：
+# 模型画字时多写会错，程序排字时少写是浪费版面。
+_DENSITY = {
+    "typeset": ("字是程序用真字体排到图上的，不会写错也不会漏，所以**别为了省字把信息砍掉**："
+                "把素材里的具体数值、条件、时间、坑都留在图上，一张卡片讲清一件事就够了。"
+                "宁可写满也不要写成口号；但合计超过 __TOTAL__ 字版面会放不下并被截断。"),
+    "model": ("字由出图模型画进像素，**字数越多错字率越高**，所以宁可少一张卡片把主线讲完整，"
+              "也不要多一张卡片讲半句。"),
+}
+
+
+def _density_rule(text_mode):
+    return _DENSITY.get(text_mode) or _DENSITY["model"]
+
+
 def style_fixed_prompt(style_key):
     """用户已在下拉里锁定风格时，把这套配法的画面方向塞进拆解 prompt。
 
@@ -311,7 +349,7 @@ def style_fixed_prompt(style_key):
             % (style_key, p["label"], p.get("scene") or ""))
 
 
-def build_text_plan(summary, ai_config, theme="", title="", style_key=""):
+def build_text_plan(summary, ai_config, theme="", title="", style_key="", text_mode=DEFAULT_TEXT_MODE):
     """调 LLM 产出文案计划 + 发布文案，并逐字段裁到字数线内。
 
     返回 (plan, publish, violations, notes)：plan 是要画进图里的文字（超预算先经 fit_plan
@@ -324,12 +362,16 @@ def build_text_plan(summary, ai_config, theme="", title="", style_key=""):
     api_key, api_base, model = _require_ai(ai_config)
     import openai
 
+    lim = limits_for(text_mode)
     client = openai.OpenAI(api_key=api_key, base_url=api_base or "https://api.openai.com/v1",
                            timeout=300, max_retries=1)
     prompt = (_PLAN_PROMPT
               .replace("__THEME__", (theme or "未指定，按素材自判").strip())
               .replace("__STYLES__", style_plan_prompt())
-              .replace("__TOTAL__", str(MAX_TOTAL_CHARS))
+              .replace("__DENSITY__", _density_rule(text_mode))
+              .replace("__TOTAL__", str(lim["total"])).replace("__TITLE__", str(lim["title"]))
+              .replace("__SUB__", str(lim["subtitle"])).replace("__CT__", str(lim["cardT"]))
+              .replace("__CD__", str(lim["cardD"])).replace("__FOOT__", str(lim["footer"]))
               .replace("__STYLE_FIXED__", style_fixed_prompt(style_key))
               .replace("{{DATE}}", datetime.now().strftime("%m月%d日"))
               .replace("__CONTENT__", (summary.get("content") or "")[:8000]))
@@ -343,24 +385,24 @@ def build_text_plan(summary, ai_config, theme="", title="", style_key=""):
     for c in (data.get("cards") or [])[:CARD_MAX]:
         if not isinstance(c, dict):
             continue
-        t, d = _clip(c.get("t"), CARD_TITLE_MAX), _clip(c.get("d"), CARD_DESC_MAX)
+        t, d = _clip(c.get("t"), lim["cardT"]), _clip(c.get("d"), lim["cardD"])
         if t or d:
             cards.append({"t": t, "d": d, "v": _clip_ws(c.get("v"), CARD_VIS_MAX)})
     key = str(style_key if style_key in STYLE_PRESETS else data.get("style_key") or "").strip()
     if key not in STYLE_PRESETS:
         key = DEFAULT_STYLE_KEY
-    plan = {"title": _clip(title or data.get("title") or summary.get("title"), TITLE_MAX),
-            "subtitle": _clip(data.get("subtitle"), SUBTITLE_MAX),
+    plan = {"title": _clip(title or data.get("title") or summary.get("title"), lim["title"]),
+            "subtitle": _clip(data.get("subtitle"), lim["subtitle"]),
             "cards": cards,
-            "footer": _clip(data.get("footer") or "内容整理自公开分享", FOOTER_MAX),
+            "footer": _clip(data.get("footer") or "内容整理自公开分享", lim["footer"]),
             # spine 只用来让人一眼判断「这条主线成不成链」，不画进海报、不计入字数预算
             "spine": _clip_ws(data.get("spine"), SPINE_MAX),
             # scene 与卡片的 v 同理：只喂给出图模型，不当成图面文字，所以也不占字数预算
             "scene": _clip_ws(data.get("scene"), SCENE_MAX),
             "style_key": key,
             "style": str(data.get("style") or "").strip()[:120]}
-    plan, notes = fit_plan(plan)
-    return plan, _clip_publish(data.get("publish")), lint_plan(plan), notes
+    plan, notes = fit_plan(plan, lim["total"], lim)
+    return plan, _clip_publish(data.get("publish")), lint_plan(plan, lim), notes
 
 
 def plan_chars(plan):
@@ -388,8 +430,12 @@ def lint_visual(plan):
     return bad
 
 
-def lint_plan(plan):
-    """字数与结构门禁：越界就返回问题清单，调用方据此拒绝出图。"""
+def lint_plan(plan, lim=None):
+    """字数与结构门禁：越界就返回问题清单，调用方据此拒绝出图。
+
+    lim 按排版模式给：程序排字看的是"版面放得下"，模型画字看的是"错字率安全线"。
+    """
+    lim = lim or dict(MD_LIMITS)
     bad = []
     if not (plan.get("title") or "").strip():
         bad.append("主标题为空")
@@ -399,33 +445,35 @@ def lint_plan(plan):
     if len(cards) > CARD_MAX:
         bad.append("卡片 %d 张，超过 %d 张" % (len(cards), CARD_MAX))
     for i, c in enumerate(cards, 1):
-        if len(c.get("d") or "") > CARD_DESC_MAX:
-            bad.append("第 %d 张卡片说明超 %d 字" % (i, CARD_DESC_MAX))
+        if len(c.get("d") or "") > lim["cardD"]:
+            bad.append("第 %d 张卡片说明超 %d 字" % (i, lim["cardD"]))
     total = plan_chars(plan)
-    if total > MAX_TOTAL_CHARS:
-        bad.append("合计 %d 字，超过安全线 %d 字（字数越多错字率越高，请删条目而不是缩字号）"
-                   % (total, MAX_TOTAL_CHARS))
+    if total > lim["total"]:
+        why = "版面会放不下并被截断" if lim is TS_LIMITS else "字数越多错字率越高，请删条目而不是缩字号"
+        bad.append("合计 %d 字，超过上限 %d 字（%s）" % (total, lim["total"], why))
     return bad
 
 
-def fit_plan(plan, limit=MAX_TOTAL_CHARS):
+def fit_plan(plan, limit=None, lim=None):
     """超预算时按价值高低确定性收敛，返回 (plan, notes)。
 
     模型实测经常多写十几个字（90 字 vs 80 线），直接判死等于让用户白等一次
     3 分钟的拆解。压缩顺序＝先砍末位卡片 → 再截最长说明 → 再削副标题与尾注，
     主标题与卡片标题最后动；全程不再调模型。收敛不了才交回 violations 报错。
     """
+    lim = lim or dict(MD_LIMITS)
+    limit = lim["total"] if limit is None else limit
     notes = []
     start = plan_chars(plan)
     # 第 0 步：先把每个字段各自裁到单条上限，让本函数不依赖调用方已做过裁剪
-    plan["title"] = _clip(plan.get("title"), TITLE_MAX)
-    plan["subtitle"] = _clip(plan.get("subtitle"), SUBTITLE_MAX)
-    plan["footer"] = _clip(plan.get("footer"), FOOTER_MAX)
+    plan["title"] = _clip(plan.get("title"), lim["title"])
+    plan["subtitle"] = _clip(plan.get("subtitle"), lim["subtitle"])
+    plan["footer"] = _clip(plan.get("footer"), lim["footer"])
     plan["scene"] = _clip_ws(plan.get("scene"), SCENE_MAX)
     if not plan.get("style_key"):
         plan["style_key"] = DEFAULT_STYLE_KEY
     for c in plan.get("cards") or []:
-        c["t"], c["d"] = _clip(c.get("t"), CARD_TITLE_MAX), _clip(c.get("d"), CARD_DESC_MAX)
+        c["t"], c["d"] = _clip(c.get("t"), lim["cardT"]), _clip(c.get("d"), lim["cardD"])
         c["v"] = _clip_ws(c.get("v"), CARD_VIS_MAX)
     if start <= limit:
         return plan, notes
@@ -436,11 +484,11 @@ def fit_plan(plan, limit=MAX_TOTAL_CHARS):
         over = plan_chars(plan) - limit
         if over <= 0:
             break
-        cands = [c for c in plan["cards"] if len(c.get("d") or "") > 6]
+        cands = [c for c in plan["cards"] if len(c.get("d") or "") > 10]
         if not cands:
             break
         c = max(cands, key=lambda x: len(x["d"]))
-        c["d"] = c["d"][:max(6, len(c["d"]) - over)]
+        c["d"] = c["d"][:max(10, len(c["d"]) - over)]
         notes.append("截短卡片「%s」的说明" % c.get("t"))
     for key, label in (("subtitle", "副标题"), ("footer", "尾注")):
         over = plan_chars(plan) - limit
@@ -509,6 +557,59 @@ def build_prompt_text(plan, ratio="9:16"):
               "- 中部是卡片区，每张卡片只出现一次自己的标题和说明，严禁两张卡片写同一句",
               "- 最下方留出尾注小灰字区，字号最小但必须存在"]
     return "\n".join(lines)
+
+
+def _canvas_px(ratio):
+    w, h = (SIZES.get(ratio) or SIZES["9:16"]).split("*")
+    return int(w), int(h)
+
+
+def build_art_prompt(plan, ratio="9:16"):
+    """程序排字模式用的出图 prompt：只要一张**没有字的底图**。
+
+    关键是那句"下部只画底纹、别画具体物体"——分区比例由 poster_typeset 按卡片内容
+    算出来，两边共用同一个函数，所以模型让出来的地方正好是程序要落字的地方。
+    卡片从 3 张变 5 张，这块区域会自己伸缩，不写死。
+    """
+    from . import poster_typeset as ts
+    preset = _preset(plan)
+    frac = ts.text_zone_ratio(plan, _canvas_px(ratio))
+    skin = ts.skin_for(plan.get("style_key"))
+    art_pct, zone_pct = int(round(frac * 100)), int(round((1 - frac) * 100))
+    scene = (plan.get("scene") or "").strip() or (preset.get("scene") or "").strip()
+    # 底图只要画风与配色那段：卡片面板和字体那两样在程序排字模式下由代码负责，
+    # 让模型去画反而会跟我们排的字打架
+    style_only = _preset(plan).get("mood") or resolve_style_text(plan).split("。图上的中文")[0]
+    lines = ["一张%s信息图的底图。画完之后会有程序往上面排中文，所以这张图里现在一个字都不要有。"
+             % RATIO_LABEL.get(ratio, "竖版 9:16"),
+             "",
+             "【画风与配色 · 严格执行】",
+             style_only,
+             "",
+             "【画面内容】",
+             "- 主视觉：%s" % (scene or "按上面画风自行构图"),
+             # 程序排字模式下每张卡片的配图没有固定位置可落，把它们当成主视觉里的道具，
+             # 免得拆解白算了这一栏，也顺便让插画跟内容更贴
+             ("- 画面里可以顺带出现的元素：%s" % "、".join(
+                 [x for x in [(c.get("v") or "").strip() for c in (plan.get("cards") or [])] if x][:4])
+              if any((c.get("v") or "").strip() for c in (plan.get("cards") or [])) else None),
+             "- 构图：上部 %d%% 是这幅主视觉插画，占满整个宽度、细节画满；下部 %d%% 只画%s，"
+             "**不要画任何具体物体、人物、边框或卡片**，那块地方是留给文字的。"
+             % (art_pct, zone_pct, skin.get("bottom", "暗色氛围底纹")),
+             "- 上下两区之间用光影或雾气自然过渡，不要出现硬边横线",
+             "",
+             "【绝对禁止 · 违反就整张作废】",
+             "- 禁止出现任何汉字、字母、数字、罗马数字、标点、符号、logo、水印",
+             "- 画面里的纸张、屏幕、招牌、卷轴、书本一律用色块和线条表示，不许写任何字",
+             "- 上面列出的道具只画外形（仪表盘、日历、卷轴、剑、面板），不许在上面标数字或文字标签",
+             "- 下部区域是一块连续的背景，禁止画成带边框的卡片或网格"]
+    return "\n".join([l for l in lines if l is not None])
+
+
+def typeset_poster(png_bytes, plan, ratio="9:16"):
+    """把中文用真字体排到无字底图上。返回 (成品字节, 版面自检 dict)。"""
+    from . import poster_typeset as ts
+    return ts.typeset(png_bytes, plan, ratio)
 
 
 # ── 2. 出图 ──
@@ -708,7 +809,7 @@ def pick_best(candidates):
     return sorted(candidates, key=_rank)[0]
 
 
-def build_lint(pub, check, overrode, review=None):
+def build_lint(pub, check, overrode, review=None, typeset=None):
     """发布包告警：error 代表这张图别发，warn 代表要人补一手。"""
     issues = lint_publish(pub)
     if not pub.get("copy_text"):
@@ -719,6 +820,10 @@ def build_lint(pub, check, overrode, review=None):
         issues.insert(0, "error: 图面文字回读未通过，缺：" + "、".join(check.get("missing") or []))
     elif check.get("ok") is None:
         issues.append("warn: 本次未做回读校验，发布前必须人眼核对图面文字")
+    if typeset is not None:
+        # 程序排字：字对不对由构造保证，这里只报版面问题（放不下会被截断）
+        if typeset.get("problems"):
+            issues.append("warn: 版面放不下——" + "；".join(typeset["problems"]))
     review = review or {}
     if review.get("skipped"):
         issues.append("warn: 本次未做视觉评审（好不好看没人判过），错误原因：%s"
@@ -752,8 +857,9 @@ def choose_candidate(summary_id, index):
     m["chosen"] = picked[0]["index"]
     m["verify"] = picked[0]["verify"]
     m["review"] = picked[0].get("review") or {}
+    m["typeset"] = picked[0].get("typeset")
     m["lint"] = build_lint(m.get("publish") or {}, picked[0]["verify"],
-                           bool(m.get("draft_override")), m["review"])
+                           bool(m.get("draft_override")), m["review"], m["typeset"])
     (OUTPUT_DIR / str(summary_id) / "manifest.json").write_text(
         json.dumps(m, ensure_ascii=False, indent=2), encoding="utf-8")
     return m
@@ -761,7 +867,7 @@ def choose_candidate(summary_id, index):
 
 def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
                     progress_cb=None, do_verify=True, plan=None, publish=None, force=False,
-                    copies=1, do_review=True):
+                    copies=1, do_review=True, text_mode=DEFAULT_TEXT_MODE):
     """整理稿 → 海报一张。返回 manifest dict（已落盘 output/poster/<summary_id>/）。
 
     plan / publish 非空时跳过 LLM 拆解（前端审改过文案再出图走这条）：plan 是要画进图的
@@ -778,6 +884,9 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
     _require_ai(ai_config)
     if ratio not in SIZES:
         ratio = "9:16"
+    if text_mode not in TEXT_MODES:
+        text_mode = DEFAULT_TEXT_MODE
+    lim = limits_for(text_mode)
     # 判据与头条/公众号共用 gate；海报线允许人工复核后 force 放行
     blockers = draft_gate.draft_blockers(summary)
     overrode = bool(force and blockers)
@@ -795,16 +904,20 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
     started = datetime.now()
     if plan is None:
         _pg("LLM 拆解海报文案...")
-        plan, llm_publish, bad, notes = build_text_plan(summary, ai_config, theme=theme, title=title)
+        plan, llm_publish, bad, notes = build_text_plan(summary, ai_config, theme=theme,
+                                                        title=title, text_mode=text_mode)
     else:
         # 手改过的文案不做自动压缩：那是用户显式输入，超线就明确报错让他自己删
-        llm_publish, bad, notes = None, lint_plan(plan), []
+        llm_publish, bad, notes = None, lint_plan(plan, lim), []
     if bad:
         raise PosterError("文案不合格：" + "；".join(bad))
     pub = _clip_publish(publish or llm_publish or {})
     chars = plan_chars(plan)
 
-    prompt_text = build_prompt_text(plan, ratio)
+    # 程序排字模式先按版面算出"下面多大一块要留给文字"，再把这个比例写进出图 prompt，
+    # 让模型在那块地方只画底纹。两边共用 text_zone_ratio，所以不会错位。
+    prompt_text = (build_art_prompt(plan, ratio) if text_mode == "typeset"
+                   else build_prompt_text(plan, ratio))
     (out_dir / "prompt.txt").write_text(prompt_text + "\n", encoding="utf-8")
     try:
         n = int(copies)
@@ -815,17 +928,28 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
     candidates, usage = [], {}
     for i in range(1, n + 1):
         _pg("出图 %d/%d（%s）..." % (i, n, COPIES_NOTE if n > 1 else "约 20-60 秒"))
-        png, usage = generate_image(prompt_text, SIZES[ratio], ai_config)
+        raw, usage = generate_image(prompt_text, SIZES[ratio], ai_config)
         fname = "poster.png" if n == 1 else ("poster_%d.png" % i)
-        (out_dir / fname).write_bytes(png)
         v = {"skipped": True, "ok": None, "missing": [], "extra": "", "transcript": ""}
-        if do_verify:
-            _pg("回读校验第 %d 张的图面文字..." % i)
-            try:
-                v = verify_image(png, plan, ai_config)
-            except Exception as e:
-                v = {"skipped": True, "ok": None, "error": str(e)[:200],
-                     "missing": [], "extra": "", "transcript": ""}
+        ts_chk = None
+        if text_mode == "typeset":
+            (out_dir / ("base.png" if n == 1 else "base_%d.png" % i)).write_bytes(raw)
+            _pg("排版第 %d 张（真字体，字不会画错）..." % i)
+            png, ts_chk = typeset_poster(raw, plan, ratio)
+            # 回读校验在这条路上是负资产：字是程序画的、不可能错，而那个视觉模型
+            # 实测会把画错的赛字读成对的、还会自己脑补出多出来的字，只会误报。
+            v = {"skipped": True, "ok": True, "not_needed": True,
+                 "missing": [], "extra": "", "transcript": ""}
+        else:
+            png = raw
+            if do_verify:
+                _pg("回读校验第 %d 张的图面文字..." % i)
+                try:
+                    v = verify_image(png, plan, ai_config)
+                except Exception as e:
+                    v = {"skipped": True, "ok": None, "error": str(e)[:200],
+                         "missing": [], "extra": "", "transcript": ""}
+        (out_dir / fname).write_bytes(png)
         r = {"skipped": True, "ok": None}
         if do_review:
             _pg("视觉评审第 %d 张好不好看..." % i)
@@ -835,7 +959,7 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
                 r = {"skipped": True, "ok": None, "error": str(e)[:200]}
         candidates.append({"index": i, "file": fname,
                            "url": "/media/poster/%d/%s" % (summary_id, fname),
-                           "verify": v, "review": r, "bytes": len(png)})
+                           "verify": v, "review": r, "typeset": ts_chk, "bytes": len(png)})
 
     # 多张时自动挑一张当默认（poster.png 永远是"当前选中的那张"，列表页与发布取图不用改）
     best = pick_best(candidates)
@@ -843,12 +967,13 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
         shutil.copyfile(out_dir / best["file"], out_dir / "poster.png")
     check = best["verify"]
     review = best.get("review") or {}
+    ts_chk = best.get("typeset")
 
     copy_text = pub.get("copy_text") or ""
     if copy_text and COMPLIANCE_NOTE[:10] not in copy_text:
         copy_text = copy_text.rstrip() + "\n\n" + COMPLIANCE_NOTE
 
-    issues = build_lint(pub, check, overrode, review)
+    issues = build_lint(pub, check, overrode, review, ts_chk)
     for w in lint_visual(plan):
         issues.append("warn: " + w)
 
@@ -875,6 +1000,8 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
         "candidates": candidates,
         "chosen": best["index"],
         "copies": n,
+        "text_mode": text_mode,
+        "typeset": ts_chk,
         "image_model": IMAGE_MODEL,
         "ocr_model": OCR_MODEL,
         "usage": usage,

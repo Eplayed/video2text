@@ -1057,7 +1057,7 @@ textarea{resize:vertical;min-height:84px}
       <div class="modal-box" style="max-width:860px" onclick="event.stopPropagation()">
         <button class="close-btn" onclick="closePosterDialog()"><span data-icon="close" class="ic14"></span></button>
         <div class="tt-gen-title">🎨 AI 海报</div>
-        <div class="tt-gen-sub">整合稿 #<span id="pk-id"></span> · 与 HTML 模板产线不同：文字由出图模型直接画进像素，出图后自动回读逐字比对 + 视觉评审打分</div>
+        <div class="tt-gen-sub">整合稿 #<span id="pk-id"></span> · 与 HTML 模板产线不同：底图由出图模型现画。默认「程序排字」＝模型画没有字的底图、中文由程序用真字体排上去，字不会错；「模型画字」＝整张交给模型，出图后回读逐字比对。两种都会再打一次视觉评审分</div>
         <div class="tt-gen-field">
           <label>画面比例 / 张数 / 题材<small>（比例决定出图尺寸；题材进 prompt，让模型知道往哪个方向画）</small></label>
           <div style="display:flex;gap:10px">
@@ -1076,6 +1076,11 @@ textarea{resize:vertical;min-height:84px}
         <div class="tt-gen-field">
           <label>画面风格预设<small>（钉死的配方：画风词 + 配色 + 卡片材质都固定，不再每次自己发挥。拆解前先选好，配图会照这个方向想）</small></label>
           <div style="display:flex;gap:10px;align-items:center">
+            <select id="pk-mode-top" style="flex:0 0 230px" onchange="pkApplyLimits(true)"
+                    title="程序排字＝模型只画没有字的底图，中文用真字体排上去，不会有错字；模型画字＝整张交给模型，风格更统一但会写错字">
+              <option value="typeset" selected>程序排字（推荐，字不会错）</option>
+              <option value="model">模型画字（会错字，仅对比用）</option>
+            </select>
             <select id="pk-style-key-top" style="flex:1" onchange="pkSyncStyle(this.value)"><option value="">载入中…</option></select>
             <label style="display:flex;align-items:center;gap:5px;font-size:12px;flex:0 0 auto">
               <input type="checkbox" id="pk-review" checked style="flex:0 0 auto">出图后做视觉评审
@@ -1086,15 +1091,15 @@ textarea{resize:vertical;min-height:84px}
           <button class="btn ghost sm" onclick="posterPlan()">① AI 拆解文案</button>
           <button class="btn sm" style="background:var(--module-5);border-color:var(--module-5);color:#fff" onclick="posterGenerate()">② 出图并校验</button>
         </div>
-        <div class="pk-hint">先「①拆解」拿到可编辑文案（快速档约 20-60 秒，结果里会写明用的哪个模型），改完再「②出图」，避免拿不合心的文案白花一次出图。<br>字数门禁 <b>64 字</b>：超了直接拒绝出图。这条线是带画面计划重测出来的——62 字连出 2 张逐字全对，79 字那张把主标题和三条说明整段画丢了；字越多、画面越满，错字率越高。<br>画面占比靠"主视觉 + 每条卡片的配图"两栏撑起来，那两栏只告诉模型画什么、<b>不会写成图上的字</b>，所以不占合计字数预算。<br>成本与限流：出图 <b>0.5 元/张</b>、模型 <b>RPM=2</b>（每分钟最多 2 次），客户端已自动节流与退避重试，批量 20 张要约 10 分钟。回读与评审走便宜的视觉模型，只花时间不额外花钱。</div>
+        <div class="pk-hint">先「①拆解」拿到可编辑文案（快速档约 20-60 秒，结果里会写明用的哪个模型），改完再「②出图」，避免拿不合心的文案白花一次出图。<br><b>默认走「程序排字」</b>：出图模型只画一张<b>没有字的底图</b>，中文由程序用系统真字体排上去。所以字不会写错、不会漏、不会多，字数上限 200 字只是"版面放得下"，可以把数值、条件、坑都留在图上。<br>另一个选项「模型画字」是把整张图（含字）交给模型，风格更统一，但实测 63 字就开始改写文案、画错笔画、把提示词里的「」框也画上，所以字数被钉死在 64，只建议用来对比。<br>成本与限流：出图 <b>0.5 元/张</b>、模型 <b>RPM=2</b>（每分钟最多 2 次），客户端已自动节流与退避重试，批量 20 张要约 10 分钟。视觉评审走便宜的视觉模型，只花时间不额外花钱。</div>
         <!-- 五步操作卡：放在动作条正下方，第一次用不必去别处找说明；收过一次就记住，不长期占地方 -->
         <details class="pk-guide" id="pk-guide" open>
           <summary>怎么用 · 五步出图</summary>
           <ol>
-            <li><b>先选后拆。</b>比例：小红书/抖音图文选 9:16，公众号图片消息选 3:4。张数：建议「出 3 张挑 1 张」（1.5 元、约 2-3 分钟，同一份文案画三次好坏不一样，一次挑比不满意重出省）。题材：填具体一点，例「魔兽怀旧服 塔卡攻略」，不填也能出但会偏。风格四选一变体：<b>攻略/版本/装备数值</b>→游戏史诗风；<b>工具实测/软件对比</b>→工具测评风；<b>经验总结/避坑清单/教程</b>→清单笔记风；<b>只有一个观点</b>→极简杂志风。「出图后做视觉评审」保持勾着。</li>
-            <li><b>点「① AI 拆解文案」，等 20-60 秒。</b>先看「主线」那一句读起来成不成链——散的就直接点「① 重新拆解」，别拿着散文案花钱出图。再看字数行：超 64 字会自动砍卡片压线，压完会写"已从 X 字压到 Y 字"，被砍的那张可能正是你要的。</li>
-            <li><b>手工改三处，这一步决定成品。</b>① 主标题要有钩子（"5步速通学习法"远好过"面试学习方法"）；② 每张卡片说明得是一句人话；③「主视觉」和每张卡片下面那行灰色「配图」必须是<b>有具体形体的东西</b>——"进度条快满旁边立着红色警告牌"画得出来，"能量核心脉动"画不出来。这两栏不会被写成图上的字，随便改都不占 64 字预算。</li>
-            <li><b>点「② 出图并校验」，看两个数。</b>回读 ✅ 才代表字没画错，写 ✗ 的别发（改短文案或换一张）；视觉评审满分 25，<b>18 分以下</b>会提示换一张或重出。出 3 张时下面每张标着"字全对/有缺字 + 分数"，点小图就换选，系统已默认挑「字对里面分最高的」那张。</li>
+            <li><b>先选后拆。</b>排版方式：<b>默认「程序排字」别动</b>（模型只画没有字的底图，中文由程序排，字不会错，能写到 200 字）；「模型画字」只在对风格要求极高时用，上限 64 字且会写错。比例：小红书/抖音图文选 9:16，公众号图片消息选 3:4。张数：建议「出 3 张挑 1 张」（1.5 元、约 2-3 分钟，同一份底图风格每次不一样，一次挑比不满意重出省）。题材：填具体一点，例「魔兽怀旧服 塔卡攻略」，不填也能出但会偏。风格四选一：<b>攻略/版本/装备数值</b>→游戏史诗风；<b>工具实测/软件对比</b>→工具测评风；<b>经验总结/避坑清单/教程</b>→清单笔记风；<b>只有一个观点</b>→极简杂志风。「出图后做视觉评审」保持勾着。</li>
+            <li><b>点「① AI 拆解文案」，等 20-60 秒。</b>先看「主线」那一句读起来成不成链——散的就直接点「① 重新拆解」，别拿着散文案花钱出图。再看字数行：程序排字模式下<b>不用为省字砍内容</b>，数值、条件、时间、坑都留在图上；只有超过 200 字才会被压，压完会写"已从 X 字压到 Y 字"。</li>
+            <li><b>手工改三处，这一步决定成品。</b>① 主标题要有钩子（"5步速通学习法"远好过"面试学习方法"）；② 每张卡片讲清一件事，说明写成完整一句话而不堆词；③「主视觉」那栏必须是<b>有具体形体的东西</b>——"盔甲战士站在高塔顶端仰视空中发光的 3600"画得出来，"科技感拉满"画不出来。程序排字模式下每张卡片的「配图」只当主视觉的道具线索用，不影响文字位置。</li>
+            <li><b>点「② 出图并校验」，看两个数。</b>程序排字模式下第一行永远是 ✅（字由代码落，不存在错字），只需留意有没有"版面放不下被截断"的提示；模型画字模式下写 ✗ 的别发。第二种数是<b>视觉评审</b>，满分 25，<b>18 分以下</b>会提示换一张或重出。出 3 张时下面每张标着"字已排好 + 分数"，点小图就换选，系统已默认挑分数最高的那张。</li>
             <li><b>点「复制发布文案」。</b>标题/摘要/配文/关键词回复/来源说明已拼好，直接去后台粘。配文末尾的合规尾注别删；数字、版本、价格自己核一手来源；后台记得勾「内容由 AI 生成」。</li>
           </ol>
           <div class="pk-guide-f">被「整合稿不合格」挡住：说明这条当初 AI 加工失败、只剩骨架。素材本身有料就能出好图，但你得先自己确认拆解出来的数字和时间线没瞎写，再点「仍然出图」放行。产物在 <code>output/poster/整理稿编号/</code>，<code>poster.png</code> 就是你选定的那张，<code>prompt.txt</code> 是这次的完整提示词——哪张满意就把那句留着当参考。</div>
@@ -1990,22 +1995,44 @@ function closePosterDialog(e) {
   document.getElementById('pk-overlay').classList.remove('show');
 }
 
-// 字数上限与后端 ai_poster 的门禁一致；/api/poster/styles 会把真值下发覆盖这里的兜底值。
-// scene / cardVis 不进图、不占合计预算，只告诉模型"这条该画什么"。
-const PK_LIMITS = {title: 12, subtitle: 10, footer: 14, cardT: 6, cardD: 16, total: 64,
-                   cardMin: 3, cardMax: 5, spine: 24, scene: 48, cardVis: 24};
+// 两套字数预算，取决于"字由谁写"：
+//   程序排字 → 字不会错，上限只是"版面放得下"，所以给到 200 字，信息量做得起来；
+//   模型画字 → 字越多错字率越高，实测 63 字就开始改写与画错笔画，所以钉在 64。
+// 真值由 /api/poster/styles 下发覆盖，这里只留兜底，避免前端抄一份迟早对不上。
+const PK_BASE = {cardMin: 3, cardMax: 5, spine: 24, scene: 48, cardVis: 24};
+const PK_BY_MODE = {
+  typeset: {title: 16, subtitle: 22, footer: 24, cardT: 8, cardD: 40, total: 200},
+  model:   {title: 12, subtitle: 10, footer: 14, cardT: 6, cardD: 10, total: 64}
+};
+const PK_LIMITS = Object.assign({}, PK_BASE, PK_BY_MODE.typeset);
+function pkTextMode() {
+  const el = document.getElementById('pk-mode-top');
+  return el ? el.value : 'typeset';
+}
+function pkApplyLimits(redraw) {
+  const src = (_pkLimitsByMode && _pkLimitsByMode[pkTextMode()]) || PK_BY_MODE[pkTextMode()];
+  Object.keys(PK_BY_MODE.typeset).forEach(k => { PK_LIMITS[k] = (src && src[k]) || PK_BY_MODE.typeset[k]; });
+  if (redraw && document.getElementById('pk-title')) {
+    // 换模式后输入框的 maxlength 得跟着重建，否则程序排字模式下仍被 10 字卡住
+    pkRenderPlan(_pkLastPlan || null, _pkLastPublish || null);
+  }
+}
 // 风格预设名单由后端下发（配方原文只有一份，前端抄一遍必然漂移）
 let _pkStyles = [];
 function pkStyle(key) {
   for (let i = 0; i < _pkStyles.length; i++) if (_pkStyles[i].key === key) return _pkStyles[i];
   return null;
 }
+let _pkLimitsByMode = null;
+let _pkLastPlan = null, _pkLastPublish = null;
 async function loadPosterStyles() {
   if (_pkStyles.length) return _pkStyles;
   try {
     const d = await fetch('/api/poster/styles').then(r => r.json());
     _pkStyles = d.items || [];
+    _pkLimitsByMode = d.limitsByMode || null;
     if (d.limits) Object.keys(d.limits).forEach(k => { PK_LIMITS[k] = d.limits[k]; });
+    pkApplyLimits(false);
   } catch (e) { _pkStyles = []; }
   const sel = document.getElementById('pk-style-key-top');
   if (sel && _pkStyles.length) {
@@ -2060,6 +2087,7 @@ function _pkRow(tag, id, val, max, ph) {
 }
 function pkRenderPlan(plan, publish) {
   plan = plan || {}; publish = publish || {};
+  _pkLastPlan = plan; _pkLastPublish = publish;
   if (pkStyleKey() !== (plan.style_key || '')) {
     const top = document.getElementById('pk-style-key-top');
     if (top && pkStyle(plan.style_key)) top.value = plan.style_key;
@@ -2109,9 +2137,11 @@ function pkReadPublish() {
 function pkCount() {
   const el = document.getElementById('pk-count');
   if (!el) return;
-  const p = pkReadPlan(), bad = pkProblems(p), hint = pkVisualHints(p);
+  const p = pkReadPlan(), bad = pkProblems(p);
+  const hint = pkTextMode() === 'typeset' ? [] : pkVisualHints(p);
   el.className = 'pk-count ' + (bad.length ? 'bad' : (hint.length ? 'mild' : 'ok'));
-  el.textContent = `合计 ${pkChars(p)} / ${PK_LIMITS.total} 字 · ${p.cards.length} 张卡片`
+  el.textContent = `合计 ${pkChars(p)} / ${PK_LIMITS.total} 字 · ${p.cards.length} 张卡片 · `
+    + (pkTextMode() === 'typeset' ? '程序排字，上限只看版面放得下' : '模型画字，上限是错字率安全线')
     + (bad.length ? '　⚠️ ' + bad.join('；')
                   : '　✅ 可出图' + (hint.length ? '　⚠️ 画面偏空：' + hint.join('；') : ''));
 }
@@ -2120,7 +2150,7 @@ async function posterPlan() {
   const body = {summary_id: _pkId,
                 theme: document.getElementById('pk-theme').value.trim(),
                 ratio: document.getElementById('pk-ratio').value,
-                style_key: pkStyleKey()};
+                style_key: pkStyleKey(), text_mode: pkTextMode()};
   const r = await fetch('/api/poster/plan', {method: 'POST',
     headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)}).then(x => x.json());
   if (r.error) { setStatus('error', r.error); return; }
@@ -2148,7 +2178,7 @@ async function posterGenerate(force) {
   const body = {summary_id: _pkId, ratio: document.getElementById('pk-ratio').value,
                 theme: document.getElementById('pk-theme').value.trim(),
                 plan: plan, publish: plan ? pkReadPublish() : null,
-                force: !!force, copies: copies, review: review};
+                force: !!force, copies: copies, review: review, text_mode: pkTextMode()};
   const r = await fetch('/api/poster/generate', {method: 'POST',
     headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)}).then(x => x.json());
   if (r.error) { setStatus('error', r.error); return; }
@@ -2202,8 +2232,15 @@ async function renderPosterResult(id) {
   const m = await fetch('/api/poster/' + id).then(r => r.json());
   _pkLast = m;
   const v = m.verify || {};
+  const tsp = (m.typeset && m.typeset.problems) || [];
+  const isTs = m.text_mode === 'typeset';
   let cls = 'mild', txt = '本次未做回读校验，请人眼核对图面文字';
-  if (v.ok === true) {
+  if (isTs) {
+    cls = tsp.length ? 'mild' : 'pass';
+    txt = tsp.length
+      ? '⚠️ 字是程序排的、不会写错，但版面有提示：' + tsp.join('；')
+      : `✅ ${m.text_chars} 字由程序用真字体排上底图，不存在错字、漏字与改写`;
+  } else if (v.ok === true) {
     cls = 'pass';
     txt = `✅ 回读校验通过：${(m.plan.cards || []).length} 张卡片 + 标题尾注，共 ${m.text_chars} 字逐字一致`;
   } else if (v.ok === false) {
@@ -2218,9 +2255,11 @@ async function renderPosterResult(id) {
     imgHtml = '<div class="pk-cands">' + m.candidates.map(c => {
       const cv = c.verify || {}, cr = c.review || {};
       const on = c.index === m.chosen;
+      const word = m.text_mode === 'typeset' ? '字已排好'
+        : (cv.ok ? '字全对' : (cv.ok === false ? '有缺字' : '未校验'));
       return `<div class="pk-cand${on ? ' on' : ''}" onclick="posterPick(${c.index})" title="点一下选这张">`
         + `<img src="${c.url}?t=${Date.now()}" alt="候选${c.index}">`
-        + `<div class="pk-cand-t">${cv.ok ? '字全对' : (cv.ok === false ? '有缺字' : '未校验')}`
+        + `<div class="pk-cand-t">${word}`
         + (cr.score ? ' · ' + cr.score + '/' + cr.full + '分' : '')
         + (on ? ' · 已选' : ' · 选它') + '</div></div>';
     }).join('') + '</div>'
@@ -2233,7 +2272,7 @@ async function renderPosterResult(id) {
     + `<div class="pk-verify ${cls}">${esc(txt)}</div>`
     + pkReviewHtml(m.review)
     + (warns.length ? `<div class="pk-verify mild">${warns.map(esc).join('<br>')}</div>` : '')
-    + `<div class="pk-sub">发布文案（约 ${m.text_chars} 字上图，配文另计；估算成本 ${m.cost_yuan_estimate} 元/张 · 风格 ${esc(m.style_label || m.style_key || '未指定')}）</div>`
+    + `<div class="pk-sub">发布文案（${m.text_chars} 字上图，${m.text_mode === 'typeset' ? '程序排字' : '模型画字'}；估算成本 ${m.cost_yuan_estimate} 元/张 · 风格 ${esc(m.style_label || m.style_key || '未指定')}）</div>`
     + `<pre class="pk-pub">${esc(pub)}</pre>`
     + `<div class="pk-sub">发布前逐条人工过</div><ul class="pk-ck">${ck}</ul>`
     + '<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">'
