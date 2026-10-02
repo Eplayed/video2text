@@ -242,7 +242,29 @@ def api_videos():
         key=lambda v: (v.get("published_at") or v.get("create_time") or v.get("pub_time") or ""),
         reverse=True,
     )
-    return jsonify({"videos": videos, "total": len(videos), "sources": source_counts})
+    total = len(videos)
+    # 分页：素材库一次塞 1000+ 张卡片进 innerHTML 要 0.9 秒、三万个节点，
+    # 而且每敲一个搜索字符都重来一遍。默认只回一页，让「加载更多」按页追加。
+    try:
+        page = max(1, int(request.args.get("page") or 1))
+    except (TypeError, ValueError):
+        page = 1
+    try:
+        page_size = int(request.args.get("page_size") or 90)
+    except (TypeError, ValueError):
+        page_size = 90
+    if page_size < 0:
+        page_size = 90
+    if page_size == 0:                      # 0＝不分页，全给（脚本侧想要完整列表时用）
+        return jsonify({"videos": videos, "total": total, "sources": source_counts,
+                        "page": 1, "page_size": 0, "has_more": False})
+    page_size = min(page_size, 500)
+    start = (page - 1) * page_size
+    page_items = videos[start:start + page_size]
+    return jsonify({"videos": page_items, "total": total, "sources": source_counts,
+                    "page": page, "page_size": page_size,
+                    "shown": min(start + len(page_items), total),
+                    "has_more": start + len(page_items) < total})
 
 
 def _load_video_extras() -> dict:

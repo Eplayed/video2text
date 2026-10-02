@@ -826,7 +826,7 @@ textarea{resize:vertical;min-height:84px}
       </div>
       <div class="toolbar">
         <div class="cat-pills" id="source-pills" style="margin:0"></div>
-        <div class="search-box"><span data-icon="search" class="ic14"></span><input class="page-search" placeholder="搜索标题 / 作者 / 描述..." oninput="loadCurrentView()"></div>
+        <div class="search-box"><span data-icon="search" class="ic14"></span><input class="page-search" placeholder="搜索标题 / 作者 / 描述..." oninput="onVideoSearch()"></div>
         <select id="topic-filter" onchange="loadVideos()">
           <option value="">全部作者</option>
         </select>
@@ -852,6 +852,7 @@ textarea{resize:vertical;min-height:84px}
       <div class="grid" id="grid-videos">
         <div class="empty"><span class="e" data-icon="list"></span>加载中...</div>
       </div>
+      <div id="videos-pager"></div>
     </section>
 
     <!-- ── 整理稿 ── -->
@@ -1501,7 +1502,22 @@ let _activeSource = '';  // ''=全部 / douyin / wechat（素材库来源筛选�
 const CATEGORY_ORDER = ['前端面试', 'AI技术', '游戏攻略', '编程开发', '产品设计', '数码评测', '商业财经', '职场成长', '生活日常', '其他'];
 const TYPE_LABELS = {game_guide: '游戏攻略', wechat_material: '公众号素材', toutiao_mix: '头条整合稿', guide_article: '攻略文章（已废弃）', ai_interview: 'AI面试题'};
 
-async function loadVideos() {
+// 素材库一次塞 1000+ 张卡片进 DOM 要 0.9 秒、三万个节点，每敲一个搜索字符都重来一遍。
+// 改成按页取、点「加载更多」追加；筛选与分页互不干扰（分页在过滤+排序之后）。
+const VID_PAGE = 90;
+let _vidPage = 1, _vidBusy = false, _vidTimer = null;
+
+function onVideoSearch() {
+  clearTimeout(_vidTimer);
+  _vidTimer = setTimeout(loadVideos, 350);
+}
+
+async function loadVideos() { return fetchVideos(1, false); }
+async function loadMoreVideos() { return fetchVideos(_vidPage + 1, true); }
+
+async function fetchVideos(page, append) {
+  if (_vidBusy) return;
+  _vidBusy = true;
   const q = getSearchValue();
   const topic = document.getElementById('topic-filter').value;
   const params = new URLSearchParams();
@@ -1510,15 +1526,35 @@ async function loadVideos() {
   if (_activeCategory) params.set('category', _activeCategory);
   if (_activeGame) params.set('game', _activeGame);
   if (_activeSource) params.set('source', _activeSource);
-  const [data, cats] = await Promise.all([
-    fetch('/api/videos?' + params).then(r=>r.json()),
-    fetch('/api/categories').then(r=>r.json()).catch(()=>({categories:[], games:[]})),
-  ]);
-  renderSourcePills(data.sources || null);
-  renderCategoryPills(cats.categories || []);
-  renderGamePills(cats.games || []);
-  renderVideos(data.videos || []);
-  document.getElementById('count-videos').textContent = (data.total||0) + ' 条';
+  params.set('page', page);
+  params.set('page_size', VID_PAGE);
+  try {
+    const [data, cats] = await Promise.all([
+      fetch('/api/videos?' + params).then(r=>r.json()),
+      fetch('/api/categories').then(r=>r.json()).catch(()=>({categories:[], games:[]})),
+    ]);
+    renderSourcePills(data.sources || null);
+    renderCategoryPills(cats.categories || []);
+    renderGamePills(cats.games || []);
+    renderVideos(data.videos || [], append);
+    _vidPage = page;
+    document.getElementById('count-videos').textContent = (data.total||0) + ' 条';
+    renderVideoPager(data);
+  } finally {
+    _vidBusy = false;
+  }
+}
+
+function renderVideoPager(d) {
+  const el = document.getElementById('videos-pager');
+  if (!el) return;
+  const total = d.total || 0, shown = (d.shown != null) ? d.shown : (d.videos || []).length;
+  if (!total) { el.innerHTML = ''; return; }
+  el.innerHTML = '<div style="display:flex;gap:10px;align-items:center;justify-content:center;margin-top:16px;flex-wrap:wrap;font-size:12px;color:var(--text-tertiary)">'
+    + '<span>已显示 ' + shown + ' / ' + total + ' 条（每批 ' + VID_PAGE + '）</span>'
+    + (d.has_more ? '<button class="btn ghost sm" onclick="loadMoreVideos()">加载更多</button>' : '')
+    + (shown > VID_PAGE ? '<button class="btn ghost sm" onclick="scrollTo(0,0)">回到顶部</button>' : '')
+    + '</div>';
 }
 
 function renderCategoryPills(cats) {
@@ -2928,14 +2964,14 @@ async function loadInterviewQuestions() {
 }
 
 // ── 渲染卡片 ──
-function renderVideos(videos) {
+function renderVideos(videos, append) {
   const grid = document.getElementById('grid-videos');
   if (!videos.length) {
-    grid.innerHTML = '<div class="empty"><span class="e">' + iconSvg('list') + '</span>暂无素材</div>';
+    if (!append) grid.innerHTML = '<div class="empty"><span class="e">' + iconSvg('list') + '</span>暂无素材</div>';
     updateOptimizeButton();
     return;
   }
-  grid.innerHTML = videos.map(v => {
+  const html = videos.map(v => {
     const status = v.status || '未开始';
     const isFail = status === '失败';
     const statusBadge = status === '已完成'
@@ -2979,6 +3015,9 @@ function renderVideos(videos) {
       </div>
     </div>`;
   }).join('');
+  // 追加用 insertAdjacentHTML，别把已有节点重新解析一遍（图片会闪、选中态会丢）
+  if (append) grid.insertAdjacentHTML('beforeend', html);
+  else grid.innerHTML = html;
   updateOptimizeButton();
 }
 
