@@ -4,6 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>video2text · 我的内容工作台</title>
+<!-- 内联图标：不加这行，浏览器每次加载都去要 /favicon.ico 并吃一个 404，
+     控制台里就这一条噪音，会把真正该看的 warn 淹掉 -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%23232220'/%3E%3Crect x='6' y='7.5' width='12' height='9' rx='1.6' fill='none' stroke='%23e8e2d5' stroke-width='1.5'/%3E%3Cpath d='M9.6 7.5v9M14.4 7.5v9' stroke='%23c8963c' stroke-width='1.4'/%3E%3C/svg%3E">
 <style>
 /* ============================================================
    THEME TOKENS — 墨色中性（与 personal-workbench 设计体系一致）
@@ -603,7 +606,6 @@ textarea{resize:vertical;min-height:84px}
         <h2>今天该干什么</h2>
         <div class="spacer"></div>
         <button class="btn ghost sm" onclick="switchPage('collect')"><span data-icon="camera" class="ic14"></span>开始采集</button>
-        <button class="btn ghost sm" onclick="syncWorkbench()"><span data-icon="activity" class="ic14"></span>同步数据</button>
         <span class="date-chip"><span data-icon="calendar" class="ic14"></span><span id="today-str"></span></span>
       </div>
 
@@ -715,7 +717,6 @@ textarea{resize:vertical;min-height:84px}
       <div class="header">
         <h2>数据与同步</h2>
         <div class="spacer"></div>
-        <span class="count" id="count-materials">0 条素材</span>
       </div>
 
       <div class="panel">
@@ -786,15 +787,7 @@ textarea{resize:vertical;min-height:84px}
         <div id="as-list" style="margin-top:10px"></div>
       </div>
 
-      <div class="toolbar" style="margin-top:16px">
-        <div class="spacer"></div>
-        <button class="btn ghost sm" onclick="syncContentDb()">同步内容库</button>
-        <button class="btn sm" onclick="syncWorkbench()"><span data-icon="activity" class="ic14"></span>同步工作台</button>
-      </div>
-      <p style="font-size:12px;color:var(--text-tertiary);margin:0 0 12px">订阅同步时会自动执行数据同步，手动按钮仅作兜底。浏览素材与生成内容请使用「素材库」。缺 ASR 的视频无法生成整理稿。</p>
-      <div id="sync-stats" style="display:flex;gap:12px;flex-wrap:wrap">
-        <div class="empty" style="flex:1;padding:24px"><span class="e" data-icon="grid"></span>加载中...</div>
-      </div>
+      <p style="font-size:12px;color:var(--text-tertiary);margin:14px 0 0">浏览素材与生成内容请用「素材库」；缺 ASR 转写的视频没法生成整理稿。</p>
     </section>
 
     <!-- ── 选题雷达 ── -->
@@ -1501,7 +1494,7 @@ function getSearchValue() {
 async function loadCurrentView() {
   if (currentView === 'dashboard') return loadDashboard();
   if (currentView === 'collect') return;
-  if (currentView === 'materials') { loadSubscriptions(); loadAutoSync(); return loadWorkbench(); }
+  if (currentView === 'materials') { loadSubscriptions(); return loadAutoSync(); }
   if (currentView === 'radar') return loadRadar();
   if (currentView === 'questions') return loadInterviewQuestions();
   if (currentView === 'summaries') return loadSummaries();
@@ -1856,37 +1849,6 @@ async function saveGame(sheet, row, game) {
   } catch(e) {
     setStatus('error', '修改游戏名失败: ' + e.message);
   }
-}
-
-async function loadWorkbench() {
-  const q = getSearchValue();
-  const params = new URLSearchParams();
-  if (q) params.set('q', q);
-  const data = await fetch('/api/workbench?' + params).then(r=>r.json());
-  renderSyncStats(data.items || []);
-  document.getElementById('count-materials').textContent = (data.total||0) + ' 条素材';
-}
-
-function renderSyncStats(items) {
-  const box = document.getElementById('sync-stats');
-  const total = items.length;
-  const withAsr = items.filter(i => Number(i.transcript_length || 0) > 0).length;
-  const withCover = items.filter(i => i.has_local_cover).length;
-  const withKf = items.filter(i => i.has_keyframes).length;
-  const withContent = items.filter(i => (i.summaries || []).length > 0).length;
-  const cards = [
-    ['总素材', total, ''],
-    ['有 ASR', withAsr, withAsr < total ? '缺 ' + (total - withAsr) + ' 条' : '全部就绪'],
-    ['本地封面', withCover, ''],
-    ['关键帧', withKf, ''],
-    ['已生成内容', withContent, ''],
-  ];
-  box.innerHTML = cards.map(([label, val, note]) => `
-    <div style="flex:1;min-width:140px;padding:14px 16px;border:1px solid var(--border);border-radius:12px;background:var(--surface-card)">
-      <div style="font-size:12px;color:var(--text-tertiary)">${label}</div>
-      <div style="font-size:24px;font-weight:800;margin-top:4px">${val}</div>
-      ${note ? `<div style="font-size:11.5px;color:var(--text-tertiary);margin-top:2px">${note}</div>` : ''}
-    </div>`).join('');
 }
 
 async function loadSummaries() {
@@ -4117,36 +4079,6 @@ async function fetchAndProcess() {
 
 function togglePreview(show) {
   document.getElementById('preview-area').style.display = show ? 'block' : 'none';
-}
-
-async function syncContentDb() {
-  setStatus('running', '正在同步 Excel 到内容库...');
-  try {
-    const resp = await fetch('/api/content/sync', {method:'POST'}).then(r=>r.json());
-    if (resp.error) {
-      setStatus('error', resp.error);
-      return;
-    }
-    setStatus('done', `内容库已同步：${resp.upserted || 0} 条`);
-    await refreshAll();
-  } catch (e) {
-    setStatus('error', '同步失败: ' + e.message);
-  }
-}
-
-async function syncWorkbench() {
-  setStatus('running', '正在同步素材工作台...');
-  try {
-    const resp = await fetch('/api/workbench/sync', {method:'POST'}).then(r=>r.json());
-    if (resp.error) {
-      setStatus('error', resp.error);
-      return;
-    }
-    setStatus('done', `工作台已同步：${resp.total || 0} 条，ASR ${resp.with_asr || 0} 条`);
-    await refreshAll();
-  } catch (e) {
-    setStatus('error', '同步失败: ' + e.message);
-  }
 }
 
 async function generateSelectedContent() {
