@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 import main as collector  # main.py
-from src import content_store, material_store, toutiao_graphics, ai_poster
+from src import content_store, material_store, toutiao_graphics, ai_poster, sync_tasks
 from src.graphics.channels import wechat as wechat_graphics
 from src.graphics import variants as graphics_variants
 from src.graphics.gate import GraphicsGateError
@@ -2412,276 +2412,508 @@ def api_subscriptions_delete(sub_id):
     return jsonify({"success": True})
 
 
+def _do_subscription_sync(sub_id=None, sub_ids=None, cookie=None):
+    """订阅同步的实际执行体：手动点「同步」和自动任务共用这一份，不写两遍。
+
+    状态统一写 _sub_status——手动与自动共用同一个"当前同步"槽位，天然互斥，
+    不会出现两边同时改 Excel、同时起 Chromium。前端本来就在轮询这个槽位，
+    自动任务跑起来时界面也能看到实时进度。
+    """
+    import time
+    _sub_status.update(running=True, done=False, error="", progress="准备同步...",
+                       result=None, new_items=[])
+    try:
+        with _db_lock:
+            subs = content_store.list_subscriptions(DB_PATH)
+        if sub_id:
+            subs = [s for s in subs if s["id"] == sub_id]
+        elif sub_ids:
+            wanted = {int(i) for i in sub_ids if str(i).isdigit() or isinstance(i, int)}
+            subs = [s for s in subs if s["id"] in wanted]
+        if not subs:
+            _sub_status["error"] = "没有可同步的订阅"
+            return
+
+        # 分流：抖音需要 cookie + parser；微信不需要
+        douyin_subs = [s for s in subs if s.get("platform", "douyin") == "douyin"]
+        wechat_subs = [s for s in subs if s.get("platform") == "wechat"]
+
+        if douyin_subs and not cookie:
+            _sub_status["error"] = "抖音订阅需要 Cookie，请先在采集中心完成一次采集"
+            return
+
+        summary = []
+        pending_marks = []  # 有新视频的抖音作者：终局统一标记（见下方终局块）
+
+        # ── 微信订阅同步 ──
+        if wechat_subs:
+            from src.wechat_fetcher import sync_wechat_feed
+            for si, sub in enumerate(wechat_subs, 1):
+                name = sub["author"] or sub["sec_uid"][:16]
+                _sub_status["progress"] = f"[微信 {si}/{len(wechat_subs)}] {name}: 拉取 RSS..."
+                try:
+                    existing = content_store.get_wechat_article_links(DB_PATH)
+                    result = sync_wechat_feed(sub["user_url"], existing)
+                    if result["error"]:
+                        with _db_lock:
+                            content_store.update_subscription_sync(
+                                DB_PATH, sub["id"], 0, result["error"])
+                        summary.append(f"{name}: {result['error']}")
+                        continue
+                    new_articles = result["articles"]
+                    # 全文未就绪的条目不入库、下次同步重试。必须回显，否则界面显示
+                    # 「无新文章」，用户以为订阅没更新（本次排查的实际报障）。
+                    pending = result.get("skipped") or []
+                    pending_note = ""
+                    if pending:
+                        shown = "、".join((t or "无标题")[:16] for t in pending[:2])
+                        pending_note = "；%d 篇全文未就绪（%s%s），下次同步自动重试" % (
+                            len(pending), shown, "…" if len(pending) > 2 else "")
+                    if not new_articles:
+                        with _db_lock:
+                            content_store.update_subscription_sync(
+                                DB_PATH, sub["id"], 0, "无新文章" + pending_note)
+                        summary.append(f"{name}: 无新文章{pending_note}")
+                        continue
+                    with _db_lock:
+                        inserted = content_store.insert_wechat_articles(
+                            DB_PATH, new_articles,
+                            category=sub.get("category") or "",
+                            game=sub.get("game") or "",
+                        )
+                    cat_note = f"，已按订阅标记分类「{sub['category']}」{len(inserted)} 条" if sub.get("category") and inserted else ""
+                    with _db_lock:
+                        content_store.update_subscription_sync(
+                            DB_PATH, sub["id"], len(inserted),
+                            f"新增 {len(inserted)} 篇文章{cat_note}{pending_note}",
+                            author=sub.get("author") or "")
+                    summary.append(f"{name}: 新增 {len(inserted)} 篇文章{cat_note}{pending_note}")
+                    _sub_status["new_items"] += [
+                        {"kind": "wechat", "author": name,
+                         "title": (a.get("title") or "").strip(),
+                         "published_at": (a.get("published_at") or "")[:10]}
+                        for a in inserted]
+                except Exception as e:
+                    with _db_lock:
+                        content_store.update_subscription_sync(
+                            DB_PATH, sub["id"], 0, f"同步失败: {e}")
+                    summary.append(f"{name}: 失败 ({e})")
+
+        # ── 抖音订阅同步 ──
+        if douyin_subs:
+            parser = _setup_parser_and_cookie(cookie)
+            ai_config = {"method": "skip", "api_key": "", "api_base": "", "model": ""}
+            # 批量拉取（2026-09-27 提速）：一次 Chromium 跑完所有作者主页，
+            # 替代旧路径逐作者冷启动浏览器（每次 5-15 秒，无新视频也要付）
+            browser_ids: dict = {}
+            try:
+                from src.browser_fetch import browser_fetch_users_batch
+                _items = [{"id": str(s["id"]), "url": s["user_url"]} for s in douyin_subs]
+
+                def _bp(done, total, item_id, ids, err):
+                    mark = f"✓ {len(ids)} 条" if ids else f"✗ {err[:40]}"
+                    _sub_status["progress"] = f"[抖音主页 {done}/{total}] {mark}"
+
+                browser_ids = browser_fetch_users_batch(_items, on_progress=_bp)
+            except Exception as be:
+                summary.append(f"浏览器批量拉取异常 ({be})，逐作者退回旧 API")
+            from src.fetch_user_videos import load_existing_aweme_ids as _load_ids
+            existing_ids = _load_ids(str(EXCEL_PATH))
+            for si, sub in enumerate(douyin_subs, 1):
+                name = sub["author"] or sub["sec_uid"][:12]
+                _sub_status["progress"] = f"[抖音 {si}/{len(douyin_subs)}] {name}: 拉取主页..."
+                try:
+                    from src.fetch_user_videos import fetch_user_videos
+                    # ── 浏览器批量结果查表（2026-09-21 起浏览器优先绕 Argus 风控，
+                    #    2026-09-27 起批量一次拉完，不再逐作者冷启动）──
+                    videos = []
+                    ids = browser_ids.get(str(sub["id"])) or []
+                    if ids:
+                        # 浏览器成功拿到列表：去重后无新就是无新，
+                        # 不再退回旧 API（旧路径无新视频也会挂起 30s+ 白等）
+                        videos = [
+                            {"aweme_id": i, "url": "https://www.douyin.com/video/" + i}
+                            for i in ids if i not in existing_ids
+                        ]
+                    else:
+                        # 浏览器没覆盖到该作者（批量异常/该作者页失败）→ 退回旧 API
+                        result = fetch_user_videos(
+                            url=sub["user_url"], cookie=cookie,
+                            max_pages=1, max_videos=20, mode="user_url",
+                            exclude_excel=str(EXCEL_PATH),
+                        )
+                        videos = result.get("videos") or []
+                    new_author = ""
+                    if not videos:
+                        with _db_lock:
+                            content_store.update_subscription_sync(
+                                DB_PATH, sub["id"], 0, "无新视频")
+                        summary.append(f"{name}: 无新视频")
+                        continue
+
+                    # 写入 Excel
+                    import openpyxl
+                    wb = openpyxl.load_workbook(str(EXCEL_PATH))
+                    ws = wb["抖音视频数据"]
+                    next_row = ws.max_row + 1
+                    for r in range(2, ws.max_row + 1):
+                        if not ws.cell(r, 1).value:
+                            next_row = r
+                            break
+                    for i, v in enumerate(videos):
+                        ws.cell(next_row + i, 1).value = v["url"]
+                        ws.cell(next_row + i, 2).value = "未开始"
+                        ws.cell(next_row + i, 3).value = v.get("aweme_id", "")
+                    wb.save(str(EXCEL_PATH))
+                    wb.close()
+
+                    # 逐条 ASR（提速：工作簿只加载一次，每条保存一次防崩溃丢转写）
+                    wb = openpyxl.load_workbook(str(EXCEL_PATH))
+                    try:
+                        ws = wb["抖音视频数据"]
+                        for i, v in enumerate(videos):
+                            row = next_row + i
+                            _sub_status["progress"] = (
+                                f"[抖音 {si}/{len(douyin_subs)}] {name}: 处理 {i+1}/{len(videos)} "
+                                f"{v.get('aweme_id','')}..."
+                            )
+                            ok = collector.process_row(ws, row, cookie, "base", ai_config, parser)
+                            if not new_author:
+                                new_author = str(ws.cell(row, 4).value or "").strip()
+                            wb.save(str(EXCEL_PATH))
+                            if i < len(videos) - 1:
+                                time.sleep(5)
+                    finally:
+                        wb.close()
+
+                    # 提速：索引重建/内容库同步/来源与分类标记/订阅状态，
+                    # 从逐作者执行改为收集后终局统一执行（每次全表重扫 2-5 秒）
+                    existing_ids.update(v["aweme_id"] for v in videos)
+                    pending_marks.append({
+                        "sub": sub,
+                        "next_row": next_row,
+                        "count": len(videos),
+                        "new_author": new_author,
+                    })
+                except Exception as e:
+                    with _db_lock:
+                        content_store.update_subscription_sync(
+                            DB_PATH, sub["id"], 0, f"同步失败: {e}")
+                    summary.append(f"{name}: 失败 ({e})")
+
+        # ── 终局：一次重建索引 + 一次内容库同步 + 补齐订阅标记 ──
+        if pending_marks:
+            _sub_status["progress"] = "重建索引与同步内容库..."
+            collector.update_video_index(str(EXCEL_PATH))
+            _sync_content_db()
+            for pm in pending_marks:
+                sub = pm["sub"]
+                name = sub["author"] or sub["sec_uid"][:12]
+                rows = [pm["next_row"] + i for i in range(pm["count"])]
+                # 标记来源 + 回填作者 sec_uid（订阅入口，按行号精确标记）
+                with _db_lock:
+                    content_store.mark_video_source(
+                        DB_PATH, "抖音视频数据", rows, "subscription",
+                        author_sec_uid=sub["sec_uid"],
+                    )
+                # 订阅设了分类 → 新视频自动打上。AI 增量分类不会改写已有 category
+                # （写回口径见 content_store.classify_videos 的 force=False 分支）
+                cat_note = ""
+                new_titles = []
+                if sub.get("category"):
+                    with _db_lock:
+                        conn = content_store.connect(DB_PATH)
+                        try:
+                            marked = 0
+                            for r0 in rows:
+                                r = conn.execute(
+                                    "SELECT id, title FROM videos WHERE source_sheet = ? AND source_row = ?",
+                                    ("抖音视频数据", r0),
+                                ).fetchone()
+                                if r:
+                                    new_titles.append((r["title"] or "").strip())
+                                    # 非游戏攻略分类不带 game
+                                    g = sub.get("game") or ""
+                                    if sub["category"] != "游戏攻略":
+                                        g = ""
+                                    conn.execute(
+                                        "UPDATE videos SET category = ?, game = ? WHERE id = ?",
+                                        (sub["category"], g, r["id"]),
+                                    )
+                                    marked += 1
+                            conn.commit()
+                        finally:
+                            conn.close()
+                    cat_note = f"，已按订阅标记分类「{sub['category']}」{marked} 条"
+                with _db_lock:
+                    content_store.update_subscription_sync(
+                        DB_PATH, sub["id"], pm["count"],
+                        f"新增 {pm['count']} 条并已转写{cat_note}", author=pm["new_author"])
+                summary.append(f"{name}: 新增 {pm['count']} 条{cat_note}")
+                _sub_status["new_items"] += [
+                    {"kind": "douyin", "author": pm["new_author"] or name, "title": tt,
+                     "published_at": ""} for tt in new_titles if tt]
+
+        # 同步入库后补 AI 增量打标：只补缺口（订阅链路新行自带 category 但缺 ai_tags，
+        # 选题雷达依赖 ai_tags）。必须放在两条分支之外——原先挂在抖音分支里，
+        # 只勾微信订阅同步时新文章一条标都不打，雷达/渠道策略侧就等于「没有更新」。
+        # AI 未配置时静默跳过，打标失败不算同步失败
+        _sub_status["progress"] = "AI 自动打标..."
+        _cls = _auto_classify_after_sync()
+        if _cls.get("classified"):
+            summary.append(f"AI 打标 {_cls['classified']}/{_cls['total']} 条")
+
+        _sub_status["result"] = summary
+        _sub_status["progress"] = "✅ 订阅同步完成：" + "；".join(summary)
+    except Exception as e:
+        _sub_status["error"] = f"{e}\n{traceback.format_exc()[-500:]}"
+    finally:
+        _sub_status["running"] = False
+        _sub_status["done"] = True
+
 @app.route("/api/subscriptions/sync", methods=["POST"])
 def api_subscriptions_sync():
     """同步订阅（全部/单个/多个勾选）。抖音：拉主页新视频→ASR。微信：拉 RSS 新文章。"""
-    if _sub_status.get("running"):
-        return jsonify({"error": "订阅同步进行中，请稍候"}), 409
     data = request.get_json(force=True, silent=True) or {}
     sub_id = data.get("id")  # None = 全部
     sub_ids = data.get("ids") or []  # 勾选批量：[1, 3, 7]；空 = 不启用批量过滤
     cookie = (data.get("cookie") or "").strip() or _read_cookie_from_file()
-
-    def run():
-        import time
-        _sub_status.update(running=True, done=False, error="", progress="准备同步...",
-                           result=None, new_items=[])
-        try:
-            with _db_lock:
-                subs = content_store.list_subscriptions(DB_PATH)
-            if sub_id:
-                subs = [s for s in subs if s["id"] == sub_id]
-            elif sub_ids:
-                wanted = {int(i) for i in sub_ids if str(i).isdigit() or isinstance(i, int)}
-                subs = [s for s in subs if s["id"] in wanted]
-            if not subs:
-                _sub_status["error"] = "没有可同步的订阅"
-                return
-
-            # 分流：抖音需要 cookie + parser；微信不需要
-            douyin_subs = [s for s in subs if s.get("platform", "douyin") == "douyin"]
-            wechat_subs = [s for s in subs if s.get("platform") == "wechat"]
-
-            if douyin_subs and not cookie:
-                _sub_status["error"] = "抖音订阅需要 Cookie，请先在采集中心完成一次采集"
-                return
-
-            summary = []
-            pending_marks = []  # 有新视频的抖音作者：终局统一标记（见下方终局块）
-
-            # ── 微信订阅同步 ──
-            if wechat_subs:
-                from src.wechat_fetcher import sync_wechat_feed
-                for si, sub in enumerate(wechat_subs, 1):
-                    name = sub["author"] or sub["sec_uid"][:16]
-                    _sub_status["progress"] = f"[微信 {si}/{len(wechat_subs)}] {name}: 拉取 RSS..."
-                    try:
-                        existing = content_store.get_wechat_article_links(DB_PATH)
-                        result = sync_wechat_feed(sub["user_url"], existing)
-                        if result["error"]:
-                            with _db_lock:
-                                content_store.update_subscription_sync(
-                                    DB_PATH, sub["id"], 0, result["error"])
-                            summary.append(f"{name}: {result['error']}")
-                            continue
-                        new_articles = result["articles"]
-                        # 全文未就绪的条目不入库、下次同步重试。必须回显，否则界面显示
-                        # 「无新文章」，用户以为订阅没更新（本次排查的实际报障）。
-                        pending = result.get("skipped") or []
-                        pending_note = ""
-                        if pending:
-                            shown = "、".join((t or "无标题")[:16] for t in pending[:2])
-                            pending_note = "；%d 篇全文未就绪（%s%s），下次同步自动重试" % (
-                                len(pending), shown, "…" if len(pending) > 2 else "")
-                        if not new_articles:
-                            with _db_lock:
-                                content_store.update_subscription_sync(
-                                    DB_PATH, sub["id"], 0, "无新文章" + pending_note)
-                            summary.append(f"{name}: 无新文章{pending_note}")
-                            continue
-                        with _db_lock:
-                            inserted = content_store.insert_wechat_articles(
-                                DB_PATH, new_articles,
-                                category=sub.get("category") or "",
-                                game=sub.get("game") or "",
-                            )
-                        cat_note = f"，已按订阅标记分类「{sub['category']}」{len(inserted)} 条" if sub.get("category") and inserted else ""
-                        with _db_lock:
-                            content_store.update_subscription_sync(
-                                DB_PATH, sub["id"], len(inserted),
-                                f"新增 {len(inserted)} 篇文章{cat_note}{pending_note}",
-                                author=sub.get("author") or "")
-                        summary.append(f"{name}: 新增 {len(inserted)} 篇文章{cat_note}{pending_note}")
-                        _sub_status["new_items"] += [
-                            {"kind": "wechat", "author": name,
-                             "title": (a.get("title") or "").strip(),
-                             "published_at": (a.get("published_at") or "")[:10]}
-                            for a in inserted]
-                    except Exception as e:
-                        with _db_lock:
-                            content_store.update_subscription_sync(
-                                DB_PATH, sub["id"], 0, f"同步失败: {e}")
-                        summary.append(f"{name}: 失败 ({e})")
-
-            # ── 抖音订阅同步 ──
-            if douyin_subs:
-                parser = _setup_parser_and_cookie(cookie)
-                ai_config = {"method": "skip", "api_key": "", "api_base": "", "model": ""}
-                # 批量拉取（2026-09-27 提速）：一次 Chromium 跑完所有作者主页，
-                # 替代旧路径逐作者冷启动浏览器（每次 5-15 秒，无新视频也要付）
-                browser_ids: dict = {}
-                try:
-                    from src.browser_fetch import browser_fetch_users_batch
-                    _items = [{"id": str(s["id"]), "url": s["user_url"]} for s in douyin_subs]
-
-                    def _bp(done, total, item_id, ids, err):
-                        mark = f"✓ {len(ids)} 条" if ids else f"✗ {err[:40]}"
-                        _sub_status["progress"] = f"[抖音主页 {done}/{total}] {mark}"
-
-                    browser_ids = browser_fetch_users_batch(_items, on_progress=_bp)
-                except Exception as be:
-                    summary.append(f"浏览器批量拉取异常 ({be})，逐作者退回旧 API")
-                from src.fetch_user_videos import load_existing_aweme_ids as _load_ids
-                existing_ids = _load_ids(str(EXCEL_PATH))
-                for si, sub in enumerate(douyin_subs, 1):
-                    name = sub["author"] or sub["sec_uid"][:12]
-                    _sub_status["progress"] = f"[抖音 {si}/{len(douyin_subs)}] {name}: 拉取主页..."
-                    try:
-                        from src.fetch_user_videos import fetch_user_videos
-                        # ── 浏览器批量结果查表（2026-09-21 起浏览器优先绕 Argus 风控，
-                        #    2026-09-27 起批量一次拉完，不再逐作者冷启动）──
-                        videos = []
-                        ids = browser_ids.get(str(sub["id"])) or []
-                        if ids:
-                            # 浏览器成功拿到列表：去重后无新就是无新，
-                            # 不再退回旧 API（旧路径无新视频也会挂起 30s+ 白等）
-                            videos = [
-                                {"aweme_id": i, "url": "https://www.douyin.com/video/" + i}
-                                for i in ids if i not in existing_ids
-                            ]
-                        else:
-                            # 浏览器没覆盖到该作者（批量异常/该作者页失败）→ 退回旧 API
-                            result = fetch_user_videos(
-                                url=sub["user_url"], cookie=cookie,
-                                max_pages=1, max_videos=20, mode="user_url",
-                                exclude_excel=str(EXCEL_PATH),
-                            )
-                            videos = result.get("videos") or []
-                        new_author = ""
-                        if not videos:
-                            with _db_lock:
-                                content_store.update_subscription_sync(
-                                    DB_PATH, sub["id"], 0, "无新视频")
-                            summary.append(f"{name}: 无新视频")
-                            continue
-
-                        # 写入 Excel
-                        import openpyxl
-                        wb = openpyxl.load_workbook(str(EXCEL_PATH))
-                        ws = wb["抖音视频数据"]
-                        next_row = ws.max_row + 1
-                        for r in range(2, ws.max_row + 1):
-                            if not ws.cell(r, 1).value:
-                                next_row = r
-                                break
-                        for i, v in enumerate(videos):
-                            ws.cell(next_row + i, 1).value = v["url"]
-                            ws.cell(next_row + i, 2).value = "未开始"
-                            ws.cell(next_row + i, 3).value = v.get("aweme_id", "")
-                        wb.save(str(EXCEL_PATH))
-                        wb.close()
-
-                        # 逐条 ASR（提速：工作簿只加载一次，每条保存一次防崩溃丢转写）
-                        wb = openpyxl.load_workbook(str(EXCEL_PATH))
-                        try:
-                            ws = wb["抖音视频数据"]
-                            for i, v in enumerate(videos):
-                                row = next_row + i
-                                _sub_status["progress"] = (
-                                    f"[抖音 {si}/{len(douyin_subs)}] {name}: 处理 {i+1}/{len(videos)} "
-                                    f"{v.get('aweme_id','')}..."
-                                )
-                                ok = collector.process_row(ws, row, cookie, "base", ai_config, parser)
-                                if not new_author:
-                                    new_author = str(ws.cell(row, 4).value or "").strip()
-                                wb.save(str(EXCEL_PATH))
-                                if i < len(videos) - 1:
-                                    time.sleep(5)
-                        finally:
-                            wb.close()
-
-                        # 提速：索引重建/内容库同步/来源与分类标记/订阅状态，
-                        # 从逐作者执行改为收集后终局统一执行（每次全表重扫 2-5 秒）
-                        existing_ids.update(v["aweme_id"] for v in videos)
-                        pending_marks.append({
-                            "sub": sub,
-                            "next_row": next_row,
-                            "count": len(videos),
-                            "new_author": new_author,
-                        })
-                    except Exception as e:
-                        with _db_lock:
-                            content_store.update_subscription_sync(
-                                DB_PATH, sub["id"], 0, f"同步失败: {e}")
-                        summary.append(f"{name}: 失败 ({e})")
-
-            # ── 终局：一次重建索引 + 一次内容库同步 + 补齐订阅标记 ──
-            if pending_marks:
-                _sub_status["progress"] = "重建索引与同步内容库..."
-                collector.update_video_index(str(EXCEL_PATH))
-                _sync_content_db()
-                for pm in pending_marks:
-                    sub = pm["sub"]
-                    name = sub["author"] or sub["sec_uid"][:12]
-                    rows = [pm["next_row"] + i for i in range(pm["count"])]
-                    # 标记来源 + 回填作者 sec_uid（订阅入口，按行号精确标记）
-                    with _db_lock:
-                        content_store.mark_video_source(
-                            DB_PATH, "抖音视频数据", rows, "subscription",
-                            author_sec_uid=sub["sec_uid"],
-                        )
-                    # 订阅设了分类 → 新视频自动打上。AI 增量分类不会改写已有 category
-                    # （写回口径见 content_store.classify_videos 的 force=False 分支）
-                    cat_note = ""
-                    new_titles = []
-                    if sub.get("category"):
-                        with _db_lock:
-                            conn = content_store.connect(DB_PATH)
-                            try:
-                                marked = 0
-                                for r0 in rows:
-                                    r = conn.execute(
-                                        "SELECT id, title FROM videos WHERE source_sheet = ? AND source_row = ?",
-                                        ("抖音视频数据", r0),
-                                    ).fetchone()
-                                    if r:
-                                        new_titles.append((r["title"] or "").strip())
-                                        # 非游戏攻略分类不带 game
-                                        g = sub.get("game") or ""
-                                        if sub["category"] != "游戏攻略":
-                                            g = ""
-                                        conn.execute(
-                                            "UPDATE videos SET category = ?, game = ? WHERE id = ?",
-                                            (sub["category"], g, r["id"]),
-                                        )
-                                        marked += 1
-                                conn.commit()
-                            finally:
-                                conn.close()
-                        cat_note = f"，已按订阅标记分类「{sub['category']}」{marked} 条"
-                    with _db_lock:
-                        content_store.update_subscription_sync(
-                            DB_PATH, sub["id"], pm["count"],
-                            f"新增 {pm['count']} 条并已转写{cat_note}", author=pm["new_author"])
-                    summary.append(f"{name}: 新增 {pm['count']} 条{cat_note}")
-                    _sub_status["new_items"] += [
-                        {"kind": "douyin", "author": pm["new_author"] or name, "title": tt,
-                         "published_at": ""} for tt in new_titles if tt]
-
-            # 同步入库后补 AI 增量打标：只补缺口（订阅链路新行自带 category 但缺 ai_tags，
-            # 选题雷达依赖 ai_tags）。必须放在两条分支之外——原先挂在抖音分支里，
-            # 只勾微信订阅同步时新文章一条标都不打，雷达/渠道策略侧就等于「没有更新」。
-            # AI 未配置时静默跳过，打标失败不算同步失败
-            _sub_status["progress"] = "AI 自动打标..."
-            _cls = _auto_classify_after_sync()
-            if _cls.get("classified"):
-                summary.append(f"AI 打标 {_cls['classified']}/{_cls['total']} 条")
-
-            _sub_status["result"] = summary
-            _sub_status["progress"] = "✅ 订阅同步完成：" + "；".join(summary)
-        except Exception as e:
-            _sub_status["error"] = f"{e}\n{traceback.format_exc()[-500:]}"
-        finally:
-            _sub_status["running"] = False
-            _sub_status["done"] = True
-
-    threading.Thread(target=run, daemon=True).start()
+    if not _claim_sync():
+        return jsonify({"error": "订阅同步进行中，请稍候"}), 409
+    threading.Thread(target=_do_subscription_sync, args=(sub_id, sub_ids, cookie),
+                     daemon=True).start()
     return jsonify({"success": True})
 
 
 @app.route("/api/subscriptions/sync/status")
 def api_subscriptions_sync_status():
     return jsonify(_sub_status)
+
+
+# ════════════════════════════════════════════════════════════════
+# 自动同步任务：勾选订阅 + 每天/每几天，工作台开着就会到点自己跑
+# ════════════════════════════════════════════════════════════════
+# 为什么放进程内而不是系统 cron：这台机器的工作台基本常开，配置改完立刻生效、界面能看
+# 下次执行时间，也不用往用户 crontab 里塞东西。代价是工作台没开时不跑——下次打开若已过
+# 点会补一轮（到期判断只看上次执行时间，不会因为跳过而丢任务）。
+_autosync_state = {"started_at": "", "last_check": "", "note": "", "skipped": 0}
+_sync_claim_lock = threading.Lock()
+
+
+def _claim_sync():
+    """原子占用"当前同步"槽位。手动点同步与自动任务都先抢它，抢不到就不跑。
+
+    原先只在线程内置 running=True，两个请求会同时看到 False 一起起跑——
+    同时写 Excel、同时起 Chromium，后果是索引与转写互相踩。
+    """
+    with _sync_claim_lock:
+        if _sub_status.get("running"):
+            return False
+        _sub_status.update(running=True, done=False, error="", progress="准备同步...",
+                           result=None, new_items=[])
+        return True
+
+
+def _run_sync_batch(sub_ids, who="自动同步"):
+    """把一批订阅跑一轮同步，跑完记进自动任务账本（上次执行时间/成败）。"""
+    ids = [int(i) for i in sub_ids]
+
+    def wrap():
+        _do_subscription_sync(None, ids, _read_cookie_from_file())
+        err = _sub_status.get("error") or ""
+        note = err or (_sub_status.get("progress") or "")
+        cfg = sync_tasks.load()
+        sync_tasks.save(sync_tasks.mark_batch(cfg, ids, not err, note))
+        _autosync_state["note"] = "%s结束：%s" % (who, note[:160])
+        print("[%s] 本轮结束（%d 条）：%s" % (who, len(ids), note[:200]), flush=True)
+
+    threading.Thread(target=wrap, daemon=True).start()
+
+
+def _autosync_tick(now=None):
+    """每分钟一次的检查：只看有没有到期任务，到期就并成一批跑。
+
+    一批而不是逐条：抖音多条只起一次 Chromium（browser_fetch_users_batch 是现成的批量口），
+    逐条跑会把启动浏览器的开销付 N 遍。
+    """
+    now = now or datetime.now()
+    _autosync_state["last_check"] = now.strftime("%Y-%m-%d %H:%M:%S")
+    cfg = sync_tasks.load()
+    if not cfg.get("enabled") or not cfg.get("tasks"):
+        return
+    with _db_lock:
+        subs = content_store.list_subscriptions(DB_PATH)
+    alive = {s["id"] for s in subs}
+    due = sync_tasks.due_task_ids(cfg, now, alive)
+    if not due:
+        return
+    if _sub_status.get("running"):
+        _autosync_state["skipped"] = int(_autosync_state.get("skipped") or 0) + 1
+        _autosync_state["note"] = "有同步正在跑，本轮自动任务顺延（到期时间不重置，不会漏）"
+        return
+    if not _claim_sync():
+        return
+    names = "、".join((s.get("author") or str(s["id"])) for s in subs if s["id"] in due)
+    _autosync_state["note"] = "自动同步开始：" + names
+    print("[自动同步] 到期 %d 条：%s" % (len(due), names), flush=True)
+    _run_sync_batch(due, "自动同步")
+
+
+def _autosync_loop():
+    _autosync_state["started_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print("[自动同步] 定时器已启动（每 60 秒检查一次到期任务）", flush=True)
+    while True:
+        time.sleep(60)
+        try:
+            _autosync_tick()
+        except Exception as e:
+            # 这一层绝不能抛出去：线程死了自动同步就静默停摆，表现和"没配"一模一样
+            print("[自动同步] 本轮检查异常（下一轮继续）: %s" % e, flush=True)
+
+
+def _start_autosync():
+    threading.Thread(target=_autosync_loop, daemon=True, name="autosync").start()
+
+
+def _task_view(cfg, subs, now):
+    """把任务配置与 subscriptions 表里的同步账拼成界面要的样子。"""
+    by_id = {s["id"]: s for s in subs}
+    tasks = []
+    for t in cfg.get("tasks") or []:
+        s = by_id.get(t["sub_id"])
+        if not s:
+            continue          # 订阅删了就不显示；配置条目在下次保存时清掉
+        nxt = sync_tasks.next_due(t, cfg.get("run_at") or sync_tasks.DEFAULT_RUN_AT, now)
+        tasks.append({
+            "sub_id": t["sub_id"],
+            "author": s.get("author") or s["sec_uid"][:12],
+            "platform": s.get("platform") or "douyin",
+            "category": s.get("category") or "",
+            "interval_days": t.get("interval_days") or 1,
+            "task_last_run": t.get("last_run") or "",
+            "task_status": t.get("last_status") or "",
+            "task_note": t.get("last_note") or "",
+            "next_due": nxt.strftime("%Y-%m-%d %H:%M:%S") if nxt else "",
+            "due_now": bool(nxt and now >= nxt),
+            # 下面三个直接取自 subscriptions 表：手动同步也会更新，是"这条订阅上次同步到哪"的权威值
+            "synced_at": s.get("last_synced_at") or "",
+            "new_count": s.get("last_new_count"),
+            "sync_note": s.get("last_sync_note") or "",
+        })
+    tasks.sort(key=lambda x: x["next_due"] or "9999")
+    return tasks
+
+
+@app.route("/api/sync/tasks")
+def api_sync_tasks():
+    """自动同步任务列表 + 可添加的订阅候选。"""
+    now = datetime.now()
+    cfg = sync_tasks.load()
+    try:
+        with _db_lock:
+            subs = content_store.list_subscriptions(DB_PATH)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    picked = {t["sub_id"] for t in cfg.get("tasks") or []}
+    return jsonify({
+        "enabled": bool(cfg.get("enabled")),
+        "run_at": cfg.get("run_at") or sync_tasks.DEFAULT_RUN_AT,
+        "intervals": list(sync_tasks.INTERVALS),
+        "tasks": _task_view(cfg, subs, now),
+        "candidates": [{"id": s["id"], "author": s.get("author") or s["sec_uid"][:12],
+                        "platform": s.get("platform") or "douyin",
+                        "category": s.get("category") or ""}
+                       for s in subs if s["id"] not in picked],
+        "last_batch": cfg.get("last_batch"),
+        "autosync": dict(_autosync_state),
+        "sync_running": bool(_sub_status.get("running")),
+        "sync_progress": _sub_status.get("progress") or "",
+    })
+
+
+def _save_tasks(cfg):
+    """落盘前清掉已删订阅留下的僵尸条目。"""
+    try:
+        with _db_lock:
+            alive = {s["id"] for s in content_store.list_subscriptions(DB_PATH)}
+    except Exception:
+        alive = None
+    if alive is not None:
+        cfg["tasks"] = [t for t in cfg.get("tasks") or [] if t["sub_id"] in alive]
+    return sync_tasks.save(cfg)
+
+
+@app.route("/api/sync/tasks", methods=["POST"])
+def api_sync_tasks_add():
+    data = request.get_json(force=True, silent=True) or {}
+    try:
+        sub_id = int(data.get("sub_id"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "缺少 sub_id"}), 400
+    cfg = sync_tasks.load()
+    if not DB_PATH.exists():
+        return jsonify({"error": "数据库还不存在，先同步一次"}), 400
+    with _db_lock:
+        subs = content_store.list_subscriptions(DB_PATH)
+    if not any(s["id"] == sub_id for s in subs):
+        return jsonify({"error": "订阅不存在"}), 404
+    cfg = sync_tasks.upsert(cfg, sub_id, data.get("interval_days") or 1)
+    _save_tasks(cfg)
+    return jsonify({"success": True, "tasks": len(cfg["tasks"])})
+
+
+@app.route("/api/sync/tasks/<int:sub_id>", methods=["DELETE"])
+def api_sync_tasks_remove(sub_id):
+    cfg = sync_tasks.load()
+    before = len(cfg["tasks"])
+    cfg = sync_tasks.remove(cfg, sub_id)
+    if len(cfg["tasks"]) == before:
+        return jsonify({"error": "这条订阅本来就没有自动任务"}), 404
+    _save_tasks(cfg)
+    return jsonify({"success": True})
+
+
+@app.route("/api/sync/tasks/settings", methods=["POST"])
+def api_sync_tasks_settings():
+    data = request.get_json(force=True, silent=True) or {}
+    cfg = sync_tasks.load()
+    if "enabled" in data:
+        cfg["enabled"] = bool(data.get("enabled"))
+    if data.get("run_at"):
+        t = sync_tasks._norm_time(data.get("run_at"))
+        if not t:
+            return jsonify({"error": "执行时刻要写成 HH:MM"}), 400
+        cfg["run_at"] = t
+    if cfg.get("enabled") and not cfg.get("tasks"):
+        return jsonify({"error": "先加至少一条订阅，再打开总开关"}), 400
+    _save_tasks(cfg)
+    return jsonify({"success": True, "enabled": cfg["enabled"], "run_at": cfg["run_at"]})
+
+
+@app.route("/api/sync/tasks/run", methods=["POST"])
+def api_sync_tasks_run():
+    """立刻按自动任务的配置跑一轮（用来验证配置对不对，不用等明天）。"""
+    data = request.get_json(force=True, silent=True) or {}
+    cfg = sync_tasks.load()
+    if not cfg.get("tasks"):
+        return jsonify({"error": "还没有自动同步任务"}), 400
+    if data.get("sub_id"):
+        ids = [int(data["sub_id"])]
+    elif data.get("all"):
+        ids = [t["sub_id"] for t in cfg["tasks"]]
+    else:
+        with _db_lock:
+            subs = content_store.list_subscriptions(DB_PATH)
+        ids = sync_tasks.due_task_ids(cfg, datetime.now(), {s["id"] for s in subs})
+    if not ids:
+        return jsonify({"error": "现在没有到期的任务（用「全部跑一遍」可强制跑）"}), 400
+    if _sub_status.get("running"):
+        return jsonify({"error": "订阅同步进行中，请稍候"}), 409
+    if not _claim_sync():
+        return jsonify({"error": "订阅同步进行中，请稍候"}), 409
+    _run_sync_batch(ids, "手动触发自动任务")
+    return jsonify({"success": True, "ids": ids})
+
 
 
 # ════════════════════════════════════════════════════════════════
@@ -2795,4 +3027,9 @@ if __name__ == "__main__":
                 print(f"   [启动] 回填 author_sec_uid/source：{_n} 条")
     except Exception as _e:
         print(f"   [启动] author_sec_uid 回填失败（不影响启动）：{_e}")
+    # 自动同步定时器：放在这里而不是模块级，是为了 import app（e2e 脚本）时不会多出一条线程
+    try:
+        _start_autosync()
+    except Exception as _e:
+        print(f"   [启动] 自动同步定时器启动失败（手动同步不受影响）：{_e}")
     app.run(host="127.0.0.1", port=15801, debug=False)

@@ -148,6 +148,23 @@ textarea{resize:vertical;min-height:84px}
 .search-box svg{position:absolute;left:11px;top:50%;transform:translateY(-50%);color:var(--text-tertiary);pointer-events:none}
 .search-box input{padding-left:34px}
 .toolbar select{width:auto}
+/* 自动同步任务 */
+.as-bar{display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin-top:12px}
+.as-bar label{display:flex;flex-direction:column;gap:4px;font-size:11.5px;font-weight:700;color:var(--text-secondary)}
+.as-bar select,.as-bar input{font-size:12.5px;font-weight:400;padding:6px 8px}
+.as-sw{display:flex;align-items:center;gap:6px;font-size:12px;font-weight:700;color:var(--text-secondary);cursor:pointer}
+.as-sw input{width:15px;height:15px;margin:0}
+.as-note{font-size:11.5px;color:var(--text-tertiary);align-self:center;flex:1;min-width:120px}
+.as-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:9px 11px;margin-top:6px;
+  border:1px solid var(--border);border-radius:9px;background:var(--surface-nested);font-size:12px}
+.as-row.due{border-color:var(--module-2);background:color-mix(in srgb,var(--module-2) 7%,var(--surface-nested))}
+.as-row .as-name{flex:1 1 130px;min-width:0;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.as-row .as-c{flex:0 0 auto;color:var(--text-secondary)}
+.as-row select.as-c{width:auto;padding:4px 6px;font-size:12px}
+.as-row .as-c b{color:var(--text)}
+.as-ok{color:#07c160;font-weight:700}
+.as-fail{color:var(--danger);font-weight:700}
+.as-off{opacity:.55}
 .form-grid{display:grid;gap:14px}
 .form-row{display:grid;gap:10px;grid-template-columns:1fr 1fr 1fr}
 .form-row.two{grid-template-columns:1fr 1fr}
@@ -786,6 +803,25 @@ textarea{resize:vertical;min-height:84px}
           </span>
         </div>
         <div id="sub-list" style="margin-top:10px"></div>
+      </div>
+
+      <!-- 自动同步任务：勾订阅 + 每天/每几天，到点自己跑（定时器在工作台进程里） -->
+      <div class="panel" id="as-panel" style="margin-top:16px">
+        <h3 style="display:flex;align-items:center;gap:9px;flex-wrap:wrap">
+          <span class="cic" style="background:color-mix(in srgb,var(--module-2) 14%,transparent);color:var(--module-2)" data-icon="calendar"></span>自动同步任务
+          <span class="count" id="as-count" style="margin-left:auto">未开启</span>
+          <label class="as-sw"><input type="checkbox" id="as-enabled" onchange="asSetEnabled(this.checked)">开总开关</label>
+          <button class="btn ghost sm" onclick="asRun(true)">全部跑一遍</button>
+        </h3>
+        <div class="p-sub">勾上订阅、定个频率，到点自己拉新内容，不用每天人过去点。定时器跑在工作台进程里：<b>工作台没开的那段时间不会跑</b>，下次打开若已过点会补一轮。抖音那条会起浏览器抓主页并做本地转写，跑起来电脑会占一会儿 CPU；微信那条只是拉一次 RSS，很轻。</div>
+        <div class="as-bar">
+          <label>每天执行时刻<input type="time" id="as-runat" value="09:30" onchange="asSetRunAt(this.value)"></label>
+          <label>添加订阅<select id="as-cand"><option value="">（先添加订阅）</option></select></label>
+          <label>频率<select id="as-interval"><option value="1">每天</option><option value="2">每 2 天</option><option value="3">每 3 天</option><option value="7">每周</option></select></label>
+          <button class="btn sm" onclick="asAdd()">加入自动任务</button>
+          <span class="as-note" id="as-note"></span>
+        </div>
+        <div id="as-list" style="margin-top:10px"></div>
       </div>
 
       <div class="toolbar" style="margin-top:16px">
@@ -1489,7 +1525,7 @@ function getSearchValue() {
 async function loadCurrentView() {
   if (currentView === 'dashboard') return loadDashboard();
   if (currentView === 'collect') return;
-  if (currentView === 'materials') { loadSubscriptions(); return loadWorkbench(); }
+  if (currentView === 'materials') { loadSubscriptions(); loadAutoSync(); return loadWorkbench(); }
   if (currentView === 'radar') return loadRadar();
   if (currentView === 'questions') return loadInterviewQuestions();
   if (currentView === 'summaries') return loadSummaries();
@@ -1843,6 +1879,129 @@ async function loadSummaries() {
   const data = await fetch('/api/content/summaries?' + params).then(r=>r.json());
   renderSummaries(data.items || []);
   document.getElementById('count-summaries').textContent = (data.total||0) + ' 篇';
+}
+
+// ── 自动同步任务 ──
+// 配置落在 config/sync_tasks.json，"该不该跑"的判断全在后端；这一层只负责让人看得见：
+// 每条任务的上次自动执行时间、成败、那轮新增几条、下次几点轮到自己。
+let _asData = null;
+
+async function asPost(url, body, method) {
+  let r;
+  try {
+    r = await fetch(url, {method: method || 'POST',
+      headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body || {})})
+      .then(x => x.json());
+  } catch (e) { r = {error: e.message}; }
+  if (r.error) { setStatus('error', '自动同步：' + r.error); return null; }
+  return r;
+}
+
+async function loadAutoSync() {
+  let d;
+  try { d = await fetch('/api/sync/tasks').then(r => r.json()); }
+  catch (e) { console.warn('[自动同步] 配置加载失败：', e); return; }
+  if (!d || d.error) { console.warn('[自动同步] 接口报错：', d && d.error); return; }
+  _asData = d;
+  renderAutoSync(d);
+}
+
+function asFreqOptions(n) {
+  return [1,2,3,7].map(v => `<option value="${v}"${v===n?' selected':''}>${
+    v===1?'每天':(v===7?'每周':'每 '+v+' 天')}</option>`).join('');
+}
+
+function asRowHtml(t) {
+  const st = t.task_status === 'ok' ? '<span class="as-ok">已跑</span>'
+    : (t.task_status === 'fail' ? '<span class="as-fail">失败</span>'
+       : '<span style="color:var(--text-tertiary)">还没跑过</span>');
+  return `<div class="as-row${t.due_now ? ' due' : ''}" title="${esc(t.sync_note || t.task_note || '')}">
+    <span class="as-name">${esc(t.author)}</span>
+    <span class="pill ${t.platform === 'wechat' ? 'wx' : 'tt'}">${t.platform === 'wechat' ? '微信' : '抖音'}</span>
+    <select class="as-c" style="padding:3px 6px" onchange="asSetInterval(${t.sub_id}, this.value)">${asFreqOptions(t.interval_days)}</select>
+    <span class="as-c">上次自动 ${esc((t.task_last_run || '—').slice(5, 16))} ${st}</span>
+    <span class="as-c">上次同步 ${esc((t.synced_at || '—').slice(5, 16))} · 新增 <b>${t.new_count == null ? '—' : t.new_count}</b> 条</span>
+    <span class="as-c">下次 <b>${esc((t.next_due || '—').slice(5, 16))}</b>${t.due_now ? ' · 已到期' : ''}</span>
+    <span class="as-c" style="cursor:pointer" title="移出自动任务（订阅本身不动）" onclick="asRemove(${t.sub_id})">✕</span>
+  </div>`;
+}
+
+function renderAutoSync(d) {
+  const en = document.getElementById('as-enabled');
+  if (en) en.checked = !!d.enabled;
+  const ra = document.getElementById('as-runat');
+  if (ra && document.activeElement !== ra) ra.value = d.run_at || '09:30';
+  const tasks = d.tasks || [];
+  const cnt = document.getElementById('as-count');
+  if (cnt) {
+    cnt.textContent = (d.enabled ? '已开 · ' : '未开 · ') + tasks.length + ' 条'
+      + (d.enabled && tasks.length && tasks[0].next_due ? ' · 下次 ' + tasks[0].next_due.slice(5, 16) : '');
+    cnt.style.color = d.enabled ? 'var(--module-2)' : '';
+  }
+  const cand = document.getElementById('as-cand');
+  if (cand) {
+    cand.innerHTML = (d.candidates || []).length
+      ? (d.candidates || []).map(s => `<option value="${s.id}">${esc(s.author)}（${
+          s.platform === 'wechat' ? '微信' : '抖音'}${s.category ? ' · ' + esc(s.category) : ''}）</option>`).join('')
+      : '<option value="">（订阅都已在任务里，或还没有订阅）</option>';
+  }
+  const list = document.getElementById('as-list');
+  if (list) {
+    list.innerHTML = tasks.length ? tasks.map(asRowHtml).join('')
+      : '<div style="font-size:12px;color:var(--text-tertiary);padding:10px 2px">还没有自动任务：上面选一条订阅、定个频率，点「加入自动任务」。</div>';
+  }
+  const note = document.getElementById('as-note');
+  if (note) {
+    const lb = d.last_batch;
+    note.textContent = d.sync_running ? ('正在同步：' + (d.sync_progress || ''))
+      : (lb ? ('上一轮 ' + String(lb.at).slice(5, 16) + (lb.ok ? ' 跑完' : ' 失败')
+              + ' · ' + String(lb.note || '').replace(/^✅\s*/, '').slice(0, 70)) : '');
+  }
+}
+
+async function asAdd() {
+  const sel = document.getElementById('as-cand');
+  const id = parseInt(sel.value, 10);
+  if (!id) { setStatus('error', '先选一条订阅'); return; }
+  const days = parseInt(document.getElementById('as-interval').value, 10) || 1;
+  const r = await asPost('/api/sync/tasks', {sub_id: id, interval_days: days});
+  if (!r) return;
+  setStatus('done', '已加入自动任务（' + (days === 1 ? '每天' : days === 7 ? '每周' : '每 ' + days + ' 天')
+    + '；新加的任务若已过执行时刻，一分钟内就会跑第一轮）');
+  loadSubscriptions();
+  loadAutoSync();
+}
+
+async function asRemove(id) {
+  if (!confirm('把这条订阅移出自动任务？（订阅本身不动，手动同步照旧）')) return;
+  const r = await asPost('/api/sync/tasks/' + id, {}, 'DELETE');
+  if (!r) return;
+  loadSubscriptions();
+  loadAutoSync();
+}
+
+async function asSetInterval(id, v) {
+  if (await asPost('/api/sync/tasks', {sub_id: id, interval_days: parseInt(v, 10) || 1})) loadAutoSync();
+}
+
+async function asSetEnabled(on) {
+  // 先按用户点的样子亮着，接口拒了（比如一条任务都没加）再刷回真实状态
+  const r = await asPost('/api/sync/tasks/settings', {enabled: on});
+  setStatus(r ? 'done' : 'error', r ? (on ? '自动同步已开启，到点自己跑' : '自动同步已关闭') : '');
+  loadAutoSync();
+}
+
+async function asSetRunAt(v) {
+  if (await asPost('/api/sync/tasks/settings', {run_at: v})) setStatus('done', '执行时刻已设为 ' + v);
+  loadAutoSync();
+}
+
+async function asRun(all) {
+  const r = await asPost('/api/sync/tasks/run', all ? {all: true} : {});
+  if (!r) return;
+  setStatus('running', '已提交自动同步（' + (r.ids || []).length + ' 条订阅），进度看下方同步状态');
+  startSubPolling();
+  setTimeout(loadAutoSync, 1500);
 }
 
 // ── 头条图文 ──
@@ -4634,9 +4793,10 @@ function startSubPolling() {
         _subSyncRunning = false;
         if (btn) btn.disabled = false;
         loadSubscriptions();
+        loadAutoSync();      // 自动任务那栏的"上次同步/新增几条"也是这一轮写进去的
         refreshAll();
       }
-    } catch(e) { /* 网络错误继续轮询 */ }
+    } catch(e) { warn('订阅同步轮询（下一轮继续）', e); }
   }, 3000);
 }
 
