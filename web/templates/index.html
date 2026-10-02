@@ -182,6 +182,13 @@ textarea{resize:vertical;min-height:84px}
 .as-ok{color:#07c160;font-weight:700}
 .as-fail{color:var(--danger);font-weight:700}
 .as-off{opacity:.55}
+/* 我的订阅：超过 10 条就在卡片内部滚，别把整页撑到一屏放不下（筛选栏留在上面不用来回滚） */
+#sub-list{position:relative;padding-right:4px}
+#sub-list.scrollable{overflow-y:auto}
+#sub-list::-webkit-scrollbar{width:9px}
+#sub-list::-webkit-scrollbar-thumb{background:var(--border-input);border-radius:5px;border:2px solid transparent;background-clip:content-box}
+#sub-list::-webkit-scrollbar-track{background:transparent}
+.sub-hint{font-size:11.5px;color:var(--text-tertiary);padding:3px 2px 0}
 .as-pick-btn{text-align:left;min-width:172px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:260px}
 .as-pick{margin-top:10px;border:1px solid var(--border);border-radius:10px;background:var(--surface-card);padding:11px 12px}
 .as-pick-top{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
@@ -782,6 +789,7 @@ textarea{resize:vertical;min-height:84px}
           </span>
         </div>
         <div id="sub-list" style="margin-top:10px"></div>
+        <div class="sub-hint" id="sub-list-hint"></div>
       </div>
 
       <!-- 自动同步任务：勾订阅 + 每天/每几天，到点自己跑（定时器在工作台进程里） -->
@@ -4535,12 +4543,14 @@ function renderSubscriptions(items) {
   updateSubTagFilterOptions(items);
   if (!items.length) {
     box.innerHTML = '<div style="font-size:12.5px;color:var(--text-tertiary);padding:10px 0">暂无订阅。点「导入素材库作者」一键订阅已采集的作者，或在采集中心输入主页链接点「订阅该作者」。</div>';
+    fitSubList();
     updateSyncCheckedBtn();
     return;
   }
   const shown = visibleSubscriptions();
   if (!shown.length) {
     box.innerHTML = '<div style="font-size:12.5px;color:var(--text-tertiary);padding:10px 0">当前筛选条件下没有订阅（来源/分类/标签三个筛选取交集）。</div>';
+    fitSubList();
     updateSyncCheckedBtn();
     return;
   }
@@ -4555,7 +4565,7 @@ function renderSubscriptions(items) {
       ? tags.map(t => `<span class="pill tag" title="点击管理标签" onclick='event.stopPropagation();editSubTags([${s.id}])'>${esc(t)}</span>`).join('')
       : `<span class="pill tag" title="点击添加分组标签" onclick='event.stopPropagation();editSubTags([${s.id}])'>+标签</span>`;
     return `
-    <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--border);border-radius:12px;margin-bottom:8px;background:var(--surface-card);flex-wrap:nowrap">
+    <div class="sub-row" style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--border);border-radius:12px;margin-bottom:8px;background:var(--surface-card);flex-wrap:nowrap">
       <input type="checkbox" data-sub-id="${s.id}" ${window._subChecked.has(s.id)?'checked':''} onchange="onSubCheckChange(${s.id}, this.checked)" style="flex:0 0 16px;width:16px;height:16px" title="勾选后批量操作">
       <div style="flex:1 1 160px;min-width:0;overflow:hidden">
         <div style="font-weight:700;font-size:13.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
@@ -4574,8 +4584,37 @@ function renderSubscriptions(items) {
       <button class="btn ghost sm" style="color:var(--module-5);flex:0 0 auto" onclick="deleteSubscriptionItem(${s.id})">取消订阅</button>
     </div>`;
   }).join('');
+  fitSubList();
   updateSyncCheckedBtn();
 }
+
+// 订阅列表超过 10 条就在卡片内滚：整页撑到三四屏的话，筛选栏和「自动同步任务」
+// 都得先滚过一屏订阅才能看到。高度按第 10 行的实际底边算，不按行数猜——
+// 行高会随窗口宽度换行变化，所以 resize 时要重算一次。
+const SUB_VISIBLE = 10;
+let _subFitTimer = null;
+
+function fitSubList() {
+  const box = document.getElementById('sub-list');
+  if (!box) return;
+  const rows = box.querySelectorAll('.sub-row');
+  const hint = document.getElementById('sub-list-hint');
+  if (rows.length <= SUB_VISIBLE) {
+    box.classList.remove('scrollable');
+    box.style.maxHeight = '';
+    if (hint) hint.textContent = '';
+    return;
+  }
+  const last = rows[SUB_VISIBLE - 1];
+  box.classList.add('scrollable');
+  box.style.maxHeight = (last.offsetTop + last.offsetHeight + 4) + 'px';
+  if (hint) hint.textContent = '共 ' + rows.length + ' 个订阅，列表内滚动查看（上面固定显示前 ' + SUB_VISIBLE + ' 个）';
+}
+
+window.addEventListener('resize', function () {
+  clearTimeout(_subFitTimer);
+  _subFitTimer = setTimeout(fitSubList, 200);
+});
 
 async function editSubAuthor(subId, current) {
   const name = prompt('修改作者显示名：', current);
