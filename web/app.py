@@ -1029,7 +1029,11 @@ def api_content_regenerate(summary_id):
             return jsonify({"error": "整理稿不存在"}), 404
 
         summary_type = request.args.get("type") or summary.get("summary_type", "game_guide")
-        config = _ai_config()
+        # 整理稿走快速档：这一步是"把口播压缩组织成结构化稿子"，不需要思考型模型。
+        # 实测 51 篇成功整理稿全是 deepseek-v4-flash 跑的；切到 qwen3.8-max 后生成的
+        # 2 篇 100% 撞 _generate_with_llm 的超时、静默降级成规则版（＝照抄转写原文），
+        # 下游海报拆文案拿到的就是没整理过的生料。
+        config = _fast_config()
         source_ids = json.loads(summary.get("source_video_ids") or "[]")
         if len(source_ids) > 1:
             videos = content_store.get_videos_by_ids(DB_PATH, [int(v) for v in source_ids])
@@ -1098,7 +1102,7 @@ def api_content_generate():
         try:
             _task_status["progress"] = "同步 Excel 到内容库..."
             _sync_content_db()
-            config = _ai_config()
+            config = _fast_config()   # 同上：整理稿走快速档，理由见 /regenerate 那段注释
             success_count = 0
             summary_ids = []
             selected_videos = []

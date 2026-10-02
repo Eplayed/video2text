@@ -786,7 +786,7 @@ def _generate_with_llm(
         client = openai.OpenAI(
             api_key=ai_config["api_key"],
             base_url=ai_config.get("api_base") or "https://api.openai.com/v1",
-            timeout=120,
+            timeout=300,
             max_retries=1,
         )
         resp = client.chat.completions.create(
@@ -812,7 +812,7 @@ def _generate_collection_with_llm(
         client = openai.OpenAI(
             api_key=ai_config["api_key"],
             base_url=ai_config.get("api_base") or "https://api.openai.com/v1",
-            timeout=180,
+            timeout=300,
             max_retries=1,
         )
         resp = client.chat.completions.create(
@@ -1190,7 +1190,7 @@ def _prompt(video: dict[str, Any], summary_type: str) -> str:
   {schema},
   "keywords": ["关键词1", "关键词2"]
 }}
-
+{_glossary_block()}
 视频标题：{video.get('title') or ''}
 作者：{video.get('author') or ''}
 游戏：{video.get('game') or ''}
@@ -1198,6 +1198,22 @@ def _prompt(video: dict[str, Any], summary_type: str) -> str:
 口播 ASR：
 {(video.get('transcript') or '')[:8000]}
 """
+
+
+def _glossary_block() -> str:
+    """把术语纠正表塞进整理稿提示词。
+
+    为什么必须塞表而不是在提示词里写一句"请修正错字"：整理稿的纪律是「只基于输入材料，
+    不要编造事实」，模型没有依据就不敢改，于是语音转写的同音错字一路原样传到海报上
+    （实测「装等」变成「装灯」、「饰品」变成「视频」）。有了这张表，按表改属于有依据的
+    规范化，不算编造。表在 config/term_glossary.json，人工维护、按修改时间热加载不用重启。
+    """
+    try:
+        from . import term_glossary
+        text = term_glossary.render_prompt()
+    except Exception:
+        return ""
+    return ("\n" + text + "\n") if text else ""
 
 
 def _collection_prompt(videos: list[dict[str, Any]], summary_type: str) -> str:
@@ -1289,7 +1305,7 @@ def _collection_prompt(videos: list[dict[str, Any]], summary_type: str) -> str:
   {schema},
   "keywords": ["关键词1", "关键词2"]
 }}
-
+{_glossary_block()}
 输入视频：
 {chr(10).join(blocks)}
 """
