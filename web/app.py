@@ -2855,27 +2855,29 @@ def _claim_sync():
         return True
 
 
-def _run_sync_batch(sub_ids, who="自动同步"):
-    """把一批订阅跑一轮同步，跑完记进自动任务账本（上次执行时间/成败）。"""
+def _run_sync_batch(sub_ids, task_keys, who="自动同步"):
+    """跑一轮同步，跑完按任务记账。task_keys 是这一轮覆盖到的任务。"""
     ids = [int(i) for i in sub_ids]
+    keys = list(task_keys or [])
 
     def wrap():
         _do_subscription_sync(None, ids, _read_cookie_from_file())
         err = _sub_status.get("error") or ""
         note = err or (_sub_status.get("progress") or "")
         cfg = sync_tasks.load()
-        sync_tasks.save(sync_tasks.mark_batch(cfg, ids, not err, note))
+        sync_tasks.save(sync_tasks.mark_batch(cfg, keys, not err, note))
         _autosync_state["note"] = "%s结束：%s" % (who, note[:160])
-        print("[%s] 本轮结束（%d 条）：%s" % (who, len(ids), note[:200]), flush=True)
+        print("[%s] 本轮结束（%d 个订阅 / %d 个任务）：%s"
+              % (who, len(ids), len(keys), note[:200]), flush=True)
 
     threading.Thread(target=wrap, daemon=True).start()
 
 
 def _autosync_tick(now=None):
-    """每分钟一次的检查：只看有没有到期任务，到期就并成一批跑。
+    """每分钟一次的检查：有没有到期任务，到期的并成一批跑。
 
-    一批而不是逐条：抖音多条只起一次 Chromium（browser_fetch_users_batch 是现成的批量口），
-    逐条跑会把启动浏览器的开销付 N 遍。
+    一批而不是一个任务一轮：抖音多条只起一次 Chromium（browser_fetch_users_batch 是现成的
+    批量口），逐任务跑会把启动浏览器的开销付 N 遍。
     """
     now = now or datetime.now()
     _autosync_state["last_check"] = now.strftime("%Y-%m-%d %H:%M:%S")
@@ -2885,7 +2887,7 @@ def _autosync_tick(now=None):
     with _db_lock:
         subs = content_store.list_subscriptions(DB_PATH)
     alive = {s["id"] for s in subs}
-    due = sync_tasks.due_task_ids(cfg, now, alive)
+    due = sync_tasks.due_tasks(cfg, now, alive)
     if not due:
         return
     if _sub_status.get("running"):
@@ -2894,10 +2896,11 @@ def _autosync_tick(now=None):
         return
     if not _claim_sync():
         return
-    names = "、".join((s.get("author") or str(s["id"])) for s in subs if s["id"] in due)
+    ids = sync_tasks.due_sub_ids(cfg, now, alive)
+    names = "、".join(t.get("name") or t.get("key") for t in due)
     _autosync_state["note"] = "自动同步开始：" + names
-    print("[自动同步] 到期 %d 条：%s" % (len(due), names), flush=True)
-    _run_sync_batch(due, "自动同步")
+    print("[自动同步] 到期任务 %d 个（%s），共 %d 个订阅" % (len(due), names, len(ids)), flush=True)
+    _run_sync_batch(ids, [t["key"] for t in due], "自动同步")
 
 
 def _autosync_loop():
@@ -2916,50 +2919,64 @@ def _start_autosync():
     threading.Thread(target=_autosync_loop, daemon=True, name="autosync").start()
 
 
+def _alive_subs():
+    with _db_lock:
+        return content_store.list_subscriptions(DB_PATH)
+
+
 def _task_view(cfg, subs, now):
-    """把任务配置与 subscriptions 表里的同步账拼成界面要的样子。"""
+    """任务列表。成员的上次同步时间与新增条数取自 subscriptions 表——
+    那里才是权威值（手动同步也会更新），JSON 里再存一份迟早对不上。"""
     by_id = {s["id"]: s for s in subs}
+    run_at = cfg.get("run_at") or sync_tasks.DEFAULT_RUN_AT
     tasks = []
     for t in cfg.get("tasks") or []:
-        s = by_id.get(t["sub_id"])
-        if not s:
-            continue          # 订阅删了就不显示；配置条目在下次保存时清掉
-        nxt = sync_tasks.next_due(t, cfg.get("run_at") or sync_tasks.DEFAULT_RUN_AT, now)
-        tasks.append({
-            "sub_id": t["sub_id"],
-            "author": s.get("author") or s["sec_uid"][:12],
-            "platform": s.get("platform") or "douyin",
-            "category": s.get("category") or "",
-            "interval_days": t.get("interval_days") or 1,
-            "task_last_run": t.get("last_run") or "",
-            "task_status": t.get("last_status") or "",
-            "task_note": t.get("last_note") or "",
-            "next_due": nxt.strftime("%Y-%m-%d %H:%M:%S") if nxt else "",
-            "due_now": bool(nxt and now >= nxt),
-            # 下面三个直接取自 subscriptions 表：手动同步也会更新，是"这条订阅上次同步到哪"的权威值
-            "synced_at": s.get("last_synced_at") or "",
-            "new_count": s.get("last_new_count"),
-            "sync_note": s.get("last_sync_note") or "",
-        })
+        members = []
+        for sid in t.get("sub_ids") or []:
+            s = by_id.get(sid)
+            if not s:
+                continue          # 订阅删了就不显示；_save_tasks 落盘时顺手清掉
+            members.append({"id": sid,
+                            "author": s.get("author") or s["sec_uid"][:12],
+                            "platform": s.get("platform") or "douyin",
+                            "category": s.get("category") or "",
+                            "synced_at": s.get("last_synced_at") or "",
+                            "new_count": s.get("last_new_count"),
+                            "sync_note": s.get("last_sync_note") or ""})
+        if not members:
+            continue
+        nxt = sync_tasks.next_due(t, run_at, now)
+        tasks.append({"key": t["key"], "name": t.get("name") or "",
+                      "interval_days": t.get("interval_days") or 1,
+                      "members": members, "count": len(members),
+                      "platforms": sorted({m["platform"] for m in members}),
+                      "last_run": t.get("last_run") or "",
+                      "last_status": t.get("last_status") or "",
+                      "last_note": t.get("last_note") or "",
+                      "last_new": sum(int(m["new_count"] or 0) for m in members),
+                      "next_due": nxt.strftime("%Y-%m-%d %H:%M:%S") if nxt else "",
+                      "due_now": bool(nxt and now >= nxt)})
     tasks.sort(key=lambda x: x["next_due"] or "9999")
     return tasks
 
 
 @app.route("/api/sync/tasks")
 def api_sync_tasks():
-    """自动同步任务列表 + 可添加的订阅候选。"""
+    """自动同步任务列表 + 还没进任何任务的订阅候选。"""
     now = datetime.now()
     cfg = sync_tasks.load()
     try:
-        with _db_lock:
-            subs = content_store.list_subscriptions(DB_PATH)
+        subs = _alive_subs()
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-    picked = {t["sub_id"] for t in cfg.get("tasks") or []}
+    picked = set()
+    for t in cfg.get("tasks") or []:
+        picked.update(t.get("sub_ids") or [])
     return jsonify({
         "enabled": bool(cfg.get("enabled")),
         "run_at": cfg.get("run_at") or sync_tasks.DEFAULT_RUN_AT,
         "intervals": list(sync_tasks.INTERVALS),
+        "max_tasks": sync_tasks.MAX_TASKS,
         "tasks": _task_view(cfg, subs, now),
         "candidates": [{"id": s["id"], "author": s.get("author") or s["sec_uid"][:12],
                         "platform": s.get("platform") or "douyin",
@@ -2973,61 +2990,112 @@ def api_sync_tasks():
 
 
 def _save_tasks(cfg):
-    """落盘前清掉已删订阅留下的僵尸条目。"""
+    """落盘前把已删订阅从成员里清掉，空了的任务一并删掉。"""
     try:
-        with _db_lock:
-            alive = {s["id"] for s in content_store.list_subscriptions(DB_PATH)}
-    except Exception:
+        alive = {s["id"] for s in _alive_subs()}
+    except Exception as e:
+        # 读不到订阅表就别乱删配置，宁可留着僵尸成员（界面会跳过不显示）
+        print("[自动同步] 订阅表读取失败，跳过成员清理: %s" % e, flush=True)
         alive = None
     if alive is not None:
-        cfg["tasks"] = [t for t in cfg.get("tasks") or [] if t["sub_id"] in alive]
+        cfg = sync_tasks.drop_subs(cfg, [i for i in _all_member_ids(cfg) if i not in alive])
     return sync_tasks.save(cfg)
 
 
+def _all_member_ids(cfg):
+    ids = []
+    for t in cfg.get("tasks") or []:
+        for sid in t.get("sub_ids") or []:
+            if sid not in ids:
+                ids.append(sid)
+    return ids
+
+
+def _valid_ids(sub_ids):
+    """过滤成还存在的订阅 id，返回 (有效, 已不存在)。"""
+    alive = {s["id"] for s in _alive_subs()}
+    want = sync_tasks._clean_ids(sub_ids)
+    return [i for i in want if i in alive], [i for i in want if i not in alive]
+
+
 @app.route("/api/sync/tasks", methods=["POST"])
-def api_sync_tasks_add():
-    """加入/改频率。支持一次勾多条订阅批量加（35 个订阅一条条点不现实）。"""
+def api_sync_tasks_new():
+    """新建一个任务：一组订阅 + 一个频率（用户勾的 6 个号是一个任务，不是 6 个）。"""
     data = request.get_json(force=True, silent=True) or {}
-    ids = data.get("sub_ids")
-    if not isinstance(ids, list):
-        ids = [data.get("sub_id")]
-    try:
-        ids = [int(i) for i in ids if str(i).strip() != ""]
-    except (TypeError, ValueError):
-        return jsonify({"error": "sub_id 要是数字"}), 400
+    ids, missing = _valid_ids(data.get("sub_ids"))
     if not ids:
-        return jsonify({"error": "先选至少一条订阅"}), 400
-    if not DB_PATH.exists():
-        return jsonify({"error": "数据库还不存在，先同步一次"}), 400
-    with _db_lock:
-        subs = content_store.list_subscriptions(DB_PATH)
-    alive = {s["id"] for s in subs}
-    missing = [i for i in ids if i not in alive]
-    ids = [i for i in ids if i in alive]
-    if not ids:
-        return jsonify({"error": "这些订阅已经不存在了"}), 404
+        return jsonify({"error": "先勾选至少一条订阅"}), 400
     cfg = sync_tasks.load()
-    known = {t["sub_id"] for t in cfg["tasks"]}
-    for i in ids:
-        cfg = sync_tasks.upsert(cfg, i, data.get("interval_days") or 1)
+    t = sync_tasks.new_task(cfg, ids, data.get("interval_days") or 1,
+                            str(data.get("name") or ""))
+    if not t:
+        return jsonify({"error": "任务数已到 %d 个上限" % sync_tasks.MAX_TASKS}), 400
     _save_tasks(cfg)
-    out = {"success": True, "added": len([i for i in ids if i not in known]),
-           "updated": len([i for i in ids if i in known]),
-           "tasks": len(cfg["tasks"])}
+    out = {"success": True, "key": t["key"], "name": t["name"], "count": len(t["sub_ids"])}
     if missing:
         out["missing"] = missing
     return jsonify(out)
 
 
-@app.route("/api/sync/tasks/<int:sub_id>", methods=["DELETE"])
-def api_sync_tasks_remove(sub_id):
+@app.route("/api/sync/tasks/<key>", methods=["POST"])
+def api_sync_tasks_update(key):
+    """改任务：改名 / 改频率 / 整体替换成员。"""
+    data = request.get_json(force=True, silent=True) or {}
     cfg = sync_tasks.load()
-    before = len(cfg["tasks"])
-    cfg = sync_tasks.remove(cfg, sub_id)
-    if len(cfg["tasks"]) == before:
-        return jsonify({"error": "这条订阅本来就没有自动任务"}), 404
+    t = sync_tasks.get_task(cfg, key)
+    if not t:
+        return jsonify({"error": "任务不存在（可能刚被删掉）"}), 404
+    sub_ids = None
+    missing = []
+    if data.get("sub_ids") is not None:
+        sub_ids, missing = _valid_ids(data.get("sub_ids"))
+        if not sub_ids:
+            return jsonify({"error": "成员不能全空，要整个删掉请点任务的 ✕"}), 400
+    sync_tasks.update_task(cfg, key, name=data.get("name"),
+                           interval_days=data.get("interval_days"), sub_ids=sub_ids)
     _save_tasks(cfg)
+    out = {"success": True, "key": key}
+    if missing:
+        out["missing"] = missing
+    return jsonify(out)
+
+
+@app.route("/api/sync/tasks/<key>/add", methods=["POST"])
+def api_sync_tasks_add_members(key):
+    """往已有任务里补订阅。"""
+    data = request.get_json(force=True, silent=True) or {}
+    ids, missing = _valid_ids(data.get("sub_ids"))
+    if not ids:
+        return jsonify({"error": "先勾选至少一条订阅"}), 400
+    cfg = sync_tasks.load()
+    t = sync_tasks.add_members(cfg, key, ids)
+    if not t:
+        return jsonify({"error": "任务不存在（可能刚被删掉）"}), 404
+    _save_tasks(cfg)
+    out = {"success": True, "count": len(t["sub_ids"])}
+    if missing:
+        out["missing"] = missing
+    return jsonify(out)
+
+
+@app.route("/api/sync/tasks/<key>", methods=["DELETE"])
+def api_sync_tasks_delete(key):
+    """删任务：只删这条自动安排，订阅本身还在「我的订阅」里。"""
+    cfg = sync_tasks.load()
+    if not sync_tasks.get_task(cfg, key):
+        return jsonify({"error": "这个任务已经不在了"}), 404
+    _save_tasks(sync_tasks.remove_task(cfg, key))
     return jsonify({"success": True})
+
+
+@app.route("/api/sync/tasks/<key>/subs/<int:sub_id>", methods=["DELETE"])
+def api_sync_tasks_del_member(key, sub_id):
+    """从任务里移出一个订阅；移出最后一个时任务本身也没了。"""
+    cfg = sync_tasks.load()
+    t = sync_tasks.remove_member(cfg, key, sub_id)
+    _save_tasks(cfg)
+    return jsonify({"success": True, "empty": t is None,
+                    "count": len(t["sub_ids"]) if t else 0})
 
 
 @app.route("/api/sync/tasks/settings", methods=["POST"])
@@ -3042,34 +3110,39 @@ def api_sync_tasks_settings():
             return jsonify({"error": "执行时刻要写成 HH:MM"}), 400
         cfg["run_at"] = t
     if cfg.get("enabled") and not cfg.get("tasks"):
-        return jsonify({"error": "先加至少一条订阅，再打开总开关"}), 400
+        return jsonify({"error": "先建至少一个任务，再打开总开关"}), 400
     _save_tasks(cfg)
     return jsonify({"success": True, "enabled": cfg["enabled"], "run_at": cfg["run_at"]})
 
 
 @app.route("/api/sync/tasks/run", methods=["POST"])
 def api_sync_tasks_run():
-    """立刻按自动任务的配置跑一轮（用来验证配置对不对，不用等明天）。"""
+    """立刻跑一轮验证配置对不对，不用等明天。key＝只跑某个任务，all＝全跑，都不给＝跑到期的。"""
     data = request.get_json(force=True, silent=True) or {}
     cfg = sync_tasks.load()
     if not cfg.get("tasks"):
         return jsonify({"error": "还没有自动同步任务"}), 400
-    if data.get("sub_id"):
-        ids = [int(data["sub_id"])]
+    alive = {s["id"] for s in _alive_subs()}
+    if data.get("key"):
+        t = sync_tasks.get_task(cfg, str(data.get("key")))
+        if not t:
+            return jsonify({"error": "任务不存在（可能刚被删掉）"}), 404
+        targets = [t]
     elif data.get("all"):
-        ids = [t["sub_id"] for t in cfg["tasks"]]
+        targets = list(cfg.get("tasks") or [])
     else:
-        with _db_lock:
-            subs = content_store.list_subscriptions(DB_PATH)
-        ids = sync_tasks.due_task_ids(cfg, datetime.now(), {s["id"] for s in subs})
+        targets = sync_tasks.due_tasks(cfg, datetime.now(), alive)
+    ids: list = []
+    for t in targets:
+        for sid in sync_tasks.live_members(t, alive):
+            if sid not in ids:
+                ids.append(sid)
     if not ids:
-        return jsonify({"error": "现在没有到期的任务（用「全部跑一遍」可强制跑）"}), 400
-    if _sub_status.get("running"):
-        return jsonify({"error": "订阅同步进行中，请稍候"}), 409
+        return jsonify({"error": "现在没有到期的任务（点「全部跑一遍」可强制跑）"}), 400
     if not _claim_sync():
         return jsonify({"error": "订阅同步进行中，请稍候"}), 409
-    _run_sync_batch(ids, "手动触发自动任务")
-    return jsonify({"success": True, "ids": ids})
+    _run_sync_batch(ids, [t["key"] for t in targets], "手动触发自动任务")
+    return jsonify({"success": True, "ids": ids, "tasks": len(targets)})
 
 
 

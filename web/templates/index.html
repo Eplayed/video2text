@@ -158,13 +158,27 @@ textarea{resize:vertical;min-height:84px}
 .as-sw{display:flex;align-items:center;gap:6px;font-size:12px;font-weight:700;color:var(--text-secondary);cursor:pointer}
 .as-sw input{width:15px;height:15px;margin:0}
 .as-note{font-size:11.5px;color:var(--text-tertiary);align-self:center;flex:1;min-width:120px}
-.as-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:9px 11px;margin-top:6px;
-  border:1px solid var(--border);border-radius:9px;background:var(--surface-nested);font-size:12px}
-.as-row.due{border-color:var(--module-2);background:color-mix(in srgb,var(--module-2) 7%,var(--surface-nested))}
-.as-row .as-name{flex:1 1 130px;min-width:0;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.as-row .as-c{flex:0 0 auto;color:var(--text-secondary)}
-.as-row select.as-c{width:auto;padding:4px 6px;font-size:12px}
-.as-row .as-c b{color:var(--text)}
+.as-task{border:1px solid var(--border);border-radius:9px;background:var(--surface-nested);margin-top:7px}
+.as-task.due{border-color:var(--module-2);background:color-mix(in srgb,var(--module-2) 7%,var(--surface-nested))}
+.as-task-top{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:9px 11px;font-size:12px}
+.as-task .as-name{flex:0 1 auto;min-width:90px;max-width:220px;font-size:13px;font-weight:800;cursor:pointer;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.as-task .as-name:hover{color:var(--module-5);text-decoration:underline}
+.as-task .as-c{flex:0 0 auto;color:var(--text-secondary)}
+.as-task select.as-c{width:auto;padding:4px 6px;font-size:12px}
+.as-task .as-c b{color:var(--text)}
+.as-toggle{cursor:pointer;font-weight:700}
+.as-toggle:hover{color:var(--module-5)}
+.as-act{cursor:pointer;font-weight:700;color:var(--module-5)}
+.as-act:hover{text-decoration:underline}
+.as-x{cursor:pointer;color:var(--text-tertiary);padding:0 3px;font-weight:700}
+.as-x:hover{color:var(--danger)}
+.as-idle{color:var(--text-tertiary)}
+.as-due{font-style:normal;font-weight:800;color:var(--module-2)}
+.as-mems{border-top:1px dashed var(--border);padding:6px 11px 9px 11px;background:var(--surface-card);border-radius:0 0 9px 9px}
+.as-mem{display:flex;gap:9px;align-items:center;padding:4px 0;font-size:12px}
+.as-mem .as-mem-n{flex:0 1 auto;min-width:0;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.as-mem .as-mem-s{flex:1;min-width:0;color:var(--text-tertiary);font-size:11.5px}
 .as-ok{color:#07c160;font-weight:700}
 .as-fail{color:var(--danger);font-weight:700}
 .as-off{opacity:.55}
@@ -778,7 +792,7 @@ textarea{resize:vertical;min-height:84px}
           <label class="as-sw"><input type="checkbox" id="as-enabled" onchange="asSetEnabled(this.checked)">开总开关</label>
           <button class="btn ghost sm" onclick="asRun(true)">全部跑一遍</button>
         </h3>
-        <div class="p-sub">勾上订阅、定个频率，到点自己拉新内容，不用每天人过去点。定时器跑在工作台进程里：<b>工作台没开的那段时间不会跑</b>，下次打开若已过点会补一轮。抖音那条会起浏览器抓主页并做本地转写，跑起来电脑会占一会儿 CPU；微信那条只是拉一次 RSS，很轻。</div>
+        <div class="p-sub">一个任务＝一组订阅＋一个频率：勾一批号点「选择订阅」建一个任务，到点整组一起跑。列表里「该跑了」不是出错，是这条已经到设定时间、等开总开关或等下一分钟触发。定时器跑在工作台进程里：<b>工作台没开的那段时间不会跑</b>，下次打开若已过点会补一轮。抖音那条会起浏览器抓主页并做本地转写，跑起来电脑会占一会儿 CPU；微信那条只是拉一次 RSS，很轻。</div>
         <div class="as-bar">
           <label>每天执行时刻<input type="time" id="as-runat" value="09:30" onchange="asSetRunAt(this.value)"></label>
           <label>添加订阅<button type="button" class="btn ghost as-pick-btn" id="as-cand-btn" onclick="asOpenPicker()">选择订阅 ▾</button></label>
@@ -796,7 +810,7 @@ textarea{resize:vertical;min-height:84px}
           </div>
           <div class="as-pick-body" id="as-pick-body"></div>
           <div class="as-pick-foot"><span class="as-pick-n" id="as-pick-n"></span>
-            <button class="btn sm pk-go" onclick="asAdd()">加入自动任务</button>
+            <button class="btn sm pk-go" id="as-pick-go" onclick="asAdd()">加入自动任务</button>
             <button class="btn ghost sm" onclick="asClosePicker()">收起</button></div>
         </div>
         <div id="as-list" style="margin-top:10px"></div>
@@ -1878,9 +1892,11 @@ async function loadSummaries() {
 }
 
 // ── 自动同步任务 ──
-// 配置落在 config/sync_tasks.json，"该不该跑"的判断全在后端；这一层只负责让人看得见：
-// 每条任务的上次自动执行时间、成败、那轮新增几条、下次几点轮到自己。
-let _asData = null;
+// 一个任务 = 一组订阅 + 一个频率 + 一份执行账：勾 6 个号是"一个活儿"，不是 6 个任务。
+// 配置与到期判断都在后端（config/sync_tasks.json + src/sync_tasks.py），这一层只管看和改。
+let _asData = null, _asCands = [], _asPicked = new Set(), _asPickPlat = 'all';
+let _asTarget = null;              // null＝新建任务，非空＝把勾选加进这个已有任务
+let _asOpenKeys = {};              // 哪个任务的订阅名单是展开的
 
 async function asPost(url, body, method) {
   let r;
@@ -1903,22 +1919,37 @@ async function loadAutoSync() {
 }
 
 function asFreqOptions(n) {
-  return [1,2,3,7].map(v => `<option value="${v}"${v===n?' selected':''}>${
-    v===1?'每天':(v===7?'每周':'每 '+v+' 天')}</option>`).join('');
+  return [1,2,3,7].map(v => `<option value="${v}"${v===n?' selected':''}>${asFreqLabel(v)}</option>`).join('');
+}
+function asFreqLabel(n) { return n === 1 ? '每天' : (n === 7 ? '每周' : '每 ' + n + ' 天'); }
+
+function asMemberHtml(key, m) {
+  return `<div class="as-mem" title="${escAttr(m.sync_note || '')}">
+    <span class="pill ${m.platform === 'wechat' ? 'wx' : 'tt'}">${m.platform === 'wechat' ? '微信' : '抖音'}</span>
+    <span class="as-mem-n">${esc(m.author)}</span>
+    <span class="as-mem-s">上次同步 ${esc((m.synced_at || '—').slice(5, 16))} · 新增 ${m.new_count == null ? '—' : m.new_count} 条</span>
+    <span class="as-x" title="把这个号移出任务（订阅本身不动）" onclick="asDelMember('${escAttr(key)}', ${m.id})">✕</span>
+  </div>`;
 }
 
-function asRowHtml(t) {
-  const st = t.task_status === 'ok' ? '<span class="as-ok">已跑</span>'
-    : (t.task_status === 'fail' ? '<span class="as-fail">失败</span>'
-       : '<span style="color:var(--text-tertiary)">还没跑过</span>');
-  return `<div class="as-row${t.due_now ? ' due' : ''}" title="${esc(t.sync_note || t.task_note || '')}">
-    <span class="as-name">${esc(t.author)}</span>
-    <span class="pill ${t.platform === 'wechat' ? 'wx' : 'tt'}">${t.platform === 'wechat' ? '微信' : '抖音'}</span>
-    <select class="as-c" style="padding:3px 6px" onchange="asSetInterval(${t.sub_id}, this.value)">${asFreqOptions(t.interval_days)}</select>
-    <span class="as-c">上次自动 ${esc((t.task_last_run || '—').slice(5, 16))} ${st}</span>
-    <span class="as-c">上次同步 ${esc((t.synced_at || '—').slice(5, 16))} · 新增 <b>${t.new_count == null ? '—' : t.new_count}</b> 条</span>
-    <span class="as-c">下次 <b>${esc((t.next_due || '—').slice(5, 16))}</b>${t.due_now ? ' · 已到期' : ''}</span>
-    <span class="as-c" style="cursor:pointer" title="移出自动任务（订阅本身不动）" onclick="asRemove(${t.sub_id})">✕</span>
+function asTaskHtml(t) {
+  const st = t.last_status === 'ok' ? '<span class="as-ok">跑成功</span>'
+    : (t.last_status === 'fail' ? '<span class="as-fail">跑失败</span>' : '<span class="as-idle">还没跑过</span>');
+  const open = !!_asOpenKeys[t.key];
+  const names = t.members.map(m => m.author).join('、');
+  return `<div class="as-task${t.due_now ? ' due' : ''}">
+    <div class="as-task-top">
+      <b class="as-name" title="点一下改名" onclick="asRename('${escAttr(t.key)}')">${esc(t.name)}</b>
+      <span class="as-c as-toggle" title="${escAttr(names)}" onclick="asToggleMembers('${escAttr(t.key)}')">
+        ${t.count} 个订阅 ${open ? '▾' : '▸'}</span>
+      <select class="as-c" title="改这个任务的频率" onchange="asSetInterval('${escAttr(t.key)}', this.value)">${asFreqOptions(t.interval_days)}</select>
+      <span class="as-c">上次 ${esc((t.last_run || '—').slice(5, 16))} ${st}</span>
+      <span class="as-c">下次 <b>${esc((t.next_due || '—').slice(5, 16))}</b>${t.due_now ? ' <em class="as-due">该跑了</em>' : ''}</span>
+      <span class="as-c as-act" onclick="asRunOne('${escAttr(t.key)}')" title="现在就用这个任务跑一轮，不用等明天">立刻跑</span>
+      <span class="as-c as-act" onclick="asOpenPicker('${escAttr(t.key)}')" title="往这个任务里补订阅">加订阅</span>
+      <span class="as-x" title="删除这个任务（订阅本身不动）" onclick="asDelTask('${escAttr(t.key)}')">✕</span>
+    </div>
+    ${open ? '<div class="as-mems">' + t.members.map(m => asMemberHtml(t.key, m)).join('') + '</div>' : ''}
   </div>`;
 }
 
@@ -1930,7 +1961,7 @@ function renderAutoSync(d) {
   const tasks = d.tasks || [];
   const cnt = document.getElementById('as-count');
   if (cnt) {
-    cnt.textContent = (d.enabled ? '已开 · ' : '未开 · ') + tasks.length + ' 条'
+    cnt.textContent = (d.enabled ? '已开 · ' : '未开 · ') + tasks.length + ' 个任务'
       + (d.enabled && tasks.length && tasks[0].next_due ? ' · 下次 ' + tasks[0].next_due.slice(5, 16) : '');
     cnt.style.color = d.enabled ? 'var(--module-2)' : '';
   }
@@ -1943,8 +1974,8 @@ function renderAutoSync(d) {
   }
   const list = document.getElementById('as-list');
   if (list) {
-    list.innerHTML = tasks.length ? tasks.map(asRowHtml).join('')
-      : '<div style="font-size:12px;color:var(--text-tertiary);padding:10px 2px">还没有自动任务：上面选一条订阅、定个频率，点「加入自动任务」。</div>';
+    list.innerHTML = tasks.length ? tasks.map(asTaskHtml).join('')
+      : '<div style="font-size:12px;color:var(--text-tertiary);padding:10px 2px">还没有自动任务：点「选择订阅」勾一批号、选一档频率，就建成一个任务。</div>';
   }
   const note = document.getElementById('as-note');
   if (note) {
@@ -1955,10 +1986,12 @@ function renderAutoSync(d) {
   }
 }
 
-// 订阅多选：35 个订阅一条条点不现实，勾一批 + 选一档频率一次加进去。
-// 面板里带搜索与"本页全选"，为的就是"微信那几条全要、抖音先不动"这种挑法。
-let _asCands = [], _asPicked = new Set(), _asPickPlat = 'all';
+function asToggleMembers(key) {
+  _asOpenKeys[key] = !_asOpenKeys[key];
+  if (_asData) renderAutoSync(_asData);
+}
 
+// ── 订阅多选：勾一批一次建成一个任务 ──
 function asCandLabel() {
   const btn = document.getElementById('as-cand-btn');
   if (!btn) return;
@@ -1997,30 +2030,43 @@ function asPickRender() {
   [['wechat', '微信'], ['douyin', '抖音']].forEach(g => {
     const items = vis.filter(s => (s.platform === 'wechat' ? 'wechat' : 'douyin') === g[0]);
     if (!items.length) return;
-    // 按来源分组、组内多列：35 条订阅摊成两列一眼扫得完，挤在一列里就得滚半天
+    // 按来源分组、组内多列：35 条订阅摊成几列一眼扫得完，挤在一列里就得滚半天
     html += `<div class="as-pick-grp">${g[1]} · ${items.length} 条</div>`
           + '<div class="as-pick-grid">' + items.map(asPickRow).join('') + '</div>';
   });
   body.innerHTML = html || '<div class="as-pick-empty">没有匹配的订阅</div>';
   const n = document.getElementById('as-pick-n');
-  if (n) n.textContent = '已选 ' + _asPicked.size + ' 条 · 频率用上面那档';
+  if (n) {
+    const tgt = _asTarget ? (_asData && (_asData.tasks.find(x => x.key === _asTarget) || {}).name) || _asTarget : '';
+    n.textContent = '已选 ' + _asPicked.size + ' 条 · ' + (_asTarget ? ('加进任务「' + tgt + '」') : '建成一个新任务');
+  }
+  const go = document.getElementById('as-pick-go');
+  if (go) go.textContent = _asTarget ? '加进这个任务' : '建成自动任务';
   asCandLabel();
 }
 
-function asOpenPicker() {
+function asOpenPicker(key) {
   const box = document.getElementById('as-pick');
   if (!box) return;
-  if (box.style.display !== 'none') { asClosePicker(); return; }   // 再点一次就是收起
-  if (!_asCands.length) { setStatus('error', '订阅都已经在自动任务里了'); return; }
+  if (!_asCands.length && !key) { setStatus('error', '订阅都已经在自动任务里了'); return; }
+  _asTarget = (typeof key === 'string' && key) ? key : null;
+  // 同一个入口再点一次＝收起；从别的任务的「加订阅」过来＝换目标，不算收起
+  const same = (box.dataset.target || '') === (_asTarget || '');
+  if (box.style.display !== 'none' && same) { asClosePicker(); return; }
+  box.dataset.target = _asTarget || '';
   box.style.display = '';
   asPickRender();
   const q = document.getElementById('as-pick-q');
   if (q) q.focus();
+  if (_asTarget) box.scrollIntoView({block:'nearest'});
 }
 
 function asClosePicker() {
   const box = document.getElementById('as-pick');
   if (box) box.style.display = 'none';
+  _asPicked.clear();
+  _asTarget = null;
+  asCandLabel();
 }
 
 function asPickToggle(id, on) {
@@ -2035,39 +2081,71 @@ function asPickAll(on) {
   asPickRender();
 }
 
+// 任务名自动起：全微信就叫「微信 N 个号」，混着选就叫「N 个订阅」，不满意点名字改
+function asAutoName(ids) {
+  const picked = _asCands.filter(s => ids.indexOf(s.id) >= 0);
+  const wx = picked.filter(s => s.platform === 'wechat').length;
+  if (wx === picked.length && wx) return '微信 ' + wx + ' 个号';
+  if (wx === 0 && picked.length) return '抖音 ' + picked.length + ' 个号';
+  return picked.length + ' 个订阅';
+}
+
 async function asAdd() {
   const ids = [..._asPicked];
   if (!ids.length) { setStatus('error', '先勾选至少一条订阅'); return; }
   const days = parseInt(document.getElementById('as-interval').value, 10) || 1;
-  const r = await asPost('/api/sync/tasks', {sub_ids: ids, interval_days: days});
+  let r;
+  if (_asTarget) {
+    r = await asPost('/api/sync/tasks/' + encodeURIComponent(_asTarget) + '/add', {sub_ids: ids});
+  } else {
+    r = await asPost('/api/sync/tasks', {sub_ids: ids, interval_days: days, name: asAutoName(ids)});
+  }
   if (!r) return;
-  _asPicked.clear();
+  const tail = r.missing ? '，' + r.missing.length + ' 条订阅已不存在被跳过' : '';
+  setStatus('done', _asTarget ? ('已加进这个任务，现在共 ' + r.count + ' 个订阅' + tail)
+    : ('已建好任务「' + r.name + '」，' + r.count + ' 个订阅 · ' + asFreqLabel(days)
+       + '（已过执行时刻的话一分钟内就会跑第一轮）' + tail));
   asClosePicker();
-  setStatus('done', '已加入自动任务 ' + (r.added || 0) + ' 条'
-    + (r.updated ? '、改频率 ' + r.updated + ' 条' : '') + '（'
-    + (days === 1 ? '每天' : days === 7 ? '每周' : '每 ' + days + ' 天')
-    + '；已过执行时刻的话一分钟内就会跑第一轮）'
-    + (r.missing ? '，' + r.missing.length + ' 条订阅已不存在被跳过' : ''));
   loadSubscriptions();
   loadAutoSync();
 }
 
-async function asRemove(id) {
-  if (!confirm('把这条订阅移出自动任务？（订阅本身不动，手动同步照旧）')) return;
-  const r = await asPost('/api/sync/tasks/' + id, {}, 'DELETE');
+async function asRename(key) {
+  const t = ((_asData && _asData.tasks) || []).find(x => x.key === key);
+  const name = prompt('给这个任务起个名字（最多 20 字，之后在列表里一眼认出是哪批号）',
+                      t ? t.name : '');
+  if (name === null) return;
+  if (await asPost('/api/sync/tasks/' + encodeURIComponent(key), {name: name.trim()})) loadAutoSync();
+}
+
+async function asSetInterval(key, v) {
+  if (await asPost('/api/sync/tasks/' + encodeURIComponent(key), {interval_days: parseInt(v, 10) || 1})) {
+    loadAutoSync();
+    setStatus('done', '频率已改成' + asFreqLabel(parseInt(v, 10) || 1));
+  }
+}
+
+async function asDelTask(key) {
+  const t = ((_asData && _asData.tasks) || []).find(x => x.key === key);
+  if (!confirm('删除这个自动任务？' + (t ? ('（' + t.count + ' 个订阅只是不再自动同步，订阅本身还在）') : ''))) return;
+  if (await asPost('/api/sync/tasks/' + encodeURIComponent(key), {}, 'DELETE')) {
+    setStatus('done', '任务已删除，订阅还在「我的订阅」里');
+    loadAutoSync();
+  }
+}
+
+async function asDelMember(key, subId) {
+  const r = await asPost('/api/sync/tasks/' + encodeURIComponent(key) + '/subs/' + subId, {}, 'DELETE');
   if (!r) return;
+  setStatus('done', r.empty ? '这个任务的订阅都移完了，任务已一并删掉' : '已把这个号移出任务');
   loadSubscriptions();
   loadAutoSync();
-}
-
-async function asSetInterval(id, v) {
-  if (await asPost('/api/sync/tasks', {sub_id: id, interval_days: parseInt(v, 10) || 1})) loadAutoSync();
 }
 
 async function asSetEnabled(on) {
-  // 先按用户点的样子亮着，接口拒了（比如一条任务都没加）再刷回真实状态
+  // 先按用户点的样子亮着，接口拒了（比如一个任务都没建）再刷回真实状态
   const r = await asPost('/api/sync/tasks/settings', {enabled: on});
-  setStatus(r ? 'done' : 'error', r ? (on ? '自动同步已开启，到点自己跑' : '自动同步已关闭') : '');
+  if (r) setStatus('done', on ? '自动同步已开启，到点自己跑' : '自动同步已关闭');
   loadAutoSync();
 }
 
@@ -2079,7 +2157,15 @@ async function asSetRunAt(v) {
 async function asRun(all) {
   const r = await asPost('/api/sync/tasks/run', all ? {all: true} : {});
   if (!r) return;
-  setStatus('running', '已提交自动同步（' + (r.ids || []).length + ' 条订阅），进度看下方同步状态');
+  setStatus('running', '已提交自动同步（' + (r.tasks || 0) + ' 个任务 / ' + (r.ids || []).length + ' 个订阅），进度看下方同步状态');
+  startSubPolling();
+  setTimeout(loadAutoSync, 1500);
+}
+
+async function asRunOne(key) {
+  const r = await asPost('/api/sync/tasks/run', {key: key});
+  if (!r) return;
+  setStatus('running', '已提交这个任务的同步（' + (r.ids || []).length + ' 个订阅），进度看下方同步状态');
   startSubPolling();
   setTimeout(loadAutoSync, 1500);
 }
