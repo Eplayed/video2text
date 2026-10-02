@@ -1680,15 +1680,24 @@ def api_wechat_delete(summary_id):
 # ── AI 海报：整理稿 → 出图模型直接画整张海报（含中文文字），出图后 OCR 回读逐字校验 ──
 # 与上面两条 HTML 模板产线互不相干：这里不渲染网页，文字是画进像素的。
 _poster_status = {"running": False, "done": True, "progress": "", "error": "",
-                  "stage": "", "package": None, "plan": None}
+                  "stage": "", "package": None, "plan": None,
+                  # 海报任务是全局单例，但界面上可以同时开两条整理稿的弹窗：不带归属的
+                  # 状态会被后一个任务覆盖，前一个弹窗轮询到的就是别人的结果（表现为
+                  # "我给 A 出图，页面上贴出来 B 的图"）。task_id 每次提交自增，
+                  # summary_id 记这条任务属于哪张整理稿，两者一起下发让前端能拒收。
+                  "summary_id": 0, "task_id": 0}
+_poster_task_seq = 0
 
 
-def _poster_start(stage, fn):
+def _poster_start(stage, fn, summary_id=0):
     """海报任务统一壳。拆解与出图都是几十秒到几分钟的活，必须后台跑 + 前端轮询。"""
+    global _poster_task_seq
     if _poster_status["running"]:
-        return False
+        return 0
+    _poster_task_seq += 1
     _poster_status.update({"running": True, "done": False, "progress": "任务排队中...", "error": "",
-                           "stage": stage,
+                           "stage": stage, "task_id": _poster_task_seq,
+                           "summary_id": int(summary_id or 0),
                            "package": None if stage == "plan" else _poster_status["package"],
                            "plan": None if stage == "poster" else _poster_status["plan"]})
 
@@ -1706,7 +1715,7 @@ def _poster_start(stage, fn):
             _poster_status["running"] = False
 
     threading.Thread(target=wrapper, daemon=True).start()
-    return True
+    return _poster_task_seq
 
 
 def _poster_get_summary(summary_id):
@@ -1751,9 +1760,10 @@ def api_poster_plan():
                                       + ("；自动压缩：" + "、".join(notes) if notes else "")
                                       + ("，⚠️ " + "；".join(bad) if bad else ""))
 
-    if not _poster_start("plan", fn):
+    if not _poster_start("plan", fn, summary["id"]):
         return jsonify({"error": "已有海报任务正在运行"}), 400
-    return jsonify({"status": "started", "summary_id": summary["id"]})
+    return jsonify({"status": "started", "summary_id": summary["id"],
+                    "task_id": _poster_status["task_id"]})
 
 
 @app.route("/api/poster/generate", methods=["POST"])
@@ -1807,9 +1817,10 @@ def api_poster_generate():
                 manifest["text_chars"], score,
                 "" if v.get("ok") else "，⚠️ 图面文字校验未通过，发布前人眼复核")
 
-    if not _poster_start("poster", fn):
+    if not _poster_start("poster", fn, summary["id"]):
         return jsonify({"error": "已有海报任务正在运行"}), 400
-    return jsonify({"status": "started", "summary_id": summary["id"]})
+    return jsonify({"status": "started", "summary_id": summary["id"],
+                    "task_id": _poster_status["task_id"]})
 
 
 @app.route("/api/poster/preview", methods=["POST"])
@@ -1876,11 +1887,22 @@ def api_poster_styles():
 @app.route("/api/poster/list")
 def api_poster_list():
     try:
-        items = [{"id": i.get("id"), "title": i.get("title"), "url": i.get("url"),
-                  "chars": i.get("text_chars"), "ratio": i.get("ratio"),
-                  "verify_ok": (i.get("verify") or {}).get("ok"),
-                  "created_at": i.get("created_at")}
-                 for i in ai_poster.list_packages()]
+        items = []
+        for i in ai_poster.list_packages():
+            rv = i.get("review") or {}
+            items.append({"id": i.get("id"), "summary_id": i.get("summary_id") or i.get("id"),
+                          "title": i.get("title"), "url": i.get("url"),
+                          "chars": i.get("text_chars"), "ratio": i.get("ratio"),
+                          "source_title": i.get("source_title") or "",
+                          "style_label": i.get("style_label") or "",
+                          "text_mode": i.get("text_mode") or "model",
+                          "base_reused": bool(i.get("base_reused")),
+                          "cost": i.get("cost_yuan_estimate"),
+                          "copies": i.get("copies") or 1,
+                          "verify_ok": (i.get("verify") or {}).get("ok"),
+                          "review_score": rv.get("score"), "review_full": rv.get("full"),
+                          "review_ok": rv.get("ok"),
+                          "created_at": i.get("created_at")})
         return jsonify({"items": items, "total": len(items)})
     except Exception as e:
         return jsonify({"error": str(e), "items": [], "total": 0}), 500

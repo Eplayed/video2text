@@ -418,6 +418,31 @@ textarea{resize:vertical;min-height:84px}
 .pk-rv-i.hi{color:#07c160;border-color:color-mix(in srgb,#07c160 35%,transparent)}
 .pk-rv-i.lo{color:var(--danger);border-color:color-mix(in srgb,var(--danger) 35%,transparent)}
 .pk-rv-s{font-size:13px;font-weight:800}
+/* 文案对照：拆解出的字要跟整理稿原文并排看，才看得出哪句是模型自己加的 */
+.pk-src{font-size:12px;line-height:1.9;color:var(--text-secondary);background:var(--surface-nested);border:1px solid var(--border);border-radius:8px;padding:11px 13px;margin:6px 0 0;max-height:300px;overflow:auto;white-space:pre-wrap;word-break:break-word}
+.pk-src mark{background:color-mix(in srgb,var(--module-5) 28%,transparent);color:var(--text);border-radius:3px;padding:0 2px;font-weight:700}
+.pk-diff{font-size:12px;line-height:1.75;margin:8px 0 0}
+.pk-diff .hit{color:#07c160;font-weight:700}
+.pk-diff .miss{color:var(--danger);font-weight:700}
+/* 海报成品页：卡片是竖图，网格比正文卡窄 */
+.pk-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(186px,1fr));gap:14px;align-content:start;min-height:200px}
+.pk-card{position:relative;background:var(--surface-card);border:1px solid var(--border);border-radius:var(--radius-card);overflow:hidden;cursor:pointer;transition:border .12s,transform .12s}
+.pk-card:hover{border-color:var(--module-5);transform:translateY(-1px)}
+.pk-card img{display:block;width:100%;aspect-ratio:9/16;object-fit:cover;background:var(--surface-nested)}
+.pk-card .pk-cb{padding:10px 11px 12px}
+.pk-card .pk-ct{font-size:13px;font-weight:700;line-height:1.45;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.pk-card .pk-cs{font-size:11px;color:var(--text-tertiary);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pk-card .pk-cm{display:flex;flex-wrap:wrap;gap:5px;margin-top:7px;font-size:10.5px;color:var(--text-tertiary)}
+.pk-card .pk-cm span{background:var(--surface-nested);border:1px solid var(--border);border-radius:5px;padding:1px 6px}
+.pk-card .pk-cm .ok{color:#07c160;border-color:color-mix(in srgb,#07c160 30%,transparent)}
+.pk-card .pk-cm .no{color:var(--danger);border-color:color-mix(in srgb,var(--danger) 30%,transparent)}
+.pk-del{position:absolute;top:8px;right:8px;width:22px;height:22px;border-radius:6px;display:grid;place-items:center;background:rgba(35,34,32,.72);color:#fff;opacity:0;transition:opacity .12s}
+.pk-card:hover .pk-del{opacity:1}
+.pk-del:hover{background:var(--danger)}
+.pk-layout{display:flex;gap:18px;align-items:flex-start;flex-wrap:wrap;margin-top:16px}
+.pk-left{flex:1 1 330px;min-width:280px;max-width:430px;position:sticky;top:16px}
+.pk-right{flex:2 1 380px;min-width:0}
+.pk-big{display:block;width:100%;border-radius:12px;border:1px solid var(--border);cursor:zoom-in}
 /* 三步操作卡：可折叠，收起状态记在 localStorage，学会之后不必一直占地方 */
 .pk-guide{font-size:12px;line-height:1.85;color:var(--text-secondary);background:var(--surface-nested);border:1px solid var(--border);border-radius:8px;padding:0 0 2px;margin-bottom:12px}
 .pk-guide>summary{cursor:pointer;font-size:12.5px;font-weight:800;color:var(--module-5);padding:9px 12px;list-style:none;user-select:none}
@@ -502,6 +527,7 @@ textarea{resize:vertical;min-height:84px}
       <div class="navi" id="nav-summaries" onclick="switchPage('summaries')"><span class="nav-ic" data-icon="book"></span>整理稿</div>
       <div class="navi" id="nav-toutiao" onclick="switchPage('toutiao')"><span class="nav-ic" data-icon="flame"></span>头条图文</div>
       <div class="navi" id="nav-wechat" onclick="switchPage('wechat')"><span class="nav-ic" data-icon="edit"></span>公众号图文</div>
+      <div class="navi" id="nav-poster" onclick="switchPage('poster')"><span class="nav-ic" data-icon="image"></span>AI 海报<span class="cnt" id="nav-poster-cnt" style="display:none">0</span></div>
       <div class="navi" id="nav-questions" onclick="switchPage('questions')"><span class="nav-ic" data-icon="target"></span>面试题库</div>
       <div class="nav-sep">设置</div>
       <div class="navi" id="nav-settings" onclick="switchPage('settings')"><span class="nav-ic" data-icon="settings"></span>AI 设置</div>
@@ -986,6 +1012,57 @@ textarea{resize:vertical;min-height:84px}
       </div>
     </section>
 
+    <!-- ── AI 海报成品 ── -->
+    <section id="page-poster">
+      <!-- 列表视图 -->
+      <div id="pk-list-view">
+        <div class="header">
+          <h2>AI 海报</h2>
+          <div class="spacer"></div>
+          <span class="count" id="count-poster">0 张</span>
+        </div>
+        <p style="font-size:12px;color:var(--text-tertiary);margin:0 0 12px">链路：整理稿点「🎨 AI 海报」→ ① 拆文案（对照原文改字）→ ② 看版面（免费）→ ③ 出图（0.5 元/张，复用模板底图 0 元）→ 这里回看成品、复制发布文案。发布动作保持<b>手动</b>，不走任何自动发布通道。</p>
+        <div class="pk-grid" id="grid-poster">
+          <div class="empty"><span class="e" data-icon="image"></span>加载中...</div>
+        </div>
+      </div>
+      <!-- 详情视图：左图右文 -->
+      <div id="pk-detail-view" style="display:none">
+        <div class="header">
+          <h2 id="pk-detail-title">海报</h2>
+          <div class="spacer"></div>
+          <button class="btn ghost sm" id="pk-detail-edit">🎨 改文案 / 重出</button>
+          <button class="btn ghost sm" onclick="showPosterList()">← 返回列表</button>
+        </div>
+        <div class="pk-layout">
+          <div class="pk-left">
+            <div class="panel" style="margin-top:0;padding:14px">
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">
+                <b style="font-size:13.5px" id="pk-detail-img-label">成品图</b>
+                <div style="flex:1"></div>
+                <button class="btn ghost sm" id="pk-detail-reveal">📁 打开文件夹</button>
+              </div>
+              <div id="pk-img-stack"></div>
+            </div>
+          </div>
+          <div class="pk-right">
+            <div class="panel" style="margin-top:0">
+              <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+                <b style="font-size:14.5px">📝 发布文案</b>
+                <div style="flex:1"></div>
+                <button class="btn sm" id="pk-detail-copy">📋 复制发布文案</button>
+                <button class="btn ghost sm" id="pk-detail-prompt">复制出图提示词</button>
+              </div>
+              <div id="pk-detail-meta"></div>
+              <pre class="pk-pub" id="pk-detail-pub" style="max-height:420px"></pre>
+              <div style="font-size:13px;font-weight:800;margin:16px 0 8px">✅ 发布前逐条人工过</div>
+              <ul class="pk-ck" id="pk-detail-ck"></ul>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <!-- 头条图文生成配置弹窗 -->
     <div class="modal-overlay" id="tt-gen-overlay" onclick="closeToutiaoGenDialog(event)">
       <div class="modal-box" onclick="event.stopPropagation()">
@@ -1350,6 +1427,7 @@ const ICONS = {
   edit:'<path d="M17 3.5a2.1 2.1 0 0 1 3 3L8 18.5 4 19.5l1-4z"/>',
   calendar:'<rect x="4" y="5" width="16" height="16" rx="2.5"/><path d="M4 9.5h16"/><path d="M8 3v4"/><path d="M16 3v4"/>',
   film:'<rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M7 4v16M17 4v16M3 9h4M3 15h4M17 9h4M17 15h4"/>',
+  image:'<rect x="3" y="4.5" width="18" height="15" rx="2.5"/><circle cx="8.5" cy="10" r="1.6"/><path d="M3.6 17.5 9 12.4l3.4 3.2 3-2.6 4.8 4.5"/>',
   settings:'<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>',
 };
 function iconSvg(name, size=22){
@@ -1366,7 +1444,7 @@ document.getElementById('brand-ava').innerHTML = iconSvg('film', 22);
 // ── 全局状态 ──
 let POLLING = false;
 let currentView = 'dashboard';
-const PAGES = ['dashboard','collect','materials','radar','videos','summaries','toutiao','wechat','questions','settings'];
+const PAGES = ['dashboard','collect','materials','radar','videos','summaries','toutiao','wechat','poster','questions','settings'];
 let selectedVideos = new Set();
 let window_lastSelected = null;
 
@@ -1417,6 +1495,7 @@ async function loadCurrentView() {
   if (currentView === 'summaries') return loadSummaries();
   if (currentView === 'toutiao') return loadToutiaoList();
   if (currentView === 'wechat') return showWechatList();
+  if (currentView === 'poster') return showPosterList();
   if (currentView === 'settings') return loadAiConfig();
   return loadVideos();
 }
@@ -2019,6 +2098,7 @@ let _pkLast = null;
 function openPosterDialog(id) {
   _pkId = id;
   _pkLast = null;
+  _pkSource = null;          // 原文缓存按整理稿存，换一条必须重取
   document.getElementById('pk-id').textContent = id;
   document.getElementById('pk-plan').innerHTML = '';
   document.getElementById('pk-result').innerHTML = '';
@@ -2027,6 +2107,28 @@ function openPosterDialog(id) {
   pkGuideInit();
   loadPosterStyles();
   loadPosterTemplates();
+  pkHydrate(id);
+}
+// 重新打开同一条整理稿时，把后台那份结果原样端回来：不用为看一眼上次的文案再跑一次拆解。
+// 归属对不上就什么都不画——这一句和 pollPoster 里的 task_id 校验是同一件事的两半。
+async function pkHydrate(id) {
+  let st;
+  try { st = await fetch('/api/poster/status').then(r => r.json()); } catch (e) { return; }
+  if (_pkId !== id || st.running || st.summary_id !== id) return;
+  if (st.error) {
+    document.getElementById('pk-result').innerHTML = '<div class="pk-verify fail">✗ 上一次任务失败：'
+      + esc(String(st.error).split('\n')[0]) + '</div>';
+    return;
+  }
+  if (st.plan && st.plan.plan) pkRenderPlan(st.plan.plan, st.plan.publish);
+  if (st.package && st.package.id === id) { renderPosterResult(id); return; }
+  if (st.plan && st.plan.plan) {
+    document.getElementById('pk-result').innerHTML = '<div class="pk-verify pass">✅ 这是上一次拆好的文案，改完直接点「③ 花钱出图」。'
+      + '下面的「对照整理稿原文」已经展开。</div>';
+    const d = document.getElementById('pk-srcpanel');
+    if (d) d.open = true;
+    pkLoadSource();
+  }
 }
 // 三步操作卡：默认展开，收过一次就记住——学会之后不必每次挡在动作条下面。
 // 每次开弹窗都按存的状态摆一次，否则同一页面里收起再开还是摊开的，记了个寂寞。
@@ -2151,7 +2253,9 @@ function pkRenderPlan(plan, publish) {
     + `<div class="pk-row"><span class="pk-tag">风格配方</span><div id="pk-style-text" class="pk-pub" style="margin:0;max-height:76px">${esc(pkStyleText())}</div></div>`
     + `<div class="pk-row" id="pk-style-free-row" style="display:${pkStyleKey() === 'auto' ? 'flex' : 'none'}">`
     + `<span class="pk-tag">自由风格</span><input id="pk-style" value="${esc(plan.style || '')}" maxlength="120" placeholder="仅「自由发挥」时生效：配色 / 材质 / 装饰一句话"></div>`
-    + '<div class="pk-count" id="pk-count"></div>';
+    + '<div class="pk-count" id="pk-count"></div>'
+    + '<details class="pk-guide" id="pk-srcpanel" style="margin:8px 0 10px">'
+    + '<summary>对照整理稿原文 · 看哪句被改写了</summary><div id="pk-srcbox"></div></details>';
   // 发布页文案：不进图，所以不占 80 字预算，但同样是 AI 起草、人可改
   html += '<div class="pk-sub">发布页文案（不进图，随包一起给你复制走）</div>'
     + `<div class="pk-row"><span class="pk-tag">配文</span><textarea id="pk-copy" class="pk-ta" placeholder="120-260 字：钩子开头 + 要点 3-5 条 + 收尾引导">${esc(publish.copy_text || '')}</textarea></div>`
@@ -2159,6 +2263,9 @@ function pkRenderPlan(plan, publish) {
     + `<div class="pk-row"><span class="pk-tag">关键词回复</span><input id="pk-kw" value="${esc(publish.keyword_reply || '')}" maxlength="30" placeholder="≤30 字，留空则不配"></div>`
     + `<div class="pk-row"><span class="pk-tag">来源说明</span><input id="pk-src" value="${esc(publish.source_note || '')}" maxlength="50" placeholder="≤50 字，含数据口径日期"></div>`;
   document.getElementById('pk-plan').innerHTML = html;
+  // 展开即取原文（details 原生开合，这里只挂一次加载）
+  const sd = document.getElementById('pk-srcpanel');
+  if (sd) sd.addEventListener('toggle', function () { if (sd.open) pkLoadSource(); });
   pkCount();
 }
 function pkReadPlan() {
@@ -2194,7 +2301,7 @@ async function posterPlan() {
   const r = await fetch('/api/poster/plan', {method: 'POST',
     headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)}).then(x => x.json());
   if (r.error) { setStatus('error', r.error); return; }
-  pollPoster('plan');
+  pollPoster('plan', r.task_id);
 }
 // 免费版面预览：占位底图 + 出图时同一个排版函数。
 // 换轨之后版面是代码算的、跟出图无关，所以折行/字号/卡片放不放得下都能在花钱前看到。
@@ -2243,17 +2350,30 @@ async function posterGenerate(force) {
   const r = await fetch('/api/poster/generate', {method: 'POST',
     headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)}).then(x => x.json());
   if (r.error) { setStatus('error', r.error); return; }
-  pollPoster('poster');
+  pollPoster('poster', r.task_id);
 }
-function pollPoster(stage) {
+function pollPoster(stage, task) {
+  const myId = _pkId;
   const box = document.getElementById('pk-result');
   box.innerHTML = '<div class="pk-verify mild">⏳ 任务已提交，等待中…</div>';
   const poll = async () => {
+    // 状态是后端一个全局单例，界面却允许同时开两条整理稿的弹窗：不校验归属，
+    // 给 A 出的图会贴到 B 的弹窗里（串过的那次就是这么来的）。先认素材，再认任务号。
+    if (_pkId !== myId) return;
     let st;
     try { st = await fetch('/api/poster/status').then(r => r.json()); }
     catch (e) { setTimeout(poll, 3000); return; }
+    if (task && st.task_id && st.task_id !== task) {
+      box.innerHTML = '<div class="pk-verify mild">这次任务的状态已经被后来的海报任务覆盖了（后台同时只跑一个任务）。'
+        + (stage === 'poster' ? '图已经落盘，去成品页看结果。' : '') + '</div>'
+        + (stage === 'poster' ? '<div class="pk-actions"><button class="btn ghost sm" onclick="gotoPosterPage('
+                               + myId + ')">去海报成品页</button></div>' : '');
+      return;
+    }
     if (st.running) {
-      box.innerHTML = `<div class="pk-verify mild">⏳ ${esc(st.progress || '处理中...')}</div>`;
+      box.innerHTML = `<div class="pk-verify mild">⏳ ${esc(st.progress || '处理中...')}</div>`
+        + '<div class="pk-hint" style="margin:8px 0 0">任务在后台跑，关掉这一页也不会中断；'
+        + (stage === 'poster' ? '出图约 20-60 秒（复用模板底图 10 秒内）' : '拆解约 10-30 秒') + '。</div>';
       setTimeout(poll, 2000); return;
     }
     if (st.error) {
@@ -2265,7 +2385,15 @@ function pollPoster(stage) {
       setStatus('error', '海报任务失败'); return;
     }
     setStatus('done', st.progress || '完成');
-    if (st.plan && st.plan.plan) pkRenderPlan(st.plan.plan, st.plan.publish);
+    if (st.plan && st.plan.plan) {
+      pkRenderPlan(st.plan.plan, st.plan.publish);
+      // 拆完就自动摊开原文对照：这一步的价值就是让人立刻看出哪句不是原文里的
+      if (stage === 'plan') {
+        const d = document.getElementById('pk-srcpanel');
+        if (d) d.open = true;
+        pkLoadSource();
+      }
+    }
     if (stage === 'poster' && st.package && st.package.id) { renderPosterResult(st.package.id); return; }
     const warn = (stage === 'plan' && st.plan && st.plan.draft_warning)
       ? `<div class="pk-verify mild">⚠️ ${esc(st.plan.draft_warning)}——文案照拆不误，但出图那一步会先拦你一次，复核后点「仍然出图」放行。</div>` : '';
@@ -2341,7 +2469,8 @@ async function renderPosterResult(id) {
     + '<button class="btn ghost sm" onclick="copyPosterPrompt()">复制出图提示词</button>'
     + '<button class="btn ghost sm" onclick="window.open(\'' + m.url + '\',\'_blank\')">看原图</button>'
     + '<button class="btn ghost sm" onclick="posterReveal(' + m.id + ')" title="在访达里定位这张图">📁 打开文件夹</button>'
-    + '<button class="btn ghost sm" onclick="posterSaveTemplate(' + m.id + ')" title="把这套画风+配色+版式收进「风格」下拉，以后直接选">★ 存为模板</button></div>';
+    + '<button class="btn ghost sm" onclick="posterSaveTemplate(' + m.id + ')" title="把这套画风+配色+版式收进「风格」下拉，以后直接选">★ 存为模板</button>'
+    + '<button class="btn ghost sm" onclick="gotoPosterPage(' + m.id + ')" title="成品页能回看、换图、复制文案，不必重出">→ 海报成品页</button></div>';
 }
 // 我的模板：把满意的成品收编成风格。带底图的那类之后换文案复用同一张底图，出图 0 元。
 async function loadPosterTemplates() {
@@ -2539,6 +2668,205 @@ function copyPosterPublish() {
 }
 function copyPosterPrompt() {
   if (_pkLast) copyText(_pkLast.prompt_text || '');
+}
+
+// ── 海报成品页 ──
+// 成品一直躺在 output/poster/<整理稿id>/ 里，但以前只有生成那一刻能在弹窗里看见，
+// 关掉就找不回来了（想复用一张文案、或发布当天再取一次文案都得重新出图花钱）。
+let _pkDetail = null;
+
+function showPosterList() {
+  document.getElementById('pk-list-view').style.display = '';
+  document.getElementById('pk-detail-view').style.display = 'none';
+  loadPosterList();
+}
+
+async function loadPosterList() {
+  const grid = document.getElementById('grid-poster');
+  let d;
+  try { d = await fetch('/api/poster/list').then(r => r.json()); }
+  catch (e) { grid.innerHTML = '<div class="empty">' + iconSvg('image') + '加载失败：' + esc(e.message) + '</div>'; return; }
+  const items = d.items || [];
+  document.getElementById('count-poster').textContent = (d.total || 0) + ' 张';
+  const cnt = document.getElementById('nav-poster-cnt');
+  if (cnt) { cnt.textContent = items.length; cnt.style.display = items.length ? '' : 'none'; }
+  if (!items.length) {
+    grid.innerHTML = '<div class="empty"><span class="e">' + iconSvg('image') + '</span>还没有海报'
+      + '<br><small>整理稿页点「🎨 AI 海报」→ ① 拆文案 → ② 看版面（免费）→ ③ 出图</small></div>';
+    return;
+  }
+  grid.innerHTML = items.map(p => {
+    const ts = p.text_mode !== 'model';
+    const word = ts ? '字由程序排' : (p.verify_ok === false ? '图面文字有出入' : '回读校验通过');
+    return `<div class="pk-card" onclick="openPosterDetail(${p.id})" title="#${p.summary_id} ${esc(p.source_title || '')}">
+      <div class="pk-del" title="删除这组海报" onclick="event.stopPropagation();deletePosterOne(${p.id})">${iconSvg('trash', 12)}</div>
+      <img src="${esc(p.url || '')}" alt="${esc(p.title || '')}" loading="lazy">
+      <div class="pk-cb">
+        <div class="pk-ct">${esc(p.title || '（无标题）')}</div>
+        <div class="pk-cs">#${p.summary_id} · ${esc(p.source_title || '')}</div>
+        <div class="pk-cm">
+          <span class="${ts && p.verify_ok !== false ? 'ok' : (p.verify_ok === false ? 'no' : '')}">${word}</span>
+          <span>${(p.chars || 0)} 字</span>
+          ${p.review_score ? '<span>好看度 ' + p.review_score + '/' + p.review_full + '</span>' : ''}
+          ${p.base_reused ? '<span class="ok">复用底图 0 元</span>' : ''}
+          <span>${esc((p.created_at || '').slice(5, 16))}</span>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function openPosterDetail(id) {
+  document.getElementById('pk-list-view').style.display = 'none';
+  document.getElementById('pk-detail-view').style.display = '';
+  document.getElementById('pk-img-stack').innerHTML = '<div style="padding:20px;color:var(--text-tertiary);font-size:13px">加载中...</div>';
+  let m;
+  try { m = await fetch('/api/poster/' + id).then(r => r.json()); }
+  catch (e) { m = {error: e.message}; }
+  if (!m || m.error) {
+    setStatus('error', (m && m.error) || '海报读取失败');
+    document.getElementById('pk-img-stack').innerHTML = '<div class="pk-verify fail">✗ ' + esc((m && m.error) || '读取失败') + '</div>';
+    return;
+  }
+  _pkDetail = m;
+  document.getElementById('pk-detail-title').textContent = m.title || '海报';
+  const imgs = (m.copies > 1 && (m.candidates || []).length > 1) ? m.candidates : [{url: m.url, index: m.chosen || 1, verify: m.verify, review: m.review}];
+  document.getElementById('pk-detail-img-label').textContent = '成品图 · ' + imgs.length + ' 张（点图放大）';
+  document.getElementById('pk-img-stack').innerHTML = imgs.map(c => {
+    const on = c.index === (m.chosen || 1);
+    const cv = c.verify || {};
+    const tag = m.text_mode === 'typeset' ? '字已排好' : (cv.ok === false ? '有缺字' : '字全对');
+    return `<div class="tt-img" style="${on ? 'border-color:var(--module-5)' : ''}">
+      <span class="lb">${tag}${imgs.length > 1 ? ' · 第' + c.index + '张' : ''}${on ? ' · 发布取这张' : ''}</span>
+      <img src="${esc(c.url)}" alt="海报" onclick="${imgs.length > 1 ? 'posterDetailPick(' + c.index + ')' : 'window.open(\'' + esc(c.url) + '\',\'_blank\')'}"></div>`;
+  }).join('')
+    + (imgs.length > 1 ? '<div style="font-size:11.5px;color:var(--text-tertiary);margin-top:6px">点上面任意一张即把它设为要发布的那张。</div>' : '');
+  const v = m.verify || {}, tsp = (m.typeset && m.typeset.problems) || [];
+  let flag = '';
+  if (m.text_mode === 'typeset') {
+    flag = tsp.length ? '<div class="pk-verify mild">⚠️ 版面提示：' + tsp.map(esc).join('；') + '</div>'
+                      : '<div class="pk-verify pass">✅ ' + (m.text_chars || 0) + ' 字由程序用真字体排版，不存在错字</div>';
+  } else if (v.ok === false) {
+    flag = '<div class="pk-verify fail">✗ 图面文字与文案不一致，缺失：' + esc((v.missing || []).join('、') || '未知') + '——别发布</div>';
+  }
+  const warns = (m.lint || []).filter(s => !s.startsWith('error') && !s.startsWith('info:'));
+  document.getElementById('pk-detail-meta').innerHTML =
+    '<div class="pk-cm" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;font-size:11.5px">'
+    + '<span class="pill">风格 ' + esc(m.style_label || '未指定') + '</span>'
+    + '<span class="pill">' + (m.text_mode === 'typeset' ? '程序排字' : '模型画字') + '</span>'
+    + '<span class="pill">' + (m.text_chars || 0) + ' 字上图</span>'
+    + '<span class="pill">' + esc(m.ratio || '') + '</span>'
+    + (m.review && m.review.score ? '<span class="pill">好看度 ' + m.review.score + '/' + m.review.full + '</span>' : '')
+    + '<span class="pill">' + (m.base_reused ? '复用底图 · 0 元' : '约 ' + (m.cost_yuan_estimate == null ? 0.5 : m.cost_yuan_estimate) + ' 元') + '</span>'
+    + '<span class="pill">#' + (m.summary_id || m.id) + ' 整理稿</span>'
+    + '<span class="pill">' + esc(m.created_at || '') + '</span></div>'
+    + flag
+    + (warns.length ? '<div class="pk-verify mild">' + warns.map(esc).join('<br>') + '</div>' : '')
+    + '<div style="margin:8px 0 0;display:flex;gap:8px;flex-wrap:wrap">'
+    + '<button class="btn ghost sm" onclick="openSummary(' + (m.summary_id || m.id) + ')">看整理稿原文</button>'
+    + '<button class="btn ghost sm" onclick="posterSaveTemplate(' + m.id + ')">★ 存为模板</button></div>';
+  document.getElementById('pk-detail-pub').textContent = pkPublishText(m);
+  document.getElementById('pk-detail-ck').innerHTML = (m.checklist || []).map(s => '<li>' + esc(s) + '</li>').join('');
+  document.getElementById('pk-detail-edit').onclick = function () { openPosterDialog(m.summary_id || m.id); };
+  document.getElementById('pk-detail-reveal').onclick = function () { posterReveal(m.id); };
+  document.getElementById('pk-detail-copy').onclick = function () { copyText(pkPublishText(m)); };
+  document.getElementById('pk-detail-prompt').onclick = function () { copyText(m.prompt_text || ''); };
+  window.scrollTo(0, 0);
+}
+
+async function posterDetailPick(index) {
+  if (!_pkDetail) return;
+  const r = await fetch('/api/poster/' + _pkDetail.id + '/pick', {method: 'POST',
+    headers: {'Content-Type': 'application/json'}, body: JSON.stringify({index: index})}).then(x => x.json());
+  if (r.error) { setStatus('error', r.error); return; }
+  setStatus('done', '已选定第 ' + r.chosen + ' 张，发布取这张');
+  openPosterDetail(_pkDetail.id);
+}
+
+async function deletePosterOne(id) {
+  if (!confirm('删除这张海报的成品与文案？（不影响整理稿本身）')) return;
+  let r;
+  try { r = await fetch('/api/poster/' + id, {method: 'DELETE'}).then(x => x.json()); }
+  catch (e) { r = {error: e.message}; }
+  if (r.error) { setStatus('error', r.error); return; }
+  showPosterList();
+}
+
+// 出图成功后光在弹窗里贴一张图不够：得能一步走到成品页，跟同步结果那个跳转一样。
+function gotoPosterPage(id) {
+  closePosterDialog();
+  switchPage('poster');
+  if (id) openPosterDetail(id);
+}
+
+// ── 文案对照整理稿原文 ──
+// 拆得准不准，光看拆解框看不出来——得跟原文并排对，尤其看数字是不是原文给的。
+let _pkSource = null;
+async function pkLoadSource() {
+  if (!_pkId) return;
+  const box = document.getElementById('pk-srcbox');
+  if (!box) return;
+  if (_pkSource && _pkSource.id === _pkId) { pkRenderSource(); return; }
+  box.innerHTML = '<div class="pk-src">原文加载中…</div>';
+  let d;
+  try { d = await fetch('/api/content/summaries/' + _pkId).then(r => r.json()); }
+  catch (e) { box.innerHTML = '<div class="pk-src">原文读取失败：' + esc(e.message) + '</div>'; return; }
+  if (!d || d.error) { box.innerHTML = '<div class="pk-src">' + esc((d && d.error) || '原文读取失败') + '</div>'; return; }
+  _pkSource = {id: _pkId, content: d.content || '', title: d.title || '', model: d.model || ''};
+  pkRenderSource();
+}
+function pkRenderSource() {
+  const box = document.getElementById('pk-srcbox');
+  if (!box || !_pkSource) return;
+  const src = _pkSource.content || '';
+  const plan = document.getElementById('pk-title') ? pkReadPlan() : (_pkLastPlan || {});
+  // 先在原文里标出拆解文案出现过的小片段：亮出来的就是"原文确实有这句"，
+  // 反过来拆解框里那些原文找不到的词，就是模型自己加工过的地方。
+  const keys = [];
+  (plan.cards || []).forEach(c => { if (c.t && c.t.length >= 3) keys.push(c.t); });
+  const planText = (plan.title || '') + (plan.subtitle || '')
+    + (plan.cards || []).map(c => (c.t || '') + (c.d || '')).join('') + (plan.footer || '');
+  (planText.match(/\d[\d.,]{1,}/g) || []).forEach(n => {   // 单个数字没有对照意义，只跟 2 位以上
+    if (src.indexOf(n) >= 0) keys.push(n);
+  });
+  // 一次正则扫完再插标记，绝不能逐个 split/join：那样后一个词会命中前一个词
+  // 已经包进 <mark> 的内容，套出 <mark>3<mark>6</mark>0</mark> 这种碎图。
+  const uniq = [...new Set(keys)].filter(k => k && k.length >= 2)
+    .sort((a, b) => b.length - a.length).slice(0, 60);
+  let html;
+  if (uniq.length) {
+    const re = new RegExp(uniq.map(k => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'g');
+    html = esc(src.replace(re, m => '\u0000' + m + '\u0001'))
+           .split('\u0000').join('<mark>').split('\u0001').join('</mark>');
+  } else {
+    html = esc(src);
+  }
+  const miss = [];
+  (plan.cards || []).forEach((c, i) => {
+    const t = (c.t || '').trim();
+    if (t.length >= 3 && src.indexOf(t) < 0) miss.push('卡片' + (i + 1) + '「' + t + '」');
+  });
+  const nums = (planText.match(/\d[\d.,]{1,}/g) || []).filter((v, i, a) => a.indexOf(v) === i);
+  const badNums = nums.filter(n => src.indexOf(n) < 0);
+  const hasPlan = !!(plan.title || (plan.cards || []).length);
+  if (!hasPlan) {
+    box.innerHTML = '<div class="pk-src">' + esc(src.slice(0, 4000)) + (src.length > 4000 ? '…（原文 ' + src.length + ' 字，往下滚动看这一段就够）' : '') + '</div>'
+      + '<div class="pk-diff">这是这次出图的依据（整理稿原文）。点「① AI 拆解文案」后回到这里，'
+      + '会把你写进图里的词在原文中逐字标出来，对不上的当场报。<span style="color:var(--text-tertiary)">　原文由 ' + esc(_pkSource.model || '?') + ' 整理。</span></div>';
+    return;
+  }
+  box.innerHTML = '<div class="pk-src">' + (html || '（这份整理稿正文是空的）') + '</div>'
+    + '<div class="pk-diff">'
+    + (miss.length ? '<span class="miss">⚠️ 原文里找不到这些卡片标题（模型改写或编造）：</span>' + miss.map(esc).join('、') + '<br>' : '')
+    + (badNums.length ? '<span class="miss">⚠️ 原文里没有这些数字：</span>' + badNums.map(esc).join('、') + '<br>' : '')
+    + (!miss.length && !badNums.length ? '<span class="hit">✅ 卡片标题与图上数字都能在原文里逐字找到</span>' : '')
+    + '<span style="color:var(--text-tertiary)">　亮底色的片段＝拆解文案里出现过、且原文里也有的词。原文由 ' + esc(_pkSource.model || '?') + ' 整理。</span></div>';
+}
+function pkSrcToggle() {
+  const d = document.getElementById('pk-srcpanel');
+  if (!d) return;
+  d.open = !d.open;
+  if (d.open) pkLoadSource();
 }
 
 // ── 公众号图文（图片消息形态 · 底稿可选：留空＝转载模式，填写＝亲测模式） ──
