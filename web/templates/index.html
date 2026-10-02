@@ -1431,14 +1431,14 @@ async function init() {
   const now = new Date();
   const hour = now.getHours();
   const greet = hour < 5 ? '夜深了' : hour < 11 ? '早上好' : hour < 14 ? '中午好' : hour < 18 ? '下午好' : '晚上好';
-  document.getElementById('greet-hi').textContent = greet + '，内容创作者';
-  document.getElementById('today-str').textContent = now.toLocaleDateString('zh-CN', {month:'long', day:'numeric', weekday:'long'});
+  document.getElementById('today-str').textContent = greet + ' · '
+    + now.toLocaleDateString('zh-CN', {month:'long', day:'numeric', weekday:'long'});
 
   const savedCookie = localStorage.getItem('v2t_cookie');
   if (savedCookie) document.getElementById('cookie').value = savedCookie;
 
   await loadTopics();
-  await loadCurrentView();
+  switchPage(pageFromHash());          // 带 #videos 这类地址打开时直接落回那一页
   const st = await fetch('/api/status').then(r=>r.json());
   if (st.running) { startPolling(); setStatus('running', st.progress); }
   updateSidebarStatus(st);
@@ -1446,7 +1446,15 @@ async function init() {
 init();
 
 // ── 页面切换 ──
+// 地址栏带 #页名：刷新不跳回首页，每一页能被收藏/直接贴链接给别人（"你看下整理稿那页"）。
+// 用改 hash 而不是 replaceState，是为了让浏览器后退键回到上一页，而不是直接退出这个站点。
+function pageFromHash() {
+  const h = String(location.hash || '').replace(/^#\/?/, '');
+  return PAGES.indexOf(h) >= 0 ? h : 'dashboard';
+}
+
 function switchPage(page) {
+  if (PAGES.indexOf(page) < 0) page = 'dashboard';
   currentView = page;
   PAGES.forEach(p => {
     document.getElementById('page-'+p).classList.toggle('on', p===page);
@@ -1456,8 +1464,14 @@ function switchPage(page) {
   selectedVideos.clear();
   updateOptimizeButton();
   loadCurrentView();
+  if (location.hash !== '#'+page) location.hash = page;
   window.scrollTo(0, 0);
 }
+
+window.addEventListener('hashchange', function () {
+  const p = pageFromHash();
+  if (p !== currentView) switchPage(p);
+});
 
 function getSearchValue() {
   const el = document.querySelector(`#page-${currentView} .page-search`);
@@ -1754,7 +1768,7 @@ async function classifyVideos() {
           else setStatus('done', '✅ ' + (st.progress || '分类完成'));
           loadVideos();
         }
-      } catch(e) { /* 网络抖动继续轮询 */ }
+      } catch(e) { warn('主产线轮询（下一轮继续）', e); }
     }, 1500);
   } catch(e) {
     btn.disabled = false;
@@ -2222,7 +2236,7 @@ function copyToutiaoText() {
   const ta = document.getElementById('tt-copy-area');
   ta.select();
   let ok = false;
-  try { ok = document.execCommand('copy'); } catch (e) {}
+  try { ok = document.execCommand('copy'); } catch (e) { warn('旧复制接口失败，改用剪贴板 API', e); }
   if (!ok && navigator.clipboard) navigator.clipboard.writeText(ta.value).catch(()=>{});
   setStatus('done', '✅ 文案已复制，去头条号粘贴发布');
 }
@@ -2283,14 +2297,14 @@ function pkGuideInit() {
   if (!d.dataset.ready) {
     d.dataset.ready = '1';
     d.addEventListener('toggle', function () {
-      try { localStorage.setItem(PK_GUIDE_KEY, d.open ? '1' : '0'); } catch (e) {}
+      try { localStorage.setItem(PK_GUIDE_KEY, d.open ? '1' : '0'); } catch (e) { warn('记住三步卡展开状态失败', e); }
     });
   }
   try {
     const saved = localStorage.getItem(PK_GUIDE_KEY);
     if (saved === '0') d.open = false;
     else if (saved === '1') d.open = true;
-  } catch (e) {}
+  } catch (e) { warn('读取三步卡展开状态失败', e); }
 }
 function closePosterDialog(e) {
   if (e && e.target !== e.currentTarget) return;
@@ -3402,7 +3416,7 @@ function copyWechatText() {
   const ta = document.getElementById('wx-copy-area');
   ta.select();
   let ok = false;
-  try { ok = document.execCommand('copy'); } catch (e) {}
+  try { ok = document.execCommand('copy'); } catch (e) { warn('旧复制接口失败，改用剪贴板 API', e); }
   if (!ok && navigator.clipboard) navigator.clipboard.writeText(ta.value).catch(()=>{});
   setStatus('done', '✅ 文案已复制，去公众号后台粘贴发布（图片消息）');
 }
@@ -3423,7 +3437,8 @@ async function loadInterviewQuestions() {
   const questions = [];
   (data.items || []).forEach(item => {
     let structured = {};
-    try { structured = JSON.parse(item.structured_data || '{}'); } catch(e) {}
+    try { structured = JSON.parse(item.structured_data || '{}'); }
+    catch(e) { warn('面试题 #' + item.id + ' 结构化数据解析失败，退回正文抽取', e); }
     const itemQuestions = structured.questions && structured.questions.length
       ? structured.questions
       : fallbackQuestionsFromSummary(item);
@@ -4233,7 +4248,7 @@ async function loadSubscriptions() {
     // 同步进行中则持续轮询
     const st = await fetch('/api/subscriptions/sync/status').then(r=>r.json());
     if (st.running) startSubPolling(); else showSubStatus(st);
-  } catch(e) { /* 静默 */ }
+  } catch(e) { warn('订阅列表加载失败（列表会停在旧内容）', e); }
 }
 
 // ── 订阅列表：来源/分类/标签三维筛选 + 勾选批量操作 ──
@@ -4503,7 +4518,7 @@ async function loadRadar() {
       const authors = (resp.authors || []).filter(a => a.count > 0);
       authorSel.innerHTML = '<option value="">全部作者</option>' +
         authors.map(a => `<option value="${esc(a.author)}">${esc(a.author)} (${a.count})</option>`).join('');
-    } catch(e) { /* 忽略 */ }
+    } catch(e) { warn('作者下拉填充失败（作者筛选暂时不可用）', e); }
   }
   // 游戏下拉：选了游戏攻略分类才显示（用 /api/categories 的 games 数据）
   if (cat === '游戏攻略' && gameSel.style.display === 'none') {
@@ -4512,7 +4527,7 @@ async function loadRadar() {
       gameSel.innerHTML = '<option value="">全部游戏</option>' +
         (resp.games||[]).map(g => `<option value="${esc(g.game)}">${esc(g.game)} (${g.count})</option>`).join('');
       gameSel.style.display = '';
-    } catch(e) { /* 忽略，下拉保持隐藏 */ }
+    } catch(e) { warn('游戏下拉填充失败（下拉保持隐藏）', e); }
   } else if (cat !== '游戏攻略') {
     gameSel.style.display = 'none';
   }
@@ -4898,6 +4913,12 @@ async function deleteQuestion(question) {
 
 // ── 工具 ──
 function esc(s) { if (!s) return ''; return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+// 空 catch 是这个单文件页面最难查的 bug 来源：出错时什么都不说，界面只是少了一块。
+// 统一走 warn()，至少浏览器控制台留得下话（F12 一眼看到是哪一步、为什么）。
+function warn(where, e) {
+  const msg = (e && e.message) ? e.message : String(e);
+  try { console.warn('[' + where + '] ' + msg); } catch (_) { /* 连控制台都没有就别再抛了 */ }
+}
 function escAttr(s) { return esc(s).replace(/'/g,'&#39;'); }
 function escBacktick(s) { return esc(s).replace(/`/g,'\\`').replace(/\$/g,'\\$'); }
 function copyText(t) { navigator.clipboard.writeText(t||'').then(()=>alert('已复制')); }
@@ -4912,7 +4933,7 @@ function copyQuestionBankJSON() {
   try {
     const parsed = typeof payload === 'string' ? JSON.parse(payload) : payload;
     payload = JSON.stringify(parsed.questions || parsed, null, 2);
-  } catch(e) {}
+  } catch(e) { warn('题库 JSON 整理失败，原样复制', e); }
   copyText(payload);
 }
 </script>
