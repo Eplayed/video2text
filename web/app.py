@@ -2986,21 +2986,37 @@ def _save_tasks(cfg):
 
 @app.route("/api/sync/tasks", methods=["POST"])
 def api_sync_tasks_add():
+    """加入/改频率。支持一次勾多条订阅批量加（35 个订阅一条条点不现实）。"""
     data = request.get_json(force=True, silent=True) or {}
+    ids = data.get("sub_ids")
+    if not isinstance(ids, list):
+        ids = [data.get("sub_id")]
     try:
-        sub_id = int(data.get("sub_id"))
+        ids = [int(i) for i in ids if str(i).strip() != ""]
     except (TypeError, ValueError):
-        return jsonify({"error": "缺少 sub_id"}), 400
-    cfg = sync_tasks.load()
+        return jsonify({"error": "sub_id 要是数字"}), 400
+    if not ids:
+        return jsonify({"error": "先选至少一条订阅"}), 400
     if not DB_PATH.exists():
         return jsonify({"error": "数据库还不存在，先同步一次"}), 400
     with _db_lock:
         subs = content_store.list_subscriptions(DB_PATH)
-    if not any(s["id"] == sub_id for s in subs):
-        return jsonify({"error": "订阅不存在"}), 404
-    cfg = sync_tasks.upsert(cfg, sub_id, data.get("interval_days") or 1)
+    alive = {s["id"] for s in subs}
+    missing = [i for i in ids if i not in alive]
+    ids = [i for i in ids if i in alive]
+    if not ids:
+        return jsonify({"error": "这些订阅已经不存在了"}), 404
+    cfg = sync_tasks.load()
+    known = {t["sub_id"] for t in cfg["tasks"]}
+    for i in ids:
+        cfg = sync_tasks.upsert(cfg, i, data.get("interval_days") or 1)
     _save_tasks(cfg)
-    return jsonify({"success": True, "tasks": len(cfg["tasks"])})
+    out = {"success": True, "added": len([i for i in ids if i not in known]),
+           "updated": len([i for i in ids if i in known]),
+           "tasks": len(cfg["tasks"])}
+    if missing:
+        out["missing"] = missing
+    return jsonify(out)
 
 
 @app.route("/api/sync/tasks/<int:sub_id>", methods=["DELETE"])
