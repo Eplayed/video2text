@@ -16,7 +16,7 @@ Python 3.9 兼容：不用 match / X|Y 语法。
 import io
 import os
 import re
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 # 字体候选按"找不到就往后退"排列：这台是 Intel Mac，另一台机器字体不一定齐，
 # 写死单一路径会让整条产线在新机器上直接崩。
@@ -33,6 +33,11 @@ _FONT_CACHE = {}
 # 不能出现在行首的收尾标点：中文按字断行时把「。」甩到行首最难看
 _NO_HEAD = "。，、；：？！）］》」』…—％%"
 _NO_TAIL = "（［《「『"
+
+# 用户上传真图当主视觉时的取景参数：坐骑/角色展示图的主体通常偏上，
+# 居中裁容易把腿或底座切掉，所以取景位置稍微上偏。
+PHOTO_FOCUS_Y = 0.42
+PHOTO_MIN_FRAC = 0.22        # 低于这个高度，贴真图就没意义了，只报版面提示
 
 
 def _font(face, size):
@@ -195,6 +200,65 @@ def _draw_text(draw, xy, text, font, fill, stroke=None, stroke_w=0):
         draw.text(xy, text, font=font, fill=fill)
 
 
+def _rounded_mask(w, h, radius):
+    r = max(0, min(int(radius), min(w, h) // 2))
+    m = Image.new("L", (w, h), 0)
+    d = ImageDraw.Draw(m)
+    d.rounded_rectangle((0, 0, w - 1, h - 1), radius=r, fill=255)
+    return m
+
+
+def crop_cover(im, w, h, focus_y=0.5):
+    """把一张真实图片按"填满不拉伸"裁成 w×h（center crop）。
+
+    focus_y 是竖直取景位置：0.5 居中，0 贴顶。坐骑/角色展示图主体通常偏上，
+    居中裁会把腿切掉，所以默认给一点点上偏（调用方传 0.42 左右）。
+    """
+    w, h = max(1, int(w)), max(1, int(h))
+    iw, ih = im.size
+    scale = max(w / float(iw), h / float(ih))
+    nw, nh = max(w, int(round(iw * scale))), max(h, int(round(ih * scale)))
+    im = im.resize((nw, nh), Image.LANCZOS)
+    x = (nw - w) // 2
+    y = int((nh - h) * max(0.0, min(1.0, focus_y)))
+    return im.crop((x, y, x + w, y + h))
+
+
+def _photo_layer(photo_png, box, radius):
+    """真图贴到画面上：圆角 + 顶部压暗，保证压在图上的主标题还读得清。"""
+    x0, y0, x1, y1 = [int(v) for v in box]
+    w, h = max(1, x1 - x0), max(1, y1 - y0)
+    src = Image.open(io.BytesIO(photo_png)).convert("RGB")
+    src = ImageOps.exif_transpose(src)
+    im = crop_cover(src, w, h, focus_y=PHOTO_FOCUS_Y).convert("RGBA")
+    im.putalpha(_rounded_mask(w, h, radius))
+    # 顶部压暗：主标题就写在这条带上，不压就是"白字花底"
+    scrim = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    d = ImageDraw.Draw(scrim)
+    band = max(1, int(h * 0.42))
+    for i in range(band):
+        a = int(150 * (1.0 - i / float(band)))
+        d.line([(0, i), (w, i)], fill=(0, 0, 0, a))
+    im.alpha_composite(scrim)
+    # 底部再压一道，卡片面板紧贴图下沿时不会显得硬切
+    fade = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    d2 = ImageDraw.Draw(fade)
+    band2 = max(1, int(h * 0.16))
+    for i in range(band2):
+        a = int(90 * (i / float(band2)))
+        d2.line([(0, h - band2 + i), (w, h - band2 + i)], fill=(0, 0, 0, a))
+    im.alpha_composite(fade)
+    return im, (x0, y0)
+
+
+def photo_box_for(W, H, m, cards_top, gap):
+    """照片能占的那块：从顶部留白一直到卡片区上方。返回 (box, 占画面高度比例)。"""
+    y0 = int(H * 0.022)
+    y1 = max(y0 + 1, int(cards_top) - gap)
+    box = (m, y0, W - m, y1)
+    return box, (y1 - y0) / float(H)
+
+
 def _panel_overlay(box, skin):
     """卡片底板的半透明层。必须**先贴板再写字**——反过来板会把字糊掉。"""
     x0, y0, x1, y1 = [int(v) for v in (box[0], box[1], box[2], box[3])]
@@ -302,11 +366,13 @@ def _card_boxes(cards, W, H, m, inner, gap, cards_bottom, skin):
     return boxes, int(top)
 
 
-def typeset(base_png, plan, ratio="9:16", skin=None):
+def typeset(base_png, plan, ratio="9:16", skin=None, photo=None):
     """把 plan 里的中文排到 AI 底图上。返回 (png 字节, 版面自检 dict)。
 
     base_png 是出图模型给的**无字底图**字节；plan 走 ai_poster 的文案计划形状
     （title / subtitle / cards[{t,d}] / footer / style_key）。
+    photo 非空时是用户上传的真实图片字节：它顶掉整块插画区，标题压在图上，
+    卡片往下让——这条分支根本不需要 AI 画底图，所以不花钱。
 
     顺序是三遍：算版面 → 贴所有半透明底板 → 写所有文字。中间任何一步反过来都会
     出现"板盖字"或"字浮在板外面"。
@@ -331,6 +397,21 @@ def typeset(base_png, plan, ratio="9:16", skin=None):
     cards_bottom = H - int(H * 0.024) - foot_h
     gap = int(W * skin["gap"])
     boxes, cards_top = _card_boxes(cards, W, H, m, inner, gap, cards_bottom, skin)
+
+    # ── 第 1.5 遍：贴用户上传的真图（顶掉插画区，必须在贴卡片板之前）──
+    photo_info = None
+    if photo:
+        pbox, pfrac = photo_box_for(W, H, m, cards_top, gap)
+        if pfrac < PHOTO_MIN_FRAC:
+            problems.append("照片区只剩画面高度的 %d%%，卡片文字太多，建议减少卡片或缩短说明"
+                            % round(pfrac * 100))
+        try:
+            layer, pos = _photo_layer(photo, pbox, radius=int(W * 0.045))
+            img.paste(layer, pos, layer)
+            photo_info = {"box": [int(v) for v in pbox], "frac": round(pfrac, 3),
+                          "bytes": len(photo)}
+        except Exception as e:
+            problems.append("照片贴失败（%s），本张已退回纯底图" % str(e)[:60])
 
     # ── 第二遍：贴底板（清单风再补一条左侧色带，靠它而不是靠面板边框撑"第几条"）──
     for b in boxes:
@@ -403,11 +484,14 @@ def typeset(base_png, plan, ratio="9:16", skin=None):
 
     out = io.BytesIO()
     img.save(out, format="PNG")
-    return out.getvalue(), {
+    chk = {
         "ok": not problems, "problems": problems,
         "canvas": "%dx%d" % (W, H), "cards": len(cards),
         "engine": "pil-typeset", "skin": (plan or {}).get("style_key") or DEFAULT_SKIN,
     }
+    if photo_info:
+        chk["photo"] = photo_info
+    return out.getvalue(), chk
 
 def text_zone_ratio(plan, canvas_wh, skin=None):
     """卡片区从画面高度的哪一段开始（0~1）。出图 prompt 用同一个数留白，
@@ -430,12 +514,14 @@ def _resolve_skin(style_key, skin):
     return skin if isinstance(skin, dict) and skin.get("layout") else skin_for(style_key)
 
 
-def placeholder_base(style_key, W, H, art_frac=0.6, skin=None):
+def placeholder_base(style_key, W, H, art_frac=0.6, skin=None, art_hint=True):
     """按风格预设的配色生成一张占位底图，给"免费预览"用。
 
     预览要值不值 5 毛钱，取决于它和成品像不像：尺寸 1:1、配色取同一套皮肤、
     分区用同一个 text_zone_ratio，所以版面上看到的就是出图后会看到的样子。
     唯一缺的是插画内容本身——那块只画一个浅色框和一句说明。
+    art_hint=False 用于"用户上传真图当主视觉"那条分支：那块马上要被真图盖住，
+    再画个灰框写"出图时才生成"就成了穿帮。
     """
     skin = _resolve_skin(style_key, skin)
     top, bot = _rgb(skin.get("bg_top", "#1a1a1a")), _rgb(skin.get("bg_bot", "#0a0a0a"))
@@ -444,14 +530,15 @@ def placeholder_base(style_key, W, H, art_frac=0.6, skin=None):
     for y in range(int(H)):                      # 纵向渐变，越往下越接近卡片底
         r = y / float(max(1, H - 1))
         d.line([(0, y), (W, y)], fill=tuple(int(top[i] * (1 - r) + bot[i] * r) for i in range(3)))
-    ay = int(H * max(0.25, min(0.85, art_frac)))
-    box = (int(W * 0.05), int(H * 0.03), int(W * 0.95), ay - int(H * 0.02))
-    d.rounded_rectangle(box, radius=18, outline=(128, 128, 128, 90), width=2)
-    f = _font(skin["body_face"], max(14, int(H * 0.018)))
-    tip = "这块是 AI 插画区 · 出图时才生成"
-    tw = f.getlength(tip)
-    d.text(((W - tw) / 2.0, (box[1] + box[3]) / 2.0 - H * 0.01), tip, font=f,
-           fill=_rgb(skin["muted"]))
+    if art_hint:
+        ay = int(H * max(0.25, min(0.85, art_frac)))
+        box = (int(W * 0.05), int(H * 0.03), int(W * 0.95), ay - int(H * 0.02))
+        d.rounded_rectangle(box, radius=18, outline=(128, 128, 128, 90), width=2)
+        f = _font(skin["body_face"], max(14, int(H * 0.018)))
+        tip = "这块是 AI 插画区 · 出图时才生成"
+        tw = f.getlength(tip)
+        d.text(((W - tw) / 2.0, (box[1] + box[3]) / 2.0 - H * 0.01), tip, font=f,
+               fill=_rgb(skin["muted"]))
     b = io.BytesIO()
     img.save(b, format="PNG")
     return b.getvalue()

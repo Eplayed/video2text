@@ -666,18 +666,22 @@ def template_base(style_key):
         return None
 
 
-def typeset_poster(png_bytes, plan, ratio="9:16"):
-    """把中文用真字体排到无字底图上。返回 (成品字节, 版面自检 dict)。"""
+def typeset_poster(png_bytes, plan, ratio="9:16", photo=None):
+    """把中文用真字体排到无字底图上。返回 (成品字节, 版面自检 dict)。
+
+    photo 是用户上传的真实图片字节：非空时它会顶掉整块插画区，标题压在图上。
+    """
     from . import poster_typeset as ts
-    return ts.typeset(png_bytes, plan, ratio)
+    return ts.typeset(png_bytes, plan, ratio, photo=photo)
 
 
-def preview_typeset(plan, ratio="9:16"):
+def preview_typeset(plan, ratio="9:16", photo=None):
     """不花钱的版面预览：占位底图 + 真排版函数，尺寸与配色都和成品一致。
 
     为什么值得单独做一个入口：换轨之后"版面"是代码算的，跟出图没关系，
     所以折行、字号、卡片放不放得下、配色对不对，全都能在花钱之前看到。
     看不到的一件事是插画本身画得好不好——那只能出图。
+    传了 photo 就连真图一起排进预览，这块也不再是"看不到"的东西。
     返回 (png 字节, 版面自检 dict)。
     """
     from . import poster_typeset as ts
@@ -686,8 +690,8 @@ def preview_typeset(plan, ratio="9:16"):
     w, h = _canvas_px(ratio)
     skin = plan.get("_skin") if isinstance(plan.get("_skin"), dict) else None
     frac = ts.text_zone_ratio(plan, (w, h), skin)
-    base = ts.placeholder_base(plan.get("style_key"), w, h, frac, skin)
-    return ts.typeset(base, plan, ratio, skin)
+    base = ts.placeholder_base(plan.get("style_key"), w, h, frac, skin, art_hint=not photo)
+    return ts.typeset(base, plan, ratio, skin, photo=photo)
 
 
 # ── 2. 出图 ──
@@ -903,7 +907,11 @@ def build_lint(pub, check, overrode, review=None, typeset=None):
         if typeset.get("problems"):
             issues.append("warn: 版面放不下——" + "；".join(typeset["problems"]))
     review = review or {}
-    if review.get("skipped"):
+    if review.get("photo_mode"):
+        # 真图主视觉不做画面评审是设计决定（那五项打的是 AI 插画好不好），
+        # 报成 warn 会让人以为漏了一步要补
+        issues.append("info: 主视觉用的是上传的真图，不做画面评审（那五项打的是 AI 插画好坏）")
+    elif review.get("skipped"):
         issues.append("warn: 本次未做视觉评审（好不好看没人判过），错误原因：%s"
                       % (review.get("error") or "已跳过"))
     elif review:
@@ -945,12 +953,16 @@ def choose_candidate(summary_id, index):
 
 def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
                     progress_cb=None, do_verify=True, plan=None, publish=None, force=False,
-                    copies=1, do_review=True, text_mode=DEFAULT_TEXT_MODE):
+                    copies=1, do_review=True, text_mode=DEFAULT_TEXT_MODE, photo=None):
     """整理稿 → 海报一张。返回 manifest dict（已落盘 output/poster/<summary_id>/）。
 
     plan / publish 非空时跳过 LLM 拆解（前端审改过文案再出图走这条）：plan 是要画进图的
     文字仍过字数硬门禁，publish 是发布页文案只做软校验。两者都不落模型自由发挥——
     模型只负责画字与排版，写什么由拆解那一步定、由人改。
+
+    photo 非空（图片字节）时走"真图主视觉"这条：用户上传的那张图顶掉整块插画区，
+    标题压在图上、卡片往下让。这条**根本不调出图模型**，所以 0 元、几秒钟出，
+    而且坐骑/角色这类"必须长这样"的内容不会被模型画跑形——这是它比 AI 插画更值钱的地方。
 
     force=True 放行 status=draft 的骨架稿。海报线与 HTML 卡片线不同：这里永远有一次 LLM
     提炼在中间，骨架稿只要底层转写有料就能出好文案（实测 61 号那篇超时稿，价格与时间线
@@ -962,6 +974,9 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
     _require_ai(ai_config)
     if ratio not in SIZES:
         ratio = "9:16"
+    if photo:
+        # 真图模式下字一定是程序排的（图都占了一半画面，再让模型写字就是糊图）
+        text_mode = "typeset"
     if text_mode not in TEXT_MODES:
         text_mode = DEFAULT_TEXT_MODE
     lim = limits_for(text_mode)
@@ -994,8 +1009,11 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
 
     # 程序排字模式先按版面算出"下面多大一块要留给文字"，再把这个比例写进出图 prompt，
     # 让模型在那块地方只画底纹。两边共用 text_zone_ratio，所以不会错位。
-    prompt_text = (build_art_prompt(plan, ratio) if text_mode == "typeset"
-                   else build_prompt_text(plan, ratio))
+    if photo:
+        prompt_text = "（真图主视觉：上半部用上传的图片，不出 AI 底图，因此没有出图提示词）"
+    else:
+        prompt_text = (build_art_prompt(plan, ratio) if text_mode == "typeset"
+                       else build_prompt_text(plan, ratio))
     (out_dir / "prompt.txt").write_text(prompt_text + "\n", encoding="utf-8")
     try:
         n = int(copies)
@@ -1004,8 +1022,12 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
     n = max(1, min(n, MAX_COPIES))
 
     # 带底图的模板：换文案时复用那张已经验收的底图，不再出图。同一张底图多出几张
-    # 只会得到完全一样的成品，所以这里强制单张。
-    tpl_base = template_base(plan.get("style_key")) if text_mode == "typeset" else None
+    # 只会得到完全一样的成品，所以这里强制单张。真图模式同理（不随机，多张必重复）。
+    tpl_base = None if photo else (template_base(plan.get("style_key"))
+                                   if text_mode == "typeset" else None)
+    if photo:
+        n = 1
+        _pg("用你上传的图排主视觉（0 元，不出 AI 底图）...")
     stale_nums = []
     if tpl_base:
         n = 1
@@ -1015,8 +1037,18 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
             stale_nums = check_base_numbers(tpl_base, plan, ai_config)
 
     candidates, usage = [], {}
+    photo_name = ""
+    if photo:
+        # 原图存一份进包里：改文案重出时不用再传一次
+        photo_name = "photo_src.png"
+        (out_dir / photo_name).write_bytes(photo)
     for i in range(1, n + 1):
-        if tpl_base:
+        if photo:
+            from . import poster_typeset as _ts
+            w, h = _canvas_px(ratio)
+            raw = _ts.placeholder_base(plan.get("style_key"), w, h,
+                                       _ts.text_zone_ratio(plan, (w, h)), art_hint=False)
+        elif tpl_base:
             raw = tpl_base
         else:
             _pg("出图 %d/%d（%s）..." % (i, n, COPIES_NOTE if n > 1 else "约 20-60 秒"))
@@ -1027,7 +1059,7 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
         if text_mode == "typeset":
             (out_dir / ("base.png" if n == 1 else "base_%d.png" % i)).write_bytes(raw)
             _pg("排版第 %d 张（真字体，字不会画错）..." % i)
-            png, ts_chk = typeset_poster(raw, plan, ratio)
+            png, ts_chk = typeset_poster(raw, plan, ratio, photo=photo)
             # 回读校验在这条路上是负资产：字是程序画的、不可能错，而那个视觉模型
             # 实测会把画错的赛字读成对的、还会自己脑补出多出来的字，只会误报。
             v = {"skipped": True, "ok": True, "not_needed": True,
@@ -1043,12 +1075,16 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
                          "missing": [], "extra": "", "transcript": ""}
         (out_dir / fname).write_bytes(png)
         r = {"skipped": True, "ok": None}
-        if do_review:
+        if do_review and not photo:
             _pg("视觉评审第 %d 张好不好看..." % i)
             try:
                 r = review_image(png, ai_config)
             except Exception as e:
                 r = {"skipped": True, "ok": None, "error": str(e)[:200]}
+        elif photo:
+            # 评审那五项打的是"AI 插画好不好看"，主视觉换成用户真图后这套分没意义，
+            # 还会因为"画面不是手绘的"乱扣，所以这条明确不做，而不是给个 0 分。
+            r = {"skipped": True, "ok": None, "photo_mode": True}
         candidates.append({"index": i, "file": fname,
                            "url": "/media/poster/%d/%s" % (summary_id, fname),
                            "verify": v, "review": r, "typeset": ts_chk, "bytes": len(png)})
@@ -1066,8 +1102,9 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
         copy_text = copy_text.rstrip() + "\n\n" + COMPLIANCE_NOTE
 
     issues = build_lint(pub, check, overrode, review, ts_chk)
-    for w in lint_visual(plan):
-        issues.append("warn: " + w)
+    if not photo:                     # 真图模式下"主视觉/配图写没写"这条提醒没意义
+        for w in lint_visual(plan):
+            issues.append("warn: " + w)
     if stale_nums:
         issues.append("warn: 这张底图里带着文案里没有的数字 %s——是上一期烙进插画的，"
                       "换内容时确认它们还对不对；不对就换一套不带底图的风格重出一张"
@@ -1092,16 +1129,18 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
         "style_label": _preset(plan).get("label", ""),
         "scene": plan.get("scene") or "",
         "image": "poster.png",
+        "photo": photo_name,
+        "photo_frac": ((ts_chk or {}).get("photo") or {}).get("frac"),
         "url": "/media/poster/%d/poster.png" % summary_id,
         "candidates": candidates,
         "chosen": best["index"],
         "copies": n,
         "text_mode": text_mode,
         "typeset": ts_chk,
-        "image_model": IMAGE_MODEL,
+        "image_model": "" if photo else IMAGE_MODEL,
         "ocr_model": OCR_MODEL,
         "usage": usage,
-        "cost_yuan_estimate": 0 if tpl_base else PRICE_PER_IMAGE_YUAN,
+        "cost_yuan_estimate": 0 if (tpl_base or photo) else PRICE_PER_IMAGE_YUAN,
         "base_reused": bool(tpl_base),
         "base_stale_numbers": stale_nums,
         "auto_notes": notes,
@@ -1119,8 +1158,9 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
         json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     errs = [i for i in issues if i.startswith("error")]
     score = ("，评审 %s/%s 分" % (review.get("score"), review.get("full"))) if review.get("score") else ""
-    _pg(("✅ 海报已生成（复用模板底图，这次没花出图钱）" if tpl_base
-         else "✅ 海报已生成" + ("" if errs else "（发布文案与清单已就绪）")) + score
+    _pg(("✅ 海报已生成（用的是你上传的真图，没花出图钱）" if photo
+         else ("✅ 海报已生成（复用模板底图，这次没花出图钱）" if tpl_base
+               else "✅ 海报已生成" + ("" if errs else "（发布文案与清单已就绪）"))) + score
         + ("，共 %d 张，点图换选" % n if n > 1 else ""))
     return manifest
 

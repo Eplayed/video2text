@@ -1,5 +1,5 @@
 """video2text Web 管理界面 - Flask Backend"""
-import json, os, re, sys, sqlite3, threading, time, traceback, hashlib, uuid
+import json, os, re, sys, sqlite3, threading, time, traceback, hashlib, uuid, io
 from pathlib import Path
 from datetime import datetime
 
@@ -1926,6 +1926,10 @@ def api_poster_generate():
         copies = int(data.get("copies") or 1)
     except (TypeError, ValueError):
         copies = 1
+    try:
+        photo = _photo_read(data.get("photo"))     # 上传图坏了要在提交前就报错，别让人白等一轮
+    except ai_poster.PosterError as e:
+        return jsonify({"error": str(e)}), 400
 
     def fn():
         def cb(msg):
@@ -1933,7 +1937,8 @@ def api_poster_generate():
         manifest = ai_poster.generate_poster(summary, _fast_config(), theme=theme, title=title,
                                              ratio=ratio, progress_cb=cb, plan=plan,
                                              publish=publish, force=force, copies=copies,
-                                             do_review=do_review, text_mode=text_mode)
+                                             do_review=do_review, text_mode=text_mode,
+                                             photo=photo)
         v = manifest.get("verify") or {}
         rv = manifest.get("review") or {}
         ts_chk = manifest.get("typeset") or {}
@@ -1943,6 +1948,9 @@ def api_poster_generate():
                                      "copies": manifest.get("copies") or 1,
                                      "verify_ok": v.get("ok"), "review": rv,
                                      "text_mode": manifest.get("text_mode"),
+                                     "photo": manifest.get("photo") or "",
+                                     "photo_frac": manifest.get("photo_frac"),
+                                     "cost": manifest.get("cost_yuan_estimate"),
                                      "typeset_problems": ts_chk.get("problems") or [],
                                      "lint": manifest.get("lint") or []}
         _poster_status["plan"] = {"plan": manifest["plan"], "publish": manifest["publish"],
@@ -1981,7 +1989,8 @@ def api_poster_preview():
         from src import poster_breakdown
         plan["_skin"] = poster_breakdown.normalize(data["draft"])["skin"]
     try:
-        png, chk = ai_poster.preview_typeset(plan, ratio)
+        photo = _photo_read(data.get("photo"))
+        png, chk = ai_poster.preview_typeset(plan, ratio, photo=photo)
         key = hashlib.sha1(png).hexdigest()[:16]
         out_dir = OUTPUT_DIR / "poster" / "_preview"
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -2003,6 +2012,65 @@ def _prune_previews(out_dir, keep=24):
             f.unlink()
     except Exception:
         pass
+
+
+# ── 海报配图：用户上传的真实图片当主视觉（坐骑/角色/装备这类"必须长这样"的内容）──
+# 这条分支不调出图模型，所以 0 元；排版引擎负责圆角、压暗和让位。
+PHOTO_DIR = OUTPUT_DIR / "poster" / "_photo"
+PHOTO_MAX_BYTES = 8 * 1024 * 1024
+PHOTO_EXT = (".jpg", ".jpeg", ".png", ".webp", ".gif")
+_PHOTO_REF = re.compile(r"^[0-9a-f]{10}\.png$")
+
+
+def _photo_read(ref):
+    """把前端回传的配图引用换成图片字节。
+
+    只认 _photo 目录下我们上传时生成的那串名字：不能让前端传什么路径就读什么文件。
+    """
+    name = os.path.basename(str(ref or "").strip())
+    if not name:
+        return None
+    if not _PHOTO_REF.match(name):
+        raise ai_poster.PosterError("配图引用不合法，请重新上传")
+    p = PHOTO_DIR / name
+    if not p.exists():
+        raise ai_poster.PosterError("配图已经不在服务器上了（临时目录只留最近 24 张），重新传一张")
+    return p.read_bytes()
+
+
+@app.route("/api/poster/photo", methods=["POST"])
+def api_poster_photo():
+    """收一张配图：校验能解码、够清晰，统一转成 PNG 存进临时目录。
+
+    转 PNG 是为了把 gif 取首帧、webp 归一、EXIF 旋转一次性处理掉——排版引擎按像素算版面，
+    带旋转信息的 jpg 贴出来会歪。太小的图明确拒绝：贴到 928 宽的海报上会糊成一片。
+    """
+    f = request.files.get("file")
+    if not f:
+        return jsonify({"error": "没收到图片"}), 400
+    ext = os.path.splitext(f.filename or "")[1].lower()
+    if ext not in PHOTO_EXT:
+        return jsonify({"error": "只支持 jpg / png / webp / gif"}), 400
+    blob = f.read()
+    if len(blob) > PHOTO_MAX_BYTES:
+        return jsonify({"error": "图片超过 8MB，压一下再传"}), 400
+    try:
+        from PIL import Image, ImageOps
+        im = ImageOps.exif_transpose(Image.open(io.BytesIO(blob)))
+        w, h = im.size
+        if w < 260 or h < 260:
+            return jsonify({"error": "图太小（%d×%d），贴到海报上会糊，换一张大一点的" % (w, h)}), 400
+        out = io.BytesIO()
+        im.convert("RGB").save(out, format="PNG")
+        png = out.getvalue()
+    except Exception as e:
+        return jsonify({"error": "这张图读不出来：%s" % str(e)[:120]}), 400
+    name = uuid.uuid4().hex[:10] + ".png"
+    PHOTO_DIR.mkdir(parents=True, exist_ok=True)
+    (PHOTO_DIR / name).write_bytes(png)
+    _prune_previews(PHOTO_DIR, keep=24)
+    return jsonify({"ref": name, "url": "/media/poster/_photo/%s" % name,
+                    "w": w, "h": h, "bytes": len(png)})
 
 
 @app.route("/api/poster/status")
@@ -2037,6 +2105,7 @@ def api_poster_list():
                           "source_title": i.get("source_title") or "",
                           "style_label": i.get("style_label") or "",
                           "text_mode": i.get("text_mode") or "model",
+                          "photo": bool(i.get("photo")),
                           "base_reused": bool(i.get("base_reused")),
                           "cost": i.get("cost_yuan_estimate"),
                           "copies": i.get("copies") or 1,

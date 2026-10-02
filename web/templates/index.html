@@ -464,6 +464,17 @@ textarea{resize:vertical;min-height:84px}
 .bd-thumb{width:96px;border-radius:6px;border:1px solid var(--border);display:block}
 .bd-prev{width:150px;border-radius:8px;border:1px solid var(--border);cursor:pointer}
 .pk-one b{color:var(--text)}
+/* 海报配图（用户上传的真图当主视觉） */
+.pk-photo{display:flex;align-items:center;gap:6px}
+.pk-photo .btn{font-size:12px;font-weight:400;padding:6px 9px;white-space:nowrap}
+.pk-thumb{position:relative;display:inline-flex;align-items:center;gap:6px;border:1px solid var(--module-5);
+  border-radius:8px;padding:3px 22px 3px 3px;background:var(--surface-nested)}
+.pk-thumb img{height:38px;width:auto;border-radius:5px;display:block}
+.pk-thumb .pk-thumb-x{position:absolute;right:5px;top:50%;transform:translateY(-50%);cursor:pointer;
+  font-size:12px;font-weight:800;color:var(--text-tertiary);padding:2px 3px}
+.pk-thumb .pk-thumb-x:hover{color:var(--danger)}
+.pk-thumb .pk-thumb-t{font-size:10.5px;color:var(--text-tertiary);max-width:74px;line-height:1.35}
+.pk-photo.busy{opacity:.55;pointer-events:none}
 .pk-actions{display:flex;gap:10px;margin:12px 0 4px}
 .pk-go{background:var(--module-5);border-color:var(--module-5);color:#fff;font-weight:700}
 .pk-actions .btn{flex:0 0 auto}
@@ -1207,17 +1218,18 @@ textarea{resize:vertical;min-height:84px}
             <option value="3">3 张挑 1</option>
           </select></label>
           <label>风格<select id="pk-style-key-top" onchange="pkSyncStyle(this.value)"><option value="">载入中…</option></select></label>
+          <label>配图<span class="pk-photo" id="pk-photo"><button type="button" class="btn ghost sm" onclick="pkPhotoPick()">＋ 用你的图</button></span></label>
           <label class="pk-grow">题材<input id="pk-theme" placeholder="选填，例：魔兽怀旧服 塔卡"></label>
           <label class="pk-check"><input type="checkbox" id="pk-review" checked>出图后打分</label>
         </div>
         <div class="pk-actions">
           <button class="btn ghost sm" onclick="posterPlan()">① 拆文案</button>
           <button class="btn ghost sm" onclick="posterPreview()" title="不花钱、当场出：用出图时同一个排版函数先看版面">② 看版面 · 免费</button>
-          <button class="btn sm pk-go" onclick="posterGenerate()">③ 出图 · 0.5 元/张</button>
+          <button class="btn sm pk-go" id="pk-go-top" onclick="posterGenerate()">③ 出图 · 0.5 元/张</button>
         </div>
         <div class="pk-tpls" id="pk-tpls" style="display:none"></div>
         <div class="pk-break" id="pk-break" style="display:none"></div>
-        <div class="pk-one">字由程序排版，不会错字也不会漏，200 字上限只是版面放得下。<b>改完文案多点几次②，一次都不花钱。</b></div>
+        <div class="pk-one" id="pk-one">字由程序排版，不会错字也不会漏，200 字上限只是版面放得下。<b>改完文案多点几次②，一次都不花钱。</b>有真实截图（坐骑、装备、界面）就点「＋ 用你的图」当主视觉，那条不出 AI 底图、0 元。</div>
         <!-- 三步操作卡：只在第一次用得着，收过一次就记住，不长期占地方 -->
         <details class="pk-guide" id="pk-guide" open>
           <summary>怎么用 · 三步</summary>
@@ -1233,7 +1245,7 @@ textarea{resize:vertical;min-height:84px}
         <div class="pk-actions">
           <button class="btn ghost sm" onclick="posterPlan()">① 重新拆文案</button>
           <button class="btn ghost sm" onclick="posterPreview()">② 看版面 · 免费</button>
-          <button class="btn sm pk-go" onclick="posterGenerate()">③ 出图 · 0.5 元/张</button>
+          <button class="btn sm pk-go" id="pk-go-bot" onclick="posterGenerate()">③ 出图 · 0.5 元/张</button>
         </div>
         <div id="pk-result"></div>
       </div>
@@ -2432,12 +2444,14 @@ function openPosterDialog(id) {
   _pkId = id;
   _pkLast = null;
   _pkSource = null;          // 原文缓存按整理稿存，换一条必须重取
+  _pkPhoto = null;           // 配图也是这条素材的，换整理稿要清掉
   document.getElementById('pk-id').textContent = id;
   document.getElementById('pk-plan').innerHTML = '';
   document.getElementById('pk-result').innerHTML = '';
   document.getElementById('pk-theme').value = '';
   document.getElementById('pk-overlay').classList.add('show');
   pkGuideInit();
+  pkPhotoLabel();
   loadPosterStyles();
   loadPosterTemplates();
   pkHydrate(id);
@@ -2638,11 +2652,69 @@ async function posterPlan() {
 }
 // 免费版面预览：占位底图 + 出图时同一个排版函数。
 // 换轨之后版面是代码算的、跟出图无关，所以折行/字号/卡片放不放得下都能在花钱前看到。
+// ── 配图：用户自己的真实截图当主视觉 ──
+// 坐骑/装备/界面这类内容，AI 画得再好看也是"另一只坐骑"，所以这条分支干脆不出 AI 底图：
+// 排版引擎把真图贴到上半部（圆角 + 顶部压暗保住标题），卡片往下让。顺带这条 0 元。
+let _pkPhoto = null;
+
+function pkPhotoPick() {
+  const inp = document.createElement('input');
+  inp.type = 'file';
+  inp.accept = 'image/*';
+  inp.onchange = function () { pkPhotoUpload(inp.files[0]); };
+  inp.click();
+}
+
+async function pkPhotoUpload(file) {
+  if (!file) return;
+  const box = document.getElementById('pk-photo');
+  if (box) box.classList.add('busy');
+  const fd = new FormData();
+  fd.append('file', file);
+  let r;
+  try { r = await fetch('/api/poster/photo', {method: 'POST', body: fd}).then(x => x.json()); }
+  catch (e) { r = {error: e.message}; }
+  if (box) box.classList.remove('busy');
+  if (r.error) { setStatus('error', '配图上传失败：' + r.error); return; }
+  _pkPhoto = r;
+  pkPhotoLabel();
+  setStatus('done', '配图收到了（' + r.w + '×' + r.h + '）。上半部就用这张真图，不出 AI 底图，所以这张 0 元。');
+  if (document.getElementById('pk-title')) posterPreview();     // 传完直接看真图版面，省一次点击
+}
+
+function pkPhotoClear() {
+  _pkPhoto = null;
+  pkPhotoLabel();
+  if (document.getElementById('pk-title')) posterPreview();
+}
+
+function pkPhotoLabel() {
+  const box = document.getElementById('pk-photo');
+  if (box) {
+    box.innerHTML = _pkPhoto
+      ? '<span class="pk-thumb"><img src="' + _pkPhoto.url + '?t=' + Date.now() + '" alt="配图">'
+        + '<span class="pk-thumb-t">' + _pkPhoto.w + '×' + _pkPhoto.h + '</span>'
+        + '<span class="pk-thumb-x" title="移除配图，回到 AI 画底图" onclick="pkPhotoClear()">✕</span></span>'
+      : '<button type="button" class="btn ghost sm" onclick="pkPhotoPick()">＋ 用你的图</button>';
+  }
+  // 出图按钮跟着变：真图模式不出 AI 底图，再写 0.5 元/张就是骗人
+  const tip = _pkPhoto ? '③ 出图 · 0 元（用你的图）' : '③ 出图 · 0.5 元/张';
+  ['pk-go-top', 'pk-go-bot'].forEach(id => {
+    const b = document.getElementById(id);
+    if (b) b.textContent = tip;
+  });
+  // 顶部那句说明也得跟着改：这时候底图不是 AI 画的
+  const sub = document.querySelector('#pk-overlay .tt-gen-sub');
+  if (sub) sub.innerHTML = '整合稿 #<span id="pk-id">' + (_pkId || '') + '</span> · '
+    + (_pkPhoto ? '主视觉用你上传的真图，中文由程序排版' : '底图 AI 现画，中文由程序排版');
+}
+
 async function posterPreview() {
   if (!document.getElementById('pk-title')) { setStatus('error', '先点「① AI 拆解文案」拿到文案'); return; }
   const box = document.getElementById('pk-result');
   box.innerHTML = '<div class="pk-verify mild">⏳ 正在按当前文案排一张免费预览…</div>';
   const body = {plan: pkReadPlan(), ratio: document.getElementById('pk-ratio').value};
+  if (_pkPhoto) body.photo = _pkPhoto.ref;
   let r;
   try {
     r = await fetch('/api/poster/preview', {method: 'POST',
@@ -2673,13 +2745,15 @@ async function posterGenerate(force) {
   const reviewEl = document.getElementById('pk-review');
   const review = reviewEl ? !!reviewEl.checked : true;
   const tip = force ? '这条整合稿被判定为规则版骨架。\n确认你已人工复核过拆解出的文案、仍要出图？'
-                    : (copies > 1 ? `出 ${copies} 张挑 1 张？约 2-3 分钟、${(copies * 0.5).toFixed(1)} 元。已有海报会被覆盖。`
-                                  : '出图？约 20-60 秒 + 一次回读校验，0.5 元/张。已有海报会被覆盖。');
+                    : (_pkPhoto ? '出图？用的是你上传的真图，不出 AI 底图，所以 0 元、几秒钟就好。已有海报会被覆盖。'
+                                : (copies > 1 ? `出 ${copies} 张挑 1 张？约 2-3 分钟、${(copies * 0.5).toFixed(1)} 元。已有海报会被覆盖。`
+                                              : '出图？约 20-60 秒 + 一次回读校验，0.5 元/张。已有海报会被覆盖。'));
   if (!confirm(tip)) return;
   const body = {summary_id: _pkId, ratio: document.getElementById('pk-ratio').value,
                 theme: document.getElementById('pk-theme').value.trim(),
                 plan: plan, publish: plan ? pkReadPublish() : null,
                 force: !!force, copies: copies, review: review, text_mode: pkTextMode()};
+  if (_pkPhoto) body.photo = _pkPhoto.ref;
   const r = await fetch('/api/poster/generate', {method: 'POST',
     headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)}).then(x => x.json());
   if (r.error) { setStatus('error', r.error); return; }
@@ -2756,8 +2830,15 @@ async function renderPosterResult(id) {
   const v = m.verify || {};
   const tsp = (m.typeset && m.typeset.problems) || [];
   const isTs = m.text_mode === 'typeset';
+  const isPhoto = !!m.photo;
   let cls = 'mild', txt = '本次未做回读校验，请人眼核对图面文字';
-  if (isTs) {
+  if (isPhoto) {
+    cls = tsp.length ? 'mild' : 'pass';
+    txt = tsp.length
+      ? '⚠️ 真图主视觉，字由程序排版不会错，但版面有提示：' + tsp.join('；')
+      : `✅ 上半部是你上传的真图（约占画面 ${Math.round((m.photo_frac || 0) * 100)}%），`
+        + `${m.text_chars} 字由程序排版，这张没花出图钱`;
+  } else if (isTs) {
     cls = tsp.length ? 'mild' : 'pass';
     txt = tsp.length
       ? '⚠️ 字是程序排的、不会写错，但版面有提示：' + tsp.join('；')
@@ -2792,7 +2873,8 @@ async function renderPosterResult(id) {
   document.getElementById('pk-result').innerHTML =
     imgHtml
     + `<div class="pk-verify ${cls}">${esc(txt)}</div>`
-    + pkReviewHtml(m.review)
+    + (isPhoto ? '<div class="pk-verify mild">真图主视觉不做画面评审：那五项打的是 AI 插画画得好不好，你的图不需要它打分。</div>'
+               : pkReviewHtml(m.review))
     + (warns.length ? `<div class="pk-verify mild">${warns.map(esc).join('<br>')}</div>` : '')
     + `<div class="pk-sub">发布文案（${m.text_chars} 字上图 · 风格 ${esc(m.style_label || m.style_key || '未指定')}）</div>`
     + `<pre class="pk-pub">${esc(pub)}</pre>`
@@ -3030,7 +3112,8 @@ async function loadPosterList() {
   }
   grid.innerHTML = items.map(p => {
     const ts = p.text_mode !== 'model';
-    const word = ts ? '字由程序排' : (p.verify_ok === false ? '图面文字有出入' : '回读校验通过');
+    const word = p.photo ? '真图主视觉'
+      : (ts ? '字由程序排' : (p.verify_ok === false ? '图面文字有出入' : '回读校验通过'));
     return `<div class="pk-card" onclick="openPosterDetail(${p.id})" title="#${p.summary_id} ${esc(p.source_title || '')}">
       <div class="pk-del" title="删除这组海报" onclick="event.stopPropagation();deletePosterOne(${p.id})">${iconSvg('trash', 12)}</div>
       <img src="${esc(p.url || '')}" alt="${esc(p.title || '')}" loading="lazy">
@@ -3038,10 +3121,10 @@ async function loadPosterList() {
         <div class="pk-ct">${esc(p.title || '（无标题）')}</div>
         <div class="pk-cs">#${p.summary_id} · ${esc(p.source_title || '')}</div>
         <div class="pk-cm">
-          <span class="${ts && p.verify_ok !== false ? 'ok' : (p.verify_ok === false ? 'no' : '')}">${word}</span>
+          <span class="${(p.photo || (ts && p.verify_ok !== false)) ? 'ok' : (p.verify_ok === false ? 'no' : '')}">${word}</span>
           <span>${(p.chars || 0)} 字</span>
           ${p.review_score ? '<span>好看度 ' + p.review_score + '/' + p.review_full + '</span>' : ''}
-          ${p.base_reused ? '<span class="ok">复用底图 0 元</span>' : ''}
+          ${(p.base_reused || p.photo) ? '<span class="ok">这张 0 元</span>' : ''}
           <span>${esc((p.created_at || '').slice(5, 16))}</span>
         </div>
       </div>
@@ -3087,6 +3170,7 @@ async function openPosterDetail(id) {
     '<div class="pk-cm" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;font-size:11.5px">'
     + '<span class="pill">风格 ' + esc(m.style_label || '未指定') + '</span>'
     + '<span class="pill">' + (m.text_mode === 'typeset' ? '程序排字' : '模型画字') + '</span>'
+    + (m.photo ? '<span class="pill">真图主视觉</span>' : '')
     + '<span class="pill">' + (m.text_chars || 0) + ' 字上图</span>'
     + '<span class="pill">' + esc(m.ratio || '') + '</span>'
     + (m.review && m.review.score ? '<span class="pill">好看度 ' + m.review.score + '/' + m.review.full + '</span>' : '')
