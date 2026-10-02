@@ -460,6 +460,26 @@ textarea{resize:vertical;min-height:84px}
 .pk-left{flex:1 1 330px;min-width:280px;max-width:430px;position:sticky;top:16px}
 .pk-right{flex:2 1 380px;min-width:0}
 .pk-big{display:block;width:100%;border-radius:12px;border:1px solid var(--border);cursor:zoom-in}
+/* 首页待办板：一行概况 + 一列可点的待办，替代原来那屏装饰性卡片 */
+.oneline{display:flex;gap:12px;flex-wrap:wrap;align-items:center;font-size:12px;color:var(--text-secondary);
+  border:1px dashed var(--border);border-radius:9px;padding:9px 13px;margin:2px 0 16px}
+.oneline b{color:var(--text);font-size:13.5px;font-weight:800}
+.oneline i{font-style:normal;color:var(--border-input)}
+.oneline em{font-style:normal;cursor:pointer;text-decoration:underline dotted}
+.oneline em:hover{color:var(--module-5)}
+.todo-list{display:flex;flex-direction:column;gap:9px}
+.todo{display:flex;gap:14px;align-items:center;border:1px solid var(--border);border-radius:12px;
+  background:var(--surface-card);box-shadow:var(--shadow-card);padding:13px 16px;cursor:pointer;transition:border .12s,transform .12s}
+.todo:hover{border-color:var(--module-5);transform:translateY(-1px)}
+.todo .n{flex:0 0 56px;font-size:22px;font-weight:800;letter-spacing:-.03em;text-align:right;color:var(--module-5)}
+.todo .tb{flex:1;min-width:0}
+.todo .tt{font-size:13.5px;font-weight:700}
+.todo .tn{font-size:11.5px;line-height:1.65;color:var(--text-secondary);margin-top:2px}
+.todo .go{flex:0 0 auto;font-size:11.5px;font-weight:700;color:var(--module-5);white-space:nowrap}
+.todo.hot{background:color-mix(in srgb,var(--danger) 5%,var(--surface-card))}
+.todo.hot .n{color:var(--danger)}
+.todo.ok .n,.todo.info .n{font-size:13px;font-weight:700;color:var(--text-tertiary);line-height:1.5}
+.todo.zero .n{color:var(--text-tertiary);font-size:15px}
 /* 三步操作卡：可折叠，收起状态记在 localStorage，学会之后不必一直占地方 */
 .pk-guide{font-size:12px;line-height:1.85;color:var(--text-secondary);background:var(--surface-nested);border:1px solid var(--border);border-radius:8px;padding:0 0 2px;margin-bottom:12px}
 .pk-guide>summary{cursor:pointer;font-size:12.5px;font-weight:800;color:var(--module-5);padding:9px 12px;list-style:none;user-select:none}
@@ -557,99 +577,21 @@ textarea{resize:vertical;min-height:84px}
   <!-- ════ 主区 ════ -->
   <main class="main">
 
-    <!-- ── 首页 ── -->
+    <!-- ── 首页：待办板 ── -->
     <section id="page-dashboard" class="on">
       <div class="header">
-        <h2>工作台首页</h2>
+        <h2>今天该干什么</h2>
         <div class="spacer"></div>
+        <button class="btn ghost sm" onclick="switchPage('collect')"><span data-icon="camera" class="ic14"></span>开始采集</button>
+        <button class="btn ghost sm" onclick="syncWorkbench()"><span data-icon="activity" class="ic14"></span>同步数据</button>
         <span class="date-chip"><span data-icon="calendar" class="ic14"></span><span id="today-str"></span></span>
       </div>
 
-      <div class="hero-banner">
-        <div class="hi" id="greet-hi">你好</div>
-        <div class="sub">抖音短视频素材采集 → ASR 转写 → AI 整理，一条链路管理你的内容选题。</div>
-        <div class="hstats">
-          <div class="hstat" onclick="switchPage('materials')"><span class="n" id="h-total">–</span><span class="t">素材总数</span></div>
-          <div class="hstat" onclick="switchPage('materials')"><span class="n" id="h-asr">–</span><span class="t">已有 ASR</span></div>
-          <div class="hstat" onclick="switchPage('summaries')"><span class="n" id="h-summaries">–</span><span class="t">整理稿</span></div>
-          <div class="hstat" onclick="switchPage('questions')"><span class="n" id="h-questions">–</span><span class="t">面试题</span></div>
-        </div>
-        <div class="htop">
-          <button class="btn sm" onclick="switchPage('collect')"><span data-icon="camera" class="ic14"></span>开始采集</button>
-          <button class="btn ghost sm" onclick="syncWorkbench()"><span data-icon="activity" class="ic14"></span>同步数据</button>
-        </div>
-      </div>
+      <div class="oneline" id="dash-oneline">加载中…</div>
 
-      <div class="sec-title">内容概况</div>
-      <div class="stat-grid">
-        <div class="mini" onclick="switchPage('materials')">
-          <div class="mh"><span class="ic" style="background:color-mix(in srgb,var(--module-1) 14%,transparent);color:var(--module-1)" data-icon="grid"></span><span class="l">素材总数</span></div>
-          <div class="v" id="st-total">–</div><div class="d" id="st-total-d">来自 Excel 内容库</div>
-        </div>
-        <div class="mini" onclick="switchPage('materials')">
-          <div class="mh"><span class="ic" style="background:color-mix(in srgb,var(--module-2) 14%,transparent);color:var(--module-2)" data-icon="chart"></span><span class="l">ASR 覆盖率</span></div>
-          <div class="v" id="st-asr">–</div><div class="d" id="st-asr-d">–</div>
-        </div>
-        <div class="mini" onclick="switchPage('summaries')">
-          <div class="mh"><span class="ic" style="background:color-mix(in srgb,var(--module-3) 14%,transparent);color:var(--module-3)" data-icon="book"></span><span class="l">整理稿</span></div>
-          <div class="v" id="st-summaries">–</div><div class="d" id="st-summaries-d">–</div>
-        </div>
-        <div class="mini" onclick="switchPage('questions')">
-          <div class="mh"><span class="ic" style="background:color-mix(in srgb,var(--module-5) 14%,transparent);color:var(--module-5)" data-icon="target"></span><span class="l">面试题</span></div>
-          <div class="v" id="st-questions">–</div><div class="d" id="st-questions-d">结构化题卡</div>
-        </div>
-      </div>
-
-      <div class="sec-title">快捷入口</div>
-      <div class="modcard-grid">
-        <div class="modcard" onclick="switchPage('collect')">
-          <div class="mc-head">
-            <span class="mc-ic" style="background:color-mix(in srgb,var(--module-4) 14%,transparent);color:var(--module-4)" data-icon="camera"></span>
-            <div class="mc-tt"><div class="mc-name">采集中心</div><div class="mc-desc">链接批处理 / 用户主页批量抓取</div></div>
-            <span class="mc-arw" data-icon="chevron"></span>
-          </div>
-          <div class="mc-body"><span class="mc-main">一键采集</span><span class="mc-extra">支持短链 · 自动 ASR</span></div>
-        </div>
-        <div class="modcard" onclick="switchPage('materials')">
-          <div class="mc-head">
-            <span class="mc-ic" style="background:color-mix(in srgb,var(--module-1) 14%,transparent);color:var(--module-1)" data-icon="grid"></span>
-            <div class="mc-tt"><div class="mc-name">素材工作台</div><div class="mc-desc">封面 / 关键帧 / ASR 资产总览</div></div>
-            <span class="mc-arw" data-icon="chevron"></span>
-          </div>
-          <div class="mc-body"><span class="mc-main" id="mc-materials">–</span><span class="mc-extra" id="mc-materials-extra">条素材</span></div>
-        </div>
-        <div class="modcard" onclick="switchPage('videos')">
-          <div class="mc-head">
-            <span class="mc-ic" style="background:color-mix(in srgb,var(--module-2) 14%,transparent);color:var(--module-2)" data-icon="list"></span>
-            <div class="mc-tt"><div class="mc-name">素材库</div><div class="mc-desc">抖音+微信统一素材池，勾选生成整理稿</div></div>
-            <span class="mc-arw" data-icon="chevron"></span>
-          </div>
-          <div class="mc-body"><span class="mc-main">选题 → 二创</span><span class="mc-extra">攻略 / 面试题</span></div>
-        </div>
-        <div class="modcard" onclick="switchPage('summaries')">
-          <div class="mc-head">
-            <span class="mc-ic" style="background:color-mix(in srgb,var(--module-3) 14%,transparent);color:var(--module-3)" data-icon="book"></span>
-            <div class="mc-tt"><div class="mc-name">整理稿</div><div class="mc-desc">AI 整理的游戏攻略与内容稿</div></div>
-            <span class="mc-arw" data-icon="chevron"></span>
-          </div>
-          <div class="mc-body"><span class="mc-main" id="mc-summaries">–</span><span class="mc-extra">篇草稿</span></div>
-        </div>
-        <div class="modcard" onclick="switchPage('questions')">
-          <div class="mc-head">
-            <span class="mc-ic" style="background:color-mix(in srgb,var(--module-5) 14%,transparent);color:var(--module-5)" data-icon="target"></span>
-            <div class="mc-tt"><div class="mc-name">面试题库</div><div class="mc-desc">结构化 AI 面试题 · 参考答案</div></div>
-            <span class="mc-arw" data-icon="chevron"></span>
-          </div>
-          <div class="mc-body"><span class="mc-main" id="mc-questions">–</span><span class="mc-extra">道题目</span></div>
-        </div>
-        <div class="modcard" onclick="syncWorkbench()">
-          <div class="mc-head">
-            <span class="mc-ic" style="background:color-mix(in srgb,var(--accent) 10%,transparent);color:var(--text-secondary)" data-icon="activity"></span>
-            <div class="mc-tt"><div class="mc-name">同步数据</div><div class="mc-desc">Excel → SQLite → AI 素材层</div></div>
-            <span class="mc-arw" data-icon="chevron"></span>
-          </div>
-          <div class="mc-body"><span class="mc-main">手动同步</span><span class="mc-extra">处理完成后建议执行</span></div>
-        </div>
+      <div class="sec-title">待办 <span id="todo-n" style="font-size:11.5px;font-weight:400;color:var(--text-tertiary)"></span></div>
+      <div class="todo-list" id="todo-list">
+        <div class="todo"><div class="tb"><div class="tt">加载中…</div></div></div>
       </div>
 
       <div class="sec-title">最近动态</div>
@@ -1541,35 +1483,29 @@ async function refreshAll() {
   await loadCurrentView();
 }
 
-// ── 仪表盘 ──
+// ── 首页：一行概况 + 待办板 ──
+const TODO_ICON = {draft:'book', need_summary:'list', pkg_review:'image', asr_fail:'bolt',
+                   autosync:'calendar', autosync_off:'calendar', stale_output:'chart', no_output:'chart'};
+
 async function loadDashboard() {
-  let data;
+  let data = {}, td = {};
   try {
-    data = await fetch('/api/dashboard').then(r=>r.json());
-  } catch(e) { return; }
+    const rs = await Promise.all([
+      fetch('/api/dashboard').then(r=>r.json()),
+      fetch('/api/todo').then(r=>r.json()),
+    ]);
+    data = rs[0] || {}; td = rs[1] || {};
+  } catch (e) {
+    console.warn('[首页] 概况与待办加载失败：', e);
+    document.getElementById('dash-oneline').textContent = '概况加载失败（网络或工作台没起来）';
+    return;
+  }
   if (data.error) {
     document.getElementById('recent-videos').innerHTML = `<div class="rm" style="padding:16px 4px;color:var(--danger)">${esc(data.error)}</div>`;
     return;
   }
-  const total = data.total || 0, withAsr = data.with_asr || 0;
-  const guide = (data.summaries||{}).game_guide || 0, interview = (data.summaries||{}).ai_interview || 0, wechat = (data.summaries||{}).wechat_material || 0;
-
-  document.getElementById('h-total').textContent = total;
-  document.getElementById('h-asr').textContent = withAsr;
-  document.getElementById('h-summaries').textContent = guide + interview + wechat;
-  document.getElementById('h-questions').textContent = data.question_count || 0;
-
-  document.getElementById('st-total').textContent = total;
-  document.getElementById('st-asr').textContent = (data.asr_rate || 0) + '%';
-  document.getElementById('st-asr-d').textContent = `已转写 ${withAsr} · 缺失 ${data.missing_asr||0}`;
-  document.getElementById('st-summaries').textContent = guide + interview + wechat;
-  document.getElementById('st-summaries-d').textContent = `攻略稿 ${guide} · 公众号素材 ${wechat} · 题稿 ${interview}`;
-  document.getElementById('st-questions').textContent = data.question_count || 0;
-
-  document.getElementById('mc-materials').textContent = total;
-  document.getElementById('mc-materials-extra').textContent = `ASR 覆盖 ${data.asr_rate||0}%`;
-  document.getElementById('mc-summaries').textContent = guide + interview + wechat;
-  document.getElementById('mc-questions').textContent = data.question_count || 0;
+  renderDashOneLine(data, td);
+  renderTodo(td);
 
   const rv = document.getElementById('recent-videos');
   if ((data.recent_videos||[]).length) {
@@ -1596,6 +1532,55 @@ async function loadDashboard() {
   }
 
   updateSidebarStatus({running: data.running});
+}
+
+function renderDashOneLine(data, td) {
+  const el = document.getElementById('dash-oneline');
+  const s = (td && td.stats) || {};
+  const total = s.total || data.total || 0, withAsr = s.with_asr || data.with_asr || 0;
+  const pk = (td && td.packages) || {};
+  const as = (td && td.autosync) || {};
+  const seg = [];
+  seg.push(`<span>素材 <b>${total}</b></span>`);
+  seg.push(`<em onclick="switchPage('videos')">已转写 <b>${withAsr}</b>（${data.asr_rate||0}%）</em>`);
+  seg.push(`<em onclick="switchPage('summaries')">整理稿 <b>${s.summaries||0}</b></em>`);
+  seg.push(`<em onclick="switchPage('poster')">海报 <b>${pk.poster||0}</b></em>`);
+  seg.push(`<em onclick="switchPage('toutiao')">头条 <b>${pk.toutiao||0}</b></em>`);
+  seg.push(`<em onclick="switchPage('wechat')">公众号 <b>${pk.wechat||0}</b></em>`);
+  seg.push(`<em onclick="switchPage('materials')">订阅 <b>${s.subs||0}</b></em>`);
+  seg.push(as.enabled
+    ? `<span>自动同步 <b>已开</b>，下次 ${esc(as.next_due||'—')}</span>`
+    : '<span>自动同步 <b>未开</b></span>');
+  if (s.last_output) seg.push(`<span>上次产出 ${esc(String(s.last_output).slice(5,16))}</span>`);
+  el.innerHTML = seg.join('<i>·</i>');
+}
+
+function renderTodo(td) {
+  const box = document.getElementById('todo-list');
+  const items = (td && td.items) || [];
+  const n = document.getElementById('todo-n');
+  const hot = items.filter(i => i.tone === 'hot').length;
+  n.textContent = items.length ? (hot ? items.length + ' 项 · 其中 ' + hot + ' 项别拖' : items.length + ' 项') : '';
+  if (!items.length) {
+    box.innerHTML = '<div class="todo zero"><span class="n">✓</span><div class="tb">'
+      + '<div class="tt">没有积压</div><div class="tn">素材、整理稿、成品都不用补，直接去出图。</div></div></div>';
+    return;
+  }
+  box.innerHTML = items.map(it => `<div class="todo ${esc(it.tone||'')}" onclick="gotoTodo('${esc(it.page)}','${esc(it.key)}')"
+    title="点一下去${esc(it.btn || '')}">
+      <span class="n">${it.n || 0}</span>
+      <div class="tb"><div class="tt">${esc(it.label)}</div><div class="tn">${esc(it.note||'')}</div></div>
+      <span class="go">${esc(it.btn||'')} →</span>
+    </div>`).join('');
+}
+
+// 待办点下去要落到"能干活"的位置，不只是翻到那一页
+function gotoTodo(page, key) {
+  switchPage(page);
+  if (key === 'pkg_review') { setTimeout(function(){ loadPosterList(); }, 50); }
+  if (key === 'autosync' || key === 'autosync_off') {
+    setTimeout(function(){ const el = document.getElementById('as-panel'); if (el) el.scrollIntoView({behavior:'smooth', block:'center'}); }, 200);
+  }
 }
 
 // ── 加载作者分类 ──

@@ -619,6 +619,147 @@ def api_stats():
 
 
 # ── API: 工作台仪表盘 ──
+# ── 首页待办板：一次算完"现在有什么活儿等着"，每项都带跳转 ──
+def _packages_pending():
+    """扫三渠道成品清单，挑出需要人眼复核的那几张，顺带报各渠道有几组。
+
+    判据跟出图那一步用的是同一套：海报看图面文字回读与视觉评审分数线，
+    头条/公众号看 model 是不是 local-template（LLM 没成时静默换的本地兜底稿，
+    这种稿会把 ASR 乱码印到读者看得见的卡片上）。
+    """
+    pending = []
+    counts = {}
+    for ch, sub in (("海报", "poster"), ("头条图文", "toutiao"), ("公众号图文", "wechat")):
+        d = OUTPUT_DIR / sub
+        n = 0
+        if d.exists():
+            for mf in d.glob("*/manifest.json"):
+                if mf.parent.name.startswith("_"):
+                    continue
+                n += 1
+                try:
+                    m = json.loads(mf.read_text(encoding="utf-8"))
+                except (ValueError, OSError):
+                    continue
+                v = (m.get("verify") or {}).get("ok")
+                rv = m.get("review") or {}
+                why = []
+                if v is False:
+                    why.append("图面文字与文案不一致")
+                if m.get("model") == "local-template" or rv.get("model") == "local-template":
+                    why.append("文案是本地兜底稿（AI 没成）")
+                if rv.get("score") is not None and int(rv.get("full") or 0) > 0 \
+                        and int(rv.get("score")) < ai_poster.REVIEW_PASS:
+                    why.append("视觉评审 %s/%s 偏低" % (rv.get("score"), rv.get("full")))
+                if why:
+                    pending.append({"channel": ch, "id": m.get("id"),
+                                    "title": m.get("title") or "", "why": "；".join(why)})
+        counts[sub] = n
+    pending.sort(key=lambda x: x["channel"])
+    return pending, counts
+
+
+@app.route("/api/todo")
+def api_todo():
+    """首页待办板。做成接口而不是在前端拼：判据要读 SQLite 与成品清单，浏览器拿不到。"""
+    if not DB_PATH.exists():
+        return jsonify({"items": [], "stats": {}, "error": "数据库还没生成，先去采集中心跑一条"})
+    now = datetime.now()
+    with _db_lock:
+        conn = sqlite3.connect(str(DB_PATH))
+        conn.row_factory = sqlite3.Row
+        try:
+            vids = conn.execute(
+                "SELECT id, status, LENGTH(COALESCE(transcript,'')) AS tlen FROM videos"
+            ).fetchall()
+            covered = set()
+            for r in conn.execute("SELECT video_id, source_video_ids FROM ai_summaries"):
+                if r["video_id"]:
+                    covered.add(r["video_id"])
+                try:
+                    for v in json.loads(r["source_video_ids"] or "[]"):
+                        covered.add(int(v))
+                except (ValueError, TypeError):
+                    continue
+            drafts = conn.execute(
+                "SELECT COUNT(*) AS c FROM ai_summaries WHERE status='draft' "
+                "OR content LIKE '%[AI生成失败%' OR content LIKE '%规则版草稿%'").fetchone()["c"]
+            n_sum = conn.execute("SELECT COUNT(*) AS c FROM ai_summaries").fetchone()["c"]
+            last_out = conn.execute(
+                "SELECT MAX(updated_at) AS t FROM ai_summaries").fetchone()["t"] or ""
+            n_subs = conn.execute("SELECT COUNT(*) AS c FROM subscriptions").fetchone()["c"]
+        finally:
+            conn.close()
+
+    need = [v for v in vids if (v["tlen"] or 0) >= 300 and v["id"] not in covered]
+    failed = [v for v in vids if (v["status"] or "") == "失败"]
+    pending_pkgs, pkg_counts = _packages_pending()
+    cfg = sync_tasks.load()
+    with _db_lock:
+        subs = content_store.list_subscriptions(DB_PATH) if DB_PATH.exists() else []
+    alive = {s["id"] for s in subs}
+    due_ids = sync_tasks.due_task_ids(cfg, now, alive)
+    nxt = None
+    for t in cfg.get("tasks") or []:
+        d = sync_tasks.next_due(t, cfg.get("run_at"), now)
+        if d and (nxt is None or d < nxt):
+            nxt = d
+    days_since = None
+    try:
+        days_since = (now - datetime.strptime(last_out, "%Y-%m-%d %H:%M:%S")).days
+    except (TypeError, ValueError):
+        pass
+
+    items = []
+    if drafts:
+        items.append({"key": "draft", "tone": "hot", "n": drafts,
+                      "label": "整理稿是规则版骨架", "page": "summaries", "btn": "去重跑整理稿",
+                      "note": "AI 当时没成，正文是照抄转写的骨架稿——从这里出图会把错字印到读者眼前"})
+    if need:
+        items.append({"key": "need_summary", "tone": "todo", "n": len(need),
+                      "label": "有转写还没整理稿", "page": "videos", "btn": "去素材库勾选",
+                      "note": "转写 ≥300 字、还没生成过整理稿的素材；图文与海报都从这一步出"})
+    if pending_pkgs:
+        first = pending_pkgs[0]
+        items.append({"key": "pkg_review", "tone": "hot", "n": len(pending_pkgs),
+                      "label": "成品等着人眼复核", "page": "poster", "btn": "去看成品",
+                      "note": "%s：%s" % (first["channel"], first["why"])})
+    if failed:
+        items.append({"key": "asr_fail", "tone": "todo", "n": len(failed),
+                      "label": "转写失败", "page": "videos", "btn": "去素材库",
+                      "note": "状态标了失败的素材，多为链接失效或下载中断"})
+    if cfg.get("enabled"):
+        items.append({"key": "autosync", "tone": "ok", "n": len(cfg.get("tasks") or []),
+                      "label": "自动同步开着", "page": "materials", "btn": "去配置",
+                      "note": "下次 %s 跑%s" % (nxt.strftime("%m-%d %H:%M") if nxt else "（无到期任务）",
+                                                "，现在已到期 %d 条" % len(due_ids) if due_ids else "")})
+    else:
+        items.append({"key": "autosync_off", "tone": "info", "n": 0,
+                      "label": "自动同步没开", "page": "materials", "btn": "去开",
+                      "note": "不开就得每次人过去点；微信那条很轻，适合交给它"})
+    if days_since is None:
+        items.append({"key": "no_output", "tone": "info", "n": 0, "label": "还没有整理稿",
+                      "page": "videos", "btn": "去生成", "note": "整条链路的第一篇稿子"})
+    elif days_since >= 3:
+        items.append({"key": "stale_output", "tone": "todo", "n": days_since,
+                      "label": "已 %d 天没出新整理稿" % days_since, "page": "summaries",
+                      "btn": "去看整理稿", "note": "产线断档比质量差更难发现，先确认是没料还是没做"})
+
+    return jsonify({
+        "items": items,
+        "stats": {"total": len(vids), "with_asr": sum(1 for v in vids if (v["tlen"] or 0) > 0),
+                  "summaries": n_sum, "subs": n_subs,
+                  "last_output": last_out, "days_since": days_since},
+        "packages": pkg_counts,
+        "autosync": {"enabled": bool(cfg.get("enabled")), "run_at": cfg.get("run_at"),
+                     "tasks": len(cfg.get("tasks") or []),
+                     "next_due": nxt.strftime("%Y-%m-%d %H:%M") if nxt else "",
+                     "due_now": len(due_ids), "last_batch": cfg.get("last_batch")},
+        "sync": {"running": bool(_sub_status.get("running")),
+                 "progress": _sub_status.get("progress") or ""},
+    })
+
+
 @app.route("/api/dashboard")
 def api_dashboard():
     """聚合 SQLite 内容库统计，供首页仪表盘使用。"""
