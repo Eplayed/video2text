@@ -169,25 +169,27 @@ textarea{resize:vertical;min-height:84px}
 .as-fail{color:var(--danger);font-weight:700}
 .as-off{opacity:.55}
 .as-pick-btn{text-align:left;min-width:172px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:260px}
-.as-pick{position:fixed;z-index:210;background:var(--surface-card);border:1px solid var(--border);
-  border-radius:12px;box-shadow:var(--shadow-overlay);padding:10px;width:330px;max-height:60vh;display:flex;flex-direction:column;gap:8px}
-.as-pick-top{display:flex;gap:6px;align-items:center}
-.as-pick-top input{flex:1;min-width:0;padding:6px 9px;font-size:12.5px}
-.as-pick-top span{font-size:11.5px;font-weight:700;color:var(--module-5);cursor:pointer;white-space:nowrap}
-.as-pick-body{overflow-y:auto;min-height:60px;margin:0 -2px;padding:0 2px}
+.as-pick{margin-top:10px;border:1px solid var(--border);border-radius:10px;background:var(--surface-card);padding:11px 12px}
+.as-pick-top{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.as-pick-top input{flex:1 1 170px;min-width:150px;padding:6px 9px;font-size:12.5px}
+.as-pick-acts{display:flex;gap:12px;margin-left:auto}
+.as-pick-acts span{font-size:11.5px;font-weight:700;color:var(--module-5);cursor:pointer;white-space:nowrap}
+.as-pick-body{max-height:46vh;overflow-y:auto;margin-top:4px;padding-right:2px}
 .as-pick-tabs{display:flex;gap:6px}
 .as-pick-tabs span{font-size:11px;font-weight:700;color:var(--text-secondary);border:1px solid var(--border);
-  border-radius:20px;padding:2px 10px;cursor:pointer;background:var(--surface-nested)}
+  border-radius:20px;padding:2px 10px;cursor:pointer;background:var(--surface-nested);white-space:nowrap}
 .as-pick-tabs span.on{color:#fff;background:var(--module-5);border-color:var(--module-5)}
-.as-pick-grp{font-size:10.5px;font-weight:800;color:var(--text-tertiary);letter-spacing:.06em;margin:8px 2px 3px}
-.as-pick-row{display:flex;gap:7px;align-items:center;padding:5px 7px;border-radius:7px;cursor:pointer;font-size:12.5px}
+.as-pick-grp{font-size:10.5px;font-weight:800;color:var(--text-tertiary);letter-spacing:.06em;margin:10px 2px 3px}
+.as-pick-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:1px 14px}
+.as-pick-row{display:flex;gap:7px;align-items:center;padding:5px 7px;border-radius:7px;cursor:pointer;font-size:12.5px;min-width:0}
 .as-pick-row:hover{background:var(--surface-nested)}
 .as-pick-row input{width:14px;height:14px;margin:0;flex:0 0 auto}
 .as-pick-row .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .as-pick-row .cat{font-size:10.5px;color:var(--text-tertiary);flex:0 0 auto}
 .as-pick-row.on{background:color-mix(in srgb,var(--module-5) 10%,transparent)}
-.as-pick-foot{display:flex;gap:8px;align-items:center;border-top:1px solid var(--border);padding-top:8px}
+.as-pick-foot{display:flex;gap:8px;align-items:center;border-top:1px solid var(--border);padding-top:9px;margin-top:10px}
 .as-pick-foot .as-pick-n{font-size:11.5px;color:var(--text-tertiary);flex:1}
+.as-pick-empty{font-size:12px;color:var(--text-tertiary);padding:14px 6px}
 .form-grid{display:grid;gap:14px}
 .form-row{display:grid;gap:10px;grid-template-columns:1fr 1fr 1fr}
 .form-row.two{grid-template-columns:1fr 1fr}
@@ -779,10 +781,23 @@ textarea{resize:vertical;min-height:84px}
         <div class="p-sub">勾上订阅、定个频率，到点自己拉新内容，不用每天人过去点。定时器跑在工作台进程里：<b>工作台没开的那段时间不会跑</b>，下次打开若已过点会补一轮。抖音那条会起浏览器抓主页并做本地转写，跑起来电脑会占一会儿 CPU；微信那条只是拉一次 RSS，很轻。</div>
         <div class="as-bar">
           <label>每天执行时刻<input type="time" id="as-runat" value="09:30" onchange="asSetRunAt(this.value)"></label>
-          <label>添加订阅<button type="button" class="btn ghost as-pick-btn" id="as-cand-btn" onclick="asOpenPicker(event)">选择订阅 ▾</button></label>
+          <label>添加订阅<button type="button" class="btn ghost as-pick-btn" id="as-cand-btn" onclick="asOpenPicker()">选择订阅 ▾</button></label>
           <label>频率<select id="as-interval"><option value="1">每天</option><option value="2">每 2 天</option><option value="3">每 3 天</option><option value="7">每周</option></select></label>
           <button class="btn sm" onclick="asAdd()">加入自动任务</button>
           <span class="as-note" id="as-note"></span>
+        </div>
+
+        <!-- 订阅多选面板就地展开（不用浮层：浮层要先量高度再定位，列表一撑高就被屏幕底边切掉） -->
+        <div class="as-pick" id="as-pick" style="display:none">
+          <div class="as-pick-top">
+            <input id="as-pick-q" placeholder="搜作者 / 分类…" oninput="asPickRender()">
+            <span class="as-pick-tabs" id="as-pick-tabs"></span>
+            <span class="as-pick-acts"><span onclick="asPickAll(true)">全选筛出的</span><span onclick="asPickAll(false)">清空</span></span>
+          </div>
+          <div class="as-pick-body" id="as-pick-body"></div>
+          <div class="as-pick-foot"><span class="as-pick-n" id="as-pick-n"></span>
+            <button class="btn sm pk-go" onclick="asAdd()">加入自动任务</button>
+            <button class="btn ghost sm" onclick="asClosePicker()">收起</button></div>
         </div>
         <div id="as-list" style="margin-top:10px"></div>
       </div>
@@ -1963,10 +1978,10 @@ function asPickVisible() {
 
 function asPickRow(s) {
   const on = _asPicked.has(s.id);
-  return `<label class="as-pick-row${on ? ' on' : ''}">`
+  const meta = (s.platform === 'wechat' ? '微信' : '抖音') + (s.category ? ' · ' + s.category : '');
+  return `<label class="as-pick-row${on ? ' on' : ''}" title="${escAttr(s.author + '（' + meta + '）')}">`
     + `<input type="checkbox" value="${s.id}"${on ? ' checked' : ''} onchange="asPickToggle(${s.id}, this.checked)">`
-    + `<span class="nm">${esc(s.author)}</span>`
-    + `<span class="cat">${s.platform === 'wechat' ? '微信' : '抖音'}${s.category ? ' · ' + esc(s.category) : ''}</span></label>`;
+    + `<span class="nm">${esc(s.author)}</span><span class="cat">${esc(meta)}</span></label>`;
 }
 
 function asPickRender() {
@@ -1982,47 +1997,30 @@ function asPickRender() {
   [['wechat', '微信'], ['douyin', '抖音']].forEach(g => {
     const items = vis.filter(s => (s.platform === 'wechat' ? 'wechat' : 'douyin') === g[0]);
     if (!items.length) return;
-    html += `<div class="as-pick-grp">${g[1]} · ${items.length} 条</div>` + items.map(asPickRow).join('');
+    // 按来源分组、组内多列：35 条订阅摊成两列一眼扫得完，挤在一列里就得滚半天
+    html += `<div class="as-pick-grp">${g[1]} · ${items.length} 条</div>`
+          + '<div class="as-pick-grid">' + items.map(asPickRow).join('') + '</div>';
   });
-  body.innerHTML = html || '<div style="font-size:12px;color:var(--text-tertiary);padding:14px 6px">没有匹配的订阅</div>';
+  body.innerHTML = html || '<div class="as-pick-empty">没有匹配的订阅</div>';
   const n = document.getElementById('as-pick-n');
-  if (n) n.textContent = '已选 ' + _asPicked.size + ' 条';
+  if (n) n.textContent = '已选 ' + _asPicked.size + ' 条 · 频率用上面那档';
   asCandLabel();
 }
 
-function asOpenPicker(ev) {
-  if (ev) ev.stopPropagation();
-  asClosePicker();
+function asOpenPicker() {
+  const box = document.getElementById('as-pick');
+  if (!box) return;
+  if (box.style.display !== 'none') { asClosePicker(); return; }   // 再点一次就是收起
   if (!_asCands.length) { setStatus('error', '订阅都已经在自动任务里了'); return; }
-  const box = document.createElement('div');
-  box.className = 'as-pick';
-  box.id = 'as-pick-pop';
-  box.innerHTML = '<div class="as-pick-top"><input id="as-pick-q" placeholder="搜作者 / 分类…" oninput="asPickRender()">'
-    + '<span onclick="asPickAll(true)">全选筛出的</span><span onclick="asPickAll(false)">清空</span></div>'
-    + '<div class="as-pick-tabs" id="as-pick-tabs"></div>'
-    + '<div class="as-pick-body" id="as-pick-body"></div>'
-    + '<div class="as-pick-foot"><span class="as-pick-n" id="as-pick-n"></span>'
-    + '<button class="btn sm pk-go" onclick="asAdd()">加入自动任务</button>'
-    + '<button class="btn ghost sm" onclick="asClosePicker()">收起</button></div>';
-  document.body.appendChild(box);
-  const r = document.getElementById('as-cand-btn').getBoundingClientRect();
-  box.style.left = Math.max(8, Math.min(r.left, window.innerWidth - 346)) + 'px';
-  box.style.top = Math.min(r.bottom + 6, window.innerHeight - box.offsetHeight - 12) + 'px';
+  box.style.display = '';
   asPickRender();
-  document.addEventListener('mousedown', asPickOutside);
   const q = document.getElementById('as-pick-q');
   if (q) q.focus();
 }
 
-function asPickOutside(e) {
-  const box = document.getElementById('as-pick-pop');
-  if (box && !box.contains(e.target)) asClosePicker();
-}
-
 function asClosePicker() {
-  const box = document.getElementById('as-pick-pop');
-  if (box) box.remove();
-  document.removeEventListener('mousedown', asPickOutside);
+  const box = document.getElementById('as-pick');
+  if (box) box.style.display = 'none';
 }
 
 function asPickToggle(id, on) {
