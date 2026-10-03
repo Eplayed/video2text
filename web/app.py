@@ -698,7 +698,7 @@ def api_todo():
     with _db_lock:
         subs = content_store.list_subscriptions(DB_PATH) if DB_PATH.exists() else []
     alive = {s["id"] for s in subs}
-    due_ids = sync_tasks.due_task_ids(cfg, now, alive)
+    due_now = sync_tasks.due_tasks(cfg, now, alive)   # 到点的任务（一组订阅一个任务）
     nxt = None
     for t in cfg.get("tasks") or []:
         d = sync_tasks.next_due(t, cfg.get("run_at"), now)
@@ -732,7 +732,7 @@ def api_todo():
         items.append({"key": "autosync", "tone": "ok", "n": len(cfg.get("tasks") or []),
                       "label": "自动同步开着", "page": "materials", "btn": "去配置",
                       "note": "下次 %s 跑%s" % (nxt.strftime("%m-%d %H:%M") if nxt else "（无到期任务）",
-                                                "，现在已到期 %d 条" % len(due_ids) if due_ids else "")})
+                                                "，现在有 %d 个该跑了" % len(due_now) if due_now else "")})
     else:
         items.append({"key": "autosync_off", "tone": "info", "n": 0,
                       "label": "自动同步没开", "page": "materials", "btn": "去开",
@@ -754,7 +754,7 @@ def api_todo():
         "autosync": {"enabled": bool(cfg.get("enabled")), "run_at": cfg.get("run_at"),
                      "tasks": len(cfg.get("tasks") or []),
                      "next_due": nxt.strftime("%Y-%m-%d %H:%M") if nxt else "",
-                     "due_now": len(due_ids), "last_batch": cfg.get("last_batch")},
+                     "due_now": len(due_now), "last_batch": cfg.get("last_batch")},
         "sync": {"running": bool(_sub_status.get("running")),
                  "progress": _sub_status.get("progress") or ""},
     })
