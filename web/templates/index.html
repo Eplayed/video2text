@@ -1218,6 +1218,7 @@ textarea{resize:vertical;min-height:84px}
             <option value="3">3 张挑 1</option>
           </select></label>
           <label>风格<select id="pk-style-key-top" onchange="pkSyncStyle(this.value)"><option value="">载入中…</option></select></label>
+          <label>布局<select id="pk-layout-key-top" onchange="pkSyncLayout(this.value)" title="文字和图各占画面哪一块。默认跟着风格走，也可以单独换，换完自动免费重排"><option value="">跟着风格</option></select></label>
           <label>配图<span class="pk-photo" id="pk-photo"><button type="button" class="btn ghost sm" onclick="pkPhotoPick()">＋ 用你的图</button></span></label>
           <label class="pk-grow">题材<input id="pk-theme" placeholder="选填，例：魔兽怀旧服 塔卡"></label>
           <label class="pk-check"><input type="checkbox" id="pk-review" checked>出图后打分</label>
@@ -1227,6 +1228,7 @@ textarea{resize:vertical;min-height:84px}
           <button class="btn ghost sm" onclick="posterPreview()" title="不花钱、当场出：用出图时同一个排版函数先看版面">② 看版面 · 免费</button>
           <button class="btn sm pk-go" id="pk-go-top" onclick="posterGenerate()">③ 出图 · 0.5 元/张</button>
         </div>
+        <div id="pk-layout-hint" style="font-size:11.5px;color:var(--text-secondary);margin:2px 0 8px;min-height:16px"></div>
         <div class="pk-tpls" id="pk-tpls" style="display:none"></div>
         <div class="pk-break" id="pk-break" style="display:none"></div>
         <div class="pk-one" id="pk-one">字由程序排版，不会错字也不会漏，200 字上限只是版面放得下。<b>改完文案多点几次②，一次都不花钱。</b>有真实截图（坐骑、装备、界面）就点「＋ 用你的图」当主视觉，那条不出 AI 底图、0 元。</div>
@@ -1235,7 +1237,7 @@ textarea{resize:vertical;min-height:84px}
           <summary>怎么用 · 三步</summary>
           <ol>
             <li><b>① 拆文案</b>（约 30 秒）：拿到可编辑文案。先看「主线」那句成不成链，散了就重新拆，别拿着散文案花钱。</li>
-            <li><b>② 看版面</b>（免费）：字号、折行、卡片放不放得下、配色都是真的，只有上面那块灰框出图时会被插画替换。改一次文案点一次。</li>
+            <li><b>② 看版面</b>（免费）：字号、折行、卡片放不放得下、配色都是真的，只有上面那块灰框出图时会被插画替换。改一次文案点一次。旁边那个<b>布局</b>下拉换的是"图和文字各占画面哪一块"——不选就跟着风格走，选了也是 0 元，多点几次对比一下。</li>
             <li><b>③ 出图</b>（0.5 元/张）：AI 现画底图，出完自动打分，满分 25、18 以下会建议换一张或重出。出 3 张时点小图就换选。</li>
           </ol>
           <div class="pk-guide-f">风格四选一：攻略/数值→游戏史诗风 · 工具实测→工具测评风 · 清单避坑→清单笔记风 · 单观点→极简杂志风。被「整合稿不合格」挡住＝这条当初转写失败只剩骨架，自己核过数字再点「仍然出图」。发之前记得勾后台的「内容由 AI 生成」。</div>
@@ -2530,6 +2532,8 @@ async function loadPosterStyles(force) {
   try {
     const d = await fetch('/api/poster/styles').then(r => r.json());
     _pkStyles = d.items || [];
+    _pkLayouts = d.layouts || [];
+    pkRenderLayoutOptions();
     _pkLimitsByMode = d.limitsByMode || null;
     if (d.limits) Object.keys(d.limits).forEach(k => { PK_LIMITS[k] = d.limits[k]; });
     pkApplyLimits();
@@ -2551,6 +2555,32 @@ function pkSyncStyle(v) {          // 顶部下拉改了：让文案区里那段
   if (box) box.textContent = pkStyleText();
   const free = document.getElementById('pk-style-free-row');
   if (free) free.style.display = (v === 'auto') ? 'flex' : 'none';
+}
+// ── 布局轴：文字和图各占画面哪一块。名单由后端下发，前端不抄一份 ──
+let _pkLayouts = [];
+function pkLayout(key) {
+  for (let i = 0; i < _pkLayouts.length; i++) if (_pkLayouts[i].key === key) return _pkLayouts[i];
+  return null;
+}
+function pkLayoutKey() {
+  const sel = document.getElementById('pk-layout-key-top');
+  return sel ? sel.value : '';
+}
+function pkRenderLayoutOptions() {
+  const sel = document.getElementById('pk-layout-key-top');
+  if (!sel || !_pkLayouts.length) return;
+  const keep = sel.value;
+  sel.innerHTML = '<option value="">跟着风格</option>'
+    + _pkLayouts.map(l => `<option value="${l.key}" title="${esc(l.when)}${l.needs_photo ? ' · 要有图' : ''}">`
+        + `${esc(l.label)}${l.needs_photo ? '（要有图）' : ''}</option>`).join('');
+  sel.value = _pkLayouts.some(l => l.key === keep) ? keep : '';
+}
+function pkSyncLayout(v) {
+  const l = pkLayout(v);
+  const hint = document.getElementById('pk-layout-hint');
+  if (hint) hint.textContent = l ? l.when : '';
+  // 排版是代码算的，跟出图无关：换布局顺手重排一次，一分钱不花
+  if (document.getElementById('pk-title')) posterPreview();
 }
 function pkStyleText() {
   const s = pkStyle(pkStyleKey());
@@ -2583,6 +2613,14 @@ function pkRenderPlan(plan, publish) {
   if (pkStyleKey() !== (plan.style_key || '')) {
     const top = document.getElementById('pk-style-key-top');
     if (top && pkStyle(plan.style_key)) top.value = plan.style_key;
+  }
+  // 模型以后会直接推荐布局（M3），这里先把值端下来；名单里没有就退回"跟着风格"
+  const lsel = document.getElementById('pk-layout-key-top');
+  if (lsel) {
+    const want = plan.layout_key || '';
+    lsel.value = (!want || pkLayout(want)) ? want : '';
+    const h = document.getElementById('pk-layout-hint');
+    if (h) h.textContent = pkLayout(lsel.value) ? pkLayout(lsel.value).when : '';
   }
   let html = `<div class="pk-row"><span class="pk-tag">主线</span>`
     + `<input id="pk-spine" value="${esc(plan.spine || '')}" maxlength="${PK_LIMITS.spine}" placeholder="这条海报讲的一条链（不进图）"></div>`
@@ -2624,7 +2662,7 @@ function pkReadPlan() {
   }
   return {title: g('pk-title'), subtitle: g('pk-subtitle'), cards: cards,
           footer: g('pk-footer'), style: g('pk-style'), spine: g('pk-spine'),
-          scene: g('pk-scene'), style_key: pkStyleKey()};
+          scene: g('pk-scene'), style_key: pkStyleKey(), layout_key: pkLayoutKey()};
 }
 function pkReadPublish() {
   const g = id => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
@@ -2728,6 +2766,9 @@ async function posterPreview() {
     + '<div class="pk-verify ' + (bad.length ? 'fail' : 'pass') + '">'
     + (bad.length ? '⚠️ 版面放不下：' + bad.join('；')
                   : '✅ 版面放得下：' + r.chars + ' 字 · ' + (r.check.cards || 0) + ' 张卡片')
+    + ((r.check && r.check.layout_label)
+        ? '　｜　布局：<b>' + esc(r.check.layout_label) + '</b>'
+          + (pkLayoutKey() ? '' : '（跟着风格走的默认）') : '')
     + '</div>'
     + '<div class="pk-hint">这张预览 <b>0 元、当场出</b>，用的就是出图时同一个排版函数——字号、折行、卡片位置、配色都是真的。'
     + '只有上面那块灰框在出图时会被 AI 插画替换掉，插画画得好不好只有真出图才知道。<b>改完文案再点一次，不花钱。</b></div>';

@@ -2082,6 +2082,8 @@ def api_poster_status():
 def api_poster_styles():
     """风格预设名单由后端下发：配方原文只有一份，前端不抄一遍才不会漂移。"""
     return jsonify({"items": ai_poster.style_choices(),
+                    # 布局名单同样后端下发：十种构图、能不能没图、卡片数区间，前端不抄
+                    "layouts": ai_poster.layout_choices(),
                     "modes": [{"key": "typeset", "label": "程序排字（推荐，字不会错）"},
                               {"key": "model", "label": "模型画字（整张交给模型，风格更统一但会错字）"}],
                     # 两套预算按模式分开下发：程序排字看版面、模型画字看错字率，

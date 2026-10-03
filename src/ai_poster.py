@@ -602,9 +602,9 @@ def build_art_prompt(plan, ratio="9:16"):
     """
     from . import poster_typeset as ts
     preset = _preset(plan)
-    frac = ts.text_zone_ratio(plan, _canvas_px(ratio), (plan or {}).get("_skin"))
+    zone = ts.art_zone(plan, _canvas_px(ratio), (plan or {}).get("_skin"))
     skin = ts.skin_for(plan.get("style_key"))
-    art_pct, zone_pct = int(round(frac * 100)), int(round((1 - frac) * 100))
+    art_line, trans_line, rest_line = ts.art_zone_hint(zone, skin)
     scene = (plan.get("scene") or "").strip() or (preset.get("scene") or "").strip()
     # 底图只要画风与配色那段：卡片面板和字体那两样在程序排字模式下由代码负责，
     # 让模型去画反而会跟我们排的字打架
@@ -622,16 +622,16 @@ def build_art_prompt(plan, ratio="9:16"):
              ("- 画面里可以顺带出现的元素：%s" % "、".join(
                  [x for x in [(c.get("v") or "").strip() for c in (plan.get("cards") or [])] if x][:4])
               if any((c.get("v") or "").strip() for c in (plan.get("cards") or [])) else None),
-             "- 构图：上部 %d%% 是这幅主视觉插画，占满整个宽度、细节画满；下部 %d%% 只画%s，"
-             "**不要画任何具体物体、人物、边框或卡片**，那块地方是留给文字的。"
-             % (art_pct, zone_pct, skin.get("bottom", "暗色氛围底纹")),
-             "- 上下两区之间用光影或雾气自然过渡，不要出现硬边横线",
+             # 这句跟着布局走：图在上就说上部，图在下就说下部，分栏就说左右，
+             # 满版就说整幅——不然换了布局底图还是老构图，中间空一条白带
+             "- 构图：%s" % art_line,
+             "- %s" % trans_line,
              "",
              "【绝对禁止 · 违反就整张作废】",
              "- 禁止出现任何汉字、字母、数字、罗马数字、标点、符号、logo、水印",
              "- 画面里的纸张、屏幕、招牌、卷轴、书本一律用色块和线条表示，不许写任何字",
              "- 上面列出的道具只画外形（仪表盘、日历、卷轴、剑、面板），不许在上面标数字或文字标签",
-             "- 下部区域是一块连续的背景，禁止画成带边框的卡片或网格"]
+             "- %s，禁止画成带边框的卡片或网格" % rest_line]
     return "\n".join([l for l in lines if l is not None])
 
 
@@ -666,10 +666,17 @@ def template_base(style_key):
         return None
 
 
+def layout_choices():
+    """布局名单下发给界面：唯一权威源在排版层，前端抄一份迟早对不上。"""
+    from . import poster_typeset as ts
+    return ts.layout_choices()
+
+
 def typeset_poster(png_bytes, plan, ratio="9:16", photo=None):
     """把中文用真字体排到无字底图上。返回 (成品字节, 版面自检 dict)。
 
     photo 是用户上传的真实图片字节：非空时它会顶掉整块插画区，标题压在图上。
+    走哪个布局看 plan["layout_key"]，没给就用这套风格的默认布局。
     """
     from . import poster_typeset as ts
     return ts.typeset(png_bytes, plan, ratio, photo=photo)
@@ -689,8 +696,9 @@ def preview_typeset(plan, ratio="9:16", photo=None):
         ratio = "9:16"
     w, h = _canvas_px(ratio)
     skin = plan.get("_skin") if isinstance(plan.get("_skin"), dict) else None
-    frac = ts.text_zone_ratio(plan, (w, h), skin)
-    base = ts.placeholder_base(plan.get("style_key"), w, h, frac, skin, art_hint=not photo)
+    zone = ts.art_zone(plan, (w, h), skin)
+    base = ts.placeholder_base(plan.get("style_key"), w, h, zone["frac"], skin,
+                               art_hint=not photo, plan=plan, zone=zone)
     return ts.typeset(base, plan, ratio, skin, photo=photo)
 
 
@@ -1007,10 +1015,13 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
     pub = _clip_publish(publish or llm_publish or {})
     chars = plan_chars(plan)
 
-    # 程序排字模式先按版面算出"下面多大一块要留给文字"，再把这个比例写进出图 prompt，
-    # 让模型在那块地方只画底纹。两边共用 text_zone_ratio，所以不会错位。
+    # 程序排字模式先按版面算出"图占哪一块、文字占哪一块"，再把这个比例写进出图 prompt，
+    # 让模型在文字那块只画底纹。两边共用 poster_typeset.art_zone，所以不会错位。
     if photo:
-        prompt_text = "（真图主视觉：上半部用上传的图片，不出 AI 底图，因此没有出图提示词）"
+        from . import poster_typeset as _ts
+        _lab = _ts.LAYOUTS[_ts.resolve_layout(plan, _ts.skin_for(plan.get("style_key")))]["label"]
+        prompt_text = ("（真图主视觉：主视觉用用户上传的图片、按「%s」排版，"
+                       "不出 AI 底图，因此没有出图提示词）" % _lab)
     else:
         prompt_text = (build_art_prompt(plan, ratio) if text_mode == "typeset"
                        else build_prompt_text(plan, ratio))
