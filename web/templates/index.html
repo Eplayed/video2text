@@ -1206,7 +1206,7 @@ textarea{resize:vertical;min-height:84px}
       <div class="modal-box" style="width:880px;max-width:94vw" onclick="event.stopPropagation()">
         <button class="close-btn" onclick="closePosterDialog()"><span data-icon="close" class="ic14"></span></button>
         <div class="tt-gen-title">🎨 AI 海报</div>
-        <div class="tt-gen-sub">整合稿 #<span id="pk-id"></span> · 底图 AI 现画，中文由程序排版</div>
+        <div class="tt-gen-sub">整合稿 #<span id="pk-id"></span> · <span id="pk-mode">底图 AI 现画，中文由程序排版</span></div>
         <div class="pk-bar">
           <label>比例<select id="pk-ratio">
             <option value="9:16" selected>9:16 小红书</option>
@@ -1263,8 +1263,8 @@ textarea{resize:vertical;min-height:84px}
           <div class="wx-count" id="wx-draft-count">转载模式（底稿留空）· 填写后转亲测模式</div>
         </div>
         <div class="tt-gen-field">
-          <label>真实截图<small>（可选：仅亲测模式建议传 ≥2 张，会复制进包并标 real_screenshot；转载模式无需截图）</small></label>
-          <div class="tt-guide-drop" onclick="document.getElementById('wx-shot-files').click()">📎 点击选择真实截图（最多 10 张 · jpg / png / webp）</div>
+          <label>真实截图 / 展示图<small>（<b>传进来的图会排进卡片当主视觉</b>：封面用第 1 张，其余按页轮着配；同时原样留在发布包里备查。亲测模式铁律 ≥2 张；转载模式选填，有官方展示图（坐骑/装备/界面）就传）</small></label>
+          <div class="tt-guide-drop" onclick="document.getElementById('wx-shot-files').click()">📎 点击选择图片（最多 10 张 · jpg / png / webp · 会进卡片画面）</div>
           <input type="file" id="wx-shot-files" accept=".jpg,.jpeg,.png,.webp" multiple hidden>
           <div class="tt-guide-thumbs" id="wx-shot-thumbs"></div>
         </div>
@@ -2703,10 +2703,11 @@ function pkPhotoLabel() {
     const b = document.getElementById(id);
     if (b) b.textContent = tip;
   });
-  // 顶部那句说明也得跟着改：这时候底图不是 AI 画的
-  const sub = document.querySelector('#pk-overlay .tt-gen-sub');
-  if (sub) sub.innerHTML = '整合稿 #<span id="pk-id">' + (_pkId || '') + '</span> · '
-    + (_pkPhoto ? '主视觉用你上传的真图，中文由程序排版' : '底图 AI 现画，中文由程序排版');
+  // 顶部那句说明也得跟着改：这时候底图不是 AI 画的。只改这一个 span——
+  // 重排整句会再生成一份 #pk-id，getElementById 就会挑到错的那个元素
+  const mode = document.getElementById('pk-mode');
+  if (mode) mode.textContent = _pkPhoto ? '主视觉用你上传的真图，中文由程序排版'
+                                        : '底图 AI 现画，中文由程序排版';
 }
 
 async function posterPreview() {
@@ -3310,7 +3311,7 @@ async function loadWechatList() {
         <div class="s-title">${esc(p.title||'')}</div>
         <div class="s-desc">源自整合稿 #${p.summary_id} · ${esc((p.copy_text||'').slice(0,120))}...</div>
         <div class="s-meta">
-          <span class="wx-imgs">🖼 ${imgs.length} 张（真实截图 ${shots}）</span>
+          <span class="wx-imgs">🖼 ${imgs.length} 张（含你的真图 ${imgs.filter(im=>im.hero).length} · 原图 ${shots}）</span>
           <span>${esc(p.created_at||'')}</span>
         </div>
       </div>`;
@@ -3332,11 +3333,15 @@ async function openWechatDetail(id) {
     document.getElementById('wx-detail-title').textContent = p.title || '公众号图文';
     const imgs = p.images || [];
     const shots = imgs.filter(im => im.source === 'real_screenshot').length;
+    const inCard = imgs.filter(im => im.hero).length;
     document.getElementById('wx-img-count').textContent =
-      '卡片 · ' + imgs.length + ' 张（含真实截图 ' + shots + ' 张 · 点击放大）';
+      '卡片 · ' + imgs.length + ' 张（' + (inCard ? inCard + ' 张用了你传的真图 · ' : '')
+      + '原图 ' + shots + ' 张 · 点击放大）';
     document.getElementById('wx-img-stack').innerHTML = imgs.map((im, i) => {
       const real = im.source === 'real_screenshot';
-      return `<div class="tt-img wx-img${real ? ' real' : ''}"><span class="lb">${real ? '实拍' : '图' + (i+1)}</span><img src="${esc(im.url)}" alt="${esc(im.label||'')}" loading="lazy" onclick="window.open('${esc(im.url)}','_blank')"></div>`;
+      // 卡片上标出用的是哪张用户图，发布时能一眼对上号
+      const lb = real ? '实拍' : ('图' + (i + 1) + (im.hero ? ' · 含你的图' : ''));
+      return `<div class="tt-img wx-img${real ? ' real' : ''}" title="${esc(im.hero || '')}"><span class="lb">${lb}</span><img src="${esc(im.url)}" alt="${esc(im.label||'')}" loading="lazy" onclick="window.open('${esc(im.url)}','_blank')"></div>`;
     }).join('');
     document.getElementById('wx-copy-area').value = p.copy_text || '';
     document.getElementById('wx-digest').textContent = p.digest || '（无摘要段）';
@@ -3519,7 +3524,7 @@ function closeWxTplPages(e) {
   document.getElementById('wx-tpl-pages-overlay').classList.remove('show');
 }
 
-// ── 真实截图上传（仅亲测模式建议 ≥2 张；转载模式无需截图） ──
+// ── 真实截图 / 展示图上传（传进来的图会排进卡片当主视觉，同时原样留在包里备查） ──
 function _wxShotRender() {
   const box = document.getElementById('wx-shot-thumbs');
   const n = _wxShotFiles.length;
@@ -3527,9 +3532,11 @@ function _wxShotRender() {
   const isRepost = !(draftEl && draftEl.value.trim());
   let hint = '';
   if (isRepost) {
-    hint = `<div style="width:100%;font-size:12px;color:#07c160;font-weight:700">转载模式无需真实截图（已选 ${n} 张，选填）</div>`;
+    hint = `<div style="width:100%;font-size:12px;color:#07c160;font-weight:700">转载模式不必传（已选 ${n} 张，选填）· 传了就排进卡片当主视觉</div>`;
   } else if (n < 2) {
     hint = `<div style="width:100%;font-size:12px;color:var(--danger);font-weight:700">⚠️ 亲测模式已选 ${n} 张，铁律要求 ≥2 张真实截图（不足则 lint 报 error）</div>`;
+  } else if (n) {
+    hint = `<div style="width:100%;font-size:12px;color:var(--text-secondary)">已选 ${n} 张：卡片按顺序取（封面第 1 张），原图也一并留在发布包里</div>`;
   }
   box.innerHTML = hint + _wxShotFiles.map((f, i) => `
     <div class="tt-guide-thumb">

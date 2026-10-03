@@ -276,8 +276,15 @@ body { width:__W__px; font-family:"PingFang SC","Hiragino Sans GB",sans-serif;
 .sig { width:64px; height:10px; background:__ACCENT__; margin-top:30px; }
 h1 { margin-top:28px; font-size:88px; line-height:1.18; font-weight:800; color:__INK__;
      letter-spacing:.01em; text-wrap:balance; word-break:keep-all; }
-h1.long { font-size:68px; }
+h1.long { font-size:68px; }   /* 标题超过 10 字走这档：11 字 × 88px 就顶到画布右边被切 */
 .sub { margin-top:22px; font-size:30px; color:__MDIM__; line-height:1.6; letter-spacing:.02em; }
+/* 真图主视觉：只有用户传了图才生成这一块。没传时 markup 里根本没有 .shot，
+   默认产物逐字节不变（这是"用户上传＝显式意图"才破例开图位，不是给素材图开口子）。
+   方角 + 1px 细描边 + object-fit:cover，跟 .tile/.row 同一套语言。 */
+.shot { margin-top:34px; flex:0 0 auto; height:320px; overflow:hidden;
+        border:1px solid __LINE__; border-radius:4px; background:__CARD__; }
+.shot img { display:block; width:100%; height:100%; object-fit:cover; }
+.shot.in { height:300px; margin-top:26px; }
 /* 2×2 要点瓦片：末格信号绿反白 */
 .tiles { margin-top:40px; flex:1; min-height:0; display:grid; grid-template-columns:1fr 1fr;
          grid-auto-rows:1fr; gap:20px; }
@@ -360,6 +367,13 @@ h1 { margin-top:16px; font-size:84px; line-height:1.16; font-weight:800; letter-
      color:__INK__; text-wrap:balance; word-break:keep-all; }
 h1.long { font-size:64px; }
 .sub { margin-top:22px; font-size:29px; line-height:1.62; color:__MDIM__; }
+/* 真图主视觉：只在用户传图时生成这一块，圆角取 16px 跟 .stat/.row 同一套；
+   不传图时 markup 里根本没有 .shot，封面内页仍是零图片标签（W11 断言守的就是这个）。
+   注意：这段注释会内联进产物 HTML，别在里面写字面的图片标签，会被那条断言判成漏图。 */
+.shot { margin-top:30px; flex:0 0 auto; height:360px; overflow:hidden;
+        border:1px solid __LINE__; border-radius:16px; background:__CARD__; }
+.shot img { display:block; width:100%; height:100%; object-fit:cover; }
+.shot.in { height:320px; }
 /* 统计卡：margin-top:auto 与 .sum 的 auto 边距均分封面余高（避免中部大白带），padding-top 保底间距 */
 .stats { margin-top:auto; padding-top:42px; display:grid; grid-template-columns:1fr 1fr 1fr; gap:20px; }
 .stat { background:__CARD__; border:1px solid __LINE__; border-radius:16px; padding:26px 24px 24px; }
@@ -1024,6 +1038,15 @@ def _cover_html_wechat(card, css, hero_uri, ctx):
     )
     sub = card.get("subtitle") or card.get("timeline_note") or ""
     sub_html = ('<div class="sub">%s</div>' % _esc(sub)) if sub else ""
+    # 用户传的真图放标题之下、要点格之上：先看见东西，再看结论。
+    # 有图时同时撤掉「这一辑怎么读」那条流带——封面已经有主视觉了，两块都要占地方，
+    # 实测留着就会把要点格挤到溢出（文字压到流带上）。
+    shot_html = ('<div class="shot"><img src="%s" alt=""></div>' % hero_uri) if hero_uri else ""
+    flow_html = "" if hero_uri else """  <div class="flow">
+    <div class="fh"><div class="ft">这一辑怎么读</div><div class="fr">READING FLOW</div></div>
+    <div class="track">%s<div class="cta">开始阅读 →</div></div>
+  </div>
+"""
     dots = "".join('<i class="%s"></i>' % ("on" if (i + 1) == ctx["idx"] else "")
                    for i in range(ctx["total"]))
     return """%s<div class="wrap" style="height:__H__px">
@@ -1032,19 +1055,16 @@ def _cover_html_wechat(card, css, hero_uri, ctx):
   <div class="sig"></div>
   <h1 class="%s">%s</h1>
   %s
+  %s
   <div class="tiles">%s</div>
-  <div class="flow">
-    <div class="fh"><div class="ft">这一辑怎么读</div><div class="fr">READING FLOW</div></div>
-    <div class="track">%s<div class="cta">开始阅读 →</div></div>
-  </div>
-  <div class="ftr"><span>CLAIM · PROOF · ACTION</span><div class="dots">%s</div>
+%s  <div class="ftr"><span>CLAIM · PROOF · ACTION</span><div class="dots">%s</div>
     <span>01 / %02d</span></div>
   </div>
 </div></body></html>""".replace("__H__", str(ctx["canvas_h"])) % (
         _page_open(css),
         _esc(ctx["brand"] or "整合速览"),
-        "long" if len(str(card.get("title") or "")) > 12 else "", _esc(card.get("title", "")),
-        sub_html, tiles, steps, dots, ctx["total"],
+        "long" if len(str(card.get("title") or "")) > 10 else "", _esc(card.get("title", "")),
+        sub_html, shot_html, tiles, flow_html % steps if flow_html else "", dots, ctx["total"],
     )
 
 
@@ -1065,6 +1085,7 @@ def _list_html_wechat(card, css, hero_uri, ctx):
         % (_esc(note.get("title", "提醒")), _esc(note.get("text", "")))
     ) if note.get("text") else ""
     sub_html = ('<div class="sub2">%s</div>' % _esc(card.get("subtitle", ""))) if card.get("subtitle") else ""
+    shot_html = ('<div class="shot in"><img src="%s" alt=""></div>' % hero_uri) if hero_uri else ""
     icon = str(card.get("icon") or "").strip()[:1]
     section = _esc(card.get("section", "要点"))
     kick = "SECTION %02d · %s%s" % (ctx["idx"], (icon + " ") if icon else "", section)
@@ -1075,6 +1096,7 @@ def _list_html_wechat(card, css, hero_uri, ctx):
   <div class="rhead"><b>%s</b><span>%s · %02d / %02d</span></div>
   <div class="kick">%s</div>
   <h2 class="%s">%s</h2>%s
+  %s
   <div class="rows">%s</div>
   %s
   <div class="ftr"><span>CLAIM · PROOF · ACTION</span><div class="dots">%s</div>
@@ -1084,8 +1106,8 @@ def _list_html_wechat(card, css, hero_uri, ctx):
         _page_open(css),
         _esc(ctx["brand"] or "整合速览"), section, ctx["idx"], ctx["total"],
         kick,
-        "long" if len(str(card.get("title") or "")) > 12 else "", _esc(card.get("title", "")), sub_html,
-        rows, note_html, dots, ctx["idx"], ctx["total"],
+        "long" if len(str(card.get("title") or "")) > 10 else "", _esc(card.get("title", "")), sub_html,
+        shot_html, rows, note_html, dots, ctx["idx"], ctx["total"],
     )
 
 
@@ -1102,6 +1124,7 @@ def _cover_html_lilac_list(card, css, hero_uri, ctx):
     concl = str(card.get("timeline") or "").strip()[:34] or "先给结论，再逐条拆解"
     sub = card.get("subtitle") or card.get("timeline_note") or ""
     sub_html = ('<div class="sub">%s</div>' % _esc(sub)) if sub else ""
+    shot_html = ('<div class="shot"><img src="%s" alt=""></div>' % hero_uri) if hero_uri else ""
     dots = "".join('<i class="%s"></i>' % ("on" if (i + 1) == ctx["idx"] else "")
                    for i in range(ctx["total"]))
     return """%s<div class="wrap" style="height:__H__px">
@@ -1110,6 +1133,7 @@ def _cover_html_lilac_list(card, css, hero_uri, ctx):
   <div class="stars"><i class="s1"></i><i class="s2"></i><i class="s1"></i></div>
   <div class="ckick">%s</div>
   <h1 class="%s">%s</h1>
+  %s
   %s
   <div class="stats">%s</div>
   <div class="sum"><div class="no">结论</div><div class="bd">
@@ -1122,7 +1146,7 @@ def _cover_html_lilac_list(card, css, hero_uri, ctx):
         _esc(ctx["brand"] or "整合速览"),
         _esc(label),
         "long" if len(str(card.get("title") or "")) > 12 else "", _esc(card.get("title", "")),
-        sub_html, stats,
+        sub_html, shot_html, stats,
         _esc(label), _esc(concl), dots, ctx["total"],
     )
 
@@ -1144,6 +1168,7 @@ def _list_html_lilac_list(card, css, hero_uri, ctx):
         % (_esc(note.get("title", "提醒")), _esc(note.get("text", "")))
     ) if note.get("text") else ""
     sub_html = ('<div class="sub2">%s</div>' % _esc(card.get("subtitle", ""))) if card.get("subtitle") else ""
+    shot_html = ('<div class="shot in"><img src="%s" alt=""></div>' % hero_uri) if hero_uri else ""
     section = _esc(card.get("section", "要点"))
     cat = "CATEGORY %02d · %s" % (ctx["idx"], section)
     dots = "".join('<i class="%s"></i>' % ("on" if (i + 1) == ctx["idx"] else "")
@@ -1154,6 +1179,7 @@ def _list_html_lilac_list(card, css, hero_uri, ctx):
   <div class="cat">%s</div>
   <h2 class="%s">%s</h2>
   <div class="rule"></div>%s
+  %s
   <div class="rows">%s</div>
   %s
   <div class="ftr"><span>%s · EDIT LIST</span><div class="dots">%s</div>
@@ -1163,7 +1189,7 @@ def _list_html_lilac_list(card, css, hero_uri, ctx):
         _page_open(css),
         ctx["idx"], cat,
         "long" if len(str(card.get("title") or "")) > 12 else "", _esc(card.get("title", "")),
-        sub_html, rows, note_html,
+        sub_html, shot_html, rows, note_html,
         section, dots, ctx["idx"], ctx["total"],
     )
 

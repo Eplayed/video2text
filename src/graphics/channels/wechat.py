@@ -70,11 +70,15 @@ def _assets_dir():
 # ── 四轴解析 + 整组渲染：generate_graphics 与 render_preview 共用同一套管线 ──
 # 两条入口若各算一遍 CSS/配图，就会出现「预览一个样、成品另一个样」，
 # 也正是 40-graphics-variants 记的那类「选了不生效」静默失效的温床。
-def _resolve_axes(template="wechat", palette=None, font=None, layout=None, skin="", theme=""):
+def _resolve_axes(template="wechat", palette=None, font=None, layout=None, skin="", theme="",
+                  photo_pool=None):
     """把「模板 + 配色/字体/版式三轴 + 皮」解析成渲染所需的一切。
 
     越界值一律回落默认（与历史行为一致）；layout 传 "random" 时在此抽定一个真实键，
     由调用方写进 manifest / 回填给前端，保证「看到的就是出的」。
+    photo_pool：用户传的真图（已复制进包，file URI 列表）。非空时它会**优先当主视觉**，
+    并解禁 wechat/lilac_list 那两套"零图位"模板——那两套禁图是为了防素材库里的游戏
+    背景图自动渗进来，用户显式上传不在此列。
     """
     tpl_key = template if template in TEMPLATE_WHITELIST else "wechat"
     tpl = templates._TEMPLATES[tpl_key]
@@ -105,6 +109,7 @@ def _resolve_axes(template="wechat", palette=None, font=None, layout=None, skin=
             "palette_key": palette_key, "font_key": font_key, "layout_key": layout_key,
             "skin_key": skin_key, "skin_uri": skin_uri,
             "assets_dir": assets_dir, "theme_imgs": theme_imgs,
+            "photo_pool": list(photo_pool or []),
             "cover_img": skins._pick_cover_image(theme_imgs)}
 
 
@@ -113,9 +118,12 @@ def _render_cards(cards, axes, out_dir, url_prefix, brand=""):
     tpl_key, tpl, css = axes["tpl_key"], axes["tpl"], axes["css"]
     skin_key, skin_uri, cover_img = axes["skin_key"], axes["skin_uri"], axes["cover_img"]
     assets_dir, theme_imgs = axes["assets_dir"], axes["theme_imgs"]
+    pool = axes.get("photo_pool") or []
     total = len(cards)
-    # 零图片依赖模板（纯 CSS 装饰）：强制不取 hero，从根上杜绝游戏背景图兜底渗入
+    # 零图片依赖模板（纯 CSS 装饰）：强制不取 hero，从根上杜绝游戏背景图兜底渗入。
+    # 但用户显式上传了真图就解禁——那不再是"兜底抓来的素材"，是人主动要放进画面的东西。
     no_hero_tpls = ("wechat", "lilac_list")
+    hero_used = []
     images = []
     from playwright.sync_api import sync_playwright
 
@@ -125,7 +133,10 @@ def _render_cards(cards, axes, out_dir, url_prefix, brand=""):
         for idx, card in enumerate(cards, 1):
             kind = card.get("kind") or "list"
             ctx = {"brand": brand, "idx": idx, "total": total, "skin_key": skin_key, "canvas_h": CANVAS_H}
-            if kind == "cover" and idx == 1:
+            photo = pool[(idx - 1) % len(pool)] if pool else None   # 封面第 1 张，往后按页轮着配
+            if photo is not None:
+                hero = photo
+            elif kind == "cover" and idx == 1:
                 if tpl_key in no_hero_tpls:
                     hero = None
                 elif tpl_key == "cream_gold":
@@ -139,6 +150,7 @@ def _render_cards(cards, axes, out_dir, url_prefix, brand=""):
                 else:
                     band = skins._pick_band_image(theme_imgs, idx)
                     hero = skins._hero_uri(card, band, skin_uri, assets_dir)
+            hero_used.append(bool(photo))
             html_path = out_dir / ("img%d.html" % idx)
             png_path = out_dir / ("img%d.png" % idx)
             html_path.write_text(tpl["cover"](card, css, hero, ctx) if (kind == "cover" and idx == 1)
@@ -146,9 +158,11 @@ def _render_cards(cards, axes, out_dir, url_prefix, brand=""):
             renderer.render_card_html(page, html_path, png_path, CANVAS_W, CANVAS_H)
             images.append({"file": png_path.name, "label": "卡片%d" % idx,
                            "url": "%s/%s" % (url_prefix, png_path.name),
-                           "source": "template"})
+                           "source": "template",
+                           # 这张卡的主视觉用的是哪张用户图（没有就空）——发布时能对上号
+                           "hero": (photo or "").rsplit("/", 1)[-1] if photo else ""})
         browser.close()
-    return images
+    return images, hero_used
 
 
 # 前端下拉/预览的适用场景说明从模板 hint 里抽，避免再抄一份会过期的清单
@@ -540,7 +554,20 @@ def generate_graphics(summary, ai_config, author_draft="", progress_cb=None,
         if progress_cb:
             progress_cb(msg)
 
-    axes = _resolve_axes(template, palette, font, layout, skin, theme)
+    # 用户传的真图先复制进包，再当主视觉池用：渲染卡片时要以 file URI 引用它们，
+    # 所以这一步必须在 _resolve_axes / _render_cards 之前完成（原来是渲染完才复制，
+    # 图只是附在卡片后面，从没进过画面）。
+    shots = []
+    for src in (real_screenshots or []):
+        sp = Path(src)
+        if not sp.is_file():
+            continue
+        dst = out_dir / ("shot_%s" % re.sub(r"[^\w.-]", "", sp.name)[:60])
+        shutil.copyfile(sp, dst)
+        shots.append(dst)
+    photo_pool = [p.as_uri() for p in shots]
+
+    axes = _resolve_axes(template, palette, font, layout, skin, theme, photo_pool=photo_pool)
     tpl_key, tpl = axes["tpl_key"], axes["tpl"]
     skin_key = axes["skin_key"]
     skin_uri = axes["skin_uri"]
@@ -567,17 +594,15 @@ def generate_graphics(summary, ai_config, author_draft="", progress_cb=None,
             card["bg"] = "skin"
     total = len(cards)
     _pg("渲染 %d 张卡片（模板：%s，画布 %dx%d）..." % (total, tpl["label"], CANVAS_W, CANVAS_H))
-    images = _render_cards(cards, axes, out_dir, "/media/wechat/%d" % summary_id,
-                           brand=(theme or "").strip()[:12])
+    if shots:
+        _pg("用户上传的 %d 张真图已排进卡片主视觉..." % len(shots))
+    images, hero_used = _render_cards(cards, axes, out_dir, "/media/wechat/%d" % summary_id,
+                                      brand=(theme or "").strip()[:12])
 
-    # 真实截图：复制进包，manifest 标 source=real_screenshot（发布清单核验用，铁律 ≥2 张）
-    for src in (real_screenshots or []):
-        sp = Path(src)
-        if not sp.is_file():
-            continue
-        dst = out_dir / ("shot_%s" % re.sub(r"[^\w.-]", "", sp.name)[:60])
-        shutil.copyfile(sp, dst)
-        images.append({"file": dst.name, "label": "真实截图%d" % (len(images) - total + 1),
+    # 原图也留在包里：卡片是"加工后的成品"，发布清单核验和回溯都得能看到原始截图。
+    # 亲测模式的 ≥2 张铁律查的就是这个列表，不能因为图进了卡片就不列。
+    for i, dst in enumerate(shots):
+        images.append({"file": dst.name, "label": "真实截图%d" % (i + 1),
                        "url": "/media/wechat/%d/%s" % (summary_id, dst.name),
                        "source": "real_screenshot"})
 
@@ -603,6 +628,9 @@ def generate_graphics(summary, ai_config, author_draft="", progress_cb=None,
         "source_note": data.get("source_note") or "",
         "author_draft": draft,
         "images": images,
+        # 真图进了哪几张卡：发布时能对上"卡片3 用的是我传的哪张图"，也方便回溯
+        "hero_photos": [p.name for p in shots],
+        "photos_in_cards": sum(1 for x in hero_used if x),
         "cards": cards,
         "model": model,
         "theme": (theme or "").strip(),
