@@ -232,6 +232,96 @@ def style_plan_prompt():
                      % (k, p["label"], p["when"]))
     return "\n".join(lines)
 
+
+# ── 页数与布局：推荐规则做成数据 ──
+# 为什么不写死在提示词的散文里：① 加一类题材（数码、汽车）只改这张表，不碰代码；
+# ② 后端回落判据和喂给模型的规则必须是同一份，否则模型按 A 说、代码按 B 改，
+#    用户在界面上看到的推荐就跟实际排出来的对不上。
+PAGE_RULES = [
+    {"max_points": 5, "pages": 1,
+     "why": "5 条以内一页读完就够，拆两页反而没人翻第二页"},
+    {"max_points": 9, "pages": 2,
+     "why": "6-9 条同类要点：首页抓眼，次页一口气说完"},
+    {"max_points": 13, "pages": 3,
+     "why": "10 条以上，或「有什么 + 怎么办」两类都有：封面 / 要点 / 收尾"},
+    {"max_points": 999, "pages": 4,
+     "why": "14 条以上按每页 4 条切；再往上没人看完，成本也按页数翻倍"},
+]
+
+# 题材信号 → 风格 + 布局（无图 / 有图两套）+ 页数倾向。加新题材往这里追加一行就够。
+THEME_RULES = [
+    {"signals": "游戏 / 版本 / 装备 / 坐骑 / 数值 / 攻略", "style": "game_epic",
+     "no_photo": "top_art", "photo": "full_bleed 或 left_text",
+     "pages": "坐骑、装备逐个列，6 条以上就 2-3 页"},
+    {"signals": "AI 工具 / 技术 / 实测 / 软件对比", "style": "tool_review",
+     "no_photo": "compare", "photo": "left_text（截图放右边）",
+     "pages": "「怎么用 + 值不值」两类都有 → 2 页"},
+    {"signals": "清单 / 避坑 / 教程要点 / 经验", "style": "checklist",
+     "no_photo": "list", "photo": "top_art",
+     "pages": "5 条内 1 页；8 条以上按每页 4 条切"},
+    {"signals": "单观点 / 结论先行 / 态度", "style": "minimal",
+     "no_photo": "big_type", "photo": "full_bleed",
+     "pages": "就 1 页，拆了力量就散了"},
+]
+
+
+def suggest_pages(n_points):
+    """按要点数给一个建议页数 + 一句话理由（回落和提示词共用这一份规则）。"""
+    for r in PAGE_RULES:
+        if n_points <= r["max_points"]:
+            return r["pages"], r["why"]
+    return PAGE_MAX, PAGE_RULES[-1]["why"]
+
+
+def layout_plan_prompt(has_photo):
+    """拼进拆解 prompt 的那段"拆几页 + 每页什么布局"规则。
+
+    里面的 __TOTAL__ 交给调用方那串 replace 一起替换，跟主模板用同一个预算数。
+    """
+    from . import poster_typeset as ts
+    lines = ["可选布局（只能填键名；标了「要有真图」的，没图就别选）："]
+    for k in ts.LAYOUT_ORDER:
+        v = ts.LAYOUTS[k]
+        lines.append('  - "%s"：%s，放 %d-%d 条%s。适用：%s'
+                     % (k, v["label"], v["min_cards"], v["max_cards"],
+                        "（要有真图）" if v.get("needs_photo") else "", v.get("when", "")))
+    lines.append("")
+    lines.append("页数规则（一页最多 5 条、每页合计 ≤__TOTAL__ 字；**装不下就翻页，不许为了塞进一页砍要点**）：")
+    for r in PAGE_RULES:
+        lines.append("  - %s → %d 页：%s"
+                     % ("≤%d 条" % r["max_points"] if r["max_points"] < 999 else "更多",
+                        r["pages"], r["why"]))
+    lines.append("  - 每页给一个 role（两个字：封面 / 要点 / 收藏 / 行动 / 收尾…），"
+                 "第 1 页负责抓眼，末页负责结论或入口。")
+    lines.append("")
+    lines.append("题材 → 风格 + 布局 + 页数倾向（本篇贴哪一行就照那行来）：")
+    for r in THEME_RULES:
+        lines.append("  - %s → 风格 %s；%s；页数：%s"
+                     % (r["signals"], r["style"],
+                        ("有真图首选 " + r["photo"]) if has_photo else ("无真图首选 " + r["no_photo"]),
+                        r["pages"]))
+    lines.append("")
+    lines.append("本篇%s真图。" % ("已经上传了" if has_photo else "没有上传"))
+    return "\n".join(lines)
+
+
+def _page_layout(layout_key, style_key, has_photo, idx):
+    """这一页到底用哪个布局：模型给的键合法就用；非法、或"没图却选了要图的"就回落并留话。"""
+    from . import poster_typeset as ts
+    raw = str(layout_key or "").strip()
+    key = ts.LAYOUT_ALIAS.get(raw, raw)
+    if key not in ts.LAYOUTS:
+        dft = ts.resolve_layout(None, ts.skin_for(style_key))
+        note = ("第 %d 页：模型给的布局「%s」不认识，已按这套风格默认「%s」"
+                % (idx, raw, ts.LAYOUTS[dft]["label"])) if raw else ""
+        return dft, note
+    if ts.LAYOUTS[key].get("needs_photo") and not has_photo:
+        return ts.DEFAULT_LAYOUT, ("第 %d 页：「%s」要有图才站得住，这篇没图，已改用「%s」"
+                                   % (idx, ts.LAYOUTS[key]["label"],
+                                      ts.LAYOUTS[ts.DEFAULT_LAYOUT]["label"]))
+    return key, ""
+
+
 class PosterError(Exception):
     """链路可预期失败（AI 未配置 / 字数越界 / 出图端点报错），消息可直接展示给用户。"""
 
@@ -276,7 +366,7 @@ _PLAN_PROMPT = """你是自媒体图文编辑。下面这份素材多半**已经
 
 铁律三·篇幅纪律：
 主标题 ≤__TITLE__ 字；副标题 ≤__SUB__ 字；每张卡片标题 ≤__CT__ 字、说明 ≤__CD__ 字；尾注 ≤__FOOT__ 字；
-卡片 3-5 张；全部文字合计 ≤__TOTAL__ 字。
+**每页**卡片 3-5 张；**每页**全部文字合计 ≤__TOTAL__ 字。
 __DENSITY__
 中文标点计入字数；不要出现 markdown 符号；
 **价格、天数、日期一律保持素材里的阿拉伯数字**（写 388 不写三八八），中文数字反而更占字数也更难读。
@@ -291,6 +381,11 @@ __DENSITY__
 - 从下面这几套风格预设里挑**一个最贴本篇题材的**填进 style_key（只能填键名，不要自己编风格描述）：
 __STYLES__
 __STYLE_FIXED__
+
+铁律五·分页与构图纪律（这条决定"要点装不下时怎么办"——翻页，不是砍掉）：
+**先数一遍素材里独立成立的要点有几条**：超过 5 条就必须拆成多页（每页 3-5 条），
+严禁只交 5 条然后把剩下的丢掉；被分到后面几页的要点仍然要出现在图上，也要在配文里带上。
+__LAYOUT__
 输出 JSON（键固定，值为字符串或对象数组）：
 {
   "title": "主标题",
@@ -301,6 +396,13 @@ __STYLE_FIXED__
   "style": "仅当 style_key 为 auto 时填写一句自由风格描述，否则留空字符串",
   "scene": "主视觉画面描述",
   "spine": "一句话说清这条主线（≤24字，不画进海报，只用来检查结构是否成链）",
+  "page_count": 1,
+  "why": "一句话说明为什么拆这么多页、每页为什么用这个布局（≤60字，给人看的）",
+  "pages": [
+    {"role": "封面", "layout_key": "上面布局键名之一", "title": "这页主标题",
+     "subtitle": "这页副标题，可留空", "scene": "这页要画成什么场景",
+     "cards": [{"t": "卡片标题", "d": "卡片说明", "v": "这一条画什么"}]}
+  ],
   "publish": {
     "copy_text": "发布页配文，120-260 字纯文本：钩子开头 1-2 句 + 要点 3-5 条（每条一行，用「· 」开头）+ 收尾引导 1 句。不要 markdown 符号。",
     "digest": "摘要，≤120 字，单独成段能读懂，不写「见图」这类字样",
@@ -308,6 +410,11 @@ __STYLE_FIXED__
     "source_note": "来源说明一句话，≤50 字，含数据口径截至{{DATE}}"
   }
 }
+
+关于 pages：按上面页数规则判定要拆几页后，**把每页写进 pages[]**（一页一个对象，形状同上），
+同时顶层的 title / subtitle / cards / scene 仍然填**第 1 页**的内容（老代码读这几个键）。
+只拆一页时 pages 可以省略。footer 整组共用一句，只填顶层就行。
+配文（publish.copy_text）要把被分到后面几页的要点也用文字带上，读者不看第二页也不漏信息。
 
 spine、scene、每张卡片的 v、style_key 与 publish 里的文字都不会画进海报，所以不占合计字数预算；
 但同样只能用素材里的事实。
@@ -377,7 +484,65 @@ def style_fixed_prompt(style_key):
             % (style_key, p["label"], p.get("scene") or ""))
 
 
-def build_text_plan(summary, ai_config, theme="", title="", style_key="", text_mode=DEFAULT_TEXT_MODE):
+def _pages_from_data(data, lim, style_key, has_photo, first_title=""):
+    """把模型给的 pages[] 洗成能排版的页列表；模型不写 pages 就返回 None（按单页走）。
+
+    模型不守格式是常态：漏页、给不认识的布局键、把"要图"的布局分给没图的页、
+    单页超预算——都在这里一次修完并留下一句人话说明，不抛错、不整条挂掉。
+    返回 (pages 或 None, why, notes)。
+    """
+    notes = []
+    why = _clip_ws(data.get("why"), 120)
+    raw = data.get("pages")
+    if not isinstance(raw, list):
+        return None, why, notes
+    picked = [p for p in raw if isinstance(p, dict)]
+    if not picked:
+        return None, why, notes
+    try:
+        want = int(data.get("page_count") or len(picked))
+    except (TypeError, ValueError):
+        want = len(picked)
+    if want < 1 or want > PAGE_MAX:
+        notes.append("模型给的页数「%s」不在 1-%d，按 %d 页处理"
+                     % (data.get("page_count"), PAGE_MAX, max(1, min(want, PAGE_MAX))))
+        want = max(1, min(want, PAGE_MAX))
+    if len(picked) > want:
+        notes.append("模型给了 %d 页，按 page_count=%d 只留前 %d 页" % (len(picked), want, want))
+        picked = picked[:want]
+    pages = []
+    for idx, item in enumerate(picked, 1):
+        cards = []
+        for c in (item.get("cards") or [])[:CARD_MAX]:
+            if not isinstance(c, dict):
+                continue
+            t, d = _clip(c.get("t"), lim["cardT"]), _clip(c.get("d"), lim["cardD"])
+            if t or d:
+                cards.append({"t": t, "d": d, "v": _clip_ws(c.get("v"), CARD_VIS_MAX)})
+        title = _clip(item.get("title") or (first_title if idx == 1 else ""), lim["title"])
+        lay, note = _page_layout(item.get("layout_key"), style_key, has_photo, idx)
+        if note:
+            notes.append(note)
+        p = {"title": title, "subtitle": _clip(item.get("subtitle"), lim["subtitle"]),
+             "cards": cards, "layout_key": lay, "style_key": style_key,
+             "role": _clip_ws(item.get("role"), 8),
+             "footer": _clip(item.get("footer") or data.get("footer") or "内容整理自公开分享",
+                             lim["footer"]),
+             "scene": _clip_ws(item.get("scene") or (data.get("scene") if idx == 1 else ""),
+                               SCENE_MAX)}
+        if not title and not cards:
+            notes.append("第 %d 页是空的（没标题也没卡片），已丢掉" % idx)
+            continue
+        p, pn = fit_plan(p, lim["total"], lim)
+        notes.extend(["第 %d 页：%s" % (idx, x) for x in pn])
+        pages.append(p)
+        if len(pages) >= PAGE_MAX:
+            break
+    return (pages or None), why, notes
+
+
+def build_text_plan(summary, ai_config, theme="", title="", style_key="", text_mode=DEFAULT_TEXT_MODE,
+                    has_photo=False):
     """调 LLM 产出文案计划 + 发布文案，并逐字段裁到字数线内。
 
     返回 (plan, publish, violations, notes)：plan 是要画进图里的文字（超预算先经 fit_plan
@@ -386,6 +551,7 @@ def build_text_plan(summary, ai_config, theme="", title="", style_key="", text_m
 
     style_key 显式传入且合法时直接盖掉模型选的风格：用户在弹窗里点过下拉，
     就不该再被模型自由发挥改回去。
+    has_photo 只影响推荐：有真图才允许推满版大图/左右分栏那几种"没图站不住"的布局。
     """
     api_key, api_base, model = _require_ai(ai_config)
     import openai
@@ -401,6 +567,7 @@ def build_text_plan(summary, ai_config, theme="", title="", style_key="", text_m
               .replace("__SUB__", str(lim["subtitle"])).replace("__CT__", str(lim["cardT"]))
               .replace("__CD__", str(lim["cardD"])).replace("__FOOT__", str(lim["footer"]))
               .replace("__STYLE_FIXED__", style_fixed_prompt(style_key))
+              .replace("__LAYOUT__", layout_plan_prompt(has_photo))
               .replace("{{DATE}}", datetime.now().strftime("%m月%d日"))
               .replace("__CONTENT__", (summary.get("content") or "")[:8000]))
     resp = client.chat.completions.create(
@@ -431,7 +598,67 @@ def build_text_plan(summary, ai_config, theme="", title="", style_key="", text_m
             "style_key": key,
             "style": str(data.get("style") or "").strip()[:120]}
     plan, notes = fit_plan(plan, lim["total"], lim)
+    pages, why, pnotes = _pages_from_data(data, lim, key, has_photo, plan.get("title") or "")
+    if pages:
+        # 顶层那几个键仍然填第 1 页：列表页、发布取图、回读校验读的都是它们，不能断
+        first = pages[0]
+        plan.update({"title": first["title"], "subtitle": first["subtitle"],
+                     "cards": first["cards"], "scene": first["scene"], "footer": first["footer"]})
+        if len(pages) > 1:
+            plan["pages"] = pages
+        if why:
+            plan["why"] = why
+        notes = pnotes + notes
+    # 推荐快照：M4 算采纳率靠它跟最后真正出的那份对比（人改过什么一目了然）
+    plan["recommended"] = {
+        "page_count": len(pages) if pages else 1,
+        "style_key": key,
+        "layouts": [p["layout_key"] for p in pages] if pages
+                   else [_page_layout(plan.get("layout_key"), key, has_photo, 1)[0]],
+        "cards": [len(p["cards"]) for p in pages] if pages else [len(plan.get("cards") or [])],
+        "why": why}
     return plan, _clip_publish(data.get("publish")), lint_plan(plan, lim), notes
+
+
+def adoption_stats(rows):
+    """rows = [(recommended, final, manifest)] → 推荐采纳率。
+
+    分母只算"有推荐记录的那些"：这套埋点上线前的历史包没有 recommended，
+    混进分母会算出一个假的低采纳率，看着像推荐不准，其实是样本没埋点。
+    哪个布局老被人改回去，就说明 §题材映射 里那条判据不对——这数字是拿来收紧规则的。
+    """
+    from collections import Counter
+    from . import poster_typeset as ts
+    labels = {k: v["label"] for k, v in ts.LAYOUTS.items()}
+    page_ok = style_ok = lay_hit = lay_all = 0
+    clicks, swaps = [], Counter()
+    for rec, fin, m in rows:
+        if int(rec.get("page_count") or 1) == int(fin.get("page_count") or 1):
+            page_ok += 1
+        if (rec.get("style_key") or "") == (fin.get("style_key") or ""):
+            style_ok += 1
+        rl, fl = rec.get("layouts") or [], fin.get("layouts") or []
+        for i in range(max(len(rl), len(fl))):
+            a = rl[i] if i < len(rl) else "（无此页）"
+            b = fl[i] if i < len(fl) else "（无此页）"
+            lay_all += 1
+            if a == b:
+                lay_hit += 1
+            else:
+                swaps["%s → %s" % (labels.get(a, a), labels.get(b, b))] += 1
+        try:
+            if m.get("preview_clicks") is not None:
+                clicks.append(int(m.get("preview_clicks")))
+        except (TypeError, ValueError):
+            pass
+    n = max(1, len(rows))
+    return {"sampled": len(rows),
+            "page": {"ok": page_ok, "n": len(rows), "rate": int(round(page_ok * 100.0 / n))},
+            "style": {"ok": style_ok, "n": len(rows), "rate": int(round(style_ok * 100.0 / n))},
+            "layout": {"ok": lay_hit, "n": lay_all,
+                       "rate": int(round(lay_hit * 100.0 / max(1, lay_all)))},
+            "avg_preview_clicks": round(sum(clicks) / float(len(clicks)), 1) if clicks else None,
+            "top_swaps": [{"pair": k, "n": v} for k, v in swaps.most_common(3)]}
 
 
 def _plan_chars_one(plan):
@@ -537,6 +764,9 @@ def lint_plan(plan, lim=None, card_min=None):
         if len(plan.get("pages") or []) > PAGE_MAX:
             bad.append("页数 %d 超过上限 %d 页" % (len(plan.get("pages") or []), PAGE_MAX))
         return bad
+    if len(pages) == 1 and isinstance(plan.get("pages"), list):
+        # pages 只有一页时也按那一页查：顶层可能只是空壳（脚本或模型只填了 pages）
+        plan = pages[0]
     bad = []
     if not (plan.get("title") or "").strip():
         bad.append("主标题为空")
@@ -1061,7 +1291,8 @@ def choose_candidate(summary_id, index):
 
 def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
                     progress_cb=None, do_verify=True, plan=None, publish=None, force=False,
-                    copies=1, do_review=True, text_mode=DEFAULT_TEXT_MODE, photo=None):
+                    copies=1, do_review=True, text_mode=DEFAULT_TEXT_MODE, photo=None,
+                    preview_clicks=0):
     """整理稿 → 海报一张。返回 manifest dict（已落盘 output/poster/<summary_id>/）。
 
     plan / publish 非空时跳过 LLM 拆解（前端审改过文案再出图走这条）：plan 是要画进图的
@@ -1292,6 +1523,13 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
         "copies": n,
         "page_count": len(pages),
         "pages": page_rows or candidates[:1],
+        # 采纳率的原料：模型推荐的那份 vs 人最后真正出的那份
+        "recommended": (plan or {}).get("recommended") or {},
+        "final": {"page_count": len(pages), "style_key": plan.get("style_key") or "",
+                  "layouts": [_ts.resolve_layout(p, _ts.skin_for(p.get("style_key"))) for p in pages],
+                  "cards": [len(p.get("cards") or []) for p in pages]},
+        "why": (plan or {}).get("why") or "",
+        "preview_clicks": int(preview_clicks or 0),
         "text_mode": text_mode,
         "typeset": ts_chk,
         "image_model": "" if photo else IMAGE_MODEL,

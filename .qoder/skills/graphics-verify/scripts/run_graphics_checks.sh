@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 图文渲染链路回归：三轴 token 静态检查 + 头条/公众号两条 e2e 线。
+# 出图渲染链路回归：三轴 token 静态检查 + 头条/公众号两条 e2e 线 + 海报布局与多页一条线。
 # 全部通过时末行输出 ALL_OK；任一失败输出 FAIL 行并以非 0 退出。
 set -uo pipefail
 
@@ -30,11 +30,12 @@ run_one() {
 run_one "三轴 token 静态检查" "$ROOT/scripts/check_variant_tokens.py"
 run_one "头条 e2e（A-R）" "$ROOT/scripts/e2e_toutiao_variants.py"
 run_one "公众号 e2e（W1-W14）" "$ROOT/scripts/e2e_wechat_variants.py"
+run_one "海报布局与多页 e2e（A-I）" "$ROOT/scripts/e2e_poster_layouts.py"
 
 printf '\n'
 if [ "$OVERALL" -eq 0 ]; then
-  echo "ALL_OK 图文回归三条线全绿"
+  echo "ALL_OK 出图回归四条线全绿"
 else
-  echo "FAIL 图文回归存在失败项，按上面 ✗/FAIL 行定位"
+  echo "FAIL 出图回归存在失败项，按上面 ✗/FAIL 行定位"
 fi
 exit "$OVERALL"

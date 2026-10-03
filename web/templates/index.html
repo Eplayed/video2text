@@ -447,6 +447,22 @@ textarea{resize:vertical;min-height:84px}
 .pk-pcell.on{border-color:var(--accent);color:var(--text);font-weight:700}
 .pk-pcell img{width:96px;height:171px;object-fit:cover;object-position:top;border-radius:7px;
   border:1px solid var(--border);display:block}
+/* AI 推荐条：一句"拆几页、为什么"，右边留改的入口 */
+.pk-rec{display:flex;gap:9px;flex-wrap:wrap;align-items:center;font-size:12.5px;
+  background:color-mix(in srgb,var(--module-5) 10%,transparent);
+  border:1px solid color-mix(in srgb,var(--module-5) 42%,transparent);
+  border-radius:10px;padding:8px 11px;margin:0 0 9px}
+.pk-rec .pill{background:var(--module-5);color:#fff;border-radius:20px;padding:2px 9px;
+  font-size:10.5px;font-weight:800}
+.pk-rec b{font-size:13px}
+.pk-rec .why{color:var(--text-secondary);font-size:11.5px;flex:1;min-width:200px;line-height:1.6}
+.pk-rec .chg{font-size:11px;font-weight:800;color:var(--danger)}
+/* 采纳率：只在海报成品页出现，小字一行，不抢地方 */
+.pk-adopt{display:flex;gap:14px;flex-wrap:wrap;align-items:center;font-size:11.5px;
+  color:var(--text-secondary);background:var(--surface-nested);border:1px solid var(--border);
+  border-radius:9px;padding:7px 11px;margin:0 0 12px}
+.pk-adopt b{color:var(--text);font-size:12px}
+.pk-adopt .sw{color:var(--danger)}
 .pk-sub{font-size:12.5px;font-weight:800;color:var(--text-secondary);margin:16px 0 6px;letter-spacing:.5px}
 .pk-ta{flex:1;min-width:0;min-height:76px;font-size:12.5px;line-height:1.7}
 .pk-pub{white-space:pre-wrap;word-break:break-word;font-family:inherit;font-size:12.5px;line-height:1.75;background:var(--surface-nested);border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin:0;max-height:240px;overflow:auto}
@@ -1079,6 +1095,7 @@ textarea{resize:vertical;min-height:84px}
           <span class="count" id="count-poster">0 张</span>
         </div>
         <p style="font-size:12px;color:var(--text-tertiary);margin:0 0 12px">链路：整理稿点「🎨 AI 海报」→ ① 拆文案（对照原文改字）→ ② 看版面（免费）→ ③ 出图（0.5 元/张，复用模板底图 0 元）→ 这里回看成品、复制发布文案。发布动作保持<b>手动</b>，不走任何自动发布通道。</p>
+        <div class="pk-adopt" id="pk-adopt" style="display:none"></div>
         <div class="pk-grid" id="grid-poster">
           <div class="empty"><span class="e" data-icon="image"></span>加载中...</div>
         </div>
@@ -1649,6 +1666,14 @@ function renderDashOneLine(data, td) {
     : '<span>自动同步 <b>未开</b></span>');
   if (s.last_output) seg.push(`<span>上次产出 ${esc(String(s.last_output).slice(5,16))}</span>`);
   el.innerHTML = seg.join('<i>·</i>');
+  // 推荐采纳率要等一次异步取数，取到再挂在行尾；没样本就不挂，免得显示 0% 让人以为推荐很差
+  pkAdoptFetch().then(function (d) {
+    if (!d || !d.sampled || document.getElementById('dash-oneline') !== el) return;
+    if (el.innerHTML.indexOf('推荐照用') >= 0) return;
+    el.insertAdjacentHTML('beforeend',
+      '<i>·</i><em onclick="switchPage(\'poster\')">海报推荐照用 <b>' + d.page.rate + '%</b>（页数）'
+      + ' / ' + d.layout.rate + '%（布局）</em>');
+  });
 }
 
 function renderTodo(td) {
@@ -2466,6 +2491,7 @@ function openPosterDialog(id) {
   _pkSource = null;          // 原文缓存按整理稿存，换一条必须重取
   _pkPhoto = null;           // 配图也是这条素材的，换整理稿要清掉
   _pkPages = []; _pkCur = 0; // 分页同样属于这条素材，不清会把上一条的页带过来
+  _pkRec = null; _pkWhy = ''; _pkPreviewClicks = 0;
   document.getElementById('pk-id').textContent = id;
   document.getElementById('pk-plan').innerHTML = '';
   document.getElementById('pk-result').innerHTML = '';
@@ -2548,6 +2574,9 @@ let _pkLastPlan = null, _pkLastPublish = null;
 // 这么做是为了复用整套已有控件（字数统计、卡片输入、校验），不再写第二份表单。
 const PK_PAGE_MAX = 4;
 let _pkPages = [], _pkCur = 0;
+// AI 推荐快照与理由：拆解回来时存一份，人改过之后推荐条要显示「已改成几页」，
+// 出包时也把它写进 manifest，采纳率靠 recommended 与 final 两对照算出来。
+let _pkRec = null, _pkWhy = '', _pkPreviewClicks = 0;
 async function loadPosterStyles(force) {
   if (_pkStyles.length && !force) return _pkStyles;
   _pkStyles = [];
@@ -2605,6 +2634,7 @@ function pkSyncLayout(v) {
   // 页签上那行"跟着风格 / 满版大图"要跟着改，否则切页时看着像没生效
   const tabs = document.getElementById('pk-tabs');
   if (tabs && _pkPages[_pkCur]) { _pkPages[_pkCur].layout_key = v; tabs.outerHTML = pkTabsHtml(); }
+  pkRefreshRec();
   // 排版是代码算的，跟出图无关：换布局顺手重排一次，一分钱不花
   if (document.getElementById('pk-title')) posterPreview();
 }
@@ -2669,6 +2699,8 @@ function pkRenderPlan(plan, publish, cur) {
   } else {
     _pkCur = Math.max(0, Math.min(_pkPages.length - 1, cur));
   }
+  _pkRec = plan.recommended || null;
+  _pkWhy = plan.why || '';
   const pg = _pkPages[_pkCur], multi = _pkPages.length > 1;
   if (pkStyleKey() !== (plan.style_key || '')) {
     const top = document.getElementById('pk-style-key-top');
@@ -2683,7 +2715,7 @@ function pkRenderPlan(plan, publish, cur) {
     const lb = document.getElementById('pk-layout-label');
     if (lb) lb.textContent = multi ? '本页布局' : '布局';
   }
-  let html = pkTabsHtml()
+  let html = pkRecHtml() + pkTabsHtml()
     + `<div class="pk-row"><span class="pk-tag">主线</span>`
     + `<input id="pk-spine" value="${esc(plan.spine || '')}" maxlength="${PK_LIMITS.spine}" placeholder="这条海报讲的一条链（不进图）"></div>`
     + _pkRow(multi ? '本页主视觉' : '主视觉', 'pk-scene', pg.scene, PK_LIMITS.scene,
@@ -2714,6 +2746,7 @@ function pkRenderPlan(plan, publish, cur) {
   // 展开即取原文（details 原生开合，这里只挂一次加载）
   const sd = document.getElementById('pk-srcpanel');
   if (sd) sd.addEventListener('toggle', function () { if (sd.open) pkLoadSource(); });
+  pkPhotoLabel();      // 页数变了，出图按钮上那句花费也要跟着改
   pkCount();
 }
 function pkReadPlan() {
@@ -2733,6 +2766,59 @@ function pkReadPublish() {
           keyword_reply: g('pk-kw'), source_note: g('pk-src')};
 }
 // ── 多页：一页装不下就翻页，页数与每页布局都能手改 ──
+function pkRecHtml() {
+  if (!_pkRec) return '';
+  const lays = (_pkRec.layouts || []).map(k => (pkLayout(k) || {}).label || k || '—').join(' / ');
+  const st = pkStyle(_pkRec.style_key);
+  // 只说人真正改了什么：页数变了报页数，布局被显式改过才报布局
+  // （下拉停在"跟着风格"＝没表态，不能算改）
+  const parts = [];
+  if (_pkPages.length !== (_pkRec.page_count || 1)) parts.push('页数 → ' + _pkPages.length);
+  const chLay = [];
+  _pkPages.forEach((p, i) => {
+    if (p.layout_key && p.layout_key !== (_pkRec.layouts || [])[i]) chLay.push(i + 1);
+  });
+  if (chLay.length) parts.push('第 ' + chLay.join('、') + ' 页布局');
+  return '<div class="pk-rec" id="pk-rec"><span class="pill">AI 推荐</span>'
+    + '<b>拆成 ' + (_pkRec.page_count || 1) + ' 页 · ' + esc(st ? st.label.split('（')[0] : '')
+    + ' · ' + esc(lays) + '</b>'
+    + (_pkWhy ? '<span class="why">' + esc(_pkWhy) + '</span>' : '')
+    + (parts.length ? '<span class="chg">已改成：' + esc(parts.join('、')) + '</span>' : '')
+    + (_pkPages.length > 1 ? '<button type="button" class="btn ghost sm" onclick="pkFlatten()">合成 1 页</button>' : '')
+    + '<button type="button" class="btn ghost sm" onclick="posterPlan()" title="重新拆一次（约 30 秒，不花钱出图）">换一套</button>'
+    + '</div>';
+}
+function pkRefreshRec() {
+  const el = document.getElementById('pk-rec');
+  if (el && _pkRec) el.outerHTML = pkRecHtml();
+}
+function pkFlatten() {
+  if (_pkPages.length < 2) return;
+  pkFlushForm();
+  const all = [];
+  _pkPages.forEach(p => { (p.cards || []).forEach(c => all.push(c)); });
+  const keep = all.slice(0, PK_LIMITS.cardMax), lost = all.slice(PK_LIMITS.cardMax);
+  const msg = '合成 1 页：一页最多 ' + PK_LIMITS.cardMax + ' 条，整组现在有 ' + all.length + ' 条。\n'
+    + (lost.length ? ('多出的 ' + lost.length + ' 条（' + lost.map(c => c.t || c.d).join('、')
+        + '）会自动写进发布配文，不会丢。') : '条数正好，不会丢内容。');
+  if (!confirm(msg)) return;
+  if (lost.length) {
+    const ta = document.getElementById('pk-copy');
+    const add = '\n· ' + lost.map(c => ((c.t ? c.t + '：' : '') + (c.d || '')).trim()).join('\n· ');
+    if (ta) ta.value = ((ta.value || '').trim() + add).trim();
+    _pkLastPublish = pkReadPublish();
+  }
+  const p0 = _pkPages[0];
+  p0.cards = keep;
+  if (!p0.title) p0.title = (_pkPages.find(q => q.title) || {}).title || '';
+  _pkPages = [p0]; _pkCur = 0;
+  // 关键：把 _pkLastPlan 也改成单页形状，否则下次归一又会把 pages[] 端回来
+  delete _pkLastPlan.pages;
+  _pkLastPlan.title = p0.title; _pkLastPlan.subtitle = p0.subtitle;
+  _pkLastPlan.cards = p0.cards; _pkLastPlan.scene = p0.scene;
+  pkRenderPlan(_pkLastPlan, _pkLastPublish);
+  posterPreview();
+}
 function pkTabsHtml() {
   let h = '<div class="pk-tabs" id="pk-tabs"><span class="pk-tabs-k">页</span>';
   _pkPages.forEach((p, i) => {
@@ -2787,15 +2873,19 @@ function pkDelPage() {
 }
 function pkReadPayload() {
   // 单页时返回的形状跟以前一模一样；多页才包成 pages[]，后端 plan_pages() 认这两种
-  if (_pkPages.length < 2) return pkReadPlan();
+  const tag = {};
+  if (_pkRec) tag.recommended = _pkRec;
+  if (_pkWhy) tag.why = _pkWhy;
+  if (_pkPages.length < 2) return Object.assign(pkReadPlan(), tag);
   pkFlushForm();
   const first = _pkPages[0];
-  return {pages: _pkPages.map(p => ({role: p.role, layout_key: p.layout_key, title: p.title,
-                                      subtitle: p.subtitle, scene: p.scene,
-                                      footer: p.footer, cards: p.cards})),
-          title: first.title, style_key: pkStyleKey(),
-          spine: (_pkLastPlan || {}).spine || '', footer: first.footer || '',
-          scene: first.scene || ''};
+  return Object.assign({pages: _pkPages.map(p => ({role: p.role, layout_key: p.layout_key,
+                                                   title: p.title, subtitle: p.subtitle,
+                                                   scene: p.scene, footer: p.footer,
+                                                   cards: p.cards})),
+                        title: first.title, style_key: pkStyleKey(),
+                        spine: (_pkLastPlan || {}).spine || '', footer: first.footer || '',
+                        scene: first.scene || ''}, tag);
 }
 function pkCount() {
   const el = document.getElementById('pk-count');
@@ -2878,8 +2968,12 @@ function pkPhotoLabel() {
         + '<span class="pk-thumb-x" title="移除配图，回到 AI 画底图" onclick="pkPhotoClear()">✕</span></span>'
       : '<button type="button" class="btn ghost sm" onclick="pkPhotoPick()">＋ 用你的图</button>';
   }
-  // 出图按钮跟着变：真图模式不出 AI 底图，再写 0.5 元/张就是骗人
-  const tip = _pkPhoto ? '③ 出图 · 0 元（用你的图）' : '③ 出图 · 0.5 元/张';
+  // 出图按钮跟着变：真图模式不出 AI 底图，再写 0.5 元/张就是骗人；
+  // 多页时花费按页数翻倍，按钮上就把总数写出来，别等确认框才看见
+  const n = Math.max(1, _pkPages.length);
+  const tip = _pkPhoto
+    ? (n > 1 ? '③ 出图 · 0 元（' + n + ' 页，首页用你的图）' : '③ 出图 · 0 元（用你的图）')
+    : (n > 1 ? '③ 出图 · ' + n + ' 页共 ' + (n * 0.5).toFixed(1) + ' 元' : '③ 出图 · 0.5 元/张');
   ['pk-go-top', 'pk-go-bot'].forEach(id => {
     const b = document.getElementById(id);
     if (b) b.textContent = tip;
@@ -2894,6 +2988,7 @@ function pkPhotoLabel() {
 async function posterPreview() {
   if (!document.getElementById('pk-title')) { setStatus('error', '先点「① AI 拆解文案」拿到文案'); return; }
   const box = document.getElementById('pk-result');
+  _pkPreviewClicks++;          // 每次免费重排都计数（含换布局/切页自动重排），当"改了几次才满意"用
   box.innerHTML = '<div class="pk-verify mild">⏳ 正在按当前文案排'
     + (_pkPages.length > 1 ? '整组 ' + _pkPages.length + ' 页' : '一张') + '免费预览…</div>';
   const body = {plan: pkReadPayload(), ratio: document.getElementById('pk-ratio').value};
@@ -2966,7 +3061,8 @@ async function posterGenerate(force) {
   const body = {summary_id: _pkId, ratio: document.getElementById('pk-ratio').value,
                 theme: document.getElementById('pk-theme').value.trim(),
                 plan: plan, publish: plan ? pkReadPublish() : null,
-                force: !!force, copies: copies, review: review, text_mode: pkTextMode()};
+                force: !!force, copies: copies, review: review, text_mode: pkTextMode(),
+                preview_clicks: _pkPreviewClicks};
   if (_pkPhoto) body.photo = _pkPhoto.ref;
   const r = await fetch('/api/poster/generate', {method: 'POST',
     headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)}).then(x => x.json());
@@ -3319,6 +3415,28 @@ function showPosterList() {
   loadPosterList();
 }
 
+let _pkAdopt = null;
+function pkAdoptFetch() {
+  if (_pkAdopt) return Promise.resolve(_pkAdopt);
+  return fetch('/api/poster/adoption?n=20').then(r => r.json())
+    .then(d => { _pkAdopt = d || {sampled: 0}; return _pkAdopt; })
+    .catch(function (e) { warn('poster/adoption', e); return {sampled: 0}; });
+}
+async function loadPosterAdoption() {
+  const el = document.getElementById('pk-adopt');
+  if (!el) return;
+  const d = await pkAdoptFetch();
+  if (!d || !d.sampled) { el.style.display = 'none'; return; }
+  const pct = o => o.ok + '/' + o.n + '（' + o.rate + '%）';
+  el.innerHTML = '<b>最近 ' + d.sampled + ' 条 · AI 推荐采纳</b>'
+    + '<span>页数照用 ' + pct(d.page) + '</span>'
+    + '<span>风格照用 ' + pct(d.style) + '</span>'
+    + '<span>布局照用 ' + pct(d.layout) + '</span>'
+    + (d.avg_preview_clicks != null ? '<span>平均预览 ' + d.avg_preview_clicks + ' 次</span>' : '')
+    + ((d.top_swaps || []).length ? '<span class="sw">最常改：'
+        + d.top_swaps.map(s => esc(s.pair) + ' ×' + s.n).join('、') + '</span>' : '');
+  el.style.display = '';
+}
 async function loadPosterList() {
   const grid = document.getElementById('grid-poster');
   let d;
@@ -3354,6 +3472,7 @@ async function loadPosterList() {
       </div>
     </div>`;
   }).join('');
+  loadPosterAdoption();          // 采纳率这块小卡片跟在列表后面取，不挡列表出图
 }
 
 async function openPosterDetail(id) {

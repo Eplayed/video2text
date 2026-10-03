@@ -445,10 +445,11 @@ def _rows_for(n, kind):
     if kind in ("stack", "list"):
         return [[i] for i in range(n)]
     if kind == "split":
+        # 左栏放前半、右栏放后半（"不换 vs 换"要竖着对着读，不是成对往下排）；
+        # 条数为奇数时右栏最后一格空着，用 None 占位，算框和写字都会跳过
         half = (n + 1) // 2
         right = list(range(half, n))
-        return [[j, right[j - half] if j - half < len(right) else None]
-                for j in range(half)]
+        return [[j, right[j] if j < len(right) else None] for j in range(half)]
     rows, i = [], 0
     if kind == "hero":
         rows.append([0])

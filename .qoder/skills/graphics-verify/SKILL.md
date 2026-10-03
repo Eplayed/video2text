@@ -1,6 +1,6 @@
 ---
 name: graphics-verify
-description: 跑头条/公众号图文生成链路的回归验证（三轴 token 静态检查 + 两条 e2e 线）。改动 src/graphics/ 下任何文件（variants.py、templates.py、css_engine.py、skins.py、channels/*.py、renderer.py、package.py）后必须执行；用户报"配色/字体/版式选了没效果""每次都是同一张图""标题被挡住"时也用它取证。
+description: 跑图文与海报出图链路的回归验证（三轴 token 静态检查 + 头条/公众号两条 e2e + 海报布局与多页一条 e2e）。改动 src/graphics/ 下任何文件（variants.py、templates.py、css_engine.py、skins.py、channels/*.py、renderer.py、package.py）或海报排版层（src/poster_typeset.py、src/ai_poster.py 的版面/分页部分）后必须执行；用户报"配色/字体/版式选了没效果""每次都是同一张图""标题被挡住""换了布局没变化"时也用它取证。
 ---
 
 # 图文变体回归验证
@@ -15,13 +15,15 @@ description: 跑头条/公众号图文生成链路的回归验证（三轴 token
 bash .qoder/skills/graphics-verify/scripts/run_graphics_checks.sh
 ```
 
-依次跑：
+依次跑（四条线）：
 
 1. `scripts/check_variant_tokens.py` — 三轴 × 全模板逐组合实测「CSS 是否真的变了 / token 是否残留」，字体轴与配色轴失效即报错（不是 warn）。
 2. `scripts/e2e_toutiao_variants.py` — 头条线 18 用例（A–R），含「默认三轴产物字节全等」硬断言。
 3. `scripts/e2e_wechat_variants.py` — 公众号线 14 用例（W1–W14），含 lilac_list/cream_gold 身份色常量断言。
 
-两条 e2e 会往 `output/toutiao/99999`、`output/wechat/99998` 写产物并自行清理；脚本内部用 `env -u PYTHONHOME -u PYTHONPATH /usr/local/bin/python3`，别用别的解释器。改了 `main.py`/`content_store` 的取稿逻辑也要跑（e2e 依赖整合稿结构）。
+第四条 `scripts/e2e_poster_layouts.py` 是海报排版层（布局轴 + 多页）的回归：十种构图的版面指纹、默认路径零变化、卡片数越界提示、布局回落、页数归一、门禁页化、页码角标、三页成组落盘（真图模式 0 元）、采纳率算式。它往 `output/poster/99996` 写产物并自行清理，全程不调付费接口。
+
+两条图文 e2e 会往 `output/toutiao/99999`、`output/wechat/99998` 写产物并自行清理；脚本内部用 `env -u PYTHONHOME -u PYTHONPATH /usr/local/bin/python3`，别用别的解释器。改了 `main.py`/`content_store` 的取稿逻辑也要跑（e2e 依赖整合稿结构）。
 
 ## 失败排查顺序（第一性原则）
 

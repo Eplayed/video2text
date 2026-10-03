@@ -1894,12 +1894,15 @@ def api_poster_plan():
     style_key = str(data.get("style_key") or "").strip()[:20]
     ratio = str(data.get("ratio") or "9:16").strip()[:5]   # 只影响预览 prompt 的版式描述
     text_mode = str(data.get("text_mode") or ai_poster.DEFAULT_TEXT_MODE).strip()[:10]
+    # 有没有真图决定能不能推"满版大图 / 左右分栏"这类没图站不住的布局
+    has_photo = bool(str(data.get("photo") or "").strip())
 
     def fn():
         cfg = _fast_config()
         _poster_status["progress"] = "LLM 拆解海报文案（模型：%s）..." % (cfg.get("model") or "?")
         plan, publish, bad, notes = ai_poster.build_text_plan(summary, cfg, theme=theme, title=title,
-                                                              style_key=style_key, text_mode=text_mode)
+                                                              style_key=style_key, text_mode=text_mode,
+                                                              has_photo=has_photo)
         # 骨架稿不在这里拦：拆解本身就能判断这份素材有没有料，拦在这里会让人白等一次拆解。
         # 只把风险随结果一起回给前端，出图那一步再决定是否放行。
         warning = "；".join(ai_poster.draft_gate.draft_blockers(summary))
@@ -1945,6 +1948,10 @@ def api_poster_generate():
         photo = _photo_read(data.get("photo"))     # 上传图坏了要在提交前就报错，别让人白等一轮
     except ai_poster.PosterError as e:
         return jsonify({"error": str(e)}), 400
+    try:
+        clicks = int(data.get("preview_clicks") or 0)   # 采纳率要用：平均点几次预览才满意
+    except (TypeError, ValueError):
+        clicks = 0
 
     def fn():
         def cb(msg):
@@ -1953,7 +1960,7 @@ def api_poster_generate():
                                              ratio=ratio, progress_cb=cb, plan=plan,
                                              publish=publish, force=force, copies=copies,
                                              do_review=do_review, text_mode=text_mode,
-                                             photo=photo)
+                                             photo=photo, preview_clicks=clicks)
         v = manifest.get("verify") or {}
         rv = manifest.get("review") or {}
         ts_chk = manifest.get("typeset") or {}
@@ -2119,6 +2126,37 @@ def api_poster_styles():
                                "cardMin": ai_poster.CARD_MIN, "cardMax": ai_poster.CARD_MAX,
                                "spine": ai_poster.SPINE_MAX},
                     "reviewPass": ai_poster.REVIEW_PASS})
+
+
+@app.route("/api/poster/adoption")
+def api_poster_adoption():
+    """最近 N 条成品的推荐采纳率：模型推荐的那份 vs 人最后真正出的那份。
+
+    本地工具不落库，直接扫 manifest（跟成品列表同一套枚举，测试位不算样本）。
+    这数字是用来收紧规则的：哪个布局老被人改回去，就说明推荐表里那条判据不对。
+    """
+    try:
+        want = max(5, min(int(request.args.get("n") or 20), 100))
+    except (TypeError, ValueError):
+        want = 20
+    rows = []
+    try:
+        for m in ai_poster.list_packages():
+            rec, fin = m.get("recommended") or {}, m.get("final") or {}
+            if not rec.get("layouts") or not fin.get("layouts"):
+                continue
+            rows.append((rec, fin, m))
+            if len(rows) >= want:
+                break
+    except Exception:
+        print("[poster/adoption] 扫包失败:\n%s" % traceback.format_exc(), flush=True)
+        return jsonify({"error": "读取成品清单失败", "sampled": 0}), 500
+    if not rows:
+        return jsonify({"sampled": 0,
+                        "note": "还没有带推荐记录的成品：拆一次文案（会给出页数与布局推荐）再出图就有了"})
+    out = ai_poster.adoption_stats(rows)
+    out["why"] = (rows[0][2].get("why") or "")
+    return jsonify(out)
 
 
 @app.route("/api/poster/list")
