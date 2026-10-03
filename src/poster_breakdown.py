@@ -17,12 +17,18 @@ import re
 
 DEFAULT_VISION_MODEL = "qwen3-vl-flash"
 
-# 版式只让模型从这四种里挑。想加第五种得先在 poster_typeset 里实现，
-# 否则拆出来一个我们排不出来的版式，等于给用户一个坏选项。
+# 版式候选与排版层同步：poster_typeset.LAYOUTS 里实现了几个，这里就能选几个。
+# 之前只放四种，拆出来的参考图十有八九被判成"双列网格"，那是我们排不出来、只能怪拆解不准。
 LAYOUTS = {
-    "stack": "单列通栏：每条要点占一整行，从上排到下，插画占大半张",
-    "grid2": "两列网格：要点做成左右两列的小面板，条数多用这种",
+    "top_art": "图上文下：插画占上半，要点做成单列卡片从上排到下",
+    "bottom_art": "图下文上：标题和卡片在上半，插画压在下面当收尾",
+    "left_text": "左文右图：文字占左半通栏，右侧一条通高竖栏放图",
+    "right_text": "右文左图：文字占右半通栏，左侧一条通高竖栏放图",
+    "full_bleed": "满版大图：整幅是一张图，标题和少量要点压在底部渐变上",
+    "big_type": "大字报：主标题极大占上三分之一，图只占一条窄带",
+    "compare": "双列对比：要点分左右两栏对着排，中间有分隔",
     "list": "清单：单列，每条前面一个大号序号（01/02/03），插画只占上部一小条",
+    "grid2": "两列网格：要点做成左右两列的小面板，条数多用这种",
     "hero": "结论式：第一条通栏放大当结论，其余几条做成小卡片",
 }
 TITLE_FACES = {"serif_black": "标题是衬线/宋体/书法那一类，有笔画粗细变化",
@@ -105,10 +111,19 @@ def normalize(raw):
     from . import poster_typeset as ts
     raw = raw if isinstance(raw, dict) else {}
     pal = raw.get("palette") if isinstance(raw.get("palette"), dict) else {}
-    layout = raw.get("layout") if raw.get("layout") in LAYOUTS else "grid2"
+    # 键是否合法以排版层为准（LAYOUTS 那份中文说明只是给人和模型看的），
+    # 排不出来的版式一律不认，免得拆出一个我们画不了的选项给用户
+    from . import poster_typeset as ts
+    raw_key = str(raw.get("layout") or "")
+    layout = ts.LAYOUT_ALIAS.get(raw_key, raw_key)
+    if layout not in ts.LAYOUTS:
+        layout = "grid2"
     share = _num(raw.get("art_share"), 0.20, 0.80, 0.55)
-    parent = {"stack": "game_epic", "grid2": "tool_review",
-              "list": "checklist", "hero": "minimal"}.get(layout, "tool_review")
+    # 配色/字体先借一套最接近的内置皮肤打底，再被上面模型给的 palette 覆盖掉
+    parent = {"top_art": "game_epic", "bottom_art": "game_epic", "full_bleed": "game_epic",
+              "left_text": "tool_review", "right_text": "tool_review", "compare": "tool_review",
+              "grid2": "tool_review", "list": "checklist",
+              "big_type": "minimal", "hero": "minimal"}.get(layout, "tool_review")
     base = dict(ts.TYPE_SKINS[parent])
 
     bg = _hex(pal.get("bg"), base["bg_top"])
