@@ -634,7 +634,33 @@ def _bottom_scrim(W, H, top_y, strength=205):
     return ov, (0, top_y)
 
 
-def typeset(base_png, plan, ratio="9:16", skin=None, photo=None):
+def _page_pill(draw, W, H, skin, page):
+    """右上角那颗「k / N」：读者知道后面还有页，才不会被"这页没说完"当成讲完了。
+
+    放在最后画，所以不会被卡片底板或真图盖住；深浅两套皮肤都靠面板色垫一层底，
+    不直接压在图上写白字。
+    """
+    try:
+        k, total = int(page[0]), int(page[1])
+    except (TypeError, ValueError, IndexError):
+        return
+    if total < 2:
+        return
+    txt = "%d / %d" % (k, total)
+    f = _font(skin["body_face"], max(16, int(H * 0.0175)))
+    tw = f.getlength(txt)
+    px, py = int(H * 0.0075), int(H * 0.0045)
+    w, h = int(tw + px * 2), int(f.size + py * 2)
+    x0 = W - int(W * 0.045) - w
+    y0 = int(H * 0.022)
+    draw.rounded_rectangle((x0, y0, x0 + w, y0 + h), radius=int(h / 2.0),
+                           fill=_rgb(skin["panel"]) + (215,),
+                           outline=_rgb(skin["stroke"]) + (int(skin["stroke_alpha"] or 0),),
+                           width=2)
+    _draw_text(draw, (x0 + px, y0 + py - int(f.size * 0.06)), txt, f, _rgb(skin["title"]))
+
+
+def typeset(base_png, plan, ratio="9:16", skin=None, photo=None, page=None):
     """把 plan 里的中文排到 AI 底图上。返回 (png 字节, 版面自检 dict)。
 
     base_png 是出图模型给的**无字底图**字节；plan 走 ai_poster 的文案计划形状
@@ -804,6 +830,8 @@ def typeset(base_png, plan, ratio="9:16", skin=None, photo=None):
         _draw_text(draw, ((W - ff.getlength(ffl[0])) / 2.0, H - foot_h + int(H * 0.006)),
                    ffl[0], ff, _rgb(skin["muted"]))
 
+    _page_pill(draw, W, H, skin, page)
+
     out = io.BytesIO()
     img.save(out, format="PNG")
     chk = {
@@ -812,6 +840,8 @@ def typeset(base_png, plan, ratio="9:16", skin=None, photo=None):
         "engine": "pil-typeset", "skin": (plan or {}).get("style_key") or DEFAULT_SKIN,
         "layout": layout, "layout_label": spec["label"],
     }
+    if page and int(page[1] or 1) > 1:
+        chk["page"] = [int(page[0]), int(page[1])]
     if photo_info:
         chk["photo"] = photo_info
     return out.getvalue(), chk
@@ -876,6 +906,31 @@ def _resolve_skin(style_key, skin):
     return skin if isinstance(skin, dict) and skin.get("layout") else skin_for(style_key)
 
 
+def _art_glow(img, box, skin):
+    """给"这块要放图、但这次不出图"的那块补一层氛围光。
+
+    为什么补：真图只当第一页主视觉，第 2、3 页在 0 元这条路上就是纯色渐变，
+    空着六成画面看着像没排完。这里按皮肤自己的强调色压一层极淡的光，
+    让它读起来是"背景氛围"而不是"缺一张图"。alpha 全程 ≤26，不会盖住文字。
+    """
+    x0, y0, x1, y1 = [int(v) for v in box]
+    w, h = x1 - x0, y1 - y0
+    if w < 12 or h < 12:
+        return
+    acc = _rgb(skin.get("accent", "#ffffff"))
+    ov = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    od = ImageDraw.Draw(ov)
+    step = max(1, h // 160)
+    for y in range(0, h, step):
+        t = y / float(max(1, h - 1))
+        a = int(26 * max(0.0, 1.0 - abs(t - 0.34) * 1.9))
+        if a <= 0:
+            continue
+        inset = int(w * 0.05 * abs(t - 0.5) * 2)
+        od.line([(inset, y), (w - inset, y)], fill=acc + (a,))
+    img.paste(ov, (x0, y0), ov)
+
+
 def placeholder_base(style_key, W, H, art_frac=0.6, skin=None, art_hint=True,
                      plan=None, zone=None):
     """按风格预设的配色生成一张占位底图，给"免费预览"用。
@@ -895,11 +950,17 @@ def placeholder_base(style_key, W, H, art_frac=0.6, skin=None, art_hint=True,
     for y in range(int(H)):                      # 纵向渐变，越往下越接近卡片底
         r = y / float(max(1, H - 1))
         d.line([(0, y), (W, y)], fill=tuple(int(top[i] * (1 - r) + bot[i] * r) for i in range(3)))
+    z = zone or (art_zone(plan, (W, H), skin) if plan is not None else None)
     if not art_hint:
+        # 这张是要真落盘的底图（真图模式、以及多页里没轮到插页图的那几页）：
+        # 不画灰框和说明，但按同一块版面给"该放图的那一块"补一层氛围光，
+        # 否则纯色底会空着六成，看着像没排完
+        if plan is not None:
+            box, _frac = photo_box_for(z, W, H, int(W * 0.062), int(W * skin["gap"]))
+            _art_glow(img, box, skin)
         b = io.BytesIO()
         img.save(b, format="PNG")
         return b.getvalue()
-    z = zone or (art_zone(plan, (W, H), skin) if plan is not None else None)
     slot = (z or {}).get("slot", "band_top")
     ay = int(H * max(0.25, min(0.85, art_frac)))
     if slot == "full":

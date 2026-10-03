@@ -429,6 +429,24 @@ textarea{resize:vertical;min-height:84px}
 .pk-verify.pass{background:color-mix(in srgb,#07c160 10%,transparent);color:#07c160;font-weight:700}
 .pk-verify.fail{background:color-mix(in srgb,var(--danger) 10%,transparent);color:var(--danger);font-weight:700}
 .pk-verify.mild{background:var(--surface-nested);color:var(--text-secondary)}
+/* 多页：页签 + 整组预览缩略条 */
+.pk-tabs{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:2px 0 10px}
+.pk-tabs-k{font-size:11px;font-weight:800;color:var(--text-secondary);margin-right:2px}
+.pk-tabs-n{font-size:11px;color:var(--text-secondary);margin-left:auto}
+.pk-tab{display:flex;flex-direction:column;align-items:flex-start;gap:1px;font-size:11.5px;
+  line-height:1.35;padding:5px 11px;border-radius:9px;border:1px solid var(--border);
+  background:var(--surface-nested);color:var(--text-secondary);cursor:pointer}
+.pk-tab b{font-size:12px;color:var(--text)}
+.pk-tab.on{background:var(--accent);border-color:var(--accent);color:#fff}
+.pk-tab.on b{color:#fff}
+.pk-tab.add{border-style:dashed;color:var(--accent);font-weight:700}
+.pk-tab.del{color:var(--danger);border-color:color-mix(in srgb,var(--danger) 40%,var(--border))}
+.pk-pstrip{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0 2px}
+.pk-pcell{display:flex;flex-direction:column;align-items:center;gap:3px;cursor:pointer;
+  font-size:11px;color:var(--text-secondary);border:2px solid transparent;border-radius:10px;padding:3px}
+.pk-pcell.on{border-color:var(--accent);color:var(--text);font-weight:700}
+.pk-pcell img{width:96px;height:171px;object-fit:cover;object-position:top;border-radius:7px;
+  border:1px solid var(--border);display:block}
 .pk-sub{font-size:12.5px;font-weight:800;color:var(--text-secondary);margin:16px 0 6px;letter-spacing:.5px}
 .pk-ta{flex:1;min-width:0;min-height:76px;font-size:12.5px;line-height:1.7}
 .pk-pub{white-space:pre-wrap;word-break:break-word;font-family:inherit;font-size:12.5px;line-height:1.75;background:var(--surface-nested);border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin:0;max-height:240px;overflow:auto}
@@ -1218,7 +1236,7 @@ textarea{resize:vertical;min-height:84px}
             <option value="3">3 张挑 1</option>
           </select></label>
           <label>风格<select id="pk-style-key-top" onchange="pkSyncStyle(this.value)"><option value="">载入中…</option></select></label>
-          <label>布局<select id="pk-layout-key-top" onchange="pkSyncLayout(this.value)" title="文字和图各占画面哪一块。默认跟着风格走，也可以单独换，换完自动免费重排"><option value="">跟着风格</option></select></label>
+          <label><span id="pk-layout-label">布局</span><select id="pk-layout-key-top" onchange="pkSyncLayout(this.value)" title="文字和图各占画面哪一块。默认跟着风格走，也可以单独换，换完自动免费重排"><option value="">跟着风格</option></select></label>
           <label>配图<span class="pk-photo" id="pk-photo"><button type="button" class="btn ghost sm" onclick="pkPhotoPick()">＋ 用你的图</button></span></label>
           <label class="pk-grow">题材<input id="pk-theme" placeholder="选填，例：魔兽怀旧服 塔卡"></label>
           <label class="pk-check"><input type="checkbox" id="pk-review" checked>出图后打分</label>
@@ -2447,6 +2465,7 @@ function openPosterDialog(id) {
   _pkLast = null;
   _pkSource = null;          // 原文缓存按整理稿存，换一条必须重取
   _pkPhoto = null;           // 配图也是这条素材的，换整理稿要清掉
+  _pkPages = []; _pkCur = 0; // 分页同样属于这条素材，不清会把上一条的页带过来
   document.getElementById('pk-id').textContent = id;
   document.getElementById('pk-plan').innerHTML = '';
   document.getElementById('pk-result').innerHTML = '';
@@ -2525,6 +2544,10 @@ function pkStyle(key) {
 }
 let _pkLimitsByMode = null;
 let _pkLastPlan = null, _pkLastPublish = null;
+// 多页：表单永远只编辑"当前这一页"，其余页存在这个数组里，切页时先把手上的写回再换。
+// 这么做是为了复用整套已有控件（字数统计、卡片输入、校验），不再写第二份表单。
+const PK_PAGE_MAX = 4;
+let _pkPages = [], _pkCur = 0;
 async function loadPosterStyles(force) {
   if (_pkStyles.length && !force) return _pkStyles;
   _pkStyles = [];
@@ -2579,6 +2602,9 @@ function pkSyncLayout(v) {
   const l = pkLayout(v);
   const hint = document.getElementById('pk-layout-hint');
   if (hint) hint.textContent = l ? l.when : '';
+  // 页签上那行"跟着风格 / 满版大图"要跟着改，否则切页时看着像没生效
+  const tabs = document.getElementById('pk-tabs');
+  if (tabs && _pkPages[_pkCur]) { _pkPages[_pkCur].layout_key = v; tabs.outerHTML = pkTabsHtml(); }
   // 排版是代码算的，跟出图无关：换布局顺手重排一次，一分钱不花
   if (document.getElementById('pk-title')) posterPreview();
 }
@@ -2596,7 +2622,25 @@ function pkChars(p) {
   (p.cards || []).forEach(c => { n += (c.t || '').length + (c.d || '').length; });
   return n;
 }
+function pkPagesOf(p) {
+  return (p && p.pages && p.pages.length) ? p.pages : [p || {}];
+}
 function pkProblems(p) {
+  const pages = pkPagesOf(p);
+  if (pages.length > 1) {
+    const bad = [];
+    if (pages.length > PK_PAGE_MAX) bad.push('最多 ' + PK_PAGE_MAX + ' 页');
+    // 多页时每页卡片下限放宽到 1（跟后端 lint_plan 一致）：末页常常只有一条结论，
+    // 按单页那套"至少 3 张"去判会把能发的稿子误报成不合格
+    pages.forEach((pg, i) => {
+      const m = [];
+      if (!pg.title) m.push('主标题为空');
+      if (!(pg.cards || []).length) m.push('这页还是空的，出图时会被丢掉');
+      if (pkChars(pg) > PK_LIMITS.total) m.push('超 ' + PK_LIMITS.total + ' 字');
+      m.forEach(x => bad.push('第 ' + (i + 1) + ' 页：' + x));
+    });
+    return bad;
+  }
   const bad = [];
   if (!p.title) bad.push('主标题不能为空');
   if ((p.cards || []).length < PK_LIMITS.cardMin) bad.push('卡片至少 ' + PK_LIMITS.cardMin + ' 张');
@@ -2607,34 +2651,53 @@ function _pkRow(tag, id, val, max, ph) {
   return `<div class="pk-row"><span class="pk-tag">${tag}</span>`
     + `<input id="${id}" value="${esc(val || '')}" maxlength="${max}" placeholder="${ph}" oninput="pkCount()"></div>`;
 }
-function pkRenderPlan(plan, publish) {
+function pkRenderPlan(plan, publish, cur) {
   plan = plan || {}; publish = publish || {};
   _pkLastPlan = plan; _pkLastPublish = publish;
+  if (cur === undefined || !_pkPages.length) {
+    // 归一：后端可能给 pages[]（多页），也可能给平铺的一份（单页/历史素材）
+    const raw = (plan.pages && plan.pages.length) ? plan.pages : [plan];
+    _pkPages = raw.slice(0, PK_PAGE_MAX).map(p => ({
+      role: p.role || '', layout_key: p.layout_key || '', title: p.title || '',
+      subtitle: p.subtitle || '', footer: plan.footer || p.footer || '',
+      scene: p.scene || plan.scene || '',
+      cards: (p.cards || []).slice(0, PK_LIMITS.cardMax)
+              .map(c => ({t: c.t || '', d: c.d || '', v: c.v || ''}))}));
+    if (!_pkPages.length) _pkPages = [{role: '', layout_key: '', title: '', subtitle: '',
+                                       footer: '', scene: '', cards: []}];
+    _pkCur = 0;
+  } else {
+    _pkCur = Math.max(0, Math.min(_pkPages.length - 1, cur));
+  }
+  const pg = _pkPages[_pkCur], multi = _pkPages.length > 1;
   if (pkStyleKey() !== (plan.style_key || '')) {
     const top = document.getElementById('pk-style-key-top');
     if (top && pkStyle(plan.style_key)) top.value = plan.style_key;
   }
-  // 模型以后会直接推荐布局（M3），这里先把值端下来；名单里没有就退回"跟着风格"
   const lsel = document.getElementById('pk-layout-key-top');
   if (lsel) {
-    const want = plan.layout_key || '';
+    const want = pg.layout_key || '';
     lsel.value = (!want || pkLayout(want)) ? want : '';
     const h = document.getElementById('pk-layout-hint');
     if (h) h.textContent = pkLayout(lsel.value) ? pkLayout(lsel.value).when : '';
+    const lb = document.getElementById('pk-layout-label');
+    if (lb) lb.textContent = multi ? '本页布局' : '布局';
   }
-  let html = `<div class="pk-row"><span class="pk-tag">主线</span>`
+  let html = pkTabsHtml()
+    + `<div class="pk-row"><span class="pk-tag">主线</span>`
     + `<input id="pk-spine" value="${esc(plan.spine || '')}" maxlength="${PK_LIMITS.spine}" placeholder="这条海报讲的一条链（不进图）"></div>`
-    + _pkRow('主视觉', 'pk-scene', plan.scene, PK_LIMITS.scene, '要画成什么场景（不进图，例：熔岩城墙头上法师举起发光卷轴）')
-    + _pkRow('主标题', 'pk-title', plan.title, PK_LIMITS.title, '≤12 字')
-    + _pkRow('副标题', 'pk-subtitle', plan.subtitle, PK_LIMITS.subtitle, '≤10 字，可留空');
-  (plan.cards || []).slice(0, PK_LIMITS.cardMax).forEach((c, i) => {
+    + _pkRow(multi ? '本页主视觉' : '主视觉', 'pk-scene', pg.scene, PK_LIMITS.scene,
+             '要画成什么场景（不进图，例：熔岩城墙头上法师举起发光卷轴）')
+    + _pkRow('主标题', 'pk-title', pg.title, PK_LIMITS.title, '≤12 字')
+    + _pkRow('副标题', 'pk-subtitle', pg.subtitle, PK_LIMITS.subtitle, '≤10 字，可留空');
+  (pg.cards || []).slice(0, PK_LIMITS.cardMax).forEach((c, i) => {
     html += `<div class="pk-row"><span class="pk-tag">卡片${i + 1}</span>`
       + `<input id="pk-ct-${i}" value="${esc(c.t || '')}" maxlength="${PK_LIMITS.cardT}" placeholder="标题 ≤6 字" oninput="pkCount()">`
       + `<input id="pk-cd-${i}" value="${esc(c.d || '')}" maxlength="${PK_LIMITS.cardD}" placeholder="说明 ≤16 字" oninput="pkCount()"></div>`
       + `<div class="pk-row pk-row-sub"><span class="pk-tag">配图</span>`
       + `<input id="pk-cv-${i}" class="pk-vis" value="${esc(c.v || '')}" maxlength="${PK_LIMITS.cardVis}" placeholder="这一条画什么（不进图，要有形体：仪表/岔路/警示牌）"></div>`;
   });
-  html += _pkRow('尾注', 'pk-footer', plan.footer, PK_LIMITS.footer, '合规转述声明')
+  html += _pkRow('尾注（每页都放）', 'pk-footer', plan.footer || pg.footer, PK_LIMITS.footer, '合规转述声明')
     + `<div class="pk-row"><span class="pk-tag">风格配方</span><div id="pk-style-text" class="pk-pub" style="margin:0;max-height:76px">${esc(pkStyleText())}</div></div>`
     + `<div class="pk-row" id="pk-style-free-row" style="display:${pkStyleKey() === 'auto' ? 'flex' : 'none'}">`
     + `<span class="pk-tag">自由风格</span><input id="pk-style" value="${esc(plan.style || '')}" maxlength="120" placeholder="仅「自由发挥」时生效：配色 / 材质 / 装饰一句话"></div>`
@@ -2669,13 +2732,93 @@ function pkReadPublish() {
   return {copy_text: g('pk-copy'), digest: g('pk-digest'),
           keyword_reply: g('pk-kw'), source_note: g('pk-src')};
 }
+// ── 多页：一页装不下就翻页，页数与每页布局都能手改 ──
+function pkTabsHtml() {
+  let h = '<div class="pk-tabs" id="pk-tabs"><span class="pk-tabs-k">页</span>';
+  _pkPages.forEach((p, i) => {
+    const lay = pkLayout(p.layout_key) ? pkLayout(p.layout_key).label : '跟着风格';
+    h += `<button type="button" class="pk-tab${i === _pkCur ? ' on' : ''}" onclick="pkSwitchPage(${i})">`
+      + `<b>${esc(p.role || ('第 ' + (i + 1) + ' 页'))}</b>${esc(lay)} · ${p.cards.length ? p.cards.length + ' 条' : '还没填'}</button>`;
+  });
+  if (_pkPages.length < PK_PAGE_MAX) h += `<button type="button" class="pk-tab add" onclick="pkAddPage()">＋ 加一页</button>`;
+  if (_pkPages.length > 1) h += `<button type="button" class="pk-tab del" onclick="pkDelPage()">✕ 删掉这页</button>`;
+  if (_pkPages.length > 1) h += `<span class="pk-tabs-n">一页装不下就翻页，风格整套统一</span>`;
+  return h + '</div>';
+}
+function pkFlushForm() {
+  const g = id => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
+  const cards = [];
+  for (let i = 0; i < PK_LIMITS.cardMax; i++) {
+    const t = g('pk-ct-' + i), d = g('pk-cd-' + i);
+    if (t || d) cards.push({t: t, d: d, v: g('pk-cv-' + i)});
+  }
+  const pg = _pkPages[_pkCur];
+  if (pg) {
+    pg.title = g('pk-title'); pg.subtitle = g('pk-subtitle');
+    pg.scene = g('pk-scene'); pg.cards = cards; pg.layout_key = pkLayoutKey();
+  }
+  const foot = g('pk-footer');
+  _pkPages.forEach(q => { q.footer = foot; });          // 尾注是合规声明，每页同一句
+  if (_pkLastPlan) { _pkLastPlan.spine = g('pk-spine'); _pkLastPlan.footer = foot; }
+  _pkLastPublish = pkReadPublish();
+}
+function pkSwitchPage(i, quiet) {
+  if (i === _pkCur) return;
+  pkFlushForm();
+  pkRenderPlan(_pkLastPlan, _pkLastPublish, i);
+  if (!quiet) posterPreview();     // 点缩略图切页时不用再重排一次，图已经有了
+}
+function pkAddPage() {
+  if (_pkPages.length >= PK_PAGE_MAX) { alert('最多 ' + PK_PAGE_MAX + ' 页：再多没人翻，钱也翻倍'); return; }
+  pkFlushForm();
+  _pkPages.push({role: '第 ' + (_pkPages.length + 1) + ' 页', layout_key: '', title: '',
+                 subtitle: '', footer: _pkPages[0].footer || '', scene: '', cards: []});
+  pkRenderPlan(_pkLastPlan, _pkLastPublish, _pkPages.length - 1);
+  posterPreview();
+}
+function pkDelPage() {
+  if (_pkPages.length < 2) { alert('现在就一页'); return; }
+  pkFlushForm();
+  const gone = _pkPages[_pkCur].title || ('第 ' + (_pkCur + 1) + ' 页');
+  if (!confirm('删掉「' + gone + '」？这一页的要点会一起没了，先确认它们已经写进配文。')) return;
+  _pkPages.splice(_pkCur, 1);
+  pkRenderPlan(_pkLastPlan, _pkLastPublish, Math.max(0, _pkCur - 1));
+  posterPreview();
+}
+function pkReadPayload() {
+  // 单页时返回的形状跟以前一模一样；多页才包成 pages[]，后端 plan_pages() 认这两种
+  if (_pkPages.length < 2) return pkReadPlan();
+  pkFlushForm();
+  const first = _pkPages[0];
+  return {pages: _pkPages.map(p => ({role: p.role, layout_key: p.layout_key, title: p.title,
+                                      subtitle: p.subtitle, scene: p.scene,
+                                      footer: p.footer, cards: p.cards})),
+          title: first.title, style_key: pkStyleKey(),
+          spine: (_pkLastPlan || {}).spine || '', footer: first.footer || '',
+          scene: first.scene || ''};
+}
 function pkCount() {
   const el = document.getElementById('pk-count');
   if (!el) return;
-  const p = pkReadPlan(), bad = pkProblems(p);
+  const p = pkReadPlan();
+  const multi = _pkPages.length > 1;
+  // 校验整组时要拿"表单里正在改的这一页"替掉数组里那份，否则改了半天校验的还是旧值
+  const bad = pkProblems(multi ? {pages: _pkPages.map((q, i) => i === _pkCur ? p : q)} : p);
+  let txt = `合计 ${pkChars(p)} / ${PK_LIMITS.total} 字 · ${p.cards.length} 张卡片`;
+  if (multi) {
+    let all = pkChars(p);
+    const over = [];
+    if (all > PK_LIMITS.total) over.push(_pkCur + 1);
+    _pkPages.forEach((q, i) => {
+      if (i === _pkCur) return;
+      all += pkChars(q);
+      if (pkChars(q) > PK_LIMITS.total) over.push(i + 1);
+    });
+    txt = `整组 ${_pkPages.length} 页 · 合计 ${all} 字　｜　本页 ${pkChars(p)} / ${PK_LIMITS.total} 字 · ${p.cards.length} 张卡片`
+        + (over.length ? '　⚠️ 第 ' + over.join('、') + ' 页放不下' : '');
+  }
   el.className = 'pk-count ' + (bad.length ? 'bad' : 'ok');
-  el.textContent = `合计 ${pkChars(p)} / ${PK_LIMITS.total} 字 · ${p.cards.length} 张卡片`
-    + (bad.length ? '　⚠️ ' + bad.join('；') : '　✅ 可出图');
+  el.textContent = txt + (bad.length ? '　⚠️ ' + bad.join('；') : '　✅ 可出图');
 }
 async function posterPlan() {
   if (!_pkId) { alert('请先选择整合稿'); return; }
@@ -2751,8 +2894,9 @@ function pkPhotoLabel() {
 async function posterPreview() {
   if (!document.getElementById('pk-title')) { setStatus('error', '先点「① AI 拆解文案」拿到文案'); return; }
   const box = document.getElementById('pk-result');
-  box.innerHTML = '<div class="pk-verify mild">⏳ 正在按当前文案排一张免费预览…</div>';
-  const body = {plan: pkReadPlan(), ratio: document.getElementById('pk-ratio').value};
+  box.innerHTML = '<div class="pk-verify mild">⏳ 正在按当前文案排'
+    + (_pkPages.length > 1 ? '整组 ' + _pkPages.length + ' 页' : '一张') + '免费预览…</div>';
+  const body = {plan: pkReadPayload(), ratio: document.getElementById('pk-ratio').value};
   if (_pkPhoto) body.photo = _pkPhoto.ref;
   let r;
   try {
@@ -2760,16 +2904,36 @@ async function posterPreview() {
       headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)}).then(x => x.json());
   } catch (e) { r = {error: e.message}; }
   if (r.error) { box.innerHTML = '<div class="pk-verify fail">✗ ' + esc(r.error) + '</div>'; return; }
-  const bad = (r.check && r.check.problems) || [];
-  box.innerHTML = '<img class="pk-img" src="' + r.url + '?t=' + Date.now() + '" '
-    + 'onclick="window.open(\'' + r.url + '\',\'_blank\')" title="点击看原图">'
+  const pages = (r.pages && r.pages.length) ? r.pages
+    : [{url: r.url, check: r.check || {}, page: 1}];
+  const cur = Math.max(0, Math.min(_pkCur, pages.length - 1));
+  const shown = pages[cur];
+  const bad = (shown.check && shown.check.problems) || [];
+  let strip = '';
+  if (pages.length > 1) {
+    strip = '<div class="pk-pstrip">' + pages.map((p, i) =>
+        `<div class="pk-pcell${i === cur ? ' on' : ''}" onclick="pkSwitchPage(${i},1)" `
+        + `title="${esc(p.layout_label || '')}${p.role ? ' · ' + esc(p.role) : ''}">`
+        + `<img src="${p.url}?t=${Date.now()}"><span>第 ${p.page} 页 · ${esc(p.layout_label || '')}</span></div>`
+      ).join('') + '</div>';
+  }
+  const img = shown.url;
+  box.innerHTML = strip
+    + '<img class="pk-img" src="' + img + '?t=' + Date.now() + '" '
+    + 'onclick="window.open(\'' + img + '\',\'_blank\')" title="点击看原图">'
     + '<div class="pk-verify ' + (bad.length ? 'fail' : 'pass') + '">'
+    + (pages.length > 1 ? `第 ${shown.page} / ${pages.length} 页　` : '')
     + (bad.length ? '⚠️ 版面放不下：' + bad.join('；')
-                  : '✅ 版面放得下：' + r.chars + ' 字 · ' + (r.check.cards || 0) + ' 张卡片')
-    + ((r.check && r.check.layout_label)
-        ? '　｜　布局：<b>' + esc(r.check.layout_label) + '</b>'
+                  : '✅ 版面放得下：' + (shown.chars || r.chars) + ' 字 · ' + (shown.check.cards || 0) + ' 张卡片')
+    + ((shown.check && shown.check.layout_label)
+        ? '　｜　布局：<b>' + esc(shown.check.layout_label) + '</b>'
           + (pkLayoutKey() ? '' : '（跟着风格走的默认）') : '')
     + '</div>'
+    + ((pages.length > 1)
+        ? '<div class="pk-hint">' + (pages.some(p => (p.check.problems || []).length)
+            ? (pages.filter(p => (p.check.problems || []).length).length + ' 页有版面提示；')
+            : (pages.length + ' 页都放得下；'))
+          + '整组合计 ' + r.chars + ' 字。点上面任意一页缩略图切过去改那一页。</div>' : '')
     + '<div class="pk-hint">这张预览 <b>0 元、当场出</b>，用的就是出图时同一个排版函数——字号、折行、卡片位置、配色都是真的。'
     + '只有上面那块灰框在出图时会被 AI 插画替换掉，插画画得好不好只有真出图才知道。<b>改完文案再点一次，不花钱。</b></div>';
   setStatus('done', bad.length ? '预览已出，但版面有提示' : '预览已出，版面没问题');
@@ -2777,19 +2941,27 @@ async function posterPreview() {
 async function posterGenerate(force) {
   if (!_pkId) { alert('请先选择整合稿'); return; }
   const hasPlan = !!document.getElementById('pk-title');
-  const plan = hasPlan ? pkReadPlan() : null;
+  const plan = hasPlan ? pkReadPayload() : null;
   if (plan) {
     const bad = pkProblems(plan);
     if (bad.length && !confirm('文案不合格（' + bad.join('；') + '）。\n后端会直接拒绝出图，仍要提交？')) return;
   }
+  const multi = !!(plan && plan.pages && plan.pages.length > 1);
+  const npages = multi ? plan.pages.length : 1;
   const copiesEl = document.getElementById('pk-copies');
-  const copies = copiesEl ? parseInt(copiesEl.value) || 1 : 1;
+  const copies = multi ? 1 : (copiesEl ? parseInt(copiesEl.value) || 1 : 1);
   const reviewEl = document.getElementById('pk-review');
   const review = reviewEl ? !!reviewEl.checked : true;
+  const shot = multi ? npages * copies : copies;
   const tip = force ? '这条整合稿被判定为规则版骨架。\n确认你已人工复核过拆解出的文案、仍要出图？'
-                    : (_pkPhoto ? '出图？用的是你上传的真图，不出 AI 底图，所以 0 元、几秒钟就好。已有海报会被覆盖。'
-                                : (copies > 1 ? `出 ${copies} 张挑 1 张？约 2-3 分钟、${(copies * 0.5).toFixed(1)} 元。已有海报会被覆盖。`
-                                              : '出图？约 20-60 秒 + 一次回读校验，0.5 元/张。已有海报会被覆盖。'));
+                    : (_pkPhoto ? (multi
+                        ? `出 ${npages} 页：第 1 页用你上传的真图，其余 ${npages - 1} 页用纯色底，整组 0 元、几秒钟。`
+                          + '\n想让后面几页也有插画，就别勾真图、走 AI 现画底图（0.5 元/页）。'
+                        : '出图？用的是你上传的真图，不出 AI 底图，所以 0 元、几秒钟就好。已有海报会被覆盖。')
+                                : (shot > 1
+                                    ? `出 ${npages > 1 ? npages + ' 页' : ''}${npages > 1 ? ' × ' : ''}${copies} 张 = ${shot} 张底图，`
+                                      + `约 ${(shot * 0.5).toFixed(1)} 元、${Math.ceil(shot / 2)} 分钟左右（限流每分钟 2 张）。已有海报会被覆盖。`
+                                    : '出图？约 20-60 秒 + 一次回读校验，0.5 元/张。已有海报会被覆盖。'));
   if (!confirm(tip)) return;
   const body = {summary_id: _pkId, ratio: document.getElementById('pk-ratio').value,
                 theme: document.getElementById('pk-theme').value.trim(),
@@ -2896,7 +3068,16 @@ async function renderPosterResult(id) {
   const pub = pkPublishText(m);
   const ck = (m.checklist || []).map(s => `<li>${esc(s)}</li>`).join('');
   let imgHtml;
-  if (m.copies > 1 && (m.candidates || []).length > 1) {
+  const pgRows = (m.pages || []).filter(p => p && p.url);
+  if (pgRows.length > 1) {
+    imgHtml = '<div class="pk-cands">' + pgRows.map(p =>
+        `<div class="pk-cand on" onclick="window.open('${p.url}','_blank')" title="点击看原图">`
+        + `<img src="${p.url}?t=${Date.now()}" alt="第${p.page}页">`
+        + `<div class="pk-cand-t">第 ${p.page} 页 · ${esc(p.layout_label || '')}</div></div>`
+      ).join('') + '</div>'
+      + `<div class="pk-hint">一组 ${pgRows.length} 页，按这个顺序一次带走发布（第 1 页也存成了 poster.png，`
+      + '列表和发布取图那条路没改）。每页字数：' + pgRows.map(p => p.chars + ' 字').join(' / ') + '。</div>';
+  } else if (m.copies > 1 && (m.candidates || []).length > 1) {
     imgHtml = '<div class="pk-cands">' + m.candidates.map(c => {
       const cv = c.verify || {}, cr = c.review || {};
       const on = c.index === m.chosen;
@@ -3164,6 +3345,7 @@ async function loadPosterList() {
         <div class="pk-cs">#${p.summary_id} · ${esc(p.source_title || '')}</div>
         <div class="pk-cm">
           <span class="${(p.photo || (ts && p.verify_ok !== false)) ? 'ok' : (p.verify_ok === false ? 'no' : '')}">${word}</span>
+          ${p.page_count > 1 ? '<span class="ok">' + p.page_count + ' 页一组</span>' : ''}
           <span>${(p.chars || 0)} 字</span>
           ${p.review_score ? '<span>好看度 ' + p.review_score + '/' + p.review_full + '</span>' : ''}
           ${(p.base_reused || p.photo) ? '<span class="ok">这张 0 元</span>' : ''}
@@ -3188,17 +3370,29 @@ async function openPosterDetail(id) {
   }
   _pkDetail = m;
   document.getElementById('pk-detail-title').textContent = m.title || '海报';
-  const imgs = (m.copies > 1 && (m.candidates || []).length > 1) ? m.candidates : [{url: m.url, index: m.chosen || 1, verify: m.verify, review: m.review}];
-  document.getElementById('pk-detail-img-label').textContent = '成品图 · ' + imgs.length + ' 张（点图放大）';
+  // 多页那组：一页一格，按页码排，点开放大——这里没有"选一张发布"的说法，整组一起发
+  const multi = (m.page_count || 1) > 1 && (m.pages || []).length > 1;
+  const imgs = multi ? m.pages.map(p => ({url: p.url, index: p.page, verify: p.verify,
+                                          review: p.review, page: true,
+                                          lay: p.layout_label || ''}))
+    : ((m.copies > 1 && (m.candidates || []).length > 1) ? m.candidates
+       : [{url: m.url, index: m.chosen || 1, verify: m.verify, review: m.review}]);
+  document.getElementById('pk-detail-img-label').textContent = multi
+    ? ('成品一组 · ' + imgs.length + ' 页（发布时按这个顺序一次带走）')
+    : ('成品图 · ' + imgs.length + ' 张（点图放大）');
   document.getElementById('pk-img-stack').innerHTML = imgs.map(c => {
-    const on = c.index === (m.chosen || 1);
+    const on = !multi && c.index === (m.chosen || 1);
     const cv = c.verify || {};
-    const tag = m.text_mode === 'typeset' ? '字已排好' : (cv.ok === false ? '有缺字' : '字全对');
+    const tag = multi ? ('第 ' + c.index + ' 页 · ' + (c.lay || ''))
+      : (m.text_mode === 'typeset' ? '字已排好' : (cv.ok === false ? '有缺字' : '字全对'));
+    const click = (multi || imgs.length <= 1)
+      ? 'window.open(\'' + esc(c.url) + '\',\'_blank\')' : 'posterDetailPick(' + c.index + ')';
     return `<div class="tt-img" style="${on ? 'border-color:var(--module-5)' : ''}">
-      <span class="lb">${tag}${imgs.length > 1 ? ' · 第' + c.index + '张' : ''}${on ? ' · 发布取这张' : ''}</span>
-      <img src="${esc(c.url)}" alt="海报" onclick="${imgs.length > 1 ? 'posterDetailPick(' + c.index + ')' : 'window.open(\'' + esc(c.url) + '\',\'_blank\')'}"></div>`;
+      <span class="lb">${esc(tag)}${(!multi && imgs.length > 1) ? ' · 第' + c.index + '张' : ''}${on ? ' · 发布取这张' : ''}</span>
+      <img src="${esc(c.url)}" alt="海报" onclick="${click}"></div>`;
   }).join('')
-    + (imgs.length > 1 ? '<div style="font-size:11.5px;color:var(--text-tertiary);margin-top:6px">点上面任意一张即把它设为要发布的那张。</div>' : '');
+    + (multi ? '<div style="font-size:11.5px;color:var(--text-tertiary);margin-top:6px">第 1 页同时存成了 poster.png，所以列表与发布取图不用改；要重出某一页，回弹窗删掉那页再补一页。</div>'
+       : (imgs.length > 1 ? '<div style="font-size:11.5px;color:var(--text-tertiary);margin-top:6px">点上面任意一张即把它设为要发布的那张。</div>' : ''));
   const v = m.verify || {}, tsp = (m.typeset && m.typeset.problems) || [];
   let flag = '';
   if (m.text_mode === 'typeset') {

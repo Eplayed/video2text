@@ -434,16 +434,77 @@ def build_text_plan(summary, ai_config, theme="", title="", style_key="", text_m
     return plan, _clip_publish(data.get("publish")), lint_plan(plan, lim), notes
 
 
-def plan_chars(plan):
-    """海报上要渲染的总字数。
-
-    风格描述、主视觉与卡片配图（style / scene / cards[].v）都不算：它们只告诉模型
-    "该画什么"，不会被落成图上的字，所以不占字数安全预算。
-    """
+def _plan_chars_one(plan):
     n = len(plan.get("title") or "") + len(plan.get("subtitle") or "") + len(plan.get("footer") or "")
     for c in plan.get("cards") or []:
         n += len(c.get("t") or "") + len(c.get("d") or "")
     return n
+
+
+# 一页装不下就翻页：页数硬上限 4（再多没人翻，而且 AI 底图按页数翻倍花钱）
+PAGE_MAX = 4
+
+
+def plan_pages(plan):
+    """把文案计划归一成"页列表"。没有 pages 字段＝单页，老素材与老逻辑完全不变。
+
+    每页缺的字段从顶层继承（style_key、footer、首页的 scene），空页和超上限的页
+    在这里一次丢掉——后面排版、出图、落盘都可以无脑信任返回值的形状。
+    """
+    if not isinstance(plan, dict):
+        return []
+    raw = plan.get("pages")
+    if not isinstance(raw, list) or not raw:
+        return [plan]
+    pages = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        cards = [c for c in (item.get("cards") or []) if isinstance(c, dict)
+                 and ((c.get("t") or "").strip() or (c.get("d") or "").strip())][:CARD_MAX]
+        if not (item.get("title") or "").strip() and not cards:
+            continue
+        pages.append({
+            "title": (item.get("title") or plan.get("title") or "").strip(),
+            "subtitle": (item.get("subtitle") or "").strip(),
+            "footer": (item.get("footer") or plan.get("footer") or "").strip(),
+            "cards": cards,
+            "scene": (item.get("scene") or (plan.get("scene") if not pages else "") or "").strip(),
+            "style_key": (item.get("style_key") or plan.get("style_key") or "").strip(),
+            "layout_key": (item.get("layout_key") or "").strip(),
+            "role": (item.get("role") or "").strip(),
+        })
+        if len(pages) >= PAGE_MAX:
+            break
+    return pages or [plan]
+
+
+def is_multi_page(plan):
+    return len(plan_pages(plan)) > 1
+
+
+def plan_has_text(plan):
+    """有没有可预览的文案：单页看主标题；多页只要有一页有标题或有卡片就算有。"""
+    if not isinstance(plan, dict):
+        return False
+    if (plan.get("title") or "").strip():
+        return True
+    for p in plan_pages(plan):
+        if (p.get("title") or "").strip() or (p.get("cards") or []):
+            return True
+    return False
+
+
+def plan_chars(plan):
+    """海报上要渲染的总字数（多页时是整组的合计）。
+
+    风格描述、主视觉与卡片配图（style / scene / cards[].v）都不算：它们只告诉模型
+    "该画什么"，不会被落成图上的字，所以不占字数安全预算。
+    """
+    pages = plan_pages(plan)
+    if len(pages) > 1:
+        return sum(_plan_chars_one(p) for p in pages)
+    return _plan_chars_one(plan or {})
 
 
 def lint_visual(plan):
@@ -459,18 +520,30 @@ def lint_visual(plan):
     return bad
 
 
-def lint_plan(plan, lim=None):
+def lint_plan(plan, lim=None, card_min=None):
     """字数与结构门禁：越界就返回问题清单，调用方据此拒绝出图。
 
     lim 按排版模式给：程序排字看的是"版面放得下"，模型画字看的是"错字率安全线"。
+    多页时逐页各查一遍（每页一份自己的预算，这正是"装不下就翻页"的意义）；
+    页内卡片下限放宽到 1——末页常常只有一条结论，不该被判成不合格。
     """
     lim = lim or dict(MD_LIMITS)
+    pages = plan_pages(plan)
+    if len(pages) > 1:
+        bad = []
+        for i, p in enumerate(pages, 1):
+            for msg in lint_plan(p, lim, card_min=1):
+                bad.append("第 %d 页：%s" % (i, msg))
+        if len(plan.get("pages") or []) > PAGE_MAX:
+            bad.append("页数 %d 超过上限 %d 页" % (len(plan.get("pages") or []), PAGE_MAX))
+        return bad
     bad = []
     if not (plan.get("title") or "").strip():
         bad.append("主标题为空")
     cards = plan.get("cards") or []
-    if len(cards) < CARD_MIN:
-        bad.append("卡片只有 %d 张，少于 %d 张" % (len(cards), CARD_MIN))
+    floor = CARD_MIN if card_min is None else card_min
+    if len(cards) < floor:
+        bad.append("卡片只有 %d 张，少于 %d 张" % (len(cards), floor))
     if len(cards) > CARD_MAX:
         bad.append("卡片 %d 张，超过 %d 张" % (len(cards), CARD_MAX))
     for i, c in enumerate(cards, 1):
@@ -672,23 +745,25 @@ def layout_choices():
     return ts.layout_choices()
 
 
-def typeset_poster(png_bytes, plan, ratio="9:16", photo=None):
+def typeset_poster(png_bytes, plan, ratio="9:16", photo=None, page=None):
     """把中文用真字体排到无字底图上。返回 (成品字节, 版面自检 dict)。
 
     photo 是用户上传的真实图片字节：非空时它会顶掉整块插画区，标题压在图上。
     走哪个布局看 plan["layout_key"]，没给就用这套风格的默认布局。
+    page=(第几页, 总页数) 时右上角画一颗「1 / 3」，多页组靠它告诉读者后面还有。
     """
     from . import poster_typeset as ts
-    return ts.typeset(png_bytes, plan, ratio, photo=photo)
+    return ts.typeset(png_bytes, plan, ratio, photo=photo, page=page)
 
 
-def preview_typeset(plan, ratio="9:16", photo=None):
+def preview_typeset(plan, ratio="9:16", photo=None, page=None, base=None):
     """不花钱的版面预览：占位底图 + 真排版函数，尺寸与配色都和成品一致。
 
     为什么值得单独做一个入口：换轨之后"版面"是代码算的，跟出图没关系，
     所以折行、字号、卡片放不放得下、配色对不对，全都能在花钱之前看到。
     看不到的一件事是插画本身画得好不好——那只能出图。
     传了 photo 就连真图一起排进预览，这块也不再是"看不到"的东西。
+    base 非空时直接用那张底图（复用模板底图那条路），不再画占位灰框。
     返回 (png 字节, 版面自检 dict)。
     """
     from . import poster_typeset as ts
@@ -696,10 +771,35 @@ def preview_typeset(plan, ratio="9:16", photo=None):
         ratio = "9:16"
     w, h = _canvas_px(ratio)
     skin = plan.get("_skin") if isinstance(plan.get("_skin"), dict) else None
-    zone = ts.art_zone(plan, (w, h), skin)
-    base = ts.placeholder_base(plan.get("style_key"), w, h, zone["frac"], skin,
-                               art_hint=not photo, plan=plan, zone=zone)
-    return ts.typeset(base, plan, ratio, skin, photo=photo)
+    if base is None:
+        zone = ts.art_zone(plan, (w, h), skin)
+        base = ts.placeholder_base(plan.get("style_key"), w, h, zone["frac"], skin,
+                                   art_hint=not photo, plan=plan, zone=zone)
+    return ts.typeset(base, plan, ratio, skin, photo=photo, page=page)
+
+
+def preview_pages(plan, ratio="9:16", photo=None):
+    """整组免费预览：一页一张，全部 0 元（占位底图或模板底图 + 真排版）。
+
+    真图只给第一页当主视觉——同一张图在第 2、3 页再出现一次很难看。后面的页
+    优先复用这套风格已经验收过的模板底图（还是 0 元），没有模板才留灰框，
+    并在自检里说明这一页出图时要花那 5 毛。
+    """
+    pages = plan_pages(plan)
+    total = len(pages)
+    out = []
+    for i, p in enumerate(pages, 1):
+        ph = photo if (i == 1 or not photo) else None
+        base = None
+        if photo and not ph:
+            base = template_base(p.get("style_key"))
+        pg = (i, total) if total > 1 else None
+        png, chk = preview_typeset(p, ratio, photo=ph, page=pg, base=base)
+        if total > 1 and photo and not ph:
+            chk["base_note"] = ("模板底图（0 元）" if base
+                                else "这页没有可复用的底图：出图时要 AI 现画（0.5 元）或换一套带底图的风格")
+        out.append((p, png, chk))
+    return out
 
 
 # ── 2. 出图 ──
@@ -1015,17 +1115,29 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
     pub = _clip_publish(publish or llm_publish or {})
     chars = plan_chars(plan)
 
+    pages = plan_pages(plan)
+    multi = len(pages) > 1
+    from . import poster_typeset as _ts
+
+    def _page_prompt(p):
+        """一页一份出图提示词：每页的版面（图在哪一块）和主视觉都不一样。"""
+        if photo:
+            lab = _ts.LAYOUTS[_ts.resolve_layout(p, _ts.skin_for(p.get("style_key")))]["label"]
+            return ("（真图主视觉：主视觉用用户上传的图片、按「%s」排版，"
+                    "不出 AI 底图，因此没有出图提示词）" % lab)
+        return (build_art_prompt(p, ratio) if text_mode == "typeset"
+                else build_prompt_text(p, ratio))
+
+    prompts = [_page_prompt(p) for p in pages]
+    prompt_text = prompts[0]
     # 程序排字模式先按版面算出"图占哪一块、文字占哪一块"，再把这个比例写进出图 prompt，
     # 让模型在文字那块只画底纹。两边共用 poster_typeset.art_zone，所以不会错位。
-    if photo:
-        from . import poster_typeset as _ts
-        _lab = _ts.LAYOUTS[_ts.resolve_layout(plan, _ts.skin_for(plan.get("style_key")))]["label"]
-        prompt_text = ("（真图主视觉：主视觉用用户上传的图片、按「%s」排版，"
-                       "不出 AI 底图，因此没有出图提示词）" % _lab)
+    if multi:
+        (out_dir / "prompt.txt").write_text(
+            "\n\n".join("【第 %d 页】\n%s" % (i, t) for i, t in enumerate(prompts, 1)) + "\n",
+            encoding="utf-8")
     else:
-        prompt_text = (build_art_prompt(plan, ratio) if text_mode == "typeset"
-                       else build_prompt_text(plan, ratio))
-    (out_dir / "prompt.txt").write_text(prompt_text + "\n", encoding="utf-8")
+        (out_dir / "prompt.txt").write_text(prompt_text + "\n", encoding="utf-8")
     try:
         n = int(copies)
     except (TypeError, ValueError):
@@ -1034,11 +1146,16 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
 
     # 带底图的模板：换文案时复用那张已经验收的底图，不再出图。同一张底图多出几张
     # 只会得到完全一样的成品，所以这里强制单张。真图模式同理（不随机，多张必重复）。
-    tpl_base = None if photo else (template_base(plan.get("style_key"))
-                                   if text_mode == "typeset" else None)
+    # 多页时也不套用：那张底图的插画位置是按单页版面算的，翻页会跟文字打架。
+    tpl_base = None if (photo or multi) else (template_base(plan.get("style_key"))
+                                              if text_mode == "typeset" else None)
     if photo:
         n = 1
-        _pg("用你上传的图排主视觉（0 元，不出 AI 底图）...")
+        _pg("用你上传的图排主视觉（0 元，不出 AI 底图）"
+            + ("，其余 %d 页用纯色底" % (len(pages) - 1) if multi else "") + "...")
+    elif multi:
+        n = 1
+        _pg("多页模式：一页一张，不再抽卡（张数 × 页数会把花费翻倍）")
     stale_nums = []
     if tpl_base:
         n = 1
@@ -1047,62 +1164,85 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
             _pg("核对底图里有没有上一期留下的数字...")
             stale_nums = check_base_numbers(tpl_base, plan, ai_config)
 
-    candidates, usage = [], {}
+    candidates, usage, page_rows = [], {}, []
     photo_name = ""
     if photo:
         # 原图存一份进包里：改文案重出时不用再传一次
         photo_name = "photo_src.png"
         (out_dir / photo_name).write_bytes(photo)
-    for i in range(1, n + 1):
-        if photo:
-            from . import poster_typeset as _ts
-            w, h = _canvas_px(ratio)
-            raw = _ts.placeholder_base(plan.get("style_key"), w, h,
-                                       _ts.text_zone_ratio(plan, (w, h)), art_hint=False)
-        elif tpl_base:
-            raw = tpl_base
-        else:
-            _pg("出图 %d/%d（%s）..." % (i, n, COPIES_NOTE if n > 1 else "约 20-60 秒"))
-            raw, usage = generate_image(prompt_text, SIZES[ratio], ai_config)
-        fname = "poster.png" if n == 1 else ("poster_%d.png" % i)
-        v = {"skipped": True, "ok": None, "missing": [], "extra": "", "transcript": ""}
-        ts_chk = None
-        if text_mode == "typeset":
-            (out_dir / ("base.png" if n == 1 else "base_%d.png" % i)).write_bytes(raw)
-            _pg("排版第 %d 张（真字体，字不会画错）..." % i)
-            png, ts_chk = typeset_poster(raw, plan, ratio, photo=photo)
-            # 回读校验在这条路上是负资产：字是程序画的、不可能错，而那个视觉模型
-            # 实测会把画错的赛字读成对的、还会自己脑补出多出来的字，只会误报。
-            v = {"skipped": True, "ok": True, "not_needed": True,
-                 "missing": [], "extra": "", "transcript": ""}
-        else:
-            png = raw
-            if do_verify:
-                _pg("回读校验第 %d 张的图面文字..." % i)
+    w, h = _canvas_px(ratio)
+    paid = 0
+    for pi, page_plan in enumerate(pages, 1):
+        # 真图只当第一页的主视觉：同一张图在第 2 页再出现一次很难看。
+        # 真图模式下整组都不出 AI 底图（其余页就是这套皮肤的纯色渐变），所以仍然 0 元。
+        pphoto = photo if pi == 1 else None
+        for i in range(1, n + 1):
+            if photo:
+                raw = _ts.placeholder_base(page_plan.get("style_key"), w, h, 0.6,
+                                           art_hint=False, plan=page_plan)
+            elif tpl_base:
+                raw = tpl_base
+            else:
+                _pg(("出第 %d/%d 页的底图（%s）..." % (pi, len(pages),
+                                                     COPIES_NOTE if n > 1 else "约 20-60 秒"))
+                    if multi else "出图 %d/%d（%s）..." % (i, n, COPIES_NOTE if n > 1 else "约 20-60 秒"))
+                raw, usage = generate_image(prompts[pi - 1], SIZES[ratio], ai_config)
+                paid += 1
+            suffix = ("_p%d" % pi) if multi else ""
+            fname = ("poster%s.png" % suffix) if (n == 1 or multi) else ("poster_%d.png" % i)
+            v = {"skipped": True, "ok": None, "missing": [], "extra": "", "transcript": ""}
+            ts_chk = None
+            # 页码用 pi（第几页），不是 i（同一页抽的第几张）——写反过，三页全标 1/3
+            pg_tag = (pi, len(pages)) if multi else None
+            if text_mode == "typeset":
+                (out_dir / ("base%s.png" % suffix if n == 1 else "base_%d.png" % i)).write_bytes(raw)
+                _pg("排版第 %d 张（真字体，字不会画错）..." % (pi if multi else i))
+                png, ts_chk = typeset_poster(raw, page_plan, ratio, photo=pphoto, page=pg_tag)
+                # 回读校验在这条路上是负资产：字是程序画的、不可能错，而那个视觉模型
+                # 实测会把画错的赛字读成对的、还会自己脑补出多出来的字，只会误报。
+                v = {"skipped": True, "ok": True, "not_needed": True,
+                     "missing": [], "extra": "", "transcript": ""}
+            else:
+                png = raw
+                if do_verify:
+                    _pg("回读校验第 %d 张的图面文字..." % i)
+                    try:
+                        v = verify_image(png, page_plan, ai_config)
+                    except Exception as e:
+                        v = {"skipped": True, "ok": None, "error": str(e)[:200],
+                             "missing": [], "extra": "", "transcript": ""}
+            (out_dir / fname).write_bytes(png)
+            r = {"skipped": True, "ok": None}
+            if do_review and not photo:
+                _pg("视觉评审第 %d 张好不好看..." % (pi if multi else i))
                 try:
-                    v = verify_image(png, plan, ai_config)
+                    r = review_image(png, ai_config)
                 except Exception as e:
-                    v = {"skipped": True, "ok": None, "error": str(e)[:200],
-                         "missing": [], "extra": "", "transcript": ""}
-        (out_dir / fname).write_bytes(png)
-        r = {"skipped": True, "ok": None}
-        if do_review and not photo:
-            _pg("视觉评审第 %d 张好不好看..." % i)
-            try:
-                r = review_image(png, ai_config)
-            except Exception as e:
-                r = {"skipped": True, "ok": None, "error": str(e)[:200]}
-        elif photo:
-            # 评审那五项打的是"AI 插画好不好看"，主视觉换成用户真图后这套分没意义，
-            # 还会因为"画面不是手绘的"乱扣，所以这条明确不做，而不是给个 0 分。
-            r = {"skipped": True, "ok": None, "photo_mode": True}
-        candidates.append({"index": i, "file": fname,
-                           "url": "/media/poster/%d/%s" % (summary_id, fname),
-                           "verify": v, "review": r, "typeset": ts_chk, "bytes": len(png)})
+                    r = {"skipped": True, "ok": None, "error": str(e)[:200]}
+            elif photo:
+                # 评审那五项打的是"AI 插画好不好看"，主视觉换成用户真图后这套分没意义，
+                # 还会因为"画面不是手绘的"乱扣，所以这条明确不做，而不是给个 0 分。
+                r = {"skipped": True, "ok": None, "photo_mode": True}
+            row = {"index": i, "file": fname,
+                   "url": "/media/poster/%d/%s" % (summary_id, fname),
+                   "verify": v, "review": r, "typeset": ts_chk, "bytes": len(png)}
+            if multi:
+                row["page"] = pi
+                row["layout"] = (ts_chk or {}).get("layout") or ""
+                row["layout_label"] = (ts_chk or {}).get("layout_label") or ""
+                row["chars"] = _plan_chars_one(page_plan)
+                row["cards"] = len(page_plan.get("cards") or [])
+                row["role"] = page_plan.get("role") or ""
+                row["base_note"] = ("真图主视觉" if pphoto else
+                                    ("纯色底（0 元）" if photo else "AI 现画底图 0.5 元"))
+                page_rows.append(row)
+            candidates.append(row)
 
     # 多张时自动挑一张当默认（poster.png 永远是"当前选中的那张"，列表页与发布取图不用改）
-    best = pick_best(candidates)
-    if n > 1:
+    best = page_rows[0] if multi else pick_best(candidates)
+    if multi:
+        shutil.copyfile(out_dir / best["file"], out_dir / "poster.png")
+    elif n > 1:
         shutil.copyfile(out_dir / best["file"], out_dir / "poster.png")
     check = best["verify"]
     review = best.get("review") or {}
@@ -1114,8 +1254,12 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
 
     issues = build_lint(pub, check, overrode, review, ts_chk)
     if not photo:                     # 真图模式下"主视觉/配图写没写"这条提醒没意义
-        for w in lint_visual(plan):
+        # 多页时只查首页：scene 与各页配图是给模型看的，第 2 页起本来就不要求再写一遍
+        for w in lint_visual(pages[0]):
             issues.append("warn: " + w)
+    if multi:
+        issues.append("info: 这组 %d 页，发布时按 img 顺序一次带走（第 1 页也复制成了 poster.png）"
+                      % len(pages))
     if stale_nums:
         issues.append("warn: 这张底图里带着文案里没有的数字 %s——是上一期烙进插画的，"
                       "换内容时确认它们还对不对；不对就换一套不带底图的风格重出一张"
@@ -1146,12 +1290,15 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
         "candidates": candidates,
         "chosen": best["index"],
         "copies": n,
+        "page_count": len(pages),
+        "pages": page_rows or candidates[:1],
         "text_mode": text_mode,
         "typeset": ts_chk,
         "image_model": "" if photo else IMAGE_MODEL,
         "ocr_model": OCR_MODEL,
         "usage": usage,
-        "cost_yuan_estimate": 0 if (tpl_base or photo) else PRICE_PER_IMAGE_YUAN,
+        "cost_yuan_estimate": (0 if (tpl_base or photo)
+                               else PRICE_PER_IMAGE_YUAN * max(1, paid or 1)),
         "base_reused": bool(tpl_base),
         "base_stale_numbers": stale_nums,
         "auto_notes": notes,

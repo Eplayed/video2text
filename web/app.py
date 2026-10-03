@@ -651,6 +651,21 @@ def _packages_pending():
                 if rv.get("score") is not None and int(rv.get("full") or 0) > 0 \
                         and int(rv.get("score")) < ai_poster.REVIEW_PASS:
                     why.append("视觉评审 %s/%s 偏低" % (rv.get("score"), rv.get("full")))
+                # 多页那组：每页各自有回读与评审结果，第 2 页分数低也得单独捞出来
+                prows = m.get("pages") or []
+                if len(prows) > 1:
+                    for p in prows:
+                        pv = (p.get("verify") or {})
+                        pr = p.get("review") or {}
+                        tag = "第 %s 页 " % (p.get("page") or "?")
+                        if pv.get("ok") is False:
+                            why.append(tag + "图面文字与文案不一致")
+                        if pr.get("score") is not None and int(pr.get("full") or 0) > 0 \
+                                and int(pr.get("score")) < ai_poster.REVIEW_PASS:
+                            why.append(tag + "视觉评审 %s/%s 偏低" % (pr.get("score"), pr.get("full")))
+                        tp = (p.get("typeset") or {}).get("problems") or []
+                        if len(tp) > len((m.get("typeset") or {}).get("problems") or []):
+                            why.append(tag + "版面有 %d 条提示" % len(tp))
                 if why:
                     pending.append({"channel": ch, "id": m.get("id"),
                                     "title": m.get("title") or "", "why": "；".join(why)})
@@ -1981,7 +1996,7 @@ def api_poster_preview():
     """
     data = request.get_json(force=True) or {}
     plan = data.get("plan") if isinstance(data.get("plan"), dict) else None
-    if not plan or not (plan.get("title") or "").strip():
+    if not plan or not ai_poster.plan_has_text(plan):
         return jsonify({"error": "还没有可预览的文案，先点「① AI 拆解文案」"}), 400
     ratio = str(data.get("ratio") or "9:16").strip()[:5]
     # 草稿预览：派生规则只有 normalize() 一份，前端只传表单原值
@@ -1990,22 +2005,33 @@ def api_poster_preview():
         plan["_skin"] = poster_breakdown.normalize(data["draft"])["skin"]
     try:
         photo = _photo_read(data.get("photo"))
-        png, chk = ai_poster.preview_typeset(plan, ratio, photo=photo)
-        key = hashlib.sha1(png).hexdigest()[:16]
         out_dir = OUTPUT_DIR / "poster" / "_preview"
         out_dir.mkdir(parents=True, exist_ok=True)
-        (out_dir / (key + ".png")).write_bytes(png)
+        # 多页就整组一起排（一页一张）：换页数、换每页布局都要能当场看到，
+        # 这一步全是代码排版，一张都不花钱
+        items = []
+        for idx, (page_plan, png, chk) in enumerate(
+                ai_poster.preview_pages(plan, ratio, photo=photo), 1):
+            key = hashlib.sha1(png).hexdigest()[:16]
+            (out_dir / (key + ".png")).write_bytes(png)
+            items.append({"page": idx, "url": "/media/poster/_preview/%s.png" % key,
+                          "check": chk, "chars": ai_poster.plan_chars(page_plan),
+                          "layout": chk.get("layout"), "layout_label": chk.get("layout_label"),
+                          "role": page_plan.get("role") or "",
+                          "cards": len(page_plan.get("cards") or [])})
         _prune_previews(out_dir)
-        return jsonify({"url": "/media/poster/_preview/%s.png" % key,
-                        "check": chk, "chars": ai_poster.plan_chars(plan),
+        first = items[0]
+        return jsonify({"url": first["url"], "check": first["check"],
+                        "chars": ai_poster.plan_chars(plan),
+                        "page_count": len(items), "pages": items,
                         "cost_yuan": 0})
     except Exception as e:
         return jsonify({"error": str(e)[:300]}), 500
 
 
-def _prune_previews(out_dir, keep=24):
+def _prune_previews(out_dir, keep=48):
     """预览图按内容哈希存，改一次文案就多一张；留最近 24 张，其余删掉。
-    这些是纯中间产物，攒在 output/ 里没人看也没人清。"""
+    这些是纯中间产物，攒在 output/ 里没人看也没人清。多页一次点三张，所以留得多些。"""
     try:
         files = sorted(out_dir.glob("*.png"), key=lambda f: f.stat().st_mtime, reverse=True)
         for f in files[keep:]:
@@ -2111,6 +2137,10 @@ def api_poster_list():
                           "base_reused": bool(i.get("base_reused")),
                           "cost": i.get("cost_yuan_estimate"),
                           "copies": i.get("copies") or 1,
+                          # 多页那组在列表里只占一格（封面就是第 1 页），角标显示"3 页"
+                          "page_count": i.get("page_count") or 1,
+                          "page_labels": [p.get("layout_label") or p.get("layout") or ""
+                                          for p in (i.get("pages") or [])],
                           "verify_ok": (i.get("verify") or {}).get("ok"),
                           "review_score": rv.get("score"), "review_full": rv.get("full"),
                           "review_ok": rv.get("ok"),
