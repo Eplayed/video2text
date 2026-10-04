@@ -273,14 +273,8 @@ def suggest_pages(n_points):
     return PAGE_MAX, PAGE_RULES[-1]["why"]
 
 
-def layout_plan_prompt(has_photo, page_hint=0):
-    """拼进拆解 prompt 的那段"拆几页 + 每页什么布局"规则。
-
-    里面的 __TOTAL__ 交给调用方那串 replace 一起替换，跟主模板用同一个预算数。
-
-    page_hint 是用户在界面上已经定了的页数（他嫌 2 页太挤、手动加到 3 页，再点「换一套」
-    就是想要 3 页的结构）。这时候页数不再由模型判断，剩下的只让它决定怎么分配与选布局。
-    """
+def layout_choices_prompt(has_photo):
+    """那十种构图的一段说明（整组拆解与单页重拆共用，别各写一份）。"""
     from . import poster_typeset as ts
     lines = ["可选布局（只能填键名；标了「要有真图」的，没图就别选）："]
     for k in ts.LAYOUT_ORDER:
@@ -289,6 +283,18 @@ def layout_plan_prompt(has_photo, page_hint=0):
                      % (k, v["label"], v["min_cards"], v["max_cards"],
                         "（要有真图）" if v.get("needs_photo") else "", v.get("when", "")))
     lines.append("")
+    return lines
+
+
+def layout_plan_prompt(has_photo, page_hint=0):
+    """拼进拆解 prompt 的那段"拆几页 + 每页什么布局"规则。
+
+    里面的 __TOTAL__ 交给调用方那串 replace 一起替换，跟主模板用同一个预算数。
+
+    page_hint 是用户在界面上已经定了的页数（他嫌 2 页太挤、手动加到 3 页，再点「换一套」
+    就是想要 3 页的结构）。这时候页数不再由模型判断，剩下的只让它决定怎么分配与选布局。
+    """
+    lines = layout_choices_prompt(has_photo)
     if page_hint and page_hint > 0:
         lines.append("**页数已由用户定死：这一组必须正好 %d 页**（page_count 填 %d，"
                      "pages 数组给满 %d 项，每页都要有自己的 role、主标题和至少 1 条要点）。"
@@ -532,6 +538,38 @@ def _resplit(pages, want, lim):
                  % (want, len(pages), len(flat), n, short))
 
 
+def normalize_page(item, lim, style_key, has_photo, idx, first_title="",
+                   group_footer="", group_scene=""):
+    """把模型给的一页洗成能排版的那一页：裁字数、认布局键、没图就换掉"要图"的构图。
+
+    整组拆解与「只重拆这一页」共用这一处——两条路出来的页必须形状一致，
+    否则同一份排版引擎要伺候两种输入，早晚在其中一条上静默出错。
+    返回 (页 或 None, 给人看的说明列表)。None 表示这页是空的，该丢掉。
+    """
+    notes = []
+    cards = []
+    for c in (item.get("cards") or [])[:CARD_MAX]:
+        if not isinstance(c, dict):
+            continue
+        t, d = _clip(c.get("t"), lim["cardT"]), _clip(c.get("d"), lim["cardD"])
+        if t or d:
+            cards.append({"t": t, "d": d, "v": _clip_ws(c.get("v"), CARD_VIS_MAX)})
+    title = _clip(item.get("title") or (first_title if idx == 1 else ""), lim["title"])
+    lay, note = _page_layout(item.get("layout_key"), style_key, has_photo, idx)
+    if note:
+        notes.append(note)
+    if not title and not cards:
+        return None, ["第 %d 页是空的（没标题也没卡片），已丢掉" % idx]
+    p = {"title": title, "subtitle": _clip(item.get("subtitle"), lim["subtitle"]),
+         "cards": cards, "layout_key": lay, "style_key": style_key,
+         "role": _clip_ws(item.get("role"), 8),
+         "footer": _clip(item.get("footer") or group_footer or "内容整理自公开分享", lim["footer"]),
+         "scene": _clip_ws(item.get("scene") or (group_scene if idx == 1 else ""), SCENE_MAX)}
+    p, pn = fit_plan(p, lim["total"], lim)
+    notes.extend(["第 %d 页：%s" % (idx, x) for x in pn])
+    return p, notes
+
+
 def _pages_from_data(data, lim, style_key, has_photo, first_title="", page_hint=0):
     """把模型给的 pages[] 洗成能排版的页列表；模型不写 pages 就返回 None（按单页走）。
 
@@ -561,29 +599,12 @@ def _pages_from_data(data, lim, style_key, has_photo, first_title="", page_hint=
         picked = picked[:want]
     pages = []
     for idx, item in enumerate(picked, 1):
-        cards = []
-        for c in (item.get("cards") or [])[:CARD_MAX]:
-            if not isinstance(c, dict):
-                continue
-            t, d = _clip(c.get("t"), lim["cardT"]), _clip(c.get("d"), lim["cardD"])
-            if t or d:
-                cards.append({"t": t, "d": d, "v": _clip_ws(c.get("v"), CARD_VIS_MAX)})
-        title = _clip(item.get("title") or (first_title if idx == 1 else ""), lim["title"])
-        lay, note = _page_layout(item.get("layout_key"), style_key, has_photo, idx)
-        if note:
-            notes.append(note)
-        p = {"title": title, "subtitle": _clip(item.get("subtitle"), lim["subtitle"]),
-             "cards": cards, "layout_key": lay, "style_key": style_key,
-             "role": _clip_ws(item.get("role"), 8),
-             "footer": _clip(item.get("footer") or data.get("footer") or "内容整理自公开分享",
-                             lim["footer"]),
-             "scene": _clip_ws(item.get("scene") or (data.get("scene") if idx == 1 else ""),
-                               SCENE_MAX)}
-        if not title and not cards:
-            notes.append("第 %d 页是空的（没标题也没卡片），已丢掉" % idx)
+        p, pn = normalize_page(item, lim, style_key, has_photo, idx,
+                               first_title=first_title, group_footer=data.get("footer") or "",
+                               group_scene=data.get("scene") or "")
+        notes.extend(pn)
+        if not p:
             continue
-        p, pn = fit_plan(p, lim["total"], lim)
-        notes.extend(["第 %d 页：%s" % (idx, x) for x in pn])
         pages.append(p)
         if len(pages) >= PAGE_MAX:
             break
@@ -592,6 +613,107 @@ def _pages_from_data(data, lim, style_key, has_photo, first_title="", page_hint=
         if rn:
             notes.insert(0, rn)
     return (pages or None), why, notes
+
+
+_PAGE_PROMPT = """你是自媒体图文编辑。这一组海报已经拆好了，现在**只重写其中第 __IDX__ 页**，
+其他页一个字都不动，也不要输出其他页。
+
+本篇主题：__THEME__
+整组主线：__SPINE__
+
+其他几页已经在讲这些（**严禁重复**，这一页要讲素材里还没被用掉、又能自成一块的内容）：
+__OTHERS__
+
+这一页的定位：角色 __ROLE__（可换，两个字，如 收藏 / 行动 / 风险 / 收尾）；
+页数不变、风格不变（style_key 固定填 "__STYLE__"，整组要统一）。
+
+铁律（与整组拆解同一套，只是范围只剩这一页）：
+- 只能用素材里出现过的事实与数字，严禁编造；全程转述口吻，禁用第一人称；
+  素材是断开的残句时要把一句话说完整再落卡片。
+- 这一页的卡片之间要构成递进，每张都能回答"所以呢"；两张卡不许讲同一件事。
+- 主标题 ≤__TITLE__ 字；副标题 ≤__SUB__ 字；每张卡片标题 ≤__CT__ 字、说明 ≤__CD__ 字；
+  **这一页**卡片 3-5 张、全部文字合计 ≤__TOTAL__ 字；中文标点计入字数；不要 markdown 符号；
+  价格、天数、日期保持素材里的阿拉伯数字。
+- scene（≤48 字）写这一页要画成什么场景，要看得见；每张卡给 v（≤24 字）写这一条画什么，
+  要有形体（讲数值画仪表/钱，讲风险画断裂/警示，讲选择画岔路）。scene 与 v 不占字数预算。
+__LAYOUT__
+输出 JSON（只此一个对象，不要 pages 数组、不要 publish）：
+{"role": "两个字", "layout_key": "上面布局键名之一", "title": "这一页主标题",
+ "subtitle": "这一页副标题，可留空", "scene": "这一页的画面",
+ "cards": [{"t": "卡片标题", "d": "卡片说明", "v": "这一条画什么"}]}
+
+素材（可能已经是别人总结过的内容）：
+__CONTENT__
+"""
+
+
+def page_plan_prompt(page_index, pages, spine, style_key, has_photo, theme, lim, content=""):
+    """把"只重写第 k 页"这段话拼出来（纯函数，离线可测）。
+
+    其他页的标题与要点会作为"别重复"的清单塞进去——不给这份清单，模型最容易出现的就是
+    第二页把第一页讲过的话再说一遍。
+    """
+    others = []
+    for i, p in enumerate(pages, 1):
+        if i == page_index:
+            continue
+        pts = "、".join([(c.get("t") or c.get("d") or "")[:12] for c in (p.get("cards") or [])[:5]
+                         if (c.get("t") or c.get("d"))])
+        others.append('  - 第 %d 页「%s」：%s%s' % (i, p.get("role") or "",
+                                                   p.get("title") or "（没标题）",
+                                                   "；要点：" + pts if pts else ""))
+    cur = pages[page_index - 1] if 1 <= page_index <= len(pages) else {}
+    txt = (_PAGE_PROMPT
+           .replace("__IDX__", str(page_index))
+           .replace("__THEME__", (theme or "未指定，按素材自判").strip())
+           .replace("__SPINE__", (spine or "（未填）"))
+           .replace("__OTHERS__", "\n".join(others) or "  - （这是唯一一页，没有别页）")
+           .replace("__ROLE__", cur.get("role") or "（未定）")
+           .replace("__STYLE__", style_key or DEFAULT_STYLE_KEY)
+           .replace("__LAYOUT__", "\n".join(layout_choices_prompt(has_photo)))
+           .replace("__TITLE__", str(lim["title"])).replace("__SUB__", str(lim["subtitle"]))
+           .replace("__CT__", str(lim["cardT"])).replace("__CD__", str(lim["cardD"]))
+           .replace("__TOTAL__", str(lim["total"]))
+           .replace("__CONTENT__", (content or "")[:8000]))
+    return txt
+
+
+def build_page_plan(summary, ai_config, page_index, pages, spine="", theme="",
+                    style_key="", text_mode=DEFAULT_TEXT_MODE, has_photo=False):
+    """只重拆一页，返回 (page, violations, notes)。其他页由调用方原样留着。
+
+    整组「换一套」会把人手动改过的别的页一起冲掉，这条就是给"这一页不满意"准备的出口。
+    """
+    api_key, api_base, model = _require_ai(ai_config)
+    import openai
+
+    lim = limits_for(text_mode)
+    try:
+        page_index = int(page_index)
+    except (TypeError, ValueError):
+        page_index = 1
+    if page_index < 1:
+        page_index = 1
+    if not pages:
+        raise PosterError("这一组还没有页可拆，先点「① 拆文案」")
+    if page_index > len(pages):
+        page_index = len(pages)
+    key = style_key if style_key in (set(STYLE_PRESETS) | set(_user_presets())) else DEFAULT_STYLE_KEY
+    prompt = page_plan_prompt(page_index, pages, spine, key, has_photo, theme, lim,
+                              content=summary.get("content") or "")
+    client = openai.OpenAI(api_key=api_key, base_url=api_base or "https://api.openai.com/v1",
+                           timeout=300, max_retries=1)
+    resp = client.chat.completions.create(
+        model=model or "qwen-plus",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.5, response_format={"type": "json_object"})
+    data = _parse_json(resp.choices[0].message.content)
+    page, notes = normalize_page(data, lim, key, has_photo, page_index,
+                                 first_title=(pages[0].get("title") if page_index == 1 else ""))
+    if not page:
+        raise PosterError("模型这一页什么也没给（没标题也没要点），换一套没换成")
+    one = {"pages": [page]}
+    return page, lint_plan(one, lim), notes
 
 
 def build_text_plan(summary, ai_config, theme="", title="", style_key="", text_mode=DEFAULT_TEXT_MODE,

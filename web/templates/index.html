@@ -442,6 +442,7 @@ textarea{resize:vertical;min-height:84px}
 .pk-tabs{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:2px 0 10px}
 .pk-tabs-k{font-size:11px;font-weight:800;color:var(--text-secondary);margin-right:2px}
 .pk-tabs-n{font-size:11px;color:var(--text-secondary);margin-left:auto}
+.pk-tabs-acts{display:flex;gap:6px;align-items:center}
 .pk-tab{display:flex;flex-direction:column;align-items:flex-start;gap:1px;font-size:11.5px;
   line-height:1.35;padding:5px 11px;border-radius:9px;border:1px solid var(--border);
   background:var(--surface-nested);color:var(--text-secondary);cursor:pointer}
@@ -2931,8 +2932,87 @@ function pkTabsHtml() {
   });
   if (_pkPages.length < PK_PAGE_MAX) h += `<button type="button" class="pk-tab add" onclick="pkAddPage()">＋ 加一页</button>`;
   if (_pkPages.length > 1) h += `<button type="button" class="pk-tab del" onclick="pkDelPage()">✕ 删掉这页</button>`;
-  if (_pkPages.length > 1) h += `<span class="pk-tabs-n">一页装不下就翻页，风格整套统一</span>`;
+  if (_pkPages.length > 1) {
+    h += '<span class="pk-tabs-n">一页装不下就翻页，风格整套统一</span>'
+      + '<span class="pk-tabs-acts">' + (_pkPageBusy
+        ? '<button type="button" class="btn ghost sm" disabled>正在重拆本页 · '
+          + esc(_elapsedText(Date.now() - (_pkPageT0 || Date.now()))) + '…</button>'
+        : '<button type="button" class="btn ghost sm" id="pk-reroll-page" onclick="pkRerollPage()" '
+          + 'title="只让模型重写当前这一页，别的页原样不动（约 20-30 秒，只花模型那几厘，不出图不花钱）">'
+          + '↻ 只重拆这一页</button>') + '</span>';
+  }
   return h + '</div>';
+}
+function pkRefreshTabs() {
+  const el = document.getElementById('pk-tabs');
+  if (el) el.outerHTML = pkTabsHtml();
+}
+
+// 「只重拆这一页」的进行中状态：跟「换一套」一样，按钮就地给计时，别让人对着不动的屏幕猜
+let _pkPageBusy = false, _pkPageT0 = 0, _pkPageTimer = null;
+
+function pkPageBusy(on) {
+  _pkPageBusy = !!on;
+  _pkPageT0 = on ? Date.now() : 0;
+  if (_pkPageTimer) { clearInterval(_pkPageTimer); _pkPageTimer = null; }
+  if (on) _pkPageTimer = setInterval(pkRefreshTabs, 1000);
+  document.querySelectorAll('#pk-overlay button').forEach(b => {
+    if ((b.getAttribute('onclick') || '').indexOf('pkRerollPage()') >= 0) b.disabled = !!on;
+  });
+  pkRefreshTabs();
+}
+
+async function pkRerollPage() {
+  if (!_pkId) { alert('请先选择整合稿'); return; }
+  if (_pkPageBusy || _pkPlanBusy) return;
+  pkFlushForm();
+  const cur = _pkPages[_pkCur] || {};
+  if ((cur.title || (cur.cards || []).length) &&
+      !confirm('只重拆第 ' + (_pkCur + 1) + ' 页：这一页现在的标题与要点会被模型换一份，'
+          + '其他 ' + (_pkPages.length - 1) + ' 页原样不动。\n（约 20-30 秒，只花模型那几厘，不出图不花钱）继续？')) return;
+  const body = {summary_id: _pkId, page_index: _pkCur + 1,
+                spine: (_pkLastPlan || {}).spine || '',
+                theme: document.getElementById('pk-theme').value.trim(),
+                ratio: document.getElementById('pk-ratio').value,
+                style_key: pkStyleKey(), text_mode: pkTextMode(),
+                pages: _pkPages.map(p => ({role: p.role, layout_key: p.layout_key,
+                                            title: p.title, subtitle: p.subtitle,
+                                            scene: p.scene, footer: p.footer, cards: p.cards}))};
+  if (_pkPhoto) body.photo = _pkPhoto.ref;
+  pkPageBusy(true);
+  let r;
+  try {
+    r = await fetch('/api/poster/plan/page', {method: 'POST',
+      headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)}).then(x => x.json());
+  } catch (e) { r = {error: e.message}; }
+  if (r.error) {
+    pkPageBusy(false);
+    setStatus('error', r.error);
+    const box = document.getElementById('pk-result');
+    if (box) box.innerHTML = '<div class="pk-verify fail">✗ ' + esc(r.error) + '</div>';
+    return;
+  }
+  pollPoster('page', r.task_id);
+}
+
+function pkApplyPage(page, idx, notes) {
+  const i = Math.max(0, Math.min((idx || 1) - 1, _pkPages.length - 1));
+  // 尾注是整组共用的合规声明，别让模型这一页自己改出一个不一样的来
+  page.footer = _pkPages[i].footer || (_pkPages[0] || {}).footer || page.footer;
+  _pkPages[i] = page;
+  if (_pkLastPlan) {
+    _pkLastPlan.pages = _pkPages.map(p => ({role: p.role, layout_key: p.layout_key,
+                                            title: p.title, subtitle: p.subtitle,
+                                            scene: p.scene, footer: p.footer, cards: p.cards}));
+    if (i === 0) {
+      _pkLastPlan.title = page.title; _pkLastPlan.subtitle = page.subtitle;
+      _pkLastPlan.cards = page.cards; _pkLastPlan.scene = page.scene;
+    }
+  }
+  pkRenderPlan(_pkLastPlan, _pkLastPublish, i);
+  posterPreview();
+  setStatus('done', '第 ' + (i + 1) + ' 页已重拆，其他页没动'
+    + (notes && notes.length ? '（' + notes.join('；') + '）' : ''));
 }
 function pkFlushForm() {
   const g = id => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
@@ -3270,6 +3350,7 @@ function pollPoster(stage, task) {
     catch (e) { setTimeout(poll, 3000); return; }
     if (task && st.task_id && st.task_id !== task) {
       pkPlanBusy(false);
+      pkPageBusy(false);
       box.innerHTML = '<div class="pk-verify mild">这次任务的状态已经被后来的海报任务覆盖了（后台同时只跑一个任务）。'
         + (stage === 'poster' ? '图已经落盘，去成品页看结果。' : '') + '</div>'
         + (stage === 'poster' ? '<div class="pk-actions"><button class="btn ghost sm" onclick="gotoPosterPage('
@@ -3283,6 +3364,7 @@ function pollPoster(stage, task) {
       setTimeout(poll, 2000); return;
     }
     pkPlanBusy(false);            // 跑完（成功或失败）都要把「换一套」按钮放回来
+    pkPageBusy(false);
     if (st.error) {
       const msg = String(st.error).split('\n')[0];
       // 骨架稿被拦：给一次显式放行的出口，而不是让人去改数据
@@ -3292,6 +3374,15 @@ function pollPoster(stage, task) {
       setStatus('error', '海报任务失败'); return;
     }
     setStatus('done', st.progress || '完成');
+    if (stage === 'page' && st.plan && st.plan.page) {
+      // 只重拆一页：回来的那一页替进当前结构，别的页一个字不动
+      const idx = st.plan.index || (_pkCur + 1);
+      pkApplyPage(st.plan.page, idx, st.plan.notes || []);
+      const d = document.getElementById('pk-srcpanel');
+      if (d) d.open = true;
+      pkLoadSource();
+      return;
+    }
     if (st.plan && st.plan.plan) {
       pkRenderPlan(st.plan.plan, st.plan.publish);
       _pkPreviewPages = [];              // 结构换了，上一轮的预览图作废

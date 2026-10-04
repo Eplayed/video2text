@@ -1986,6 +1986,52 @@ def api_poster_plan():
                     "task_id": _poster_status["task_id"]})
 
 
+@app.route("/api/poster/plan/page", methods=["POST"])
+def api_poster_plan_page():
+    """只重拆某一页：整组「换一套」会把人手动改过的别的页一起冲掉，这条是"就这页不满意"的出口。
+
+    前端把当前整组结构一起传过来，后端只交第 k 页给模型，并把别的页已讲的要点作为
+    "别重复"清单塞进提示词；回来的也只有一页，别的页由前端原样留着。
+    """
+    data = request.get_json(force=True) or {}
+    summary = _poster_get_summary(data.get("summary_id"))
+    if not summary:
+        return jsonify({"error": "整合稿不存在"}), 404
+    pages = [p for p in (data.get("pages") or []) if isinstance(p, dict)]
+    if not pages:
+        return jsonify({"error": "这一组还没有页，先点「① 拆文案」"}), 400
+    try:
+        idx = int(data.get("page_index") or 1)
+    except (TypeError, ValueError):
+        idx = 1
+    if idx < 1 or idx > len(pages):
+        return jsonify({"error": "页码超出范围（1-%d）" % len(pages)}), 400
+    theme = str(data.get("theme") or "").strip()[:30]
+    style_key = str(data.get("style_key") or "").strip()[:20]
+    text_mode = str(data.get("text_mode") or ai_poster.DEFAULT_TEXT_MODE).strip()[:10]
+    has_photo = bool(str(data.get("photo") or "").strip())
+    spine = str(data.get("spine") or "").strip()[:40]
+
+    def fn():
+        cfg = _fast_config()
+        _poster_status["progress"] = "只重拆第 %d 页（模型：%s）..." % (idx, cfg.get("model") or "?")
+        page, bad, notes = ai_poster.build_page_plan(
+            summary, cfg, idx, pages, spine=spine, theme=theme, style_key=style_key,
+            text_mode=text_mode, has_photo=has_photo)
+        _poster_status["plan"] = {"page": page, "index": idx, "violations": bad,
+                                  "notes": notes, "chars": ai_poster.plan_chars(page),
+                                  "model": cfg.get("model") or ""}
+        _poster_status["progress"] = ("✅ 第 %d 页已重拆（%d 字 · 模型 %s）"
+                                      % (idx, ai_poster.plan_chars(page), cfg.get("model") or "?")
+                                      + ("；自动压缩：" + "、".join(notes) if notes else "")
+                                      + ("，⚠️ " + "；".join(bad) if bad else ""))
+
+    if not _poster_start("page", fn, summary["id"]):
+        return jsonify({"error": "已有海报任务正在运行"}), 400
+    return jsonify({"status": "started", "summary_id": summary["id"], "page_index": idx,
+                    "task_id": _poster_status["task_id"]})
+
+
 @app.route("/api/poster/generate", methods=["POST"])
 def api_poster_generate():
     """出图。plan 非空＝用前端审改过的文案（不再调 LLM），留空＝现场拆解。"""

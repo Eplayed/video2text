@@ -297,6 +297,43 @@ def main():
     ck("新摊出来的那页标题留空、由界面提示人补（不是门禁问题）",
        "主标题为空" in ai_poster.lint_plan({"pages": [p3[2]]}, lim, card_min=1))
 
+    print("== K 只重拆一页：提示词与归一与整组同源 ==")
+    pages2 = [{"role": "封面", "title": "10月商栈更新", "subtitle": "绝版回来了",
+               "layout_key": "top_art", "cards": [{"t": "幽灵军马", "d": "绝版卡牌坐骑", "v": "马"},
+                                                  {"t": "面具幻化", "d": "按月轮换", "v": "面具"}]},
+              {"role": "行动", "title": "先换哪个", "subtitle": "",
+               "layout_key": "list", "cards": [{"t": "看余额", "d": "不够就做日志", "v": "钱袋"}]}]
+    pp = ai_poster.page_plan_prompt(2, pages2, "先抓绝版再算顺序", "game_epic", False, "商栈",
+                                    lim, content="素材正文在这里")
+    ck("只交第 2 页", "只重写其中第 2 页" in pp and "这一页的定位：角色 行动" in pp,
+       "；".join([ln for ln in pp.splitlines() if "定位" in ln][:1]))
+    ck("把别的页已讲的要点当「别重复」清单塞进去",
+       "第 1 页「封面」：10月商栈更新" in pp and "幽灵军马" in pp)
+    ck("不叫模型改风格、不改页数、不写 publish",
+       'style_key 固定填 "game_epic"' in pp and '"publish"' not in pp
+       and "page_count" not in pp)
+    ck("布局清单与整组拆解共用同一份", '"full_bleed"' in pp and "要有真图" in pp)
+    ck("素材正文进提示词", "素材正文在这里" in pp)
+    ck("单页预算与整组同一档", "≤%d 字" % lim["total"] in pp)
+
+    one, n1 = ai_poster.normalize_page(
+        {"role": "风险", "layout_key": "not_a_key", "title": "注意这些坑",
+         "cards": [{"t": "别拖", "d": "每月刷新下架", "v": "沙漏"}]},
+        lim, "game_epic", False, 2)
+    ck("单页归一：不认识的布局键回落并留话",
+       one["layout_key"] == ts.DEFAULT_LAYOUT and any("不认识" in x for x in n1), "；".join(n1))
+    ck("单页归一：尾注整组共用，不让模型各页改",
+       one["footer"] == "内容整理自公开分享", one["footer"])
+    empty, n2 = ai_poster.normalize_page({"role": "空", "title": "", "cards": []},
+                                         lim, "game_epic", False, 3)
+    ck("单页归一：什么都没给就判空并说明", empty is None and any("空的" in x for x in n2),
+       "；".join(n2))
+    try:
+        ai_poster.build_page_plan({"content": "x"}, {"api_key": "sk-test"}, 1, [])
+        ck("没有页时直接报错而不是白跑模型", False, "没抛异常")
+    except ai_poster.PosterError as e:
+        ck("没有页时直接报错而不是白跑模型", "还没有页" in str(e), str(e))
+
     print()
     if FAILS:
         print("FAIL %d 项：%s" % (len(FAILS), "、".join(FAILS)))
