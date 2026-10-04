@@ -17,6 +17,8 @@
 所以想改成系统 cron 调脚本时，到期逻辑一行都不用动。Python 3.9 兼容。
 """
 import json
+import os
+import threading
 import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -146,8 +148,81 @@ def save(cfg: Dict) -> Dict:
     cfg["run_at"] = _norm_time(cfg.get("run_at")) or DEFAULT_RUN_AT
     cfg["updated_at"] = datetime.now().strftime(TIME_FMT)
     STORE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    STORE_PATH.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+    # 先写临时文件再改名：直接 write_text 若正好被中断，会留下半截 JSON，
+    # 下次 load() 一律回退成"没有任务"——整个账本凭空没了
+    tmp = STORE_PATH.parent / (STORE_PATH.name + ".tmp")
+    tmp.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, STORE_PATH)
     return cfg
+
+
+# ── 读改写要排队 ──
+# 界面保存与调度记账写的都是同一个文件。之前每个改动路由都是"先 load → 查一次数据库
+# （可能等几秒）→ 整份 save"，中间只要调度器记了一笔账，就被这份旧快照冲掉：
+# 任务看起来还是"到期"，于是同一批订阅紧接着又跑一轮（10-03 的 17:08 与 17:1x 两轮）。
+# 现在两件事一起修：① 读改写全程持锁；② 界面只许改"意图"，账本字段以磁盘为准。
+_MUTEX = threading.RLock()
+
+# 界面拥有的是意图，调度拥有的是账本。字段按归属分开，谁也别覆盖谁。
+INTENT_TOP = ("enabled", "run_at")
+LEDGER_TASK = ("last_run", "last_status", "last_note")
+
+
+def all_member_ids(cfg: Dict) -> List[int]:
+    ids: List[int] = []
+    for t in cfg.get("tasks") or []:
+        for sid in t.get("sub_ids") or []:
+            if sid not in ids:
+                ids.append(sid)
+    return ids
+
+
+def save_intent(intent: Dict, alive=None) -> Dict:
+    """把界面那份"意图"合进磁盘上最新的账本再落盘。
+
+    任务**清单本身以意图为准**（要的就是"改成员/删任务"能落住），
+    每个任务只覆盖 name / interval_days / sub_ids 这三样意图字段；
+    last_run / last_status / last_note 一律保留磁盘上那份——
+    调度器刚记的账不会因为界面点了两下就丢。alive 传集合时顺带清掉已删订阅。
+    """
+    with _MUTEX:
+        cfg = load()
+        src = intent or {}
+        for k in INTENT_TOP:
+            if k in src:
+                cfg[k] = src[k]
+        ledger = {t.get("key"): t for t in cfg.get("tasks") or [] if t.get("key")}
+        tasks = []
+        for one in (src.get("tasks") or []):
+            t = dict(one or {})
+            old = ledger.get(t.get("key"))
+            for f in LEDGER_TASK:
+                # 账本字段只认磁盘上那份，意图里带了也不看
+                t[f] = (old or {}).get(f, "") if old else t.get(f, "")
+            tasks.append(t)
+        cfg["tasks"] = tasks
+        if alive is not None:
+            gone = [i for i in all_member_ids(cfg) if i not in alive]
+            if gone:
+                cfg = drop_subs(cfg, gone)
+        return save(cfg)
+
+
+def touch_running(keys: List[str], now: Optional[datetime] = None) -> Dict:
+    """锁内读最新账本 → 把这一轮的时间戳占上 → 落盘。开跑前调用。"""
+    with _MUTEX:
+        cfg = load()
+        save(mark_running(cfg, keys, now))
+        return cfg
+
+
+def finish_batch(keys: List[str], ok: bool, note: str,
+                 now: Optional[datetime] = None) -> Dict:
+    """锁内读最新账本 → 记这一轮的结果 → 落盘。跑完调用。"""
+    with _MUTEX:
+        cfg = load()
+        save(mark_batch(cfg, keys, ok, note, now))
+        return cfg
 
 
 def _norm_time(v) -> str:

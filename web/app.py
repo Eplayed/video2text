@@ -3003,8 +3003,7 @@ def _run_sync_batch(sub_ids, task_keys, who="自动同步"):
         _do_subscription_sync(None, ids, _read_cookie_from_file())
         err = _sub_status.get("error") or ""
         note = err or (_sub_status.get("progress") or "")
-        cfg = sync_tasks.load()
-        sync_tasks.save(sync_tasks.mark_batch(cfg, keys, not err, note))
+        sync_tasks.finish_batch(keys, not err, note)
         _autosync_state["note"] = "%s结束：%s" % (who, note[:160])
         print("[%s] 本轮结束（%d 个订阅 / %d 个任务）：%s"
               % (who, len(ids), len(keys), note[:200]), flush=True)
@@ -3039,7 +3038,7 @@ def _autosync_tick(now=None):
     names = "、".join(t.get("name") or t.get("key") for t in due)
     # 先把这一轮的时间戳占上再跑：一轮要几分钟，跑完才记账的话，中途配置被界面重写
     # 或进程重启就会丢账，同一个任务紧接着再跑一轮（对上游是骚扰）
-    sync_tasks.save(sync_tasks.mark_running(cfg, [t["key"] for t in due]))
+    sync_tasks.touch_running([t["key"] for t in due])
     _autosync_state["note"] = "自动同步开始：" + names
     print("[自动同步] 到期任务 %d 个（%s），共 %d 个订阅" % (len(due), names, len(ids)), flush=True)
     _run_sync_batch(ids, [t["key"] for t in due], "自动同步")
@@ -3132,25 +3131,22 @@ def api_sync_tasks():
 
 
 def _save_tasks(cfg):
-    """落盘前把已删订阅从成员里清掉，空了的任务一并删掉。"""
+    """落盘界面那份改动：只合"意图"字段，账本以磁盘为准；顺手把已删订阅从成员里清掉。
+
+    以前这里是"整份覆盖写"，而中间还要查一次数据库（同步在跑时会等 _db_lock 好几秒），
+    等查完再写，就把这期间调度器记的账一起冲掉了——同一任务紧接着再跑一轮就是这么来的。
+    """
     try:
         alive = {s["id"] for s in _alive_subs()}
     except Exception as e:
         # 读不到订阅表就别乱删配置，宁可留着僵尸成员（界面会跳过不显示）
         print("[自动同步] 订阅表读取失败，跳过成员清理: %s" % e, flush=True)
         alive = None
-    if alive is not None:
-        cfg = sync_tasks.drop_subs(cfg, [i for i in _all_member_ids(cfg) if i not in alive])
-    return sync_tasks.save(cfg)
+    return sync_tasks.save_intent(cfg, alive)
 
 
 def _all_member_ids(cfg):
-    ids = []
-    for t in cfg.get("tasks") or []:
-        for sid in t.get("sub_ids") or []:
-            if sid not in ids:
-                ids.append(sid)
-    return ids
+    return sync_tasks.all_member_ids(cfg)
 
 
 def _valid_ids(sub_ids):
