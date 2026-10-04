@@ -12,6 +12,7 @@ sys.path.insert(0, str(ROOT))
 import main as collector  # main.py
 from src import content_store, material_store, toutiao_graphics, ai_poster, sync_tasks
 from src.graphics.channels import wechat as wechat_graphics
+from src.graphics.channels import toutiao as toutiao_channel
 from src.graphics import variants as graphics_variants
 from src.graphics.gate import GraphicsGateError
 from src.path_config import find_parser_dir, ensure_parser_on_path, get_cookie_path
@@ -209,10 +210,19 @@ def api_videos():
     # 来源标识统一：微信文章 vs 抖音，前端卡片徽章/筛选用
     for v in videos:
         v["source"] = "wechat" if v.get("sheet") == "微信文章" else "douyin"
-    # 来源计数取筛选前的合并列表，保证药丸数字与卡片口径一致
+    # 药丸计数一律取"筛选前的合并列表"，跟下面真正要显示的那份数据同一个口径。
+    # 之前分类药丸走 /api/categories（按 SQLite 整张 videos 表统计，含 174 条还没做转写的行），
+    # 列表走索引（只收有 ASR 的行），于是"其他 240"点进去只有 128 条，每个分类都对不上。
     source_counts = {"douyin": 0, "wechat": 0}
+    category_counts = {}
+    game_counts = {}
     for v in videos:
         source_counts[v["source"]] = source_counts.get(v["source"], 0) + 1
+        cat = (v.get("category") or "").strip() or "未分类"
+        category_counts[cat] = category_counts.get(cat, 0) + 1
+        if cat == "游戏攻略":            # 游戏药丸只在游戏攻略下有意义（与 get_game_stats 同口径）
+            g = (v.get("game") or "").strip() or "未识别游戏"
+            game_counts[g] = game_counts.get(g, 0) + 1
     if source in ("douyin", "wechat"):
         videos = [v for v in videos if v["source"] == source]
     if topic:
@@ -243,6 +253,14 @@ def api_videos():
         reverse=True,
     )
     total = len(videos)
+    # 分类/游戏药丸名单：按合并列表实际有的排（数量倒序），再补上权威名单里当前为 0 的分类，
+    # 免得以后新加一个分类要在界面里预设它却看不到
+    cats_out = [{"category": k, "count": n} for k, n in
+                sorted(category_counts.items(), key=lambda x: (-x[1], x[0]))]
+    known = {c["category"] for c in cats_out}
+    cats_out += [{"category": c, "count": 0} for c in content_store.CATEGORIES if c not in known]
+    games_out = [{"game": k, "count": n} for k, n in
+                 sorted(game_counts.items(), key=lambda x: (-x[1], x[0]))]
     # 分页：素材库一次塞 1000+ 张卡片进 innerHTML 要 0.9 秒、三万个节点，
     # 而且每敲一个搜索字符都重来一遍。默认只回一页，让「加载更多」按页追加。
     try:
@@ -257,11 +275,13 @@ def api_videos():
         page_size = 90
     if page_size == 0:                      # 0＝不分页，全给（脚本侧想要完整列表时用）
         return jsonify({"videos": videos, "total": total, "sources": source_counts,
+                        "categories": cats_out, "games": games_out,
                         "page": 1, "page_size": 0, "has_more": False})
     page_size = min(page_size, 500)
     start = (page - 1) * page_size
     page_items = videos[start:start + page_size]
     return jsonify({"videos": page_items, "total": total, "sources": source_counts,
+                    "categories": cats_out, "games": games_out,
                     "page": page, "page_size": page_size,
                     "shown": min(start + len(page_items), total),
                     "has_more": start + len(page_items) < total})
@@ -327,15 +347,22 @@ def _load_video_extras() -> dict:
 # ── API: 分类统计 ──
 @app.route("/api/categories")
 def api_categories():
+    """分类/游戏统计 + 权威分类名单。
+
+    `all_categories` 是给下拉框用的（订阅预设分类、选题雷达筛选）：名单只有 `content_store.CATEGORIES`
+    一处权威源。之前这两个下拉在 HTML 里写死了 7 个，而权威名单有 11 个，
+    结果是「其他」「职场成长」「生活日常」「汽车资讯」这四类（合计 300 多条素材）选不出来。
+    """
     if not DB_PATH.exists():
-        return jsonify({"categories": [], "games": []})
+        return jsonify({"categories": [], "games": [], "all_categories": list(content_store.CATEGORIES)})
     try:
         with _db_lock:
             stats = content_store.get_category_stats(DB_PATH)
             games = content_store.get_game_stats(DB_PATH)
     except Exception as e:
         return jsonify({"categories": [], "games": [], "error": str(e)}), 500
-    return jsonify({"categories": stats, "games": games})
+    return jsonify({"categories": stats, "games": games,
+                    "all_categories": list(content_store.CATEGORIES)})
 
 
 # ── API: 选题雷达 ──
@@ -1573,6 +1600,35 @@ def api_toutiao_generate():
 @app.route("/api/toutiao/status")
 def api_toutiao_status():
     return jsonify(_tt_task_status)
+
+
+@app.route("/api/toutiao/templates")
+def api_toutiao_templates():
+    """头条弹窗的模板与三轴预设下发（key + 中文标签），与公众号那条同一套构造逻辑。
+
+    这四个下拉此前写死在 HTML 里：模板 7 项、配色 3 项、字体 2 项、版式 4 项，
+    连"配色对哪些模板生效"那句话也是手抄的。内核加一套配色或一个模板，头条这边不会跟上，
+    就是本项目反复出现的"选了没反应"。名单与生效范围一律以 graphics 内核为准。
+    """
+    try:
+        ready = [k for k in toutiao_channel.TEMPLATE_WHITELIST
+                 if k in graphics_variants.PALETTE_READY_TPLS]
+        return jsonify({
+            "templates": toutiao_channel.template_choices(),
+            "palettes": [{"key": k, "label": graphics_variants.palette_label(k)}
+                         for k in graphics_variants.PALETTE_KEYS],
+            "fonts": [{"key": k, "label": graphics_variants.font_label(k)}
+                      for k in graphics_variants.FONT_KEYS],
+            "layouts": ([{"key": k, "label": graphics_variants.layout_label(k)}
+                         for k in graphics_variants.LAYOUT_KEYS]
+                        + [{"key": graphics_variants.RANDOM_LAYOUT_KEY, "label": "每次随机（自动换排布）"}]),
+            "palette_ready": ready,
+            "defaults": {"template": "classic", "palette": graphics_variants.DEFAULT_PALETTE_KEY,
+                         "font": graphics_variants.DEFAULT_FONT_KEY,
+                         "layout": graphics_variants.DEFAULT_LAYOUT_KEY},
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/toutiao/list")

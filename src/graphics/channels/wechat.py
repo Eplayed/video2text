@@ -165,24 +165,14 @@ def _render_cards(cards, axes, out_dir, url_prefix, brand=""):
     return images, hero_used
 
 
-# 前端下拉/预览的适用场景说明从模板 hint 里抽，避免再抄一份会过期的清单
-_FIT_RE = re.compile(r"专为「([^」]+)」")
-_STYLE_RE = re.compile(r"——([^，]+)")
-
-
 def template_choices():
     """模板下拉的唯一权威源：白名单 + 中文名 + 一句适用场景（取自模板 hint）。
 
     历史上前端自己抄了一份 4 项白名单，而渠道已是 6 项——选新模板被静默回落成 wechat。
     新增模板只改 TEMPLATE_WHITELIST 与 _TEMPLATES，前端不再需要同步。
+    名单构造逻辑在 `templates.choice_list`，与头条渠道共用。
     """
-    out = []
-    for key in TEMPLATE_WHITELIST:
-        hint = templates._TEMPLATES[key].get("hint") or ""
-        fit = _FIT_RE.search(hint) or _STYLE_RE.search(hint)
-        out.append({"key": key, "label": templates._TEMPLATES[key]["label"],
-                    "fit": fit.group(1) if fit else ""})
-    return out
+    return templates.choice_list(TEMPLATE_WHITELIST)
 
 
 # ── 样式预览：固定样例文案 + 真实四轴渲染（不调 LLM、不进发布包） ──

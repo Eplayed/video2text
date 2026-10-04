@@ -26,6 +26,17 @@ CANVAS_W, CANVAS_H = 1080, 1920
 
 _ASSETS_DIR = OUTPUT_DIR / "_assets"
 
+# 头条弹窗可选的模板（顺序即下拉顺序）。名单以前只写在前端 HTML 里，内核加了模板这里不会自动出现；
+# 现在收进后端一处，前端走 /api/toutiao/templates 拿。
+# 不含 wechat / lilac_list / cream_gold：那三套是公众号竖版（3:4）的身份模板，
+# 头条是 1080x1920 九比十六，版式与卡数都按公众号定的，硬塞进来是给用户一个出坏图的选项。
+TEMPLATE_WHITELIST = ["classic", "magazine", "minimal", "bold", "guide", "tier", "quest"]
+
+
+def template_choices():
+    """头条模板下拉的权威源（与公众号共用 templates.choice_list 的构造逻辑）。"""
+    return templates.choice_list(TEMPLATE_WHITELIST)
+
 # 素材选图随机种子（2026-09-29 素材随机化引入）：
 # 生产为 None —— 每次生成新建随机源，同一素材库多次出图会换封面/换横带；
 # 测试或需要复现某次选图时，把它设成整数即可让选图完全确定（e2e 用它保证字节级断言可复现）。

@@ -227,6 +227,12 @@ textarea{resize:vertical;min-height:84px}
 .status-card.running .s-ic{color:var(--module-3);border-color:var(--module-3)}
 .status-card.done .s-ic{color:var(--module-1);border-color:var(--module-1)}
 .status-card.error .s-ic{color:var(--danger);border-color:var(--danger)}
+/* 已耗时：跑几分钟的任务（思考型模型卡片化实测 3 分半）光看一行不变的"生成中"会被当成卡死 */
+.s-elapsed{display:inline-block;margin-left:6px;padding:1px 7px;border-radius:999px;font-size:10.5px;
+  letter-spacing:0;text-transform:none;font-weight:800;color:var(--text-tertiary);
+  border:1px solid var(--border);background:var(--surface-nested)}
+.status-card.running .s-elapsed{color:var(--module-3);border-color:var(--module-3)}
+.status-card.done .s-elapsed,.status-card.error .s-elapsed{color:var(--text-tertiary);border-color:var(--border)}
 .status-card .s-msg{font-size:13.5px;font-weight:700}
 .status-card .s-err{font-size:12px;color:var(--danger);white-space:pre-wrap;margin-top:5px;max-height:110px;overflow-y:auto;font-family:SFMono-Regular,Consolas,monospace}
 
@@ -775,7 +781,7 @@ textarea{resize:vertical;min-height:84px}
       <div class="status-card card" id="status-box">
         <div class="s-ic" data-icon="activity"></div>
         <div style="flex:1;min-width:0">
-          <div style="font-size:11px;font-weight:800;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.06em;margin-bottom:2px">任务状态</div>
+          <div style="font-size:11px;font-weight:800;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.06em;margin-bottom:2px">任务状态 <span class="s-elapsed" id="status-elapsed"></span></div>
           <div class="s-msg" id="status-msg">等待操作...</div>
           <div class="s-err" id="status-error"></div>
         </div>
@@ -799,19 +805,10 @@ textarea{resize:vertical;min-height:84px}
         </h3>
         <div class="p-sub">订阅的抖音主页/微信公众号，点「同步」自动拉取新内容（抖音 20 条视频+ASR 转写，微信 RSS 文章直接入库）。点作者名可改名，点分类徽章设置分类（新内容自动归类）。<b>分类</b>是固定 11 类、喂选题雷达与渠道策略的权威口径；<b>标签</b>是你的自定义分组，勾选多个订阅后可批量设分类/设标签，筛完直接点「同步当前筛选」。微信订阅需先部署 <a href="https://github.com/cooderl/wewe-rss" target="_blank" style="color:var(--module-2)">WeWe RSS</a> 服务。</div>
         <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
-          <input id="wechat-rss-url" class="page-search" style="flex:1;min-width:200px" placeholder="粘贴 WeWe RSS 订阅地址，如 http://localhost:4000/feed/xxx.xml">
+          <input id="wechat-rss-url" class="page-search" style="flex:1;min-width:200px" placeholder="粘贴 WeWe RSS 订阅地址，形如 http://&lt;你的 WeWe RSS 地址&gt;/feed/xxx.xml">
+          <!-- 分类选项由 /api/categories 的 all_categories 下发（loadCategoryOptions），不在这里写死名单 -->
           <select id="wechat-sub-cat" style="width:auto">
             <option value="">自动分类</option>
-            <option value="前端面试">前端面试</option>
-            <option value="AI技术">AI技术</option>
-            <option value="游戏攻略">游戏攻略</option>
-            <option value="编程开发">编程开发</option>
-            <option value="产品设计">产品设计</option>
-            <option value="数码评测">数码评测</option>
-            <option value="商业财经">商业财经</option>
-            <option value="职场成长">职场成长</option>
-            <option value="生活日常">生活日常</option>
-            <option value="其他">其他</option>
           </select>
           <button class="btn sm" onclick="addWechatSubscription()"><span data-icon="plus" class="ic14"></span>添加微信订阅</button>
         </div>
@@ -889,18 +886,9 @@ textarea{resize:vertical;min-height:84px}
           <option value="wechat">公众号策略</option>
           <option value="xhs">小红书策略</option>
         </select>
+        <!-- 分类选项同样走 /api/categories 下发，不在这里各写一份 -->
         <select id="radar-cat" onchange="loadRadar()">
           <option value="">全部分类</option>
-          <option value="前端面试">前端面试</option>
-          <option value="AI技术">AI技术</option>
-          <option value="游戏攻略">游戏攻略</option>
-          <option value="编程开发">编程开发</option>
-          <option value="产品设计">产品设计</option>
-          <option value="数码评测">数码评测</option>
-          <option value="商业财经">商业财经</option>
-          <option value="职场成长">职场成长</option>
-          <option value="生活日常">生活日常</option>
-          <option value="其他">其他</option>
         </select>
         <select id="radar-game" onchange="loadRadar()" style="display:none"></select>
         <select id="radar-author" onchange="loadRadar()">
@@ -1173,7 +1161,8 @@ textarea{resize:vertical;min-height:84px}
           </div>
         </div>
         <div class="tt-gen-field">
-          <label>配色 / 字体 / 版式 <small>（预设闭集：配色对经典卡片/梯度榜/任务面板/攻略图解生效；字体对全部模板生效；版式对全部模板生效）</small></label>
+          <label>配色 / 字体 / 版式 <small id="tt-axis-scope">（预设闭集：配色对经典卡片/梯度榜/任务面板/攻略图解生效；字体对全部模板生效；版式对全部模板生效）</small></label>
+          <!-- 四个下拉的选项与上面那句生效范围，打开弹窗时由 /api/toutiao/templates 覆盖（HTML 里这份只是接口没回来时的兜底） -->
           <div style="display:flex;gap:10px">
             <select id="tt-gen-palette" style="flex:1">
               <option value="gold_night" selected>鎏金夜蓝（现状默认）</option>
@@ -1539,6 +1528,7 @@ async function init() {
   const savedCookie = localStorage.getItem('v2t_cookie');
   if (savedCookie) document.getElementById('cookie').value = savedCookie;
 
+  loadCategoryOptions();          // 分类名单下发到各下拉（不等它，先让首页渲染）
   await loadTopics();
   switchPage(pageFromHash());          // 带 #videos 这类地址打开时直接落回那一页
   const st = await fetch('/api/status').then(r=>r.json());
@@ -1723,8 +1713,34 @@ async function loadTopics() {
 let _activeCategory = '';
 let _activeGame = '';
 let _activeSource = '';  // ''=全部 / douyin / wechat（素材库来源筛选）
-const CATEGORY_ORDER = ['前端面试', 'AI技术', '游戏攻略', '编程开发', '产品设计', '数码评测', '商业财经', '职场成长', '生活日常', '其他'];
+// 分类名单的唯一权威源是后端 content_store.CATEGORIES（通过 /api/categories 的 all_categories 下发）。
+// 这里只是"接口还没回来时"的兜底顺序；以前它是写死的一份名单，结果订阅下拉少一类、
+// 选题雷达下拉只有 7 类，库里 300 多条「其他/职场成长/生活日常/汽车资讯」根本筛不出来。
+let CATEGORY_ORDER = ['前端面试', 'AI技术', '游戏攻略', '编程开发', '产品设计', '数码评测', '商业财经', '职场成长', '生活日常', '其他'];
 const TYPE_LABELS = {game_guide: '游戏攻略', wechat_material: '公众号素材', toutiao_mix: '头条整合稿', guide_article: '攻略文章（已废弃）', ai_interview: 'AI面试题'};
+
+// 把分类名单灌进所有该用它的下拉（订阅预设分类、选题雷达筛选）。
+// 保留用户当前选中项：名单变长不该把人正在用的值清掉。
+function fillCategorySelect(id, firstLabel) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const cur = el.value;
+  let html = '<option value="">' + esc(firstLabel) + '</option>';
+  CATEGORY_ORDER.forEach(c => { html += `<option value="${escAttr(c)}">${esc(c)}</option>`; });
+  el.innerHTML = html;
+  if (cur && CATEGORY_ORDER.indexOf(cur) >= 0) el.value = cur;
+}
+
+async function loadCategoryOptions() {
+  let d;
+  try { d = await fetch('/api/categories').then(r => r.json()); }
+  catch (e) { warn('分类名单拉取失败（下拉沿用页面内置的默认名单）', e); return; }
+  const list = (d.all_categories || []).filter(Boolean);
+  if (!list.length) return;
+  CATEGORY_ORDER = list;
+  fillCategorySelect('wechat-sub-cat', '自动分类');
+  fillCategorySelect('radar-cat', '全部分类');
+}
 
 // 素材库一次塞 1000+ 张卡片进 DOM 要 0.9 秒、三万个节点，每敲一个搜索字符都重来一遍。
 // 改成按页取、点「加载更多」追加；筛选与分页互不干扰（分页在过滤+排序之后）。
@@ -1753,13 +1769,12 @@ async function fetchVideos(page, append) {
   params.set('page', page);
   params.set('page_size', VID_PAGE);
   try {
-    const [data, cats] = await Promise.all([
-      fetch('/api/videos?' + params).then(r=>r.json()),
-      fetch('/api/categories').then(r=>r.json()).catch(()=>({categories:[], games:[]})),
-    ]);
+    // 分类/游戏药丸的计数直接取这份列表自己的口径（/api/videos 在筛选前算好一起回），
+    // 不再另问 /api/categories——那个数按整张表统计，含还没做转写的行，点进去永远对不上
+    const data = await fetch('/api/videos?' + params).then(r=>r.json());
     renderSourcePills(data.sources || null);
-    renderCategoryPills(cats.categories || []);
-    renderGamePills(cats.games || []);
+    renderCategoryPills(data.categories || []);
+    renderGamePills(data.games || []);
     renderVideos(data.videos || [], append);
     _vidPage = page;
     document.getElementById('count-videos').textContent = (data.total||0) + ' 条';
@@ -1986,8 +2001,15 @@ async function loadAutoSync() {
   renderAutoSync(d);
 }
 
+// 频率档位以接口下发的 intervals 为准（后端 sync_tasks.INTERVALS 是唯一权威源）；
+// 接口没回来前用页面里这份兜底，两处都只当"还没拿到"时的临时值，不当名单。
+const _AS_FREQ_FALLBACK = [1, 2, 3, 7];
+function asFreqKeys() {
+  const list = (_asData && _asData.intervals) || [];
+  return list.length ? list : _AS_FREQ_FALLBACK;
+}
 function asFreqOptions(n) {
-  return [1,2,3,7].map(v => `<option value="${v}"${v===n?' selected':''}>${asFreqLabel(v)}</option>`).join('');
+  return asFreqKeys().map(v => `<option value="${v}"${v===n?' selected':''}>${asFreqLabel(v)}</option>`).join('');
 }
 function asFreqLabel(n) { return n === 1 ? '每天' : (n === 7 ? '每周' : '每 ' + n + ' 天'); }
 
@@ -2027,6 +2049,12 @@ function asTaskHtml(t) {
 function renderAutoSync(d) {
   const en = document.getElementById('as-enabled');
   if (en) en.checked = !!d.enabled;
+  const iv = document.getElementById('as-interval');
+  if (iv && (d.intervals || []).length) {
+    const cur = parseInt(iv.value, 10) || 1;
+    iv.innerHTML = d.intervals.map(v => `<option value="${v}">${esc(asFreqLabel(v))}</option>`).join('');
+    iv.value = d.intervals.indexOf(cur) >= 0 ? cur : d.intervals[0];
+  }
   const ra = document.getElementById('as-runat');
   if (ra && document.activeElement !== ra) ra.value = d.run_at || '09:30';
   const tasks = d.tasks || [];
@@ -2330,6 +2358,42 @@ async function revealToutiaoFolder() {
 }
 
 let _ttGenTargetId = null;
+// 头条弹窗的模板与三轴名单走 /api/toutiao/templates 下发（权威源＝graphics 内核，与公众号同一构造）。
+// 这四个下拉和"配色对哪些模板生效"那句话此前写死在 HTML 里：内核加一套配色或一个模板，
+// 头条这边不会跟上，正是本项目反复出现的"选了没反应"。
+let _ttAxisLoaded = false;
+
+async function loadTtAxisOptions() {
+  if (_ttAxisLoaded) return;
+  let d;
+  try { d = await fetch('/api/toutiao/templates').then(r => r.json()); }
+  catch (e) { warn('头条模板/三轴名单加载失败（下拉沿用页面内置选项）', e); return; }
+  if (!d || !d.templates || !d.templates.length) { warn('头条模板名单为空', d && d.error); return; }
+  _ttAxisLoaded = true;
+  const fill = (id, items, defKey) => {
+    const sel = document.getElementById(id);
+    if (!sel || !items || !items.length) return;
+    const cur = sel.value;
+    sel.innerHTML = items.map(o => `<option value="${escAttr(o.key)}"${o.key === defKey ? ' selected' : ''}>${esc(o.label)}${o.fit ? ' · ' + esc(o.fit) : ''}</option>`).join('');
+    if (cur && [...sel.options].some(x => x.value === cur)) sel.value = cur;
+  };
+  const def = d.defaults || {};
+  fill('tt-gen-tpl', d.templates, def.template);
+  fill('tt-gen-palette', d.palettes, def.palette);
+  fill('tt-gen-font', d.fonts, def.font);
+  fill('tt-gen-layout', d.layouts, def.layout);
+  const el = document.getElementById('tt-axis-scope');
+  if (el) {
+    const byKey = {};
+    d.templates.forEach(t => { byKey[t.key] = t.label; });
+    const ready = (d.palette_ready || []).map(k => byKey[k] || k);
+    el.textContent = ready.length
+      ? '（配色对 ' + ready.join(' / ') + ' 生效；字体、版式对全部模板生效）'
+      : '（配色轴对当前这些模板都还没接通，选了不会变；字体、版式对全部模板生效）';
+  }
+  updateTplPreview();
+}
+
 function openToutiaoGenDialog(id) {
   _ttGenTargetId = id;
   document.getElementById('tt-gen-id').textContent = id;
@@ -2344,6 +2408,7 @@ function openToutiaoGenDialog(id) {
   document.getElementById('tt-gen-skin-custom').value = '';
   _ttGuideFiles = [];
   _ttGuideRender();
+  loadTtAxisOptions();
   updateTplPreview();
   document.getElementById('tt-gen-overlay').classList.add('show');
 }
@@ -3094,6 +3159,7 @@ async function posterGenerate(force) {
 }
 function pollPoster(stage, task) {
   const myId = _pkId;
+  const t0 = Date.now();          // 弹窗里没有状态卡那一格，进度条自己报"已经等多久"
   const box = document.getElementById('pk-result');
   box.innerHTML = '<div class="pk-verify mild">⏳ 任务已提交，等待中…</div>';
   const poll = async () => {
@@ -3111,7 +3177,7 @@ function pollPoster(stage, task) {
       return;
     }
     if (st.running) {
-      box.innerHTML = `<div class="pk-verify mild">⏳ ${esc(st.progress || '处理中...')}</div>`
+      box.innerHTML = `<div class="pk-verify mild">⏳ ${esc(st.progress || '处理中...')} · ${esc(_elapsedText(Date.now() - t0))}</div>`
         + '<div class="pk-hint" style="margin:8px 0 0">任务在后台跑，关掉这一页也不会中断；'
         + (stage === 'poster' ? '出图约 20-60 秒（复用模板底图 10 秒内）' : '拆解约 10-30 秒') + '。</div>';
       setTimeout(poll, 2000); return;
@@ -4513,6 +4579,23 @@ function startPolling() {
 }
 
 // ── 状态显示 ──
+// ── 已等待计时 ──
+// 后端状态里没有任务开始时刻，所以这里量的是"这一页从看到它在跑算起等了多久"，
+// 措辞用「已等」不用「已用」，刷新页面会重新起算——但足以回答"是不是卡死了"。
+let _runSince = 0, _runEnded = false, _runTimer = null;
+
+function _elapsedText(ms) {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  return s < 60 ? ('已等 ' + s + ' 秒') : ('已等 ' + Math.floor(s / 60) + ' 分 ' + (s % 60) + ' 秒');
+}
+
+function _tickElapsed() {
+  const el = document.getElementById('status-elapsed');
+  if (!el) return;
+  if (!_runSince) { el.textContent = ''; return; }
+  el.textContent = _elapsedText(Date.now() - _runSince);
+}
+
 function setStatus(type, msg, err) {
   const box = document.getElementById('status-box');
   box.className = 'status-card card';
@@ -4521,6 +4604,14 @@ function setStatus(type, msg, err) {
   else if (type === 'error') box.classList.add('error');
   document.getElementById('status-msg').textContent = msg || '';
   document.getElementById('status-error').textContent = err || '';
+  if (type === 'running') {
+    if (!_runSince || _runEnded) { _runSince = Date.now(); _runEnded = false; }
+    if (!_runTimer) _runTimer = setInterval(_tickElapsed, 1000);
+  } else if (_runSince && !_runEnded) {
+    _runEnded = true;                       // 停在最后一次读数，让"这轮等了多久"看得见
+    if (_runTimer) { clearInterval(_runTimer); _runTimer = null; }
+  }
+  _tickElapsed();
 }
 
 // ── 批量采集 ──
@@ -4857,11 +4948,30 @@ let _subPollTimer = null;
 async function loadSubscriptions() {
   try {
     const data = await fetch('/api/subscriptions').then(r=>r.json());
-    renderSubscriptions(data.items || []);
+    const items = data.items || [];
+    renderSubscriptions(items);
+    rssHintFromSubs(items);
     // 同步进行中则持续轮询
     const st = await fetch('/api/subscriptions/sync/status').then(r=>r.json());
     if (st.running) startSubPolling(); else showSubStatus(st);
   } catch(e) { warn('订阅列表加载失败（列表会停在旧内容）', e); }
+}
+
+// 微信订阅地址的示例提示跟着"你实际在用的那个地址"走。
+// 以前这里写死 http://localhost:4000，而服务实际部署在 8001，照着提示填就填错——
+// 同一个端口在界面上抄第二份就一定会过期，所以从已有订阅里取，取不到才用不带端口的说法。
+function rssHintFromSubs(items) {
+  const el = document.getElementById('wechat-rss-url');
+  if (!el) return;
+  let base = '';
+  (items || []).forEach(s => {
+    if (base || (s.platform || '') !== 'wechat') return;
+    const m = String(s.user_url || '').match(/^(https?:\/\/[^/]+)/);
+    if (m) base = m[1];
+  });
+  el.placeholder = base
+    ? '粘贴 WeWe RSS 订阅地址，如 ' + base + '/feed/xxx.xml'
+    : '粘贴 WeWe RSS 订阅地址，形如 http://<你的 WeWe RSS 地址>/feed/xxx.xml';
 }
 
 // ── 订阅列表：来源/分类/标签三维筛选 + 勾选批量操作 ──

@@ -209,7 +209,8 @@ def sync_wechat_feed(
     """Fetch a WeWe RSS feed, return new articles not yet in DB.
 
     Args:
-        feed_url: RSS feed URL (e.g. http://localhost:4000/feed/xxx.xml)
+        feed_url: RSS feed URL, as configured per subscription
+            (e.g. http://<wewe-rss-host>/feed/MP_WXS_123.xml)
         existing_links: set of article URLs already in DB (for dedup)
         timeout: HTTP timeout
 

@@ -1614,3 +1614,31 @@ _TEMPLATES = {
                       "列表卡 items 为步骤（name=步骤或地点名，tag=坐标或类型标签，desc=一句话动作说明），"
                       "note 写操作链（用 → 连接，如「跳马车 → 点信箱 → 拿睡袋」）。"},
 }
+
+# 模板下拉的唯一构造处：头条与公众号两个渠道都走这里，前端不再各自抄一份名单。
+# 历史上前端抄的那份停在 4 项而渠道已扩到 6 项，选新模板被静默回落——见 CHANGELOG 2026-09-30。
+_FIT_RE = re.compile(r"专为「([^」]+)」")
+_STYLE_RE = re.compile(r"——([^，]+)")
+
+
+def choice_list(keys):
+    """按给定 key 顺序返回 [{key, label, fit}]：中文名 + 一句适用场景（从模板 hint 里取）。
+
+    hint 里那句场景说明后面常常还接着写稿纪律（「攻略图解」那条 95 字），
+    下拉里只要场景那一小句，所以到第一个「：」或「。」就收——给用户一个读得完的选项。
+    """
+    out = []
+    for key in keys:
+        t = _TEMPLATES.get(key)
+        if not t:                                  # 名单写错时宁可少一项，也不抛出去打断接口
+            continue
+        hint = t.get("hint") or ""
+        fit = _FIT_RE.search(hint) or _STYLE_RE.search(hint)
+        phrase = fit.group(1) if fit else ""
+        cut = len(phrase)
+        for ch in ("：", "。", ":"):
+            i = phrase.find(ch)
+            if 0 < i < cut:
+                cut = i
+        out.append({"key": key, "label": t["label"], "fit": phrase[:cut].strip()})
+    return out
