@@ -23,7 +23,8 @@ bash .qoder/skills/graphics-verify/scripts/run_graphics_checks.sh
 
 第四条 `scripts/e2e_poster_layouts.py` 是海报排版层（布局轴 + 多页）的回归：十种构图的版面指纹、默认路径零变化、卡片数越界提示、布局回落、页数归一、门禁页化、页码角标、三页成组落盘（真图模式 0 元）、采纳率算式。它往 `output/poster/99996` 写产物并自行清理，全程不调付费接口。
 
-第五条 `scripts/e2e_sync_tasks.py` 是自动同步调度：改「每天执行时刻」或改「频率」是否立刻重算下次、实际跑完时间不影响下次、开跑前占账后同一分钟不再到期、界面旧快照保存不会冲掉调度刚记的账、删任务/加成员/清已删订阅、坏 JSON 回退不抛错、老格式迁移两次读 key 一致。它只用临时文件，不碰 `config/sync_tasks.json` 也不碰上游。
+第五条 `scripts/e2e_sync_tasks.py` 是自动同步调度：时刻是否按任务各存一份（改一条不挪动别条、
+全局那格只是新任务默认值、老配置缺那格读一次补齐并回写），改「执行时刻」或改「频率」是否立刻重算下次、实际跑完时间不影响下次、开跑前占账后同一分钟不再到期、界面旧快照保存不会冲掉调度刚记的账、删任务/加成员/清已删订阅、坏 JSON 回退不抛错、老格式迁移两次读 key 一致。它只用临时文件，不碰 `config/sync_tasks.json` 也不碰上游。
 
 两条图文 e2e 会往 `output/toutiao/99999`、`output/wechat/99998` 写产物并自行清理；脚本内部用 `env -u PYTHONHOME -u PYTHONPATH /usr/local/bin/python3`，别用别的解释器。改了 `main.py`/`content_store` 的取稿逻辑也要跑（e2e 依赖整合稿结构）。
 

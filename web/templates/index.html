@@ -166,6 +166,9 @@ textarea{resize:vertical;min-height:84px}
 .as-task .as-name:hover{color:var(--module-5);text-decoration:underline}
 .as-task .as-c{flex:0 0 auto;color:var(--text-secondary)}
 .as-task select.as-c{width:auto;padding:4px 6px;font-size:12px}
+/* 列表里每条任务自带的时刻：label 横排，跟旁边的频率下拉一样高，别把行撑开 */
+.as-task label.as-time{display:flex;align-items:center;gap:5px;font-size:12px;font-weight:400;color:var(--text-secondary)}
+.as-task label.as-time input{width:auto;padding:4px 6px;font-size:12px;font-weight:400}
 .as-task .as-c b{color:var(--text)}
 .as-toggle{cursor:pointer;font-weight:700}
 .as-toggle:hover{color:var(--module-5)}
@@ -845,9 +848,9 @@ textarea{resize:vertical;min-height:84px}
           <label class="as-sw"><input type="checkbox" id="as-enabled" onchange="asSetEnabled(this.checked)">开总开关</label>
           <button class="btn ghost sm" onclick="asRun(true)">全部跑一遍</button>
         </h3>
-        <div class="p-sub">一个任务＝一组订阅＋一个频率：勾一批号点「选择订阅」建一个任务，到点整组一起跑。<b>「每天执行时刻」与每个任务的「频率」是下一次的两半</b>：下次 = 上次那天 + 频率 的那天的这个时刻，改完立刻重算，实际几点跑完、跑多久都不影响它（设 08:30 就一直是 08:30，不会因为哪天手动晚跑了就跟着往后漂）。列表里「该跑了」不是出错，是这条已经到设定时间、等开总开关或等下一分钟触发。定时器跑在工作台进程里：<b>工作台没开的那段时间不会跑</b>，下次打开若已过点会补一轮。抖音那条会起浏览器抓主页并做本地转写，跑起来电脑会占一会儿 CPU；微信那条只是拉一次 RSS，很轻。</div>
+        <div class="p-sub">一个任务＝一组订阅＋<b>这一条自己的执行时刻</b>＋一个频率：勾一批号点「选择订阅」建一个任务，到点整组一起跑。<b>下次 = 上次那天 + 频率 的那天的「这一条的时刻」</b>，改完立刻重算，实际几点跑完、跑多久都不影响它（设 08:30 就一直是 08:30，不会因为哪天手动晚跑了就跟着往后漂）。<b>时刻按任务各存一份</b>：三条任务可以 09:30 / 10:00 / 08:00 各跑各的，改其中一条不动另外两条；顶上那格只是<b>下一条新任务的默认时刻</b>，改它不会把已有任务一起挪走。列表里「该跑了」不是出错，是这条已经到设定时间、等开总开关或等下一分钟触发。定时器跑在工作台进程里：<b>工作台没开的那段时间不会跑</b>，下次打开若已过点会补一轮。抖音那条会起浏览器抓主页并做本地转写，跑起来电脑会占一会儿 CPU；微信那条只是拉一次 RSS，很轻。</div>
         <div class="as-bar">
-          <label>每天执行时刻<input type="time" id="as-runat" value="09:30" onchange="asSetRunAt(this.value)"></label>
+          <label title="只决定下一条新建任务的时刻，已有任务的时刻在列表里各自改">新任务默认时刻<input type="time" id="as-runat" value="09:30" onchange="asSetRunAt(this.value)"></label>
           <label>添加订阅<button type="button" class="btn ghost as-pick-btn" id="as-cand-btn" onclick="asOpenPicker()">选择订阅 ▾</button></label>
           <label>频率<select id="as-interval"><option value="1">每天</option><option value="2">每 2 天</option><option value="3">每 3 天</option><option value="7">每周</option></select></label>
           <button class="btn sm" onclick="asAdd()">加入自动任务</button>
@@ -2009,6 +2012,7 @@ function asTaskHtml(t) {
       <b class="as-name" title="点一下改名" onclick="asRename('${escAttr(t.key)}')">${esc(t.name)}</b>
       <span class="as-c as-toggle" title="${escAttr(names)}" onclick="asToggleMembers('${escAttr(t.key)}')">
         ${t.count} 个订阅 ${open ? '▾' : '▸'}</span>
+      <label class="as-c as-time" title="这条任务几点跑（只改这一条，别的任务不动）">时刻<input type="time" value="${escAttr(t.run_at || '')}" onchange="asSetTaskRunAt('${escAttr(t.key)}', this.value)"></label>
       <select class="as-c" title="改这个任务的频率" onchange="asSetInterval('${escAttr(t.key)}', this.value)">${asFreqOptions(t.interval_days)}</select>
       <span class="as-c">上次 ${esc((t.last_run || '—').slice(5, 16))} ${st}</span>
       <span class="as-c">下次 <b>${esc((t.next_due || '—').slice(5, 16))}</b>${t.due_now ? ' <em class="as-due">该跑了</em>' : ''}</span>
@@ -2161,16 +2165,20 @@ async function asAdd() {
   const ids = [..._asPicked];
   if (!ids.length) { setStatus('error', '先勾选至少一条订阅'); return; }
   const days = parseInt(document.getElementById('as-interval').value, 10) || 1;
+  // 新任务的时刻按当下这一格存进它自己那份：之后改全局默认或别的任务都不该挪走它
+  const at = (document.getElementById('as-runat') || {}).value || '';
   let r;
   if (_asTarget) {
     r = await asPost('/api/sync/tasks/' + encodeURIComponent(_asTarget) + '/add', {sub_ids: ids});
   } else {
-    r = await asPost('/api/sync/tasks', {sub_ids: ids, interval_days: days, name: asAutoName(ids)});
+    r = await asPost('/api/sync/tasks', {sub_ids: ids, interval_days: days,
+                                         name: asAutoName(ids), run_at: at});
   }
   if (!r) return;
   const tail = r.missing ? '，' + r.missing.length + ' 条订阅已不存在被跳过' : '';
   setStatus('done', _asTarget ? ('已加进这个任务，现在共 ' + r.count + ' 个订阅' + tail)
     : ('已建好任务「' + r.name + '」，' + r.count + ' 个订阅 · ' + asFreqLabel(days)
+       + (at ? ' · ' + at : '')
        + '（已过执行时刻的话一分钟内就会跑第一轮）' + tail));
   asClosePicker();
   loadSubscriptions();
@@ -2190,6 +2198,17 @@ async function asSetInterval(key, v) {
     loadAutoSync();
     setStatus('done', '频率已改成' + asFreqLabel(parseInt(v, 10) || 1));
   }
+}
+
+// 时刻是每条任务自己的：改这一条不会挪动别的任务（原来全局只有一格，动一下三条一起走）
+async function asSetTaskRunAt(key, v) {
+  if (!v) { loadAutoSync(); setStatus('error', '执行时刻要选一个时间点'); return; }
+  const r = await asPost('/api/sync/tasks/' + encodeURIComponent(key), {run_at: v});
+  if (!r) return;
+  const t = ((_asData && _asData.tasks) || []).find(x => x.key === key);
+  loadAutoSync();
+  setStatus('done', '「' + ((t && t.name) || '这个任务') + '」的时刻已设为 ' + v
+    + (r.next_due ? '，下次 ' + r.next_due : ''));
 }
 
 async function asDelTask(key) {
@@ -2217,7 +2236,9 @@ async function asSetEnabled(on) {
 }
 
 async function asSetRunAt(v) {
-  if (await asPost('/api/sync/tasks/settings', {run_at: v})) setStatus('done', '执行时刻已设为 ' + v);
+  if (await asPost('/api/sync/tasks/settings', {run_at: v})) {
+    setStatus('done', '新建任务默认用 ' + v + '（已有任务的时刻在列表里各自改，不会被这格带走）');
+  }
   loadAutoSync();
 }
 

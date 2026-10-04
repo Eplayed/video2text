@@ -3089,6 +3089,7 @@ def _task_view(cfg, subs, now):
         nxt = sync_tasks.next_due(t, run_at, now)
         tasks.append({"key": t["key"], "name": t.get("name") or "",
                       "interval_days": t.get("interval_days") or 1,
+                      "run_at": sync_tasks.task_run_at(t, run_at),
                       "members": members, "count": len(members),
                       "platforms": sorted({m["platform"] for m in members}),
                       "last_run": t.get("last_run") or "",
@@ -3165,7 +3166,8 @@ def api_sync_tasks_new():
         return jsonify({"error": "先勾选至少一条订阅"}), 400
     cfg = sync_tasks.load()
     t = sync_tasks.new_task(cfg, ids, data.get("interval_days") or 1,
-                            str(data.get("name") or ""))
+                            str(data.get("name") or ""),
+                            run_at=str(data.get("run_at") or ""))
     if not t:
         return jsonify({"error": "任务数已到 %d 个上限" % sync_tasks.MAX_TASKS}), 400
     _save_tasks(cfg)
@@ -3177,7 +3179,7 @@ def api_sync_tasks_new():
 
 @app.route("/api/sync/tasks/<key>", methods=["POST"])
 def api_sync_tasks_update(key):
-    """改任务：改名 / 改频率 / 整体替换成员。"""
+    """改任务：改名 / 改频率 / 改这一条的执行时刻 / 整体替换成员。"""
     data = request.get_json(force=True, silent=True) or {}
     cfg = sync_tasks.load()
     t = sync_tasks.get_task(cfg, key)
@@ -3189,10 +3191,20 @@ def api_sync_tasks_update(key):
         sub_ids, missing = _valid_ids(data.get("sub_ids"))
         if not sub_ids:
             return jsonify({"error": "成员不能全空，要整个删掉请点任务的 ✕"}), 400
+    run_at = None
+    if data.get("run_at"):
+        run_at = sync_tasks._norm_time(data.get("run_at"))
+        if not run_at:
+            return jsonify({"error": "执行时刻要写成 HH:MM"}), 400
     sync_tasks.update_task(cfg, key, name=data.get("name"),
-                           interval_days=data.get("interval_days"), sub_ids=sub_ids)
+                           interval_days=data.get("interval_days"), sub_ids=sub_ids,
+                           run_at=run_at)
     _save_tasks(cfg)
-    out = {"success": True, "key": key}
+    cur = sync_tasks.get_task(cfg, key) or {}
+    nxt = sync_tasks.next_due(cur, cfg.get("run_at") or "", datetime.now()) if cur else None
+    out = {"success": True, "key": key,
+           "run_at": sync_tasks.task_run_at(cur, cfg.get("run_at") or ""),
+           "next_due": nxt.strftime("%Y-%m-%d %H:%M") if nxt else ""}
     if missing:
         out["missing"] = missing
     return jsonify(out)
@@ -3238,6 +3250,11 @@ def api_sync_tasks_del_member(key, sub_id):
 
 @app.route("/api/sync/tasks/settings", methods=["POST"])
 def api_sync_tasks_settings():
+    """总开关 + 新建任务的默认执行时刻。
+
+    这里改时刻**不会**动已有任务：每条任务的时刻存在任务自己身上（`task["run_at"]`），
+    全局这格只是下一条新任务的起点。原来它就是唯一的真相源，改一次三条任务的"下次"一起挪。
+    """
     data = request.get_json(force=True, silent=True) or {}
     cfg = sync_tasks.load()
     if "enabled" in data:

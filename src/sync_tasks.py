@@ -4,9 +4,10 @@
 为什么要有这一层：订阅同步以前只能人过去点，一天不点就一天没新料；而"什么时候该跑"
 这件事完全是本地偏好，不该塞进 subscriptions 表（那张表是采集到的实体，删订阅就该没）。
 
-一个任务 = 一组订阅 + 一个频率 + 一份执行账。用户勾一批号建的是"一个活儿"，
+一个任务 = 一组订阅 + 一个频率 + 一个执行时刻 + 一份执行账。用户勾 6 个号建的是"一个活儿"，
 不是 N 个任务；调度也确实是并成一批跑（抖音多条只起一次 Chromium），
 所以账本按任务记才对得上界面。
+时刻也按任务记：全局那格只是"新建任务的默认时刻"，改它不该把已有三条一起挪走。
 
 任务里只存"该不该跑、上次几点跑的、跑成没跑成"，不存"跑出来几条"：
 每条订阅的上次同步时间与新增条数本来就写在 subscriptions 表里
@@ -61,7 +62,7 @@ def _default_name(sub_ids: List[int]) -> str:
     return "%d 个订阅" % len(sub_ids)
 
 
-def _norm_task(t: Dict) -> Optional[Dict]:
+def _norm_task(t: Dict, run_at_fallback: str = "") -> Optional[Dict]:
     if not isinstance(t, dict):
         return None
     subs = _clean_ids(t.get("sub_ids"))
@@ -72,12 +73,14 @@ def _norm_task(t: Dict) -> Optional[Dict]:
             "name": name or _default_name(subs),
             "sub_ids": subs,
             "interval_days": _norm_interval(t.get("interval_days")),
+            # 时刻是任务自己的：老数据没有这一格，读的时候按当时那份全局时刻补上（load 里回写一次）
+            "run_at": _norm_time(t.get("run_at")) or _norm_time(run_at_fallback) or DEFAULT_RUN_AT,
             "last_run": t.get("last_run") or "",
             "last_status": t.get("last_status") or "",
             "last_note": t.get("last_note") or ""}
 
 
-def _migrate(raw: List) -> List[Dict]:
+def _migrate(raw: List, run_at_fallback: str = "") -> List[Dict]:
     """老格式（一条订阅一个任务，只有 sub_id）并成"同一频率一个任务"。
 
     不迁移的话，用户按老界面勾出来的 6 个号会在界面上摊成 6 行，跟"这是一个任务"的
@@ -89,7 +92,7 @@ def _migrate(raw: List) -> List[Dict]:
         if not isinstance(t, dict):
             continue
         if t.get("sub_ids"):
-            n = _norm_task(t)
+            n = _norm_task(t, run_at_fallback)
             if n:
                 out.append(n)
         elif t.get("sub_id"):
@@ -110,7 +113,9 @@ def _migrate(raw: List) -> List[Dict]:
     for iv in sorted(by_iv):
         g = by_iv[iv]
         out.append({"key": _new_key(), "name": _default_name(g["subs"]), "sub_ids": g["subs"],
-                    "interval_days": iv, "last_run": g["last_run"],
+                    "interval_days": iv,
+                    "run_at": _norm_time(run_at_fallback) or DEFAULT_RUN_AT,
+                    "last_run": g["last_run"],
                     "last_status": g["last_status"], "last_note": g["last_note"]})
     return out
 
@@ -118,8 +123,9 @@ def _migrate(raw: List) -> List[Dict]:
 def load() -> Dict:
     """读配置。文件坏了一律回退成"没有任务"，绝不让同步链路挂在这里。
 
-    老格式在这里就地迁移并回写一次：任务 key 是随机生成的，不回写的话每次读都换 key，
-    界面就改不动、删不掉。
+    两种就地迁移都在这里回写一次：① 老格式（任务 key 是随机生成的，不回写的话每次读都
+    换 key，界面就改不动、删不掉）；② 时刻从全局一份搬进每个任务（不回写的话每次读都
+    重新拿当前全局时刻去补，用户刚给某条任务单独设的时间会被全局那格盖掉）。
     """
     if not STORE_PATH.exists():
         return _blank()
@@ -131,21 +137,26 @@ def load() -> Dict:
         return _blank()
     raw = data.get("tasks") or []
     legacy = any(isinstance(t, dict) and not t.get("sub_ids") and t.get("sub_id") for t in raw)
+    need_time = any(isinstance(t, dict) and t.get("sub_ids") and not _norm_time(t.get("run_at"))
+                    for t in raw)
     cfg = _blank()
     cfg.update(data)
     cfg["enabled"] = bool(cfg.get("enabled"))
     cfg["run_at"] = _norm_time(cfg.get("run_at")) or DEFAULT_RUN_AT
-    if legacy:
-        cfg["tasks"] = _migrate(raw)
+    if legacy or need_time:
+        cfg["tasks"] = _migrate(raw, cfg["run_at"])
         save(cfg)
     else:
-        cfg["tasks"] = [t for t in (_norm_task(x) for x in raw) if t]
+        cfg["tasks"] = [t for t in (_norm_task(x, cfg["run_at"]) for x in raw) if t]
     return cfg
 
 
 def save(cfg: Dict) -> Dict:
     cfg = dict(cfg)
     cfg["run_at"] = _norm_time(cfg.get("run_at")) or DEFAULT_RUN_AT
+    # 落盘前把每个任务规整一遍：少了一格 run_at 的任务下次读会被全局时刻补上，
+    # 等于用户单独设的时间被顶掉，所以宁可在这里就写全
+    cfg["tasks"] = [t for t in (_norm_task(x, cfg["run_at"]) for x in (cfg.get("tasks") or [])) if t]
     cfg["updated_at"] = datetime.now().strftime(TIME_FMT)
     STORE_PATH.parent.mkdir(parents=True, exist_ok=True)
     # 先写临时文件再改名：直接 write_text 若正好被中断，会留下半截 JSON，
@@ -199,6 +210,10 @@ def save_intent(intent: Dict, alive=None) -> Dict:
             for f in LEDGER_TASK:
                 # 账本字段只认磁盘上那份，意图里带了也不看
                 t[f] = (old or {}).get(f, "") if old else t.get(f, "")
+            if old and not _norm_time(t.get("run_at")):
+                # 意图里没带时刻（老前端或只改名的请求）就沿用磁盘上那条自己设的，
+                # 别让它掉回全局那一格——那正是"改一条、三条一起挪"的病根
+                t["run_at"] = old.get("run_at") or ""
             tasks.append(t)
         cfg["tasks"] = tasks
         if alive is not None:
@@ -262,8 +277,12 @@ def get_task(cfg: Dict, key: str) -> Optional[Dict]:
     return None
 
 
-def new_task(cfg: Dict, sub_ids, interval_days: int = 1, name: str = "") -> Optional[Dict]:
-    """新建任务（一组订阅一个任务）。任务数满了或没有效订阅返回 None。"""
+def new_task(cfg: Dict, sub_ids, interval_days: int = 1, name: str = "",
+             run_at: str = "") -> Optional[Dict]:
+    """新建任务（一组订阅一个任务）。任务数满了或没有效订阅返回 None。
+
+    时刻不单独给就用全局那格当这条的初始值——存成任务自己的，之后改全局不会再动它。
+    """
     if len(cfg.get("tasks") or []) >= MAX_TASKS:
         return None
     subs = _clean_ids(sub_ids)
@@ -271,12 +290,14 @@ def new_task(cfg: Dict, sub_ids, interval_days: int = 1, name: str = "") -> Opti
         return None
     t = {"key": _new_key(), "name": str(name or "").strip()[:NAME_MAX] or _default_name(subs),
          "sub_ids": subs, "interval_days": _norm_interval(interval_days),
+         "run_at": task_run_at({"run_at": run_at}, cfg.get("run_at") or ""),
          "last_run": "", "last_status": "", "last_note": ""}
     cfg["tasks"].append(t)
     return t
 
 
-def update_task(cfg: Dict, key: str, name=None, interval_days=None, sub_ids=None) -> Optional[Dict]:
+def update_task(cfg: Dict, key: str, name=None, interval_days=None, sub_ids=None,
+                run_at=None) -> Optional[Dict]:
     t = get_task(cfg, key)
     if not t:
         return None
@@ -284,6 +305,10 @@ def update_task(cfg: Dict, key: str, name=None, interval_days=None, sub_ids=None
         t["name"] = str(name).strip()[:NAME_MAX] or t["name"]
     if interval_days is not None:
         t["interval_days"] = _norm_interval(interval_days)
+    if run_at is not None:
+        n = _norm_time(run_at)
+        if n:
+            t["run_at"] = n    # 不合法就当没收到这格，界面按原值回显（路由已先挡过一道）
     if sub_ids is not None:
         subs = _clean_ids(sub_ids)
         # 成员被清空时不动任务本身：删除任务是另一个动作，别让用户以为改频率删了任务
@@ -339,19 +364,28 @@ def drop_subs(cfg: Dict, sub_ids) -> Dict:
     return cfg
 
 
+def task_run_at(task: Dict, run_at: str = "") -> str:
+    """这条任务用哪个时刻：任务自己那格优先，没填才退回全局那格（全局只是新建任务的默认值）。"""
+    return (_norm_time((task or {}).get("run_at"))
+            or _norm_time(run_at) or DEFAULT_RUN_AT)
+
+
 def next_due(task: Dict, run_at: str, now: datetime) -> Optional[datetime]:
-    """下一次该跑的时间点 = **上次跑的那天 + 间隔**那一天的设定时刻。
+    """下一次该跑的时间点 = **上次跑的那天 + 间隔**那一天的这个任务的执行时刻。
 
     原来写成 `max(上次时间 + 间隔, 当天时刻)`，等于"上次几点、下次就几点"：
-    16:39 手动跑过一次，往后每天都变 16:39，用户设的 08:30 永远追不回来
-    （用户报的"没按每天执行时刻执行"就是这个）。改成只认 run_at 之后，
+    16:39 手动跑过一次，往后每天都变 16:39，用户设的时刻永远追不回来
+    （用户报的"没按每天执行时刻执行"就是这个）。改成只认设定时刻之后，
     实际几点跑完、跑多久都不影响下一次。
+
+    时刻取任务自己那格（`task_run_at`）：全局只有一份时，改一处三条任务的下次一起挪，
+    而用户要的正是"微信 9:30、魔兽世界 10:00、AI 每 2 天 08:00"这样各跑各的。
 
     从没跑过的任务算"今天这个点"，哪怕现在已过点：刚建好任务，用户希望
     一分钟内就看到它跑一轮（这也是验证配置对不对最快的办法），而不是等到明天。
     """
     last = _parse(task.get("last_run") or "")
-    hh, mm = [int(x) for x in (_norm_time(run_at) or DEFAULT_RUN_AT).split(":")]
+    hh, mm = [int(x) for x in task_run_at(task, run_at).split(":")]
     if not last:
         return now.replace(hour=hh, minute=mm, second=0, microsecond=0)
     day = last.date() + timedelta(days=int(task.get("interval_days") or 1))

@@ -32,7 +32,7 @@ run_one "三轴 token 静态检查" "$ROOT/scripts/check_variant_tokens.py"
 run_one "头条 e2e（A-R）" "$ROOT/scripts/e2e_toutiao_variants.py"
 run_one "公众号 e2e（W1-W14）" "$ROOT/scripts/e2e_wechat_variants.py"
 run_one "海报布局与多页 e2e（A-I）" "$ROOT/scripts/e2e_poster_layouts.py"
-run_one "自动同步调度与并发写 e2e（A-H）" "$ROOT/scripts/e2e_sync_tasks.py"
+run_one "自动同步调度与并发写 e2e（A-J）" "$ROOT/scripts/e2e_sync_tasks.py"
 
 printf '\n'
 if [ "$OVERALL" -eq 0 ]; then

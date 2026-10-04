@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 """自动同步任务的调度与并发写回归（纯本地，不碰真配置、不碰上游）。
 
-改了什么必须跑它：`next_due` 的时刻口径、界面保存与调度记账的并发写。
+改了什么必须跑它：`next_due` 的时刻口径（时刻存在任务自己身上，全局那格只是新任务默认值）、
+界面保存与调度记账的并发写。
 这两处坏掉的表象都是"没按设定时间跑"或"同一批订阅连着跑两轮"，
 而后者会去打上游（微信侧尤其敏感），所以不能只靠肉眼看界面。
 
@@ -35,9 +36,13 @@ def fmt(dt):
     return dt.strftime("%Y-%m-%d %H:%M") if dt else "—"
 
 
-def task(key="t1", name="每天", interval=1, last="2026-10-03 16:39:00", subs=(1,)):
-    return {"key": key, "name": name, "sub_ids": list(subs), "interval_days": interval,
-            "last_run": last, "last_status": "ok" if last else "", "last_note": ""}
+def task(key="t1", name="每天", interval=1, last="2026-10-03 16:39:00", subs=(1,),
+         run_at=None):
+    t = {"key": key, "name": name, "sub_ids": list(subs), "interval_days": interval,
+         "last_run": last, "last_status": "ok" if last else "", "last_note": ""}
+    if run_at:
+        t["run_at"] = run_at
+    return t
 
 
 def main():
@@ -45,7 +50,7 @@ def main():
     real = st.STORE_PATH
     st.STORE_PATH = Path(tmp) / "sync_tasks.json"
     try:
-        print("== A 改了「每天执行时刻」立刻生效 ==")
+        print("== A 时刻口径：任务没自己那格时退回全局（I 段测的是各存一份）==")
         t = task()
         for run_at, want in (("08:30", "2026-10-04 08:30"), ("21:00", "2026-10-04 21:00"),
                              ("06:00", "2026-10-04 06:00"), ("09:00", "2026-10-04 09:00")):
@@ -153,6 +158,76 @@ def main():
            and sorted(migrated["tasks"][0]["sub_ids"]) == [11, 12])
         ck("迁移结果回写落盘（两次读出来的 key 一致）",
            [t["key"] for t in migrated["tasks"]] == [t["key"] for t in again["tasks"]])
+        print("== I 时刻按任务各存一份（改一条不挪动别条）==")
+        three = {"enabled": True, "run_at": "09:30", "tasks": [
+            task("wa", "微信 5 个号", 1, "2026-10-03 09:30:00", (1,), "09:30"),
+            task("wb", "魔兽世界", 1, "2026-10-03 09:30:00", (2,), "10:00"),
+            task("wc", "AI", 2, "2026-10-02 09:30:00", (3,), "08:00")]}
+        st.save(three)
+        cfg = st.load()
+
+        def nxt(key):
+            return fmt(st.next_due(st.get_task(cfg, key), cfg["run_at"], NOW))
+
+        ck("三条各自时刻 → 下次分别是 09:30 / 10:00 / 08:00",
+           [nxt("wa"), nxt("wb"), nxt("wc")] == ["2026-10-04 09:30", "2026-10-04 10:00",
+                                                 "2026-10-04 08:00"],
+           "%s / %s / %s" % (nxt("wa"), nxt("wb"), nxt("wc")))
+        # 顶上那格现在只是"新任务默认时刻"：改它不该把已有三条一起带走
+        moved = copy.deepcopy(cfg)
+        moved["run_at"] = "21:00"
+        st.save_intent(moved, alive=None)
+        cfg2 = st.load()
+        ck("改全局默认时刻，已有三条的下次一个都不动",
+           [st.get_task(cfg2, k)["run_at"] for k in ("wa", "wb", "wc")]
+           == ["09:30", "10:00", "08:00"],
+           str([t["run_at"] for t in cfg2["tasks"]]))
+        ck("全局那格落盘成了 21:00（下一条新任务用它）", cfg2["run_at"] == "21:00")
+        one = copy.deepcopy(cfg2)
+        st.update_task(one, "wb", run_at="11:15")
+        st.save_intent(one, alive=None)
+        cfg3 = st.load()
+        ck("只改「魔兽世界」到 11:15，另外两条不变",
+           [st.get_task(cfg3, k)["run_at"] for k in ("wa", "wb", "wc")]
+           == ["09:30", "11:15", "08:00"],
+           str([t["run_at"] for t in cfg3["tasks"]]))
+        ck("改时刻非法（25:99）不动原值",
+           st.update_task(cfg3, "wa", run_at="25:99")["run_at"] == "09:30")
+        at931 = datetime(2026, 10, 4, 9, 31, 0)
+        due = sorted(t["key"] for t in st.due_tasks(st.load(), at931, {1, 2, 3}))
+        ck("09:31 只有 09:30 与 08:00 那两条到期，11:15 那条还没",
+           due == ["wa", "wc"], str(due))
+        new_t = st.new_task(st.load(), [9], 1, "新建", run_at="18:40")
+        ck("新建任务带时刻就用它自己的", new_t["run_at"] == "18:40")
+        new_t2 = st.new_task(st.load(), [10], 1, "新建2")
+        ck("新建任务不给时刻 → 拿全局那格当自己的默认", new_t2["run_at"] == "21:00")
+        # 意图里没带 run_at（老前端 / 只改名的请求）不能把磁盘上单独设的时刻掉回全局
+        partial = st.load()
+        for x in partial["tasks"]:
+            x.pop("run_at", None)
+        st.save_intent(partial, alive=None)
+        ck("意图没带时刻时沿用磁盘那份，不会退回全局",
+           [st.get_task(st.load(), k)["run_at"] for k in ("wa", "wb", "wc")]
+           == ["09:30", "11:15", "08:00"],
+           str([t["run_at"] for t in st.load()["tasks"]]))
+
+        print("== J 老配置（时刻只有全局一份）读一次就补齐并回写 ==")
+        old = {"enabled": True, "run_at": "07:20", "tasks": [
+            {"key": "o1", "name": "老任务", "sub_ids": [5], "interval_days": 1,
+             "last_run": "", "last_status": "", "last_note": ""}]}
+        st.STORE_PATH.write_text(json.dumps(old, ensure_ascii=False), encoding="utf-8")
+        first = st.load()
+        ck("补齐成任务自己那格", first["tasks"][0]["run_at"] == "07:20",
+           repr(first["tasks"][0].get("run_at")))
+        # 补过一次后，再改全局不该把这条的时刻带走（迁移只在缺那格时发生一次）
+        first["run_at"] = "13:00"
+        st.save(first)
+        ck("迁移已回写：之后改全局，这条仍是 07:20",
+           st.load()["tasks"][0]["run_at"] == "07:20",
+           repr(st.load()["tasks"][0].get("run_at")))
+        raw = json.loads(st.STORE_PATH.read_text(encoding="utf-8"))
+        ck("回写真的落了盘（文件里能看到 run_at）", raw["tasks"][0].get("run_at") == "07:20")
+
     finally:
         st.STORE_PATH = real
         import shutil
