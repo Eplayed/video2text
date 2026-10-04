@@ -1952,13 +1952,18 @@ def api_poster_plan():
     text_mode = str(data.get("text_mode") or ai_poster.DEFAULT_TEXT_MODE).strip()[:10]
     # 有没有真图决定能不能推"满版大图 / 左右分栏"这类没图站不住的布局
     has_photo = bool(str(data.get("photo") or "").strip())
+    # 用户已经在页签里定死的页数（点「换一套」时把当前页数带过来，模型才不会再拆回 2 页）
+    try:
+        page_hint = int(data.get("page_hint") or 0)
+    except (TypeError, ValueError):
+        page_hint = 0
 
     def fn():
         cfg = _fast_config()
         _poster_status["progress"] = "LLM 拆解海报文案（模型：%s）..." % (cfg.get("model") or "?")
         plan, publish, bad, notes = ai_poster.build_text_plan(summary, cfg, theme=theme, title=title,
                                                               style_key=style_key, text_mode=text_mode,
-                                                              has_photo=has_photo)
+                                                              has_photo=has_photo, page_hint=page_hint)
         # 骨架稿不在这里拦：拆解本身就能判断这份素材有没有料，拦在这里会让人白等一次拆解。
         # 只把风险随结果一起回给前端，出图那一步再决定是否放行。
         warning = "；".join(ai_poster.draft_gate.draft_blockers(summary))

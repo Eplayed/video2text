@@ -273,10 +273,13 @@ def suggest_pages(n_points):
     return PAGE_MAX, PAGE_RULES[-1]["why"]
 
 
-def layout_plan_prompt(has_photo):
+def layout_plan_prompt(has_photo, page_hint=0):
     """拼进拆解 prompt 的那段"拆几页 + 每页什么布局"规则。
 
     里面的 __TOTAL__ 交给调用方那串 replace 一起替换，跟主模板用同一个预算数。
+
+    page_hint 是用户在界面上已经定了的页数（他嫌 2 页太挤、手动加到 3 页，再点「换一套」
+    就是想要 3 页的结构）。这时候页数不再由模型判断，剩下的只让它决定怎么分配与选布局。
     """
     from . import poster_typeset as ts
     lines = ["可选布局（只能填键名；标了「要有真图」的，没图就别选）："]
@@ -286,15 +289,22 @@ def layout_plan_prompt(has_photo):
                      % (k, v["label"], v["min_cards"], v["max_cards"],
                         "（要有真图）" if v.get("needs_photo") else "", v.get("when", "")))
     lines.append("")
-    lines.append("页数规则（一页最多 5 条、每页合计 ≤__TOTAL__ 字；**装不下就翻页，不许为了塞进一页砍要点**）：")
-    for r in PAGE_RULES:
-        lines.append("  - %s → %d 页：%s"
-                     % ("≤%d 条" % r["max_points"] if r["max_points"] < 999 else "更多",
-                        r["pages"], r["why"]))
-    lines.append("  - 每页给一个 role（两个字：封面 / 要点 / 收藏 / 行动 / 收尾…），"
-                 "第 1 页负责抓眼，末页负责结论或入口。")
-    lines.append("")
-    lines.append("题材 → 风格 + 布局 + 页数倾向（本篇贴哪一行就照那行来）：")
+    if page_hint and page_hint > 0:
+        lines.append("**页数已由用户定死：这一组必须正好 %d 页**（page_count 填 %d，"
+                     "pages 数组给满 %d 项，每页都要有自己的 role、主标题和至少 1 条要点）。"
+                     "不要再自行改成别的页数；要点不够也要按内容重心分成 %d 个角度，"
+                     "每页合计 ≤__TOTAL__ 字。" % (page_hint, page_hint, page_hint, page_hint))
+        lines.append("")
+    else:
+        lines.append("页数规则（一页最多 5 条、每页合计 ≤__TOTAL__ 字；**装不下就翻页，不许为了塞进一页砍要点**）：")
+        for r in PAGE_RULES:
+            lines.append("  - %s → %d 页：%s"
+                         % ("≤%d 条" % r["max_points"] if r["max_points"] < 999 else "更多",
+                            r["pages"], r["why"]))
+        lines.append("  - 每页给一个 role（两个字：封面 / 要点 / 收藏 / 行动 / 收尾…），"
+                     "第 1 页负责抓眼，末页负责结论或入口。")
+        lines.append("")
+    lines.append("题材 → 风格 + 布局 + 页数倾向（本篇贴哪一行就照那行来；用户定了页数就以用户为准）：")
     for r in THEME_RULES:
         lines.append("  - %s → 风格 %s；%s；页数：%s"
                      % (r["signals"], r["style"],
@@ -484,11 +494,50 @@ def style_fixed_prompt(style_key):
             % (style_key, p["label"], p.get("scene") or ""))
 
 
-def _pages_from_data(data, lim, style_key, has_photo, first_title=""):
+def _resplit(pages, want, lim):
+    """按 want 页重新分配卡片：用户在界面上定的页数与模型给的不一致时兜一次。
+
+    只动卡片归属——每页的标题/副标题/布局/场景沿用模型给的那一页，多出来的新页留空
+    （界面会提示"主标题为空"，人补一句就行）。要点一条都不许丢，这是铁律三的下半句。
+    """
+    n = max(1, min(want, PAGE_MAX))
+    flat = []
+    for p in pages:
+        flat.extend(p.get("cards") or [])
+    if n == len(pages) or not flat:
+        return pages, ""
+    short = ""
+    if n > len(flat):
+        # 要点比页数还少：硬摊成 N 页必然出现空页（界面会报"这页是空的，出图时会被丢掉"），
+        # 不如老实按能摊开的页数给，并说清楚为什么
+        short = "、这篇只有 %d 条要点，最多拆 %d 页" % (len(flat), len(flat))
+        n = max(1, len(flat))
+    base, extra = divmod(len(flat), n)
+    out, i = [], 0
+    for k in range(n):
+        cnt = base + (1 if k < extra else 0)
+        chunk = flat[i:i + cnt]
+        i += cnt
+        src = pages[k] if k < len(pages) else {}
+        out.append({"title": src.get("title") or "", "subtitle": src.get("subtitle") or "",
+                    "cards": chunk, "layout_key": src.get("layout_key") or "",
+                    "style_key": src.get("style_key") or pages[0].get("style_key") or DEFAULT_STYLE_KEY,
+                    "role": src.get("role") or ("第%d页" % (k + 1)),
+                    "footer": src.get("footer") or pages[0].get("footer") or "内容整理自公开分享",
+                    "scene": src.get("scene") or ""})
+    if i < len(flat):                      # 均分不该剩，真剩了就并进末页，绝不丢要点
+        out[-1]["cards"] = out[-1]["cards"] + flat[i:]
+    out = [fit_plan(p, lim["total"], lim)[0] for p in out]
+    return out, ("你要 %d 页、模型给了 %d 页，已把 %d 条要点重排成 %d 页（新页标题请补一句）%s"
+                 % (want, len(pages), len(flat), n, short))
+
+
+def _pages_from_data(data, lim, style_key, has_photo, first_title="", page_hint=0):
     """把模型给的 pages[] 洗成能排版的页列表；模型不写 pages 就返回 None（按单页走）。
 
     模型不守格式是常态：漏页、给不认识的布局键、把"要图"的布局分给没图的页、
     单页超预算——都在这里一次修完并留下一句人话说明，不抛错、不整条挂掉。
+    page_hint 是用户在界面上定死的页数，与模型给的不一致时按用户的重排。
     返回 (pages 或 None, why, notes)。
     """
     notes = []
@@ -538,11 +587,15 @@ def _pages_from_data(data, lim, style_key, has_photo, first_title=""):
         pages.append(p)
         if len(pages) >= PAGE_MAX:
             break
+    if page_hint and pages and len(pages) != page_hint:
+        pages, rn = _resplit(pages, page_hint, lim)
+        if rn:
+            notes.insert(0, rn)
     return (pages or None), why, notes
 
 
 def build_text_plan(summary, ai_config, theme="", title="", style_key="", text_mode=DEFAULT_TEXT_MODE,
-                    has_photo=False):
+                    has_photo=False, page_hint=0):
     """调 LLM 产出文案计划 + 发布文案，并逐字段裁到字数线内。
 
     返回 (plan, publish, violations, notes)：plan 是要画进图里的文字（超预算先经 fit_plan
@@ -552,10 +605,17 @@ def build_text_plan(summary, ai_config, theme="", title="", style_key="", text_m
     style_key 显式传入且合法时直接盖掉模型选的风格：用户在弹窗里点过下拉，
     就不该再被模型自由发挥改回去。
     has_photo 只影响推荐：有真图才允许推满版大图/左右分栏那几种"没图站不住"的布局。
+    page_hint 同理用在页数上：人已经在页签里加到 3 页，再点「换一套」就是想要 3 页的结构，
+    这时候页数不再由模型判断（模型给成 2 页的话，后端把要点重排成 3 页并留一句说明）。
     """
     api_key, api_base, model = _require_ai(ai_config)
     import openai
 
+    try:
+        page_hint = int(page_hint or 0)
+    except (TypeError, ValueError):
+        page_hint = 0
+    page_hint = max(0, min(page_hint, PAGE_MAX))
     lim = limits_for(text_mode)
     client = openai.OpenAI(api_key=api_key, base_url=api_base or "https://api.openai.com/v1",
                            timeout=300, max_retries=1)
@@ -567,7 +627,7 @@ def build_text_plan(summary, ai_config, theme="", title="", style_key="", text_m
               .replace("__SUB__", str(lim["subtitle"])).replace("__CT__", str(lim["cardT"]))
               .replace("__CD__", str(lim["cardD"])).replace("__FOOT__", str(lim["footer"]))
               .replace("__STYLE_FIXED__", style_fixed_prompt(style_key))
-              .replace("__LAYOUT__", layout_plan_prompt(has_photo))
+              .replace("__LAYOUT__", layout_plan_prompt(has_photo, page_hint))
               .replace("{{DATE}}", datetime.now().strftime("%m月%d日"))
               .replace("__CONTENT__", (summary.get("content") or "")[:8000]))
     resp = client.chat.completions.create(
@@ -598,7 +658,17 @@ def build_text_plan(summary, ai_config, theme="", title="", style_key="", text_m
             "style_key": key,
             "style": str(data.get("style") or "").strip()[:120]}
     plan, notes = fit_plan(plan, lim["total"], lim)
-    pages, why, pnotes = _pages_from_data(data, lim, key, has_photo, plan.get("title") or "")
+    pages, why, pnotes = _pages_from_data(data, lim, key, has_photo, plan.get("title") or "",
+                                          page_hint)
+    if not pages and page_hint > 1:
+        # 模型只交了平铺的一份（没写 pages[]），但用户已经定了页数：按用户的页数把要点切开
+        one = {"title": plan.get("title") or "", "subtitle": plan.get("subtitle") or "",
+               "cards": plan.get("cards") or [], "layout_key": plan.get("layout_key") or "",
+               "style_key": key, "role": "封面", "footer": plan.get("footer") or "",
+               "scene": plan.get("scene") or ""}
+        pages, rn = _resplit([one], page_hint, lim)
+        if rn:
+            pnotes = [rn] + pnotes
     if pages:
         # 顶层那几个键仍然填第 1 页：列表页、发布取图、回读校验读的都是它们，不能断
         first = pages[0]

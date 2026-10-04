@@ -2810,13 +2810,23 @@ function pkRenderPlan(plan, publish, cur) {
              '要画成什么场景（不进图，例：熔岩城墙头上法师举起发光卷轴）')
     + _pkRow('主标题', 'pk-title', pg.title, PK_LIMITS.title, '≤12 字')
     + _pkRow('副标题', 'pk-subtitle', pg.subtitle, PK_LIMITS.subtitle, '≤10 字，可留空');
-  (pg.cards || []).slice(0, PK_LIMITS.cardMax).forEach((c, i) => {
+  // 空页也要给一行可写的要点：以前「＋ 加一页」摊出来的页一张卡片都没有，
+  // 表单里连输入框都不渲染，用户只能填标题、没法补要点，预览自然永远等不到第 3 张图
+  const rows = (pg.cards || []).slice(0, PK_LIMITS.cardMax);
+  if (!rows.length) rows.push({t: '', d: '', v: ''});
+  rows.forEach((c, i) => {
     html += `<div class="pk-row"><span class="pk-tag">卡片${i + 1}</span>`
       + `<input id="pk-ct-${i}" value="${esc(c.t || '')}" maxlength="${PK_LIMITS.cardT}" placeholder="标题 ≤6 字" oninput="pkCount()">`
       + `<input id="pk-cd-${i}" value="${esc(c.d || '')}" maxlength="${PK_LIMITS.cardD}" placeholder="说明 ≤16 字" oninput="pkCount()"></div>`
       + `<div class="pk-row pk-row-sub"><span class="pk-tag">配图</span>`
       + `<input id="pk-cv-${i}" class="pk-vis" value="${esc(c.v || '')}" maxlength="${PK_LIMITS.cardVis}" placeholder="这一条画什么（不进图，要有形体：仪表/岔路/警示牌）"></div>`;
   });
+  if (rows.length < PK_LIMITS.cardMax) {
+    html += '<div class="pk-row"><span class="pk-tag"></span>'
+      + '<button type="button" class="btn ghost sm" onclick="pkAddCard()"'
+      + ' title="这一页再加一条要点（每页最多 ' + PK_LIMITS.cardMax + ' 条）">'
+      + '＋ 加一条要点（本页 ' + rows.length + '/' + PK_LIMITS.cardMax + '）</button></div>';
+  }
   html += _pkRow('尾注（每页都放）', 'pk-footer', plan.footer || pg.footer, PK_LIMITS.footer, '合规转述声明')
     + `<div class="pk-row"><span class="pk-tag">风格配方</span><div id="pk-style-text" class="pk-pub" style="margin:0;max-height:76px">${esc(pkStyleText())}</div></div>`
     + `<div class="pk-row" id="pk-style-free-row" style="display:${pkStyleKey() === 'auto' ? 'flex' : 'none'}">`
@@ -2873,7 +2883,12 @@ function pkRecHtml() {
     + (_pkWhy ? '<span class="why">' + esc(_pkWhy) + '</span>' : '')
     + (parts.length ? '<span class="chg">已改成：' + esc(parts.join('、')) + '</span>' : '')
     + (_pkPages.length > 1 ? '<button type="button" class="btn ghost sm" onclick="pkFlatten()">合成 1 页</button>' : '')
-    + '<button type="button" class="btn ghost sm" onclick="posterPlan()" title="重新拆一次（约 30 秒，不花钱出图）">换一套</button>'
+    + (_pkPlanBusy
+        ? '<button type="button" class="btn ghost sm" disabled>正在重拆 · '
+          + esc(_elapsedText(Date.now() - (_pkPlanT0 || Date.now()))) + '…（约 30 秒）</button>'
+        : '<button type="button" class="btn ghost sm" onclick="posterPlan()" '
+          + 'title="重新拆一次（约 30 秒，不花钱出图）'
+          + (_pkPages.length > 1 ? '；会按你现在这 ' + _pkPages.length + ' 页的结构重拆' : '') + '">换一套</button>')
     + '</div>';
 }
 function pkRefreshRec() {
@@ -2940,7 +2955,10 @@ function pkSwitchPage(i, quiet) {
   if (i === _pkCur) return;
   pkFlushForm();
   pkRenderPlan(_pkLastPlan, _pkLastPublish, i);
-  if (!quiet) posterPreview();     // 点缩略图切页时不用再重排一次，图已经有了
+  if (!quiet) { posterPreview(); return; }
+  // 点缩略图：表单换了，图也得跟着换。上一次重排的几张图还在手里，直接重画（0 请求）；
+  // 缓存不匹配（文案改过、页数变了）才老老实实再排一次。
+  if (!pkPaintPreview(i)) posterPreview();
 }
 function pkAddPage() {
   if (_pkPages.length >= PK_PAGE_MAX) { alert('最多 ' + PK_PAGE_MAX + ' 页：再多没人翻，钱也翻倍'); return; }
@@ -2949,6 +2967,16 @@ function pkAddPage() {
                  subtitle: '', footer: _pkPages[0].footer || '', scene: '', cards: []});
   pkRenderPlan(_pkLastPlan, _pkLastPublish, _pkPages.length - 1);
   posterPreview();
+}
+function pkAddCard() {
+  pkFlushForm();
+  const pg = _pkPages[_pkCur];
+  if (!pg) return;
+  if ((pg.cards || []).length >= PK_LIMITS.cardMax) { alert('一页最多 ' + PK_LIMITS.cardMax + ' 条：再多版面放不下'); return; }
+  pg.cards = (pg.cards || []).concat([{t: '', d: '', v: ''}]);
+  pkRenderPlan(_pkLastPlan, _pkLastPublish, _pkCur);
+  const last = document.getElementById('pk-ct-' + (pg.cards.length - 1));
+  if (last && last.focus) last.focus();
 }
 function pkDelPage() {
   if (_pkPages.length < 2) { alert('现在就一页'); return; }
@@ -3000,14 +3028,51 @@ function pkCount() {
 }
 async function posterPlan() {
   if (!_pkId) { alert('请先选择整合稿'); return; }
+  const n = _pkPages.length;              // 用户已经在页签里定死的页数
+  if (n > 1) {
+    pkFlushForm();
+    const filled = _pkPages.filter(p => p.title || (p.cards || []).length).length;
+    if (filled > 1 && !confirm('重新拆一套会换成模型给的新结构，现在这 ' + n + ' 页里你手改过的内容会被替换掉。\n'
+        + '这次会让模型就按 ' + n + ' 页来拆（不再自己改成 2 页）。继续？')) return;
+  }
   const body = {summary_id: _pkId,
                 theme: document.getElementById('pk-theme').value.trim(),
                 ratio: document.getElementById('pk-ratio').value,
-                style_key: pkStyleKey(), text_mode: pkTextMode()};
-  const r = await fetch('/api/poster/plan', {method: 'POST',
-    headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)}).then(x => x.json());
-  if (r.error) { setStatus('error', r.error); return; }
+                style_key: pkStyleKey(), text_mode: pkTextMode(), page_hint: n};
+  if (_pkPhoto) body.photo = _pkPhoto.ref;
+  pkPlanBusy(true);
+  let r;
+  try {
+    r = await fetch('/api/poster/plan', {method: 'POST',
+      headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)}).then(x => x.json());
+  } catch (e) { r = {error: e.message}; }
+  if (r.error) {
+    pkPlanBusy(false);
+    // 状态卡在「采集中心」那一页，海报页里根本看不见——只 setStatus 就等于没提示（用户报的"没响应"）
+    setStatus('error', r.error);
+    const box = document.getElementById('pk-result');
+    if (box) box.innerHTML = '<div class="pk-verify fail">✗ ' + esc(r.error) + '</div>'
+      + '<div class="pk-hint">等上一个海报任务跑完再点（后台同时只跑一个）。'
+      + '进度看下面这块，不用反复点。</div>';
+    if (box && box.scrollIntoView) box.scrollIntoView({block: 'nearest'});
+    return;
+  }
   pollPoster('plan', r.task_id);
+}
+
+// 「换一套 / ① 拆文案」的进行中状态要出现在用户点的那个位置：结果块在表单下面，
+// 光靠它等于没反馈。这里把按钮本身变成"正在重拆 · 已等 N 秒"并禁点，跑完自动恢复。
+let _pkPlanBusy = false, _pkPlanT0 = 0, _pkPlanTimer = null;
+
+function pkPlanBusy(on) {
+  _pkPlanBusy = !!on;
+  _pkPlanT0 = on ? Date.now() : 0;
+  if (_pkPlanTimer) { clearInterval(_pkPlanTimer); _pkPlanTimer = null; }
+  if (on) _pkPlanTimer = setInterval(pkRefreshRec, 1000);
+  document.querySelectorAll('#pk-overlay button').forEach(b => {
+    if ((b.getAttribute('onclick') || '').indexOf('posterPlan()') >= 0) b.disabled = !!on;
+  });
+  pkRefreshRec();
 }
 // 免费版面预览：占位底图 + 出图时同一个排版函数。
 // 换轨之后版面是代码算的、跟出图无关，所以折行/字号/卡片放不放得下都能在花钱前看到。
@@ -3073,6 +3138,64 @@ function pkPhotoLabel() {
                                         : '底图 AI 现画，中文由程序排版';
 }
 
+// 上一次免费重排的产物留在手里：点缩略图切页时直接重画，不再请求后端。
+// 以前切页只换表单、不换图（posterPreview 被 quiet 跳过了），所以"点后面几张没反应"。
+let _pkPreviewPages = [], _pkPreviewChars = 0, _pkPreviewSig = '';
+
+function pkPreviewSig() {
+  const ratioEl = document.getElementById('pk-ratio');
+  return JSON.stringify(pkReadPayload()) + '|' + ((ratioEl || {}).value || '')
+    + '|' + (_pkPhoto ? _pkPhoto.ref : '');
+}
+
+function pkPaintPreview(cur) {
+  const box = document.getElementById('pk-result');
+  const pages = _pkPreviewPages;
+  if (!box || !pages.length) return false;
+  // 文案改过就不能再拿旧图糊弄（切页只换图不重排，靠这个签名判断缓存还作不作数）
+  if (_pkPreviewSig && _pkPreviewSig !== pkPreviewSig()) return false;
+  cur = Math.max(0, Math.min(cur === undefined ? _pkCur : cur, _pkPages.length - 1));
+  // 空页后端不给出图（plan_pages 会丢掉没标题没要点的页），所以按"页号"找图，找不到就如实说
+  let idx = -1;
+  pages.forEach((p, i) => { if (p.page === cur + 1) idx = i; });
+  const missing = idx < 0;
+  const strip = pages.length > 1 ? '<div class="pk-pstrip">' + pages.map(p => {
+    const ti = (p.page || 1) - 1;
+    return `<div class="pk-pcell${ti === cur ? ' on' : ''}" onclick="pkSwitchPage(${ti},1)" `
+      + `title="${escAttr(p.layout_label || '')}${p.role ? ' · ' + escAttr(p.role) : ''}">`
+      + `<img src="${p.url}?t=${Date.now()}"><span>第 ${p.page} 页 · ${esc(p.layout_label || '')}</span></div>`;
+  }).join('') + '</div>' : '';
+  if (missing) {
+    box.innerHTML = strip
+      + '<div class="pk-verify mild">第 ' + (cur + 1) + ' 页还是空的（没主标题也没要点），'
+        + '预览先不给它出图——补一句标题或一条要点再点进来就有。出图时这一页会被丢掉。</div>'
+      + '<div class="pk-hint">上面这几页是现在的样子，点缩略图随时切回去看。</div>';
+    return true;
+  }
+  const shown = pages[idx];
+  const bad = (shown.check && shown.check.problems) || [];
+  const img = shown.url;
+  box.innerHTML = strip
+    + '<img class="pk-img" src="' + img + '?t=' + Date.now() + '" '
+    + 'onclick="window.open(\'' + img + '\',\'_blank\')" title="点击看原图">'
+    + '<div class="pk-verify ' + (bad.length ? 'fail' : 'pass') + '">'
+    + (pages.length > 1 ? `第 ${shown.page} / ${_pkPages.length} 页　` : '')
+    + (bad.length ? '⚠️ 版面放不下：' + bad.join('；')
+                  : '✅ 版面放得下：' + (shown.chars || _pkPreviewChars) + ' 字 · ' + (shown.check.cards || 0) + ' 张卡片')
+    + ((shown.check && shown.check.layout_label)
+        ? '　｜　布局：<b>' + esc(shown.check.layout_label) + '</b>'
+          + (pkLayoutKey() ? '' : '（跟着风格走的默认）') : '')
+    + '</div>'
+    + ((pages.length > 1)
+        ? '<div class="pk-hint">' + (pages.some(p => (p.check.problems || []).length)
+            ? (pages.filter(p => (p.check.problems || []).length).length + ' 页有版面提示；')
+            : (pages.length + ' 页都有图；'))
+          + '整组合计 ' + _pkPreviewChars + ' 字。点上面任意一页缩略图切过去改那一页。</div>' : '')
+    + '<div class="pk-hint">这张预览 <b>0 元、当场出</b>，用的就是出图时同一个排版函数——字号、折行、卡片位置、配色都是真的。'
+    + '只有上面那块灰框在出图时会被 AI 插画替换掉，插画画得好不好只有真出图才知道。<b>改完文案再点一次，不花钱。</b></div>';
+  return true;
+}
+
 async function posterPreview() {
   if (!document.getElementById('pk-title')) { setStatus('error', '先点「① AI 拆解文案」拿到文案'); return; }
   const box = document.getElementById('pk-result');
@@ -3087,39 +3210,13 @@ async function posterPreview() {
       headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)}).then(x => x.json());
   } catch (e) { r = {error: e.message}; }
   if (r.error) { box.innerHTML = '<div class="pk-verify fail">✗ ' + esc(r.error) + '</div>'; return; }
-  const pages = (r.pages && r.pages.length) ? r.pages
+  _pkPreviewPages = (r.pages && r.pages.length) ? r.pages
     : [{url: r.url, check: r.check || {}, page: 1}];
-  const cur = Math.max(0, Math.min(_pkCur, pages.length - 1));
-  const shown = pages[cur];
-  const bad = (shown.check && shown.check.problems) || [];
-  let strip = '';
-  if (pages.length > 1) {
-    strip = '<div class="pk-pstrip">' + pages.map((p, i) =>
-        `<div class="pk-pcell${i === cur ? ' on' : ''}" onclick="pkSwitchPage(${i},1)" `
-        + `title="${esc(p.layout_label || '')}${p.role ? ' · ' + esc(p.role) : ''}">`
-        + `<img src="${p.url}?t=${Date.now()}"><span>第 ${p.page} 页 · ${esc(p.layout_label || '')}</span></div>`
-      ).join('') + '</div>';
-  }
-  const img = shown.url;
-  box.innerHTML = strip
-    + '<img class="pk-img" src="' + img + '?t=' + Date.now() + '" '
-    + 'onclick="window.open(\'' + img + '\',\'_blank\')" title="点击看原图">'
-    + '<div class="pk-verify ' + (bad.length ? 'fail' : 'pass') + '">'
-    + (pages.length > 1 ? `第 ${shown.page} / ${pages.length} 页　` : '')
-    + (bad.length ? '⚠️ 版面放不下：' + bad.join('；')
-                  : '✅ 版面放得下：' + (shown.chars || r.chars) + ' 字 · ' + (shown.check.cards || 0) + ' 张卡片')
-    + ((shown.check && shown.check.layout_label)
-        ? '　｜　布局：<b>' + esc(shown.check.layout_label) + '</b>'
-          + (pkLayoutKey() ? '' : '（跟着风格走的默认）') : '')
-    + '</div>'
-    + ((pages.length > 1)
-        ? '<div class="pk-hint">' + (pages.some(p => (p.check.problems || []).length)
-            ? (pages.filter(p => (p.check.problems || []).length).length + ' 页有版面提示；')
-            : (pages.length + ' 页都放得下；'))
-          + '整组合计 ' + r.chars + ' 字。点上面任意一页缩略图切过去改那一页。</div>' : '')
-    + '<div class="pk-hint">这张预览 <b>0 元、当场出</b>，用的就是出图时同一个排版函数——字号、折行、卡片位置、配色都是真的。'
-    + '只有上面那块灰框在出图时会被 AI 插画替换掉，插画画得好不好只有真出图才知道。<b>改完文案再点一次，不花钱。</b></div>';
-  setStatus('done', bad.length ? '预览已出，但版面有提示' : '预览已出，版面没问题');
+  _pkPreviewChars = r.chars || 0;
+  _pkPreviewSig = JSON.stringify(body.plan) + '|' + body.ratio + '|' + (body.photo || '');
+  pkPaintPreview(_pkCur);
+  const warn = _pkPreviewPages.filter(p => ((p.check || {}).problems || []).length).length;
+  setStatus('done', warn ? ('预览已出，' + warn + ' 页有版面提示') : '预览已出，版面没问题');
 }
 async function posterGenerate(force) {
   if (!_pkId) { alert('请先选择整合稿'); return; }
@@ -3162,6 +3259,8 @@ function pollPoster(stage, task) {
   const t0 = Date.now();          // 弹窗里没有状态卡那一格，进度条自己报"已经等多久"
   const box = document.getElementById('pk-result');
   box.innerHTML = '<div class="pk-verify mild">⏳ 任务已提交，等待中…</div>';
+  // 结果块在长表单下面，不滚过去就是"点了没反应"（用户报的第一条）
+  if (box.scrollIntoView) box.scrollIntoView({block: 'center', behavior: 'smooth'});
   const poll = async () => {
     // 状态是后端一个全局单例，界面却允许同时开两条整理稿的弹窗：不校验归属，
     // 给 A 出的图会贴到 B 的弹窗里（串过的那次就是这么来的）。先认素材，再认任务号。
@@ -3170,6 +3269,7 @@ function pollPoster(stage, task) {
     try { st = await fetch('/api/poster/status').then(r => r.json()); }
     catch (e) { setTimeout(poll, 3000); return; }
     if (task && st.task_id && st.task_id !== task) {
+      pkPlanBusy(false);
       box.innerHTML = '<div class="pk-verify mild">这次任务的状态已经被后来的海报任务覆盖了（后台同时只跑一个任务）。'
         + (stage === 'poster' ? '图已经落盘，去成品页看结果。' : '') + '</div>'
         + (stage === 'poster' ? '<div class="pk-actions"><button class="btn ghost sm" onclick="gotoPosterPage('
@@ -3182,6 +3282,7 @@ function pollPoster(stage, task) {
         + (stage === 'poster' ? '出图约 20-60 秒（复用模板底图 10 秒内）' : '拆解约 10-30 秒') + '。</div>';
       setTimeout(poll, 2000); return;
     }
+    pkPlanBusy(false);            // 跑完（成功或失败）都要把「换一套」按钮放回来
     if (st.error) {
       const msg = String(st.error).split('\n')[0];
       // 骨架稿被拦：给一次显式放行的出口，而不是让人去改数据
@@ -3193,11 +3294,14 @@ function pollPoster(stage, task) {
     setStatus('done', st.progress || '完成');
     if (st.plan && st.plan.plan) {
       pkRenderPlan(st.plan.plan, st.plan.publish);
+      _pkPreviewPages = [];              // 结构换了，上一轮的预览图作废
       // 拆完就自动摊开原文对照：这一步的价值就是让人立刻看出哪句不是原文里的
       if (stage === 'plan') {
         const d = document.getElementById('pk-srcpanel');
         if (d) d.open = true;
         pkLoadSource();
+        const tabs = document.getElementById('pk-tabs');   // 滚到页签，让人立刻看见"这次拆成了几页"
+        if (tabs && tabs.scrollIntoView) tabs.scrollIntoView({block: 'start', behavior: 'smooth'});
       }
     }
     if (stage === 'poster' && st.package && st.package.id) { renderPosterResult(st.package.id); return; }

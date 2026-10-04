@@ -241,6 +241,62 @@ def main():
     ck("建议页数与规则表一致",
        [ai_poster.suggest_pages(n)[0] for n in (3, 7, 11, 30)] == [1, 2, 3, 4])
 
+    print("== J 用户定了页数时，页数不再由模型判断 ==")
+    lim = ai_poster.limits_for(ai_poster.DEFAULT_TEXT_MODE)
+    hint3 = ai_poster.layout_plan_prompt(False, 3)
+    ck("定了 3 页 → 提示词写死必须正好 3 页",
+       "必须正好 3 页" in hint3 and "page_count 填 3" in hint3)
+    ck("定了页数就不再念自动页数规则（免得两套话打架）", "装不下就翻页" not in hint3)
+    ck("没定页数时提示词照旧走自动规则",
+       "装不下就翻页" in blk and "必须正好" not in blk)
+
+    def _pg(title, cards):
+        return {"title": title, "subtitle": "", "layout_key": "list", "style_key": "game_epic",
+                "role": title, "footer": "内容整理自公开分享", "scene": "",
+                "cards": [{"t": "t%d" % i, "d": "说明%d" % i, "v": ""} for i in range(cards)]}
+
+    two = [_pg("第一页", 3), _pg("第二页", 3)]
+    got, note = ai_poster._resplit(two, 3, lim)
+    ck("2 页 6 条重排成 3 页", len(got) == 3 and note, note)
+    ck("重排后要点一条不丢", sum(len(p["cards"]) for p in got) == 6,
+       str([len(p["cards"]) for p in got]))
+    ck("每页分到的条数尽量均匀（2/2/2）",
+       [len(p["cards"]) for p in got] == [2, 2, 2], str([len(p["cards"]) for p in got]))
+    ck("新页有角色名，标题留空等人补",
+       got[2]["role"] and got[2]["title"] == "", repr(got[2]["role"]))
+    back, _n2 = ai_poster._resplit(got, 1, lim)
+    ck("3 页并回 1 页也不丢点",
+       sum(len(p["cards"]) for p in back) == 6 and len(back) == 1,
+       str([len(p["cards"]) for p in back]))
+    same, note3 = ai_poster._resplit(two, 2, lim)
+    ck("页数本来就对得上就不动结构", same is two and not note3)
+
+    data = {"page_count": 2, "why": "两条线各一页", "cards": [], "footer": "内容整理自公开分享",
+            "pages": [{"title": "A 页", "cards": [{"t": "甲", "d": "说明甲"}]},
+                      {"title": "B 页", "cards": [{"t": "乙", "d": "说明乙"}]}]}
+    p2h, _w, n2h = ai_poster._pages_from_data(data, lim, "game_epic", False, "A 页", 3)
+    ck("要点比页数少时不硬摊空页：只给 2 页并说清楚",
+       len(p2h) == 2 and any("最多拆 2 页" in x for x in n2h), "；".join(n2h))
+    p_no, _wn, n_no = ai_poster._pages_from_data(data, lim, "game_epic", False, "A 页")
+    ck("不给 hint 时保持模型给的两页（默认零变化）",
+       len(p_no) == 2 and not any("重排" in x for x in n_no), "；".join(n_no))
+
+    rich = {"page_count": 2, "why": "两条线各一页", "cards": [], "footer": "内容整理自公开分享",
+            "pages": [{"title": "A 页", "cards": [{"t": "甲%d" % i, "d": "说明%d" % i} for i in range(3)]},
+                      {"title": "B 页", "cards": [{"t": "乙%d" % i, "d": "说明%d" % i} for i in range(3)]}]}
+    p3, _w, n3 = ai_poster._pages_from_data(rich, lim, "game_epic", False, "A 页", 3)
+    ck("模型只给 2 页、用户要 3 页 → 落 3 页并留一句说明",
+       len(p3) == 3 and any("重排" in x for x in n3), "；".join(n3))
+    def _page_problems(pg):
+        # 多页时门禁本来就是按 card_min=1 逐页查的（lint_plan 内部就是这么调的）
+        return [m for m in ai_poster.lint_plan({"pages": [pg]}, lim, card_min=1)
+                if m != "主标题为空"]
+    ck("重排后每页仍能通过字数与卡片数门禁",
+       all(not _page_problems(x) for x in p3),
+       str([_page_problems(x) for x in p3]))
+    ck("新摊出来的那页标题留空、由界面提示人补（不是门禁问题）",
+       "主标题为空" in ai_poster.lint_plan({"pages": [p3[2]]}, lim, card_min=1))
+
     print()
     if FAILS:
         print("FAIL %d 项：%s" % (len(FAILS), "、".join(FAILS)))
