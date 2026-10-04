@@ -23,6 +23,43 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 API = "http://127.0.0.1:15801"
+HANDCODE = ROOT / "product" / "handcode.json"
+VERSION = "0.2"
+
+
+def load_handcode():
+    """手撕代码题的原料。跑不通的一律不进这份资料（先过 scripts/verify_handcode.py）。"""
+    if not HANDCODE.exists():
+        return []
+    try:
+        return (json.loads(HANDCODE.read_text(encoding="utf-8")).get("items")) or []
+    except (ValueError, OSError):
+        print("   手撕代码题文件读失败，这一节先不出")
+        return []
+
+
+def render_handcode(items, start_no):
+    """按"面试官原话 → 参考实现 → 考点 → 常见坑 → 追问"排，代码块用围栏，能直接复制去跑。"""
+    if not items:
+        return [], start_no
+    n = start_no
+    lines = ["", "## 手撕代码题（%d 道，每条参考实现都在 node 里真跑过）" % len(items), ""]
+    lines += ["这一节的代码不是「看起来对」，是执行过的：`python3 scripts/verify_handcode.py` 会逐条跑断言。"
+              "面试官要的不是你背得出，是你写的时候知道边界在哪。", ""]
+    for it in items:
+        n += 1
+        lines += ["**%d. %s**（%s）" % (n, it.get("title") or "", it.get("theme") or ""), ""]
+        if it.get("ask"):
+            lines += ["面试官会这么说：%s" % it["ask"], ""]
+        lines += ["```js", "\n".join(it.get("code") or []), "```", ""]
+        if it.get("points"):
+            lines += ["- 考点：" + "；".join(it["points"]), ""]
+        if it.get("traps"):
+            lines += ["- 常见错：" + "；".join(it["traps"]), ""]
+        if it.get("followup"):
+            lines += ["- 追问：" + it["followup"], ""]
+        lines += ["", "---", ""]
+    return lines, n
 BASE = "http://127.0.0.1:15801/media/ai_summaries"
 
 # 主题桶：按顺序命中第一个（越靠前越具体）。判据是"面试官会怎么分类问"，不是素材来源。
@@ -35,10 +72,10 @@ THEMES = [
     ("Agent 与工具调用", r"[Aa]gent|工具调用|function[ _]?call|MCP|编排|工作流|规划|自主|多轮|任务分解|LLM工具|自动化报告"),
     ("RAG 与知识库", r"检索|向量|embedding|召回|知识库|切片|rerank|引用|文档问答|RAG|公文|格式转换|排版|PDF|表格"),
     ("大模型原理与长文本", r"幻觉|量化|微调|LoRA|上下文|token|注意力|预训练|对齐|蒸馏|推理|显存|采样|提示词|prompt"
-                     r"|长线记忆|长文本|记忆|前后矛盾|一致性|分章|网文"),
+                     r"|长线记忆|长文本|前后矛盾|分章|网文|上下文窗口"),
     ("AI 面试与对话产品", r"面试者|面试官|多角色|对话|语义分析|专业程度|评估.*回答|追问"),
     ("数据采集与反爬", r"爬虫|反爬|抓取|页面结构|采集|解析"),
-    ("数据与安全", r"数据一致|校验|清洗|脱敏|隐私|权限|加密|安全|审计|合规|差异检测"),
+    ("数据与安全", r"数据一致|差异检测|脱敏|隐私|权限|加密|审计|合规|数据安全|校验"),
     ("系统设计与工程落地", r"架构|链路|高并发|缓存|队列|幂等|灰度|监控|部署|成本|吞吐|可用性|全链路|扩展"
                      r"|设计.*方案|实现方案|匹配算法|测试用例|质量保障|上传"),
     ("AI 工具选型与工程边界", r"开源|选型|评估.*维度|采用|局限|无法替代|替代|边界|风险|效率"),
@@ -76,7 +113,10 @@ def sanitize(s):
     s = s or ""
     left = []
     for w in CYR.findall(s):
-        s = s.replace(w, FIX.get(w, w))
+        rep = FIX.get(w, w)
+        s = s.replace(w, rep)
+        if rep and "\u4e00" <= rep[0] <= "\u9fff":
+            s = s.replace(" " + rep, rep)
         if w not in FIX:
             left.append(w)
     return s, left
@@ -171,8 +211,8 @@ def rewrite(q):
     return text, (has_noun and not named)
 
 
-def render(questions, counts):
-    """按主题分组拼 markdown。"""
+def render(questions, counts, handcode=()):
+    """按主题分组拼 markdown；手撕代码题单独一大节，编号接着往下排。"""
     groups = {}
     for q in questions:
         text, unresolved = rewrite(q)
@@ -180,10 +220,12 @@ def render(questions, counts):
         groups.setdefault(theme_of(q), []).append(q)
     order = [t for t, _ in THEMES] + [FALLBACK_THEME]
     today = datetime.now().strftime("%Y-%m-%d")
+    total = len(questions) + len(handcode)
 
-    lines = ["# AI 应用方向面试答案库 v0.1", ""]
-    lines += ["> 整理日期 %s ｜ 共 %d 道可直接准备的题 ｜ 来源：公开分享内容的转述整理（AI 辅助加工，已逐条复核题干）"
-              % (today, len(questions)), ""]
+    lines = ["# AI 应用方向面试答案库 v%s" % VERSION, ""]
+    lines += ["> 整理日期 %s ｜ 共 %d 道（%d 道场景与原理题 + %d 道手撕代码）｜ "
+              "来源：公开分享内容的转述整理（AI 辅助加工，已逐条复核题干；代码全部执行过）"
+              % (today, total, len(questions), len(handcode)), ""]
     lines += ["**怎么用**：每道题三段——「参考答案」是能开口说的完整版，先照它复述一遍；"
               "「常见坑」是面试官一听就知道你没做过的点；「追问」是答完第一句之后一定会被问的，"
               "提前把答案想好。数字、时间、公司名一律换成你自己项目里的，背模板最容易被问穿。", ""]
@@ -201,6 +243,11 @@ def render(questions, counts):
             n += 1
             q["_no"] = n
             lines += ["%d. %s" % (n, clean(q["_text"], 46))]
+        lines += [""]
+    if handcode:
+        lines += ["**手撕代码（%d 题，代码跑过）**" % len(handcode), ""]
+        for i, it in enumerate(handcode, 1):
+            lines += ["%d. %s" % (n + i, clean(it.get("title"), 46))]
         lines += [""]
     lines += ["", "## 题目", ""]
     for t in order:
@@ -233,29 +280,34 @@ def render(questions, counts):
                 lines += ["- 面试官会追问：%s" % dp, ""]
             lines += ["", "---", ""]
 
-    lines += ["", "## 这份还没做到的（v0.2 要补的）", ""]
-    lines += ["- 手撕代码题（快排、LRU、并发限制、防抖节流）一条没有，这条线面试必考；",
-              "- 场景题没给「按你自己项目怎么答」的填空模板，现在还是通用答案；",
+    hc_lines, n = render_handcode(handcode, n)
+    lines += hc_lines
+
+    lines += ["", "## 这份还没做到的（下一版要补的）", ""]
+    lines += ["- 场景题没给「按你自己项目怎么答」的填空模板，现在还是通用答案；",
               "- 缺一份「我做过什么」的项目追问清单——那才是决定 offer 的部分；",
+              "- 手撕代码只覆盖了接口工程与前端高频，图论/动态规划那类算法题不在范围内；",
               "- 数字类事实（模型参数量、延迟、成本）没有逐条核到公开来源，引用前自己确认。", ""]
     lines += ["## 来源与说明", ""]
     lines += ["内容是对公开分享（视频/文章）的转述整理，用 AI 辅助做题目化与归纳，"
               "已剔除离开原文就看不懂的题（本次剔除 %d 道、改写主语后保留 %d 道）。"
               % (counts.get("C", 0), counts.get("B", 0)),
+              "手撕代码题的参考实现由 `scripts/verify_handcode.py` 在 node 里逐条跑断言，跑不通的不进这份资料。",
               "所有数字与技术结论请在使用前自行核对，本资料不构成任何平台的官方说法。", ""]
     return "\n".join(lines)
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", default=str(ROOT / "AI面试答案库-v0.1.md"))
+    ap.add_argument("--out", default=str(ROOT / "product" / ("AI面试答案库-v%s.md" % VERSION)))
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
     raw = fetch_questions()
+    handcode = load_handcode()
     counts = Counter(grade(q) for q in raw)
-    print("摊平题目 %d 道 ｜ A 直接能用 %d ｜ B 补主语能用 %d ｜ C 离开原视频看不懂（丢） %d"
-          % (len(raw), counts["A"], counts["B"], counts["C"]))
+    print("摊平题目 %d 道 ｜ A 直接能用 %d ｜ B 补主语能用 %d ｜ C 离开原视频看不懂（丢） %d ｜ 手撕代码 %d 道"
+          % (len(raw), counts["A"], counts["B"], counts["C"], len(handcode)))
     keep = [q for q in raw if grade(q) in ("A", "B")]
     dist = Counter(theme_of(q) for q in keep)
     for t, n in dist.most_common():
@@ -267,9 +319,10 @@ def main():
     print("发布前要人工过一遍：乱码词 %d 道、指代没名字 %d 道" % (len(garbled), len(unresolved)))
     if args.dry_run:
         return 0
-    md = render(keep, counts)
+    md = render(keep, counts, handcode)
+    Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     Path(args.out).write_text(md, encoding="utf-8")
-    print("已写出：%s（%d 题，%d 字）" % (args.out, len(keep), len(md)))
+    print("已写出：%s（%d 题 + 手撕 %d 题，%d 字）" % (args.out, len(keep), len(handcode), len(md)))
     return 0
 
 

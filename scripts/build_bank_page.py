@@ -28,7 +28,7 @@ import build_interview_bank as bib    # noqa: E402  复用同一套筛选/分组
 COPY = {
     "kicker": "AI 应用 / 前端 + AI 岗位",
     "h1": "把「面过才知道的题」提前摊开",
-    "lede": "76 道 AI 应用落地方向的面试题。每题不只给答案，还给你「答到哪几个点算过」、"
+    "lede": "95 道 AI 应用落地方向的面试题，其中 19 道手撕代码。每题不只给答案，还给你「答到哪几个点算过」、"
             "「面试官一听就知道你没做过的坑」，以及「你答完第一句之后一定会被追问的那一句」。",
     "适合谁": [
         "投 AI 应用 / 大模型产品 / 前端 + AI 这类岗位，但没系统准备过面试问答的人",
@@ -51,8 +51,10 @@ COPY = {
                     "再逐条剔除「离开原视频就看不懂」的题、改写题干里的指代。"),
         ("数字和结论能直接引用吗？", "不能。参数量、延迟、成本这类事实请自己再核一遍公开来源，"
                               "这份资料不构成任何官方说法。"),
-        ("为什么是 v0.1？", "手撕代码题还没有（这条线必考）、场景题缺「按你自己项目怎么答」的填空模板、"
-                        "也没有项目追问清单。这三块会在 v0.2 补，买过的按联系方式补发。"),
+        ("为什么手撕代码那部分可以信？", "19 道每条的参考实现都在 node 里跑过断言（脚本会逐条执行，跑不通的不进这份资料）。"
+                                  "别的面经给你的是「看起来对」的代码，这里给的是执行过的代码。"),
+        ("这一版还缺什么？", "场景题还没有「换成你自己项目怎么答」的填空模板，也没有项目追问清单；"
+                        "算法岗的推导题、论文题不在范围内。补上之后价格上调，已买的按下面的联系方式补发。"),
         ("多少钱、怎么买？", "见下面的价格与购买方式。【填完再对外发】"),
     ],
 }
@@ -116,6 +118,11 @@ border:1px solid currentColor;border-radius:999px;padding:1px 8px;margin:0 0 8px
 padding:0 4px;border-radius:4px;font-weight:700}
 .faq dt{font-weight:700;margin-top:16px}
 .faq dd{margin:4px 0 0;color:var(--ink2)}
+pre.code{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px;
+overflow-x:auto;font-size:13px;line-height:1.6;margin:0 0 12px;
+font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.hc-list{font-size:15px;color:var(--ink2);padding-left:22px;margin:0 0 18px}
+.hc-list li{margin:0 0 6px}
 footer{padding:22px 0 108px;color:var(--ink2);font-size:13px}
 .bar{position:fixed;left:0;right:0;bottom:0;background:var(--card);border-top:1px solid var(--line);
 padding:11px 20px;display:flex;align-items:center;gap:12px;z-index:5}
@@ -145,7 +152,7 @@ TPL = """<!doctype html>
   <ul class="stats">
     <li><b>%(nq)s</b><span>道题</span></li>
     <li><b>%(nt)s</b><span>个主题</span></li>
-    <li><b>4</b><span>段/题</span></li>
+    <li><b>%(ncode)s</b><span>道代码跑过</span></li>
   </ul>
   <p class="cta"><a class="btn" href="#buy">看价格与购买</a><a class="btn ghost" href="#sample">先看样章</a></p>
 </header>
@@ -158,10 +165,17 @@ TPL = """<!doctype html>
     <div class="card"><h3>不适合（别浪费钱）</h3><ul>%(nofits)s</ul></div>
   </div>
 </section>
-<section>
+<section id="toc">
   <h2>目录</h2>
   <p class="lede">点开一个主题就能看到全部题干——先扫一遍，标出自己答不上来的。</p>
   %(toc)s
+</section>
+<section id="handcode">
+  <h2>手撕代码（%(nhc)s 道，代码都跑过）</h2>
+  <p class="lede">这部分是这份资料和别的面经最实在的差别：每条参考实现都在 node 里跑过断言，
+  跑不通的不收。下面完整放一道（并发限制），其余按标题列出来。</p>
+  <ul class="hc-list">%(hc_list)s</ul>
+  %(hc_demo)s
 </section>
 <section id="sample">
   <h2>免费样章（%(nsm)s 题，完整版）</h2>
@@ -239,7 +253,25 @@ def qa_html(q):
     return "".join(rows)
 
 
-def build(groups, keep, samples):
+def hc_html(item):
+    """手撕代码一道题的完整展示：面试官原话 → 代码 → 考点/常见错/追问。"""
+    rows = ["<div class=\"qa\"><span class=\"tag\">%s</span><h3>%s</h3>"
+            % (esc(item.get("theme") or "手撕代码"), esc(item.get("title") or ""))]
+    if item.get("ask"):
+        rows.append("<p class=\"lede\">面试官会这么说：%s</p>" % esc(item["ask"]))
+    rows.append("<pre class=\"code\">%s</pre>" % esc("\n".join(item.get("code") or [])))
+    rows.append("<dl class=\"dl\">")
+    if item.get("points"):
+        rows.append("<dt>考点</dt><dd>%s</dd>" % esc("；".join(item["points"])))
+    if item.get("traps"):
+        rows.append("<dt>常见错</dt><dd>%s</dd>" % esc("；".join(item["traps"])))
+    if item.get("followup"):
+        rows.append("<dt>追问</dt><dd>%s</dd>" % esc(item["followup"]))
+    rows.append("</dl></div>")
+    return "".join(rows)
+
+
+def build(groups, keep, samples, handcode):
     toc = []
     for t in [x for x, _ in bib.THEMES] + [bib.FALLBACK_THEME]:
         qs = groups.get(t) or []
@@ -251,26 +283,32 @@ def build(groups, keep, samples):
     faq = "".join("<dt>%s</dt><dd>%s</dd>" % (esc(a), esc(b)) for a, b in COPY["faq"])
     price = "39.9"
     todo_marks = 2                      # 付款方式、发货方式
-    todos = todo_marks
+    themes = len([1 for x, _ in bib.THEMES if groups.get(x)] +
+                 [1 for x in [bib.FALLBACK_THEME] if groups.get(x)]) + (1 if handcode else 0)
+    demo = next((x for x in handcode if x.get("id") == "plimit"), handcode[0] if handcode else None)
+    hc_list = "".join("<li>%s</li>" % esc(x.get("title")) for x in handcode if x is not demo)
     warn = ("<div class=\"warn\">本页还有 <b>%d</b> 处占位没填（付款方式、发货方式），"
             "填完再对外发。</div>" % todo_marks)
+    total = len(keep) + len(handcode)
     return TPL % {
-        "title": "AI 应用方向面试答案库 v0.1（%d 题）" % len(keep),
-        "desc": "%d 道 AI 应用落地面试题，每题给参考答案、得分点、常见坑和面试官追问。" % len(keep),
+        "title": "AI 应用方向面试答案库 v%s（%d 题）" % (bib.VERSION, total),
+        "desc": "%d 道 AI 应用落地面试题（含 %d 道代码跑过的手撕题），每题给参考答案、得分点、常见坑和面试官追问。"
+                % (total, len(handcode)),
         "css": CSS, "kicker": esc(COPY["kicker"]), "h1": esc(COPY["h1"]), "lede": esc(COPY["lede"]),
-        "nq": len(keep), "nt": len([1 for x, _ in bib.THEMES if groups.get(x)] +
-                                  [1 for x in [bib.FALLBACK_THEME] if groups.get(x)]),
+        "nq": total, "nt": themes, "ncode": len(handcode),
         "fits": "".join("<li>%s</li>" % esc(x) for x in COPY["适合谁"]),
         "nofits": "".join("<li>%s</li>" % esc(x) for x in COPY["不适合谁"]),
         "howto": "".join("<li>%s</li>" % esc(x) for x in COPY["怎么用"]),
-        "toc": "".join(toc), "samples": "".join(qa_html(q) for q in samples), "nsm": len(samples),
+        "toc": "".join(toc), "hc_list": hc_list, "hc_demo": hc_html(demo) if demo else "",
+        "nhc": len(handcode),
+        "samples": "".join(qa_html(q) for q in samples), "nsm": len(samples),
         "faq": faq, "price": price, "warn": warn, "date": datetime.now().strftime("%Y-%m-%d"),
-    }, todos
+    }, todo_marks
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", default=str(Path(bib.ROOT) / "AI面试答案库-卖货页.html"))
+    ap.add_argument("--out", default=str(Path(bib.ROOT) / "product" / ("AI面试答案库-卖货页-v%s.html" % bib.VERSION)))
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
@@ -289,13 +327,14 @@ def main():
             n += 1
             q["_no"] = n
     samples = pick_samples(groups, keep)
-    counts = {"C": sum(1 for q in raw if bib.grade(q) == "C")}
-    htmltext, todos = build(groups, keep, samples)
-    print("渲染 %d 题 / %d 个主题 / 样章 %d 题（%s）/ 待填占位 %d 处"
-          % (len(keep), len([t for t in order if groups.get(t)]), len(samples),
-             "、".join(bib.theme_of(q) for q in samples), todos))
+    handcode = bib.load_handcode()
+    htmltext, todos = build(groups, keep, samples, handcode)
+    print("渲染 %d 题（含手撕 %d 道）/ %d 个主题 / 样章 %d 题（%s）/ 待填占位 %d 处"
+          % (len(keep) + len(handcode), len(handcode), len([t for t in order if groups.get(t)]) + 1,
+             len(samples), "、".join(bib.theme_of(q) for q in samples), todos))
     if args.dry_run:
         return 0
+    Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     Path(args.out).write_text(htmltext, encoding="utf-8")
     print("已写出：%s（%d 字）" % (args.out, len(htmltext)))
     return 0

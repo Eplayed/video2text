@@ -58,6 +58,5 @@ vendor/
 # 例外：工作台原型的演示图是 index.html 硬依赖且不可再生，需入库
 !微头条试跑/头条图文工作台原型/assets/*.png
 
-# 要卖的资料成品不进公开仓库（GitHub 上是 PUBLIC，推上去等于免费公开）
-AI面试答案库-*.md
-AI面试答案库-卖货页.html
+# 要卖的资料成品与原料不进公开仓库（GitHub 上是 PUBLIC，推上去等于免费公开）
+product/
