@@ -265,18 +265,23 @@ def drop_subs(cfg: Dict, sub_ids) -> Dict:
 
 
 def next_due(task: Dict, run_at: str, now: datetime) -> Optional[datetime]:
-    """下一次该跑的时间点。频率按整天数走，但不会早于当天设定的时刻。
+    """下一次该跑的时间点 = **上次跑的那天 + 间隔**那一天的设定时刻。
+
+    原来写成 `max(上次时间 + 间隔, 当天时刻)`，等于"上次几点、下次就几点"：
+    16:39 手动跑过一次，往后每天都变 16:39，用户设的 08:30 永远追不回来
+    （用户报的"没按每天执行时刻执行"就是这个）。改成只认 run_at 之后，
+    实际几点跑完、跑多久都不影响下一次。
 
     从没跑过的任务算"今天这个点"，哪怕现在已过点：刚建好任务，用户希望
     一分钟内就看到它跑一轮（这也是验证配置对不对最快的办法），而不是等到明天。
     """
     last = _parse(task.get("last_run") or "")
-    hh, mm = [int(x) for x in (run_at or DEFAULT_RUN_AT).split(":")]
+    hh, mm = [int(x) for x in (_norm_time(run_at) or DEFAULT_RUN_AT).split(":")]
     if not last:
         return now.replace(hour=hh, minute=mm, second=0, microsecond=0)
-    due = last + timedelta(days=int(task.get("interval_days") or 1))
-    floor = due.replace(hour=hh, minute=mm, second=0, microsecond=0)
-    return max(due, floor)
+    day = last.date() + timedelta(days=int(task.get("interval_days") or 1))
+    return datetime.combine(day, datetime.min.time()).replace(
+        hour=hh, minute=mm, second=0, microsecond=0)
 
 
 def is_due(task: Dict, run_at: str, now: datetime) -> bool:
@@ -308,6 +313,27 @@ def due_sub_ids(cfg: Dict, now: datetime, alive=None) -> List[int]:
             if sid not in ids:
                 ids.append(sid)
     return ids
+
+
+def mark_running(cfg: Dict, keys: List[str], now: Optional[datetime] = None) -> Dict:
+    """开跑前先把 last_run 推到当下、状态记成 running。
+
+    不这么做就有个窗口：一轮要跑几分钟，跑完才记账；这期间只要有一次
+    界面保存配置把 JSON 重写掉（或进程被重启），记账就丢，任务看起来还是"到期"，
+    于是同一个任务连着跑两轮——10-03 那次「魔兽世界 17:08 跑完紧接着又跑一轮、
+    第二条整批都是"无新视频"」就是这么来的，对上游是纯骚扰。
+    先占时间戳，最坏情况是这一轮没跑成、明天再跑，而不是今天重复跑。
+    """
+    now = now or datetime.now()
+    stamp = now.strftime(TIME_FMT)
+    touched = set(keys or [])
+    for t in cfg.get("tasks") or []:
+        if t.get("key") in touched:
+            t["last_run"] = stamp
+            t["last_status"] = "running"
+            t["last_note"] = "这一轮正在跑…"
+    cfg["updated_at"] = stamp
+    return cfg
 
 
 def mark_batch(cfg: Dict, keys: List[str], ok: bool, note: str,

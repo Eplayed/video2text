@@ -845,7 +845,7 @@ textarea{resize:vertical;min-height:84px}
           <label class="as-sw"><input type="checkbox" id="as-enabled" onchange="asSetEnabled(this.checked)">开总开关</label>
           <button class="btn ghost sm" onclick="asRun(true)">全部跑一遍</button>
         </h3>
-        <div class="p-sub">一个任务＝一组订阅＋一个频率：勾一批号点「选择订阅」建一个任务，到点整组一起跑。列表里「该跑了」不是出错，是这条已经到设定时间、等开总开关或等下一分钟触发。定时器跑在工作台进程里：<b>工作台没开的那段时间不会跑</b>，下次打开若已过点会补一轮。抖音那条会起浏览器抓主页并做本地转写，跑起来电脑会占一会儿 CPU；微信那条只是拉一次 RSS，很轻。</div>
+        <div class="p-sub">一个任务＝一组订阅＋一个频率：勾一批号点「选择订阅」建一个任务，到点整组一起跑。<b>「每天执行时刻」就是那一轮的时刻</b>：下次 = 上次那天 + 间隔 的那天的这个点，实际几点跑完、跑多久都不影响它（设 08:30 就一直是 08:30，不会因为哪天手动晚跑了就跟着往后漂）。列表里「该跑了」不是出错，是这条已经到设定时间、等开总开关或等下一分钟触发。定时器跑在工作台进程里：<b>工作台没开的那段时间不会跑</b>，下次打开若已过点会补一轮。抖音那条会起浏览器抓主页并做本地转写，跑起来电脑会占一会儿 CPU；微信那条只是拉一次 RSS，很轻。</div>
         <div class="as-bar">
           <label>每天执行时刻<input type="time" id="as-runat" value="09:30" onchange="asSetRunAt(this.value)"></label>
           <label>添加订阅<button type="button" class="btn ghost as-pick-btn" id="as-cand-btn" onclick="asOpenPicker()">选择订阅 ▾</button></label>
@@ -1999,7 +1999,9 @@ function asMemberHtml(key, m) {
 
 function asTaskHtml(t) {
   const st = t.last_status === 'ok' ? '<span class="as-ok">跑成功</span>'
-    : (t.last_status === 'fail' ? '<span class="as-fail">跑失败</span>' : '<span class="as-idle">还没跑过</span>');
+    : (t.last_status === 'fail' ? '<span class="as-fail">跑失败</span>'
+      : (t.last_status === 'running' ? '<span class="as-ok">正在跑…</span>'
+        : '<span class="as-idle">还没跑过</span>'));
   const open = !!_asOpenKeys[t.key];
   const names = t.members.map(m => m.author).join('、');
   return `<div class="as-task${t.due_now ? ' due' : ''}">

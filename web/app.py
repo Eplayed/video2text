@@ -3037,6 +3037,9 @@ def _autosync_tick(now=None):
         return
     ids = sync_tasks.due_sub_ids(cfg, now, alive)
     names = "、".join(t.get("name") or t.get("key") for t in due)
+    # 先把这一轮的时间戳占上再跑：一轮要几分钟，跑完才记账的话，中途配置被界面重写
+    # 或进程重启就会丢账，同一个任务紧接着再跑一轮（对上游是骚扰）
+    sync_tasks.save(sync_tasks.mark_running(cfg, [t["key"] for t in due]))
     _autosync_state["note"] = "自动同步开始：" + names
     print("[自动同步] 到期任务 %d 个（%s），共 %d 个订阅" % (len(due), names, len(ids)), flush=True)
     _run_sync_batch(ids, [t["key"] for t in due], "自动同步")
