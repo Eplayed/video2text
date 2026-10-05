@@ -81,6 +81,10 @@ def audit_prose(text, tag, rows, narrator_text=None, narrator_level="FAIL"):
             rows.append(("WARN", tag + "编辑向交代",
                          "命中「%s」×%d——成品不能交代素材缺口" % (hits[0][:16], len(hits))))
     probe = narrator_text if narrator_text is not None else text
+    placeholders = re.findall(r"\[插图\s*\d+\]", text)
+    if placeholders:
+        rows.append(("WARN", tag + "插图占位未删",
+                     "残留 %s——贴进发布页前要把占位删掉或换成真图" % "、".join(placeholders[:5])))
     if not re.search(NARRATOR, probe) and "我" not in probe:
         rows.append((narrator_level, tag + "叙述者缺席",
                      "没有一个带具体动作的「我」，只剩通稿腔——这就是「一眼 AI 写的」主因"))
