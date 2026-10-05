@@ -370,6 +370,17 @@ textarea{resize:vertical;min-height:84px}
 /* 选题包弹窗：样式按 id 作用域写（本文件的弹窗都是这个规矩，不共用 .modal-box 基础类） */
 #pack-overlay .modal-box{position:relative;background:var(--surface-card);border-radius:var(--radius-sheet);box-shadow:var(--shadow-overlay);width:560px;max-width:92vw;max-height:92vh;overflow-y:auto;padding:24px 26px}
 #pack-result textarea{width:100%;border:1px solid var(--border-input);border-radius:var(--radius-control);padding:9px 12px;font-size:12px;background:var(--surface-card);color:var(--text-primary);resize:vertical}
+/* 发布审核台：状态徽章 + 行 */
+.rv-row{display:flex;align-items:center;gap:10px;padding:11px 14px;border:1px solid var(--border-input);border-radius:var(--radius-control);background:var(--surface-card);margin-bottom:8px}
+.rv-title{font-size:13.5px;font-weight:700;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rv-kind{font-size:11px;color:var(--text-tertiary);border:1px solid var(--border-input);border-radius:999px;padding:1px 8px}
+.rv-pill{font-size:11.5px;font-weight:800;border-radius:999px;padding:2px 9px;white-space:nowrap}
+.rv-pass{background:rgba(34,160,94,.14);color:#1a8a4f}
+.rv-warn{background:rgba(230,162,60,.16);color:#a2691a}
+.rv-fail{background:rgba(214,69,65,.14);color:#b3352f}
+.rv-idle{background:rgba(125,133,148,.16);color:var(--text-secondary)}
+.rv-report{width:100%;margin:-2px 0 10px;padding:10px 12px;border:1px dashed var(--border-input);border-radius:var(--radius-control);background:var(--surface-card);font-family:ui-monospace,Menlo,monospace;font-size:11.5px;white-space:pre-wrap;line-height:1.55}
+@media (prefers-color-scheme:dark){.rv-pass{color:#5fd693}.rv-warn{color:#f0b95c}.rv-fail{color:#ff8d86}}
 #tt-gen-overlay .close-btn{position:absolute;top:14px;right:14px}
 .tt-gen-title{font-size:17px;font-weight:800}
 .tt-gen-sub{font-size:12.5px;color:var(--text-secondary);margin:4px 0 16px}
@@ -669,6 +680,7 @@ textarea{resize:vertical;min-height:84px}
       <div class="navi" id="nav-toutiao" onclick="switchPage('toutiao')"><span class="nav-ic" data-icon="flame"></span>头条图文</div>
       <div class="navi" id="nav-wechat" onclick="switchPage('wechat')"><span class="nav-ic" data-icon="edit"></span>公众号图文</div>
       <div class="navi" id="nav-poster" onclick="switchPage('poster')"><span class="nav-ic" data-icon="image"></span>AI 海报<span class="cnt" id="nav-poster-cnt" style="display:none">0</span></div>
+      <div class="navi" id="nav-review" onclick="switchPage('review')"><span class="nav-ic" data-icon="target"></span>发布审核<span class="cnt" id="nav-review-cnt" style="display:none">0</span></div>
       <div class="navi" id="nav-questions" onclick="switchPage('questions')"><span class="nav-ic" data-icon="target"></span>面试题库</div>
       <div class="nav-sep">设置</div>
       <div class="navi" id="nav-settings" onclick="switchPage('settings')"><span class="nav-ic" data-icon="settings"></span>AI 设置</div>
@@ -1013,6 +1025,8 @@ textarea{resize:vertical;min-height:84px}
               <textarea class="tt-copy-area" id="tt-copy-area" spellcheck="false"></textarea>
               <div style="font-size:13px;font-weight:800;margin:16px 0 8px">✅ 发布检查清单</div>
               <div id="tt-checklist"></div>
+              <div style="font-size:13px;font-weight:800;margin:16px 0 8px">🔒 发布门禁（没过审不给复制）</div>
+              <div id="tt-review" style="font-size:12.5px">载入中...</div>
               <div class="tt-tips"><b>合规提示：</b>发布时勾选「内容包含AI生成」声明；发布动作保持手动，不走任何自动发布通道。试跑纪律：连续 2 条阅读 &lt;100 停下复盘形态。</div>
             </div>
           </div>
@@ -1375,6 +1389,24 @@ textarea{resize:vertical;min-height:84px}
     </div>
 
     <!-- ── 面试题库 ── -->
+    <!-- ── 发布审核 ── -->
+    <section id="page-review">
+      <div class="header">
+        <h2>发布审核</h2>
+        <div class="spacer"></div>
+        <span class="count" id="review-count">0 项</span>
+      </div>
+      <p style="font-size:12px;color:var(--text-tertiary);margin:0 0 12px">
+        链路：生成图文/文章 → <b>体检</b> → 可以发 → 标记已发布。没体检过的稿子不给发布；
+        内容改过一个字，之前的通过自动作废（防"改完还挂着已通过"）。
+        发布动作本身仍然在平台手工完成，这里不接任何自动发布通道。
+      </p>
+      <div class="cat-pills" id="review-filter"></div>
+      <div id="review-list">
+        <div class="empty"><span class="e" data-icon="target"></span>加载中...</div>
+      </div>
+    </section>
+
     <section id="page-questions">
       <div class="header">
         <h2>面试题库</h2>
@@ -1552,7 +1584,7 @@ document.getElementById('brand-ava').innerHTML = iconSvg('film', 22);
 // ── 全局状态 ──
 let POLLING = false;
 let currentView = 'dashboard';
-const PAGES = ['dashboard','collect','materials','radar','videos','summaries','toutiao','wechat','poster','questions','settings'];
+const PAGES = ['dashboard','collect','materials','radar','videos','summaries','toutiao','wechat','poster','review','questions','settings'];
 let selectedVideos = new Set();
 let window_lastSelected = null;
 
@@ -1570,6 +1602,7 @@ async function init() {
   loadCategoryOptions();          // 分类名单下发到各下拉（不等它，先让首页渲染）
   await loadTopics();
   switchPage(pageFromHash());          // 带 #videos 这类地址打开时直接落回那一页
+  refreshReviewBadge();                // 侧栏「发布审核」徽章：一打开就要看见有几篇没过审
   const st = await fetch('/api/status').then(r=>r.json());
   if (st.running) { startPolling(); setStatus('running', st.progress); }
   updateSidebarStatus(st);
@@ -1619,6 +1652,7 @@ async function loadCurrentView() {
   if (currentView === 'toutiao') return loadToutiaoList();
   if (currentView === 'wechat') return showWechatList();
   if (currentView === 'poster') return showPosterList();
+  if (currentView === 'review') return loadReviewList();
   if (currentView === 'settings') return loadAiConfig();
   return loadVideos();
 }
@@ -1626,6 +1660,7 @@ async function loadCurrentView() {
 async function refreshAll() {
   await loadTopics();
   await loadCurrentView();
+  refreshReviewBadge();   // 不 await：徽章读不到不该拖住页面
 }
 
 // ── 首页：一行概况 + 待办板 ──
@@ -2375,10 +2410,66 @@ async function openToutiaoDetail(id) {
     document.getElementById('tt-checklist').innerHTML = checks.map(c =>
       `<label class="tt-cl"><input type="checkbox" onchange="this.closest('.tt-cl').classList.toggle('done',this.checked)"><span>${esc(c)}</span></label>`).join('');
     window._ttPackage = p;
+    loadTtReview(id);
   } catch (e) {
     alert('加载失败: ' + e.message);
     showToutiaoList();
   }
+}
+
+// 发布门禁：图文包必须先体检通过才允许复制文案（发布动作本身仍在平台手工完成）
+let _ttReview = null;
+
+async function loadTtReview(id) {
+  _ttReview = null;
+  const box = document.getElementById('tt-review');
+  try {
+    const d = await fetch('/api/review/toutiao/' + encodeURIComponent(id)).then(r => r.json());
+    if (d.error) { box.textContent = d.error; return; }
+    _ttReview = d.state;
+    const tone = RV_TONE[d.state.status] || 'rv-idle';
+    box.innerHTML = '<span class="rv-pill ' + tone + '">' + esc(d.state.label) + '</span> '
+      + (d.state.fails ? '<span class="rv-pill rv-fail">FAIL ' + d.state.fails + '</span> ' : '')
+      + (d.state.warns ? '<span class="rv-pill rv-warn">WARN ' + d.state.warns + '</span> ' : '')
+      + (d.state.published_at ? '<span style="color:var(--text-tertiary)">已发布 ' + esc(d.state.published_at) + '</span>' : '')
+      + '<div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">'
+      + '<button class="btn sm" onclick="ttAudit(' + id + ')">体检</button>'
+      + (d.state.status === 'warn' || d.state.status === 'fail'
+          ? '<button class="btn sm ghost" onclick="ttApprove(' + id + ',' + d.state.fails + ')">人工放行</button>' : '')
+      + (d.state.can_publish && d.state.status !== 'published'
+          ? '<button class="btn sm ghost" onclick="ttPublish(' + id + ')">标记已发布</button>' : '')
+      + '</div>'
+      + (d.state.report ? '<div class="rv-report" style="margin-top:8px">' + esc(d.state.report) + '</div>' : '');
+  } catch (e) {
+    box.textContent = '门禁状态读不到：' + e.message;
+  }
+}
+
+async function ttAudit(id) {
+  const box = document.getElementById('tt-review');
+  box.textContent = '体检中...';
+  const d = await fetch('/api/review/toutiao/' + id + '/audit', { method: 'POST' }).then(r => r.json());
+  if (d.error) { alert(d.error); }
+  loadTtReview(id);
+}
+
+async function ttApprove(id, fails) {
+  const reason = fails > 0
+    ? prompt('这条还有 ' + fails + ' 项 FAIL，写明为什么仍然要发（落库留痕，不填不放行）：', '')
+    : prompt('确认放行？可留一句理由（可空）：', '');
+  if (reason === null) return;
+  const d = await fetch('/api/review/toutiao/' + id + '/approve', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reason: reason })
+  }).then(r => r.json());
+  if (d.error) alert(d.error);
+  loadTtReview(id);
+}
+
+async function ttPublish(id) {
+  if (!confirm('标记为「已发布」？发布动作本身仍在头条号后台手工完成。')) return;
+  const d = await fetch('/api/review/toutiao/' + id + '/publish', { method: 'POST' }).then(r => r.json());
+  if (d.error) alert(d.error);
+  loadTtReview(id);
 }
 
 function showToutiaoList() {
@@ -2593,7 +2684,17 @@ function pollToutiaoStatus(summaryId) {
 }
 
 function copyToutiaoText() {
+  // 门禁：没过审不给复制；文案被手改过也不给（门禁判的是出图时那份，改了必须重判）
+  if (!_ttReview || !_ttReview.can_publish) {
+    alert('还没过审，不能复制发布。\n当前状态：' + (_ttReview ? _ttReview.label : '未体检')
+      + '\n先点「体检」，有 FAIL 就改完再体检，或写明理由人工放行。');
+    return;
+  }
   const ta = document.getElementById('tt-copy-area');
+  if (window._ttPackage && ta.value !== (window._ttPackage.copy_text || '')) {
+    alert('文案被改过，门禁判的是出图时那一份。改完请点「体检」重判，或回素材库改整合稿后重新出图。');
+    return;
+  }
   ta.select();
   let ok = false;
   try { ok = document.execCommand('copy'); } catch (e) { warn('旧复制接口失败，改用剪贴板 API', e); }
@@ -5104,6 +5205,126 @@ async function revealPack() {
   } catch (e) {
     alert('打开失败：' + e.message);
   }
+}
+
+// ── 发布审核台（状态流转：未体检 → 体检 → 可以发 → 已发布） ──
+let reviewItems = [];
+let reviewFilter = 'all';
+const RV_TONE = { approved: 'rv-pass', published: 'rv-pass', warn: 'rv-warn',
+                  fail: 'rv-fail', unaudited: 'rv-idle', stale: 'rv-warn' };
+const RV_TABS = [['all', '全部'], ['unaudited', '未体检'], ['fail', '不能发'],
+                 ['warn', '改完再发'], ['approved', '可以发'], ['published', '已发布']];
+
+function rvKey(it) { return it.kind + ':' + it.ref_id; }
+
+async function loadReviewList() {
+  const box = document.getElementById('review-list');
+  try {
+    const d = await fetch('/api/review/items').then(r => r.json());
+    if (d.error) { box.innerHTML = '<div class="empty">' + esc(d.error) + '</div>'; return; }
+    reviewItems = d.items || [];
+    document.getElementById('review-count').textContent = reviewItems.length + ' 项';
+    renderReviewFilter(d.counts || {});
+    renderReviewList();
+    setReviewBadge(d);
+  } catch (e) {
+    box.innerHTML = '<div class="empty">加载失败：' + esc(e.message) + '</div>';
+  }
+}
+
+function setReviewBadge(d) {
+  const el = document.getElementById('nav-review-cnt');
+  if (!el) return;
+  const pending = d.pending || 0;
+  el.textContent = pending;
+  el.style.display = pending > 0 ? '' : 'none';
+}
+
+// 侧栏徽章：没体检的稿子根本不在 content_reviews 里，所以只能按「全部产物 - 已过审」算
+async function refreshReviewBadge() {
+  try {
+    const d = await fetch('/api/review/items').then(r => r.json());
+    if (d && !d.error) setReviewBadge(d);
+  } catch (e) { warn('刷新审核徽章失败', e); }
+}
+
+function renderReviewFilter(counts) {
+  const box = document.getElementById('review-filter');
+  const n = s => reviewItems.filter(it => s === 'all' || it.state.status === s).length;
+  box.innerHTML = RV_TABS.map(([key, label]) =>
+    '<span class="cat-pill' + (reviewFilter === key ? ' on' : '') + '" onclick="setReviewFilter(\'' + key + '\')">'
+    + label + ' ' + n(key) + '</span>').join('');
+}
+
+function setReviewFilter(k) { reviewFilter = k; renderReviewList(); renderReviewFilter({}); }
+
+function renderReviewList() {
+  const box = document.getElementById('review-list');
+  const items = reviewItems.filter(it => reviewFilter === 'all' || it.state.status === reviewFilter);
+  if (!items.length) {
+    box.innerHTML = '<div class="empty"><span class="e" data-icon="target"></span>这个筛选下没有稿子</div>';
+    return;
+  }
+  box.innerHTML = items.map(it => {
+    const s = it.state, k = rvKey(it), tone = RV_TONE[s.status] || 'rv-idle';
+    const btn = (fn, label, cls) => '<button class="btn sm ' + (cls || 'ghost') + '" onclick="'
+      + fn + '(\'' + it.kind + '\',\'' + encodeURIComponent(it.ref_id) + '\')">' + label + '</button>';
+    const actions = (s.status === 'unaudited' || s.status === 'stale' || s.status === 'fail' || s.status === 'warn'
+        ? btn('rvAudit', '体检', '') : '')
+      + (s.status === 'warn' || s.status === 'fail' ? btn('rvApprove', '人工放行') : '')
+      + (s.can_publish ? btn('rvPublish', '标记已发布', '') : '')
+      + '<button class="btn sm ghost" onclick="rvToggle(\'' + k + '\')">报告</button>';
+    return '<div class="rv-row"><span class="rv-kind">' + (it.kind === 'toutiao' ? '图文' : '文章') + '</span>'
+      + '<span class="rv-title" title="' + esc(it.title) + '">' + esc(it.title) + '</span>'
+      + '<span class="rv-pill ' + tone + '">' + esc(s.label) + '</span>'
+      + (s.fails ? '<span class="rv-pill rv-fail">FAIL ' + s.fails + '</span>' : '')
+      + (s.warns ? '<span class="rv-pill rv-warn">WARN ' + s.warns + '</span>' : '')
+      + (s.override_reason ? '<span class="rv-pill rv-idle" title="' + esc(s.override_reason) + '">已放行</span>' : '')
+      + actions + '</div>'
+      + '<div class="rv-report" id="rv-rep-' + k + '" style="display:none">' + esc(s.report || '还没跑过体检，没有报告。') + '</div>';
+  }).join('');
+}
+
+function rvToggle(k) {
+  const el = document.getElementById('rv-rep-' + k);
+  if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none';
+}
+
+async function rvAudit(kind, refEnc) {
+  const ref = decodeURIComponent(refEnc);
+  try {
+    const d = await fetch('/api/review/' + kind + '/' + encodeURIComponent(ref) + '/audit',
+      { method: 'POST' }).then(r => r.json());
+    if (d.error) { alert(d.error); return; }
+    await loadReviewList();
+    if (d.state.status === 'fail') alert('体检没过：' + d.state.fails + ' 项必须改，展开报告看明细');
+  } catch (e) { alert('体检失败：' + e.message); }
+}
+
+async function rvApprove(kind, refEnc) {
+  const ref = decodeURIComponent(refEnc);
+  const it = reviewItems.find(x => x.kind === kind && x.ref_id === ref);
+  const hasFail = it && it.state.fails > 0;
+  const reason = hasFail
+    ? prompt('这条还有 ' + it.state.fails + ' 项 FAIL，写明为什么仍然要发（会落库留痕，不填不放行）：', '')
+    : prompt('确认放行？可留一句理由（可空）：', '');
+  if (reason === null) return;
+  const d = await fetch('/api/review/' + kind + '/' + encodeURIComponent(ref) + '/approve', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ reason: reason })
+  }).then(r => r.json());
+  if (d.error) { alert(d.error); return; }
+  loadReviewList();
+}
+
+async function rvPublish(kind, refEnc) {
+  const ref = decodeURIComponent(refEnc);
+  if (!confirm('标记为「已发布」？（发布动作本身在平台手工完成，这里只记状态）')) return;
+  const d = await fetch('/api/review/' + kind + '/' + encodeURIComponent(ref) + '/publish', {
+    method: 'POST'
+  }).then(r => r.json());
+  if (d.error) { alert(d.error); return; }
+  loadReviewList();
 }
 
 function pollContentStatus() {

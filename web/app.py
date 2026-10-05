@@ -11,6 +11,7 @@ sys.path.insert(0, str(ROOT))
 
 import main as collector  # main.py
 from src import content_store, material_store, toutiao_graphics, ai_poster, sync_tasks, topic_pack
+from src import draft_audit, review_store
 from src.graphics.channels import wechat as wechat_graphics
 from src.graphics.channels import toutiao as toutiao_channel
 from src.graphics import variants as graphics_variants
@@ -1355,6 +1356,127 @@ def api_topic_pack_reveal():
         return jsonify({"success": True, "path": str(target)})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+ARTICLE_DIR_NAME = "文章"
+
+
+def _review_target(kind: str, ref_id: str):
+    """解析审核对象 → (正文, 对照素材, 标题, 落盘路径)。找不到就抛错。
+
+    图文包的正文是「卡片文字 + 微头条文案」（这就是要贴出去的东西）；
+    对照素材用同一条的整合稿，数字出处能不能核得上就看它。
+    """
+    if kind == "toutiao":
+        mpath = OUTPUT_DIR / "toutiao" / str(ref_id) / "manifest.json"
+        if not mpath.is_file():
+            raise ValueError("图文包不存在：%s" % mpath)
+        data = json.loads(mpath.read_text(encoding="utf-8"))
+        prose, _copy = draft_audit.manifest_prose(data)
+        sources = ""
+        sid = data.get("summary_id") or ref_id
+        try:
+            with _db_lock:
+                summary = content_store.get_summary(DB_PATH, int(sid))
+            sources = (summary or {}).get("content") or ""
+        except (TypeError, ValueError):
+            sources = ""
+        return prose, sources, (data.get("title") or "头条图文 #%s" % ref_id), str(mpath)
+    if kind == "article":
+        path = OUTPUT_DIR / ARTICLE_DIR_NAME / os.path.basename(str(ref_id))
+        if not path.is_file():
+            raise ValueError("文章稿不存在：%s" % path)
+        text = path.read_text(encoding="utf-8")
+        title = next((ln.strip()[2:] for ln in text.splitlines() if ln.startswith("# ")), path.stem)
+        return text, "", title, str(path)
+    raise ValueError("kind 只能是 toutiao / article")
+
+
+@app.route("/api/review/items")
+def api_review_items():
+    """一次给全审核台：图文包 + 文章稿，带各自状态（列表页拿这个合并徽章）。"""
+    items = []
+    tt_root = OUTPUT_DIR / "toutiao"
+    if tt_root.is_dir():
+        for d in sorted(tt_root.iterdir(), key=lambda p: p.name, reverse=True):
+            if not (d / "manifest.json").is_file() or not d.name.isdigit():
+                continue
+            try:
+                content, _, title, _ = _review_target("toutiao", d.name)
+            except Exception as e:
+                app.logger.info("跳过图文包 %s：%s", d.name, e)
+                continue
+            items.append({"kind": "toutiao", "ref_id": d.name, "title": title,
+                          "state": review_store.state(DB_PATH, "toutiao", d.name, content)})
+    art_root = OUTPUT_DIR / ARTICLE_DIR_NAME
+    if art_root.is_dir():
+        for f in sorted(art_root.glob("*.md"), reverse=True):
+            content, _, title, _ = _review_target("article", f.name)
+            items.append({"kind": "article", "ref_id": f.name, "title": title,
+                          "state": review_store.state(DB_PATH, "article", f.name, content)})
+    return jsonify({"items": items, "counts": review_store.counts(DB_PATH),
+                    # 待处理 = 所有产物里还没过审的（含从没体检过的），侧栏徽章用这个数；
+                    # 只数 content_reviews 里的记录会永远是 0，因为没体检的压根没记录
+                    "pending": sum(1 for it in items if it["state"]["needs_audit"]),
+                    "total": len(items)})
+
+
+@app.route("/api/review/<kind>/<path:ref_id>")
+def api_review_get(kind, ref_id):
+    try:
+        content, _src, title, path = _review_target(kind, ref_id)
+    except (ValueError, json.JSONDecodeError) as e:
+        return jsonify({"error": str(e)}), 404
+    return jsonify({"kind": kind, "ref_id": ref_id, "title": title, "path": path,
+                    "state": review_store.state(DB_PATH, kind, ref_id, content)})
+
+
+@app.route("/api/review/<kind>/<path:ref_id>/audit", methods=["POST"])
+def api_review_audit(kind, ref_id):
+    """跑体检并落状态。图文包体检走卡稿口径，文章稿走长文稿口径。"""
+    try:
+        content, sources, _title, path = _review_target(kind, ref_id)
+    except (ValueError, json.JSONDecodeError) as e:
+        return jsonify({"error": str(e)}), 404
+    try:
+        if kind == "toutiao":
+            data = json.loads(open(path, encoding="utf-8").read())
+            result = draft_audit.audit(manifest=data, sources_text=sources or None)
+        else:
+            result = draft_audit.audit(md_text=content, sources_text=sources or None,
+                                       draft_path=path, use_verify=False)
+    except Exception as e:
+        return jsonify({"error": "体检跑挂了：%s" % e}), 500
+    st = review_store.save_audit(DB_PATH, kind, ref_id, content, result)
+    app.logger.info("体检 %s/%s → %s", kind, ref_id, st["status"])
+    return jsonify({"state": st})
+
+
+@app.route("/api/review/<kind>/<path:ref_id>/approve", methods=["POST"])
+def api_review_approve(kind, ref_id):
+    """人工放行。有 FAIL 时必须写理由（理由落库，不写就 400）。"""
+    try:
+        content, _s, _t, _p = _review_target(kind, ref_id)
+        reason = (request.get_json(silent=True) or {}).get("reason", "")
+        st = review_store.approve(DB_PATH, kind, ref_id, content, reason)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        return jsonify({"error": str(e)}), 404
+    return jsonify({"state": st})
+
+
+@app.route("/api/review/<kind>/<path:ref_id>/publish", methods=["POST"])
+def api_review_publish(kind, ref_id):
+    """标记已发布。审核没过直接 400——发布本身仍在平台手工完成，这里不碰任何发布通道。"""
+    try:
+        content, _s, _t, _p = _review_target(kind, ref_id)
+        st = review_store.mark_published(DB_PATH, kind, ref_id, content)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        return jsonify({"error": str(e)}), 404
+    return jsonify({"state": st})
 
 
 @app.route("/api/content/generate", methods=["POST"])
