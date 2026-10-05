@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 import main as collector  # main.py
-from src import content_store, material_store, toutiao_graphics, ai_poster, sync_tasks
+from src import content_store, material_store, toutiao_graphics, ai_poster, sync_tasks, topic_pack
 from src.graphics.channels import wechat as wechat_graphics
 from src.graphics.channels import toutiao as toutiao_channel
 from src.graphics import variants as graphics_variants
@@ -1273,6 +1273,86 @@ def api_content_delete(summary_id):
     try:
         content_store.delete_summary(DB_PATH, summary_id)
         return jsonify({"success": True, "deleted": summary_id})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+PACK_DIR_NAME = "选题包"
+
+
+@app.route("/api/topic/pack", methods=["POST"])
+def api_topic_pack():
+    """选题包：把多条素材打成一份「给 agent 消费的选题材料」，含口径分歧候选。
+
+    为什么不复用 /api/content/generate：那条是「一条素材 → 一篇整合稿」的压缩链路，
+    一次只喂 1-2 条，看不见「同一件事被几个 up 主同时讲、说法互相矛盾」——而那才是
+    抄不到的独家增量。这里只做捞全 + 对齐，生成动作在 Qoder 会话里按 skill 走。
+    取材两种入口：前端勾选的素材；或给关键词按主题自动捞（把 96% 没用过的素材捞出来）。
+    """
+    data = request.get_json(force=True)
+    theme = (data.get("theme") or "").strip()
+    keyword = (data.get("keyword") or "").strip()
+    game = (data.get("game") or "").strip()
+    keys = data.get("videos") or []
+
+    videos = []
+    if keys:
+        with _db_lock:
+            for key in keys:
+                try:
+                    sheet, row_text = str(key).split(":", 1)
+                    video = content_store.get_video_by_source(DB_PATH, sheet, int(row_text))
+                except (ValueError, TypeError):
+                    video = None
+                if video:
+                    videos.append(video)
+    elif keyword:
+        with _db_lock:
+            videos = content_store.search_videos(DB_PATH, keyword, game=game,
+                                                 limit=int(data.get("limit") or 80))
+    else:
+        return jsonify({"error": "要么勾选素材，要么给一个用来捞素材的关键词"}), 400
+
+    if len(videos) < 2:
+        return jsonify({"error": "选题包至少需要 2 条素材（现在 %d 条），交叉核对才有意义" % len(videos)}), 400
+
+    with _db_lock:
+        used = content_store.used_video_ids(DB_PATH)
+    markdown, stats = topic_pack.build_pack(videos, theme or keyword, used)
+
+    safe = re.sub(r"[^\w一-鿿-]+", "", (theme or keyword))[:24] or "未命名"
+    folder = OUTPUT_DIR / PACK_DIR_NAME
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / ("%s-%s.md" % (datetime.now().strftime("%Y-%m-%d"), safe))
+    path.write_text(markdown, encoding="utf-8")
+    app.logger.info("选题包已生成 %s：%s", path, stats)
+    return jsonify({
+        "path": str(path),
+        "name": path.name,
+        "stats": stats,
+        "command": "按 %s 出头条文章：走 content-research-writer（先大纲 → 我补 300 字 → 成稿），"
+                   "写完跑 /article-audit 改到可以发" % path,
+    })
+
+
+@app.route("/api/topic/pack/reveal", methods=["POST"])
+def api_topic_pack_reveal():
+    """在访达里定位选题包。只认 选题包/ 目录下的文件名，防路径穿越。"""
+    import subprocess
+
+    name = os.path.basename((request.get_json(force=True).get("name") or "").strip())
+    root = (OUTPUT_DIR / PACK_DIR_NAME).resolve()
+    target = (root / name).resolve()
+    if not str(target).startswith(str(root) + os.sep) or not target.is_file():
+        return jsonify({"error": "文件不存在或不在选题包目录里"}), 404
+    try:
+        if sys.platform == "darwin":
+            subprocess.Popen(["open", "-R", str(target)])
+        elif os.name == "nt":
+            subprocess.Popen(["explorer", "/select,", str(target)])
+        else:
+            subprocess.Popen(["xdg-open", str(root)])
+        return jsonify({"success": True, "path": str(target)})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

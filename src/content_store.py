@@ -380,6 +380,54 @@ def get_videos_by_ids(db_path: str | Path, video_ids: list[int]) -> list[dict[st
         conn.close()
 
 
+def search_videos(
+    db_path: str | Path,
+    keyword: str,
+    game: str = "",
+    category: str = "",
+    limit: int = 80,
+) -> list[dict[str, Any]]:
+    """按关键词捞素材（标题 / ai_tags / 转写正文），选题包用它把沉睡素材一次捞出来。
+
+    关键词命中转写正文很宽，所以只取 LIKE 匹配、按发布时间倒序、带条数上限，
+    不做相关度排序——这是给人挑素材用的，不是给人直接成稿用的。
+    """
+    kw = (keyword or "").strip()
+    if not kw:
+        return []
+    sql = "SELECT * FROM videos WHERE (title LIKE ? OR ai_tags LIKE ? OR transcript LIKE ?)"
+    args = ["%%%s%%" % kw] * 3
+    if game:
+        sql += " AND game = ?"
+        args.append(game)
+    if category:
+        sql += " AND category = ?"
+        args.append(category)
+    sql += " ORDER BY published_at DESC LIMIT ?"
+    args.append(int(limit))
+    conn = connect(db_path)
+    try:
+        return [_dict(row) for row in conn.execute(sql, args).fetchall()]
+    finally:
+        conn.close()
+
+
+def used_video_ids(db_path: str | Path) -> set[int]:
+    """进过整理稿的素材 id 集合——选题包用它标「★ 没用过」。"""
+    conn = connect(db_path)
+    try:
+        rows = conn.execute("SELECT source_video_ids FROM ai_summaries").fetchall()
+    finally:
+        conn.close()
+    used: set[int] = set()
+    for row in rows:
+        try:
+            used |= {int(x) for x in json.loads(row["source_video_ids"] or "[]")}
+        except (ValueError, TypeError, json.JSONDecodeError):
+            continue
+    return used
+
+
 def save_summary(
     db_path: str | Path,
     video_id: int,

@@ -367,6 +367,9 @@ textarea{resize:vertical;min-height:84px}
 
 /* ── 头条图文生成配置弹窗 ── */
 #tt-gen-overlay .modal-box{position:relative;background:var(--surface-card);border-radius:var(--radius-sheet);box-shadow:var(--shadow-overlay);width:460px;max-width:92vw;max-height:92vh;overflow-y:auto;padding:24px 26px}
+/* 选题包弹窗：样式按 id 作用域写（本文件的弹窗都是这个规矩，不共用 .modal-box 基础类） */
+#pack-overlay .modal-box{position:relative;background:var(--surface-card);border-radius:var(--radius-sheet);box-shadow:var(--shadow-overlay);width:560px;max-width:92vw;max-height:92vh;overflow-y:auto;padding:24px 26px}
+#pack-result textarea{width:100%;border:1px solid var(--border-input);border-radius:var(--radius-control);padding:9px 12px;font-size:12px;background:var(--surface-card);color:var(--text-primary);resize:vertical}
 #tt-gen-overlay .close-btn{position:absolute;top:14px;right:14px}
 .tt-gen-title{font-size:17px;font-weight:800}
 .tt-gen-sub{font-size:12.5px;color:var(--text-secondary);margin:4px 0 16px}
@@ -934,6 +937,7 @@ textarea{resize:vertical;min-height:84px}
           <option value="combine">合并成一篇</option>
         </select>
         <button class="btn sm" id="btn-ai-optimize" onclick="generateSelectedContent()" style="display:none"><span data-icon="star" class="ic14"></span>生成整理稿</button>
+        <button class="btn sm" id="btn-topic-pack" onclick="openPackDialog()" style="display:none">选题包</button>
       </div>
       <div class="cat-pills" id="category-pills"></div>
       <div class="cat-pills" id="game-pills" style="display:none"></div>
@@ -1447,6 +1451,40 @@ textarea{resize:vertical;min-height:84px}
   </main>
 </div>
 
+<!-- ════ 选题包弹窗 ════ -->
+<div class="modal-overlay" id="pack-overlay" onclick="closePackDialog(event)">
+  <div class="modal-box" onclick="event.stopPropagation()">
+    <button class="close-btn" onclick="closePackDialog()"><span data-icon="close" class="ic14"></span></button>
+    <div class="tt-gen-title">选题包 · 把多条素材一次交给 AI 写稿</div>
+    <div class="tt-gen-sub">产线原来的路子是「一条素材 → 一篇整合稿」，看不见同一件事被几个 up 主讲出了不同说法——那才是抄不到的增量。选题包只做「捞全 + 对齐」：素材清单、口播原文、口径分歧候选。写稿在 Qoder 会话里按 skill 走。</div>
+    <div class="tt-gen-field">
+      <label>取材范围</label>
+      <select id="pack-scope" onchange="packScopeChanged()">
+        <option value="selected">用我勾选的素材</option>
+        <option value="keyword">按关键词自动捞（把没用过的素材一次捞出来）</option>
+      </select>
+    </div>
+    <div class="tt-gen-field" id="pack-kw-field" style="display:none">
+      <label>关键词 + 游戏 <small>（关键词命中标题、标签、口播正文；按发布时间倒序取前 80 条）</small></label>
+      <input id="pack-keyword" placeholder="如：无限、团本、升级">
+      <select id="pack-game"></select>
+    </div>
+    <div class="tt-gen-field">
+      <label>主题名 <small>（只用于文件名；写你打算讲的那个问题，别写游戏名就行）</small></label>
+      <input id="pack-theme" placeholder="如：魔兽无限服开荒">
+    </div>
+    <button class="btn" id="pack-run" onclick="runPack()">生成选题包</button>
+    <div id="pack-result" style="display:none;margin-top:14px">
+      <div class="tt-gen-sub" id="pack-stats"></div>
+      <textarea id="pack-cmd" readonly style="width:100%;min-height:60px;font-size:12px;margin-top:8px"></textarea>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button class="btn sm ghost" onclick="copyPackCmd()">复制这段指令</button>
+        <button class="btn sm ghost" onclick="revealPack()">在访达显示</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- ════ 详情弹窗 ════ -->
 <div class="modal-overlay" id="modal-overlay" onclick="closeModal(event)">
   <div class="modal" onclick="event.stopPropagation()">
@@ -1776,6 +1814,7 @@ async function fetchVideos(page, append) {
     renderSourcePills(data.sources || null);
     renderCategoryPills(data.categories || []);
     renderGamePills(data.games || []);
+    packGames = (data.games || []).filter(g => g && g.game);
     renderVideos(data.videos || [], append);
     _vidPage = page;
     document.getElementById('count-videos').textContent = (data.total||0) + ' 条';
@@ -4523,6 +4562,12 @@ function updateOptimizeButton() {
   btn.innerHTML = iconSvg('star', 14) + ` ${mode}${type}(${selectedVideos.size})`;
   const clearBtn = document.getElementById('btn-clear-selection');
   if (clearBtn) clearBtn.style.display = currentView === 'videos' && selectedVideos.size > 0 ? 'inline-flex' : 'none';
+  // 选题包不要求先勾选：弹窗里可以改成按关键词自动捞（那才是激活沉睡素材的主路）
+  const packBtn = document.getElementById('btn-topic-pack');
+  if (packBtn) {
+    packBtn.style.display = currentView === 'videos' ? 'inline-flex' : 'none';
+    packBtn.textContent = selectedVideos.size >= 2 ? `选题包（用勾选 ${selectedVideos.size} 条）` : '选题包';
+  }
   const delBtn = document.getElementById('btn-delete-videos');
   if (delBtn) delBtn.style.display = currentView === 'videos' && selectedVideos.size > 0 ? 'inline-flex' : 'none';
 }
@@ -4967,6 +5012,98 @@ function clearSelection() {
   window_lastSelected = null;
   syncCardSelection();
   updateOptimizeButton();
+}
+
+// ── 选题包（多条素材 → 给 AI 写稿的选题材料） ──
+let packGames = [];
+let _packName = '';
+
+function openPackDialog() {
+  const n = selectedVideos.size;
+  document.getElementById('pack-scope').value = n >= 2 ? 'selected' : 'keyword';
+  packScopeChanged();
+  const sel = document.getElementById('pack-game');
+  if (sel.options.length === 0) {
+    sel.innerHTML = '<option value="">全部游戏</option>' + packGames.map(g =>
+      '<option value="' + esc(g.game) + '">' + esc(g.game) + '（' + g.count + ' 条）</option>').join('');
+  }
+  document.getElementById('pack-result').style.display = 'none';
+  document.getElementById('pack-overlay').classList.add('show');
+  document.body.style.overflow = 'hidden';
+}
+
+function packScopeChanged() {
+  const isKeyword = document.getElementById('pack-scope').value === 'keyword';
+  document.getElementById('pack-kw-field').style.display = isKeyword ? '' : 'none';
+  const n = selectedVideos.size;
+  const opt = document.querySelector('#pack-scope option[value="selected"]');
+  opt.textContent = n >= 2 ? '用我勾选的素材（' + n + ' 条）' : '用我勾选的素材（至少 2 条）';
+}
+
+function closePackDialog(event) {
+  if (event && event.target !== event.currentTarget) return;
+  document.getElementById('pack-overlay').classList.remove('show');
+  document.body.style.overflow = '';
+}
+
+async function runPack() {
+  const scope = document.getElementById('pack-scope').value;
+  const body = { theme: document.getElementById('pack-theme').value.trim() };
+  if (scope === 'selected') {
+    if (selectedVideos.size < 2) { alert('至少勾选 2 条素材，交叉核对才有意义'); return; }
+    body.videos = [...selectedVideos];
+  } else {
+    body.keyword = document.getElementById('pack-keyword').value.trim();
+    body.game = document.getElementById('pack-game').value;
+    if (!body.keyword) { alert('给个关键词，比如「无限」'); return; }
+  }
+  if (!body.theme) body.theme = body.keyword || '选题包';
+  const btn = document.getElementById('pack-run');
+  btn.disabled = true;
+  btn.textContent = '正在捞素材并比对口径...';
+  try {
+    const resp = await fetch('/api/topic/pack', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    const d = await resp.json();
+    if (d.error) { alert(d.error); return; }
+    _packName = d.name;
+    const s = d.stats;
+    document.getElementById('pack-stats').textContent =
+      '素材 ' + s.videos + ' 条（' + s.unused + ' 条从没进过整理稿）｜up 主 ' + s.authors +
+      ' 个｜口径分歧候选 ' + s.clusters + ' 组｜全文约 ' + Math.round(s.chars / 1000) + 'k 字';
+    document.getElementById('pack-cmd').value = d.command;
+    document.getElementById('pack-result').style.display = '';
+  } catch (e) {
+    alert('生成失败：' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '生成选题包';
+  }
+}
+
+function copyPackCmd() {
+  const el = document.getElementById('pack-cmd');
+  el.select();
+  document.execCommand('copy');
+  alert('已复制，贴到 Qoder 会话里发给我即可');
+}
+
+async function revealPack() {
+  if (!_packName) return;
+  try {
+    const resp = await fetch('/api/topic/pack/reveal', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: _packName })
+    });
+    const d = await resp.json();
+    if (d.error) alert(d.error);
+  } catch (e) {
+    alert('打开失败：' + e.message);
+  }
 }
 
 function pollContentStatus() {
