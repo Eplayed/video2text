@@ -113,6 +113,8 @@ def main():
     ap.add_argument("draft", nargs="?", help="长文稿 .md 路径")
     ap.add_argument("--manifest", help="图文卡稿目录或 manifest.json（output/toutiao/65）")
     ap.add_argument("--sources", help="整合稿/素材原文路径，用于数字出处核对")
+    ap.add_argument("--no-verify", action="store_true",
+                    help="跳过 verify_toutiao.js（调度器已经跑过它，这里只补它查不到的三项）")
     args = ap.parse_args()
     if not args.draft and not args.manifest:
         ap.error("必须给 .md 路径或 --manifest")
@@ -123,7 +125,9 @@ def main():
     if args.draft:
         md = open(args.draft, encoding="utf-8").read()
         prose = extract_body(md)
-        if os.path.exists(VERIFY_JS):
+        if args.no_verify:
+            rows.append(("INFO", "机检", "按 --no-verify 跳过（调度器已单独跑过 verify_toutiao.js）"))
+        elif os.path.exists(VERIFY_JS):
             code, out = run(["node", VERIFY_JS, args.draft])
             for line in out.splitlines():
                 m = re.search(r"\[(PASS|WARN|FAIL)\]\s*(.+?)\s*—\s*(.*)", line)
