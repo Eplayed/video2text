@@ -11,7 +11,7 @@ sys.path.insert(0, str(ROOT))
 
 import main as collector  # main.py
 from src import content_store, material_store, toutiao_graphics, ai_poster, sync_tasks, topic_pack
-from src import draft_audit, review_store
+from src import draft_audit, review_store, toutiao_stats
 from src.graphics.channels import wechat as wechat_graphics
 from src.graphics.channels import toutiao as toutiao_channel
 from src.graphics import variants as graphics_variants
@@ -1837,9 +1837,64 @@ def api_toutiao_templates():
 def api_toutiao_list():
     try:
         items = toutiao_graphics.list_packages()
-        return jsonify({"items": items, "total": len(items)})
+        rows, meta = toutiao_stats.load_snapshot()
+        matched = [p for p in items if (p.get("performance") or {}).get("matched")]
+        app.logger.info("图文列表 %d 组，其中已匹配平台数据 %d 组", len(items), len(matched))
+        return jsonify({
+            "items": items, "total": len(items),
+            "perf": {"platform_total": len(rows), "matched": len(matched),
+                     "synced_at": next((p["performance"]["synced_at"] for p in matched
+                                        if p["performance"].get("synced_at")), ""),
+                     "cookie_from": meta.get("cookie_from") or "",
+                     "pages": meta.get("pages"), "total_on_page": meta.get("total_on_page")},
+        })
     except Exception as e:
         return jsonify({"error": str(e), "items": [], "total": 0}), 500
+
+
+# ── 头条图文数据回流：抓创作中心内容管理页，按标题匹配回本地图文包 ────────
+# 为什么这么绕：5180 台账只登记过文章且停在 09-17，图文从来是盲区（2026-10-06 取证）。
+# 用户拍板不做人肉登记，直接问平台网页要数——所以这里只读不写：打开内容页、翻分页、收接口响应。
+# 必须起真实浏览器：裸调 mp_provider 拿到的是随机推荐流（每调一次换一批、has_more 永真）。
+_perf_status = {"running": False, "progress": "", "error": "", "result": None, "started_at": ""}
+_perf_lock = threading.Lock()
+
+
+@app.route("/api/toutiao/perf/sync", methods=["POST"])
+def api_toutiao_perf_sync():
+    with _perf_lock:
+        if _perf_status["running"]:
+            return jsonify({"error": "已经有一次同步在跑，等它结束"}), 409
+        _perf_status.update({"running": True, "progress": "准备打开创作中心…",
+                             "error": "", "result": None,
+                             "started_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
+
+    def worker():
+        try:
+            rows, meta = toutiao_stats.collect(
+                progress_cb=lambda s: _perf_status.update({"progress": s}))
+            res = toutiao_stats.match_packages(rows=rows, meta=meta)
+            _perf_status["result"] = {
+                "synced_at": res["synced_at"], "platform_total": res["platform_total"],
+                "cookie_from": (meta or {}).get("cookie_from"),
+                "total_on_page": (meta or {}).get("total_on_page"),
+                "errors": (meta or {}).get("errors") or [],
+                "matched": len(res["matched"]), "unmatched": len(res["unmatched"]),
+                "top": res["platform_top"][:6],
+            }
+        except Exception as e:
+            app.logger.error("头条数据回流失败：%s", traceback.format_exc())
+            _perf_status["error"] = str(e)
+        finally:
+            _perf_status["running"] = False
+
+    threading.Thread(target=worker, daemon=True).start()
+    return jsonify({"started": True})
+
+
+@app.route("/api/toutiao/perf/status")
+def api_toutiao_perf_status():
+    return jsonify(_perf_status)
 
 
 @app.route("/api/toutiao/<int:summary_id>")
