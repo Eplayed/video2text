@@ -82,18 +82,20 @@ def main():
            and st.is_due(never, "08:30", NOW))
 
         print("== D 占账：同一轮不会被连着触发两次 ==")
+        # 这三处必须显式传 now=NOW：不传就用真实时间记账，
+        # 「次日 08:31 该不该到期」这类断言会在 10-04 之后的任何一天挂掉（2026-10-06 踩过）。
         cfg = {"enabled": True, "run_at": "08:30", "tasks": [task("t1"), task("t2", "每2天", 2,
                                                                "2026-10-02 17:02:00")]}
         st.save(cfg)
         due = st.due_tasks(st.load(), NOW)
         ck("08:31 两个任务都到期", sorted(t["key"] for t in due) == ["t1", "t2"],
            str([t["key"] for t in due]))
-        st.touch_running([t["key"] for t in due])
+        st.touch_running([t["key"] for t in due], now=NOW)
         after = st.due_tasks(st.load(), datetime(2026, 10, 4, 8, 32, 0))
         ck("占账后下一分钟不再到期（这就是 10-03 连着跑两轮的病根）", after == [], str(after))
         got = st.load()
         ck("占账写的是 running 状态", all(t["last_status"] == "running" for t in got["tasks"]))
-        st.finish_batch(["t1", "t2"], True, "✅ 同步完成")
+        st.finish_batch(["t1", "t2"], True, "✅ 同步完成", now=NOW)
         done = st.load()
         ck("跑完记账覆盖成 ok", all(t["last_status"] == "ok" for t in done["tasks"]))
         ck("当天剩下的时间都不再到期",
@@ -104,7 +106,7 @@ def main():
         print("== E 界面保存不会把调度记的账冲掉 ==")
         stale = st.load()                      # 模拟路由：先读一份
         stale["tasks"][0]["name"] = "改个名字"   # 界面上改了名
-        st.finish_batch(["t1"], True, "调度器刚记的一笔")   # 期间调度器落了账
+        st.finish_batch(["t1"], True, "调度器刚记的一笔", now=NOW)   # 期间调度器落了账
         st.save_intent(stale, alive=None)      # 界面这份旧快照后落盘
         now_cfg = st.load()
         t1 = st.get_task(now_cfg, "t1")
