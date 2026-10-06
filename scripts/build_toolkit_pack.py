@@ -2,21 +2,24 @@
 # -*- coding: utf-8 -*-
 """build_toolkit_pack.py — 生成《自媒体 AI 写稿工具包 v1》（公众号关注回复的引流品）
 
-产品阶梯（2026-10-05 拍板）：
-  免费 · 关注回复【工具包】→ 本包：5 条提示词 + 2 个 skill + 使用说明（目的：涨粉+信任）
+产品阶梯（2026-10-06 定稿）：
+  免费 · 关注回复【工具包】→ 本包：6 条提示词 + 2 个 skill + 《索引/AI能力地图》+ 使用说明
+        （目的：涨粉+信任。索引那一份只收公开知识库的分类、条目名与原文链接，
+          他人 prompt 正文一个字都不复制——「公开」不等于「可以转发」，这条线要守住。）
   99  · AI 面试答案库 95 题（product/AI面试答案库-v0.2.md）
   199 · 答案库 + 完整工作流（Dify yml + 产线脚本）+ 一次配置辅导（卖给同行）
 
 为什么必须用脚本生成：包里的提示词和体检规则，权威源在本仓库代码里
-（content_store._prompt / draft_audit / topic_pack / 头条出稿规范.md）。
-手抄一份进产品目录，三个月后两边口径一定漂移——这个项目已经为漂移付过三次学费。
-所以这里只做「抽取 + 加使用说明」，规则本体永远从源里读。
+（content_store._prompt / draft_audit / topic_pack / 头条出稿规范.md），
+素材库条数也只在库里；手抄一份进产品目录，三个月后两边口径一定漂移——
+这个项目已经为漂移付过三次学费。所以这里只做「抽取 + 加使用说明」，规则本体永远从源里读。
 
 用法：
-  python3 scripts/build_toolkit_pack.py            # 生成 product/工具包-v1/ 并打 zip
+  python3 scripts/build_toolkit_pack.py            # 生成 product/自媒体AI写稿工具包-v1/ 并打 zip
   python3 scripts/build_toolkit_pack.py --no-zip   # 只生成目录，先看内容
 """
 import argparse
+import json
 import re
 import shutil
 import sys
@@ -25,9 +28,11 @@ from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-OUT = ROOT / "product" / "工具包-v1"
+OUT = ROOT / "product" / "自媒体AI写稿工具包-v1"
 RULES_MD = Path.home() / "Documents" / "自媒体" / "头条出稿规范.md"
 V7_MD = Path.home() / "Documents" / "自媒体" / "ARPG去AI味写作规则-v7.md"
+INDEX_JSON = ROOT / "product" / "外部参考" / "ai-index.json"
+DB_PATH = ROOT / "output" / "video2text.db"
 
 sys.path.insert(0, str(ROOT))
 from src import content_store, draft_audit, topic_pack  # noqa: E402
@@ -108,6 +113,104 @@ def build_prompts() -> dict:
         + "\n## 一句话用法\n同一个话题被 2 个以上作者在 48 小时内讲过、说法不一致——"
           "那个不一致就是别人抄不到的选题。先对齐口径再动笔，别各写各的。\n")
     return files
+
+
+def library_stats():
+    """素材库实测：AI 相关分类的条数与高频标签。打包时现算，避免产品里写死过期数字。"""
+    if not DB_PATH.is_file():
+        return None
+    import sqlite3
+    from collections import Counter
+    cats = ("AI技术", "前端面试", "编程开发", "职场成长", "产品设计")
+    marks = ",".join("?" * len(cats))
+    out = {"total": 0, "rows": [], "game": 0}
+    con = sqlite3.connect("file:%s?mode=ro" % DB_PATH, uri=True)
+    try:
+        out["total"] = con.execute("select count(*) from videos").fetchone()[0]
+        out["game"] = con.execute("select count(*) from videos where category='游戏攻略'").fetchone()[0]
+        counts = dict(con.execute(
+            "select category, count(*) from videos where category in (%s) group by category" % marks, cats))
+        tags = {c: Counter() for c in cats}
+        for cat, raw in con.execute(
+                "select category, ai_tags from videos where category in (%s)" % marks, cats):
+            if cat in tags and raw:
+                for t in raw.split():
+                    tags[cat][t] += 1
+        for cat in sorted(counts, key=lambda c: -counts[c]):
+            top = "、".join(t for t, n in tags[cat].most_common(8) if n >= 2)
+            out["rows"].append((cat, counts[cat], top or "（还没打上标签）"))
+    except Exception:
+        return None
+    finally:
+        con.close()
+    return out
+
+
+def build_index() -> str:
+    """AI 能力地图：公开知识库目录级索引 + 我自己素材库的对照（不复制他人正文）。"""
+    if not INDEX_JSON.is_file():
+        return "# AI 能力地图\n\n（未找到索引数据源 %s，请检查路径）\n" % INDEX_JSON
+    data = json.loads(INDEX_JSON.read_text(encoding="utf-8"))
+    src = data.get("source") or {}
+    lines = [GEN_NOTE % "product/外部参考/ai-index.json",
+             "# AI 能力地图：公开学习资源索引（只给链接，不抄内容）\n",
+             "这份表解决一个具体问题：AI 学习资料多到看不完，也不知道该看哪一份。",
+             "所以我按「先学什么、什么时候用」排了一遍，每条只写三件事：它是什么、什么时候用得上、",
+             "以及我对照自己产线的判断。**原文一律不复制，要看点链接去原站。**\n",
+             "## 先说清口径",
+             "",
+             "- 结构来自社区公开知识库「%s」，抓取日期 %s。" % (src.get("name", ""), src.get("retrieved", "")),
+             "- 我收的是**目录级**（分类与条目名），条目名按站内原样列出，进去直接搜这个名字就能定位。",
+             "- 不复制他人的 prompt 正文和教程段落；右边那列「我的做法」是我自己的判断，你可以不同意。",
+             "- 本包免费，关注后回复关键字就送，不收费。",
+             "",
+             "## 入口",
+             ""]
+    for key, label in (("entry", "知识库首页"), ("prompts_node", "Prompts 专区（表格视图）"),
+                       ("start_node", "起步页")):
+        if src.get(key):
+            lines.append("- %s：%s" % (label, src[key]))
+    lines.append("")
+
+    for br in data.get("branches") or []:
+        lines.append("## %s\n" % br.get("group", ""))
+        lines.append("| 条目（站内可搜） | 什么时候用得上 | 我的做法 / 该不该看 |")
+        lines.append("|---|---|---|")
+        for it in br.get("items") or []:
+            lines.append("| %s | %s | %s |" % (it.get("name", ""), it.get("use", ""),
+                                               (it.get("mine") or "").replace("\n", " ")))
+        lines.append("")
+
+    lib = data.get("library") or {}
+    stats = library_stats()
+    lines.append("## 跟我自己的素材库怎么对照\n")
+    if stats and stats["rows"]:
+        lines.append("我自己也在攒素材库（现共 %d 条，打包时从库里现算），AI 相关的几类长这样：\n" % stats["total"])
+        lines.append("| 我的分类 | 条数 | 里面都在讲什么（高频标签） |")
+        lines.append("|---|---|---|")
+        for cat, n, top in stats["rows"]:
+            if n < 5:      # 只有两三条的分类列出来只会稀释表格，不列
+                continue
+            lines.append("| %s | %d | %s |" % (cat, n, top))
+        lines.append("\n> 另有游戏攻略类 %d 条，是内容产线的口粮，跟 AI 学习无关，就不列了。\n" % stats["game"])
+    elif lib.get("note"):
+        lines.append(lib["note"] + "\n")
+    lines.append("| 公开库里的分类 | 我这边对应的东西 | 下一步怎么做 |")
+    lines.append("|---|---|---|")
+    for m in lib.get("map") or []:
+        lines.append("| %s | %s | %s |" % (m.get("waytoagi", ""), m.get("ours", ""), m.get("action", "")))
+    lines.append("""
+## 三步用法（别一上来全看）
+
+1. **先把本包 prompts 01–06 用熟。** 方法层的条目，在你没有自己的失败案例之前看了也记不住。
+2. **按活查：** 要写代码面试题看「职业层·软件工程师」，要出图看「周边·可视化的 Prompt」——
+   后者我们的做法是模型只画无字底图、中文自己排，这条别处看不到。
+3. **其余分类先放着。** 具体任务来了再按条目名搜，别把时间花在收集站点和收藏上。
+
+最后一句实话：这张表里 90% 的东西你都用不上，也不需要看完。
+把一条产线跑通的人，比看完十个教程的人值钱得多。
+""")
+    return "\n".join(lines)
 
 
 SKILL_AUDIT = """---
@@ -229,8 +332,8 @@ README = """# 自媒体 AI 写稿工具包 v1（免费引流版）
    一个游戏自媒体号用它日更图文，一个技术号用它写面试资料。规则都是被数据改出来的，
    不是拍脑袋写的。
 2. **它解决的是"AI 写的东西没人味、还容易编"这两个具体问题**，不解决"怎么涨粉"。
-3. 想要完整工作流（自动采集、出图、体检门禁那一整套）和 95 题面试答案库，
-   看包内《升级与定价.md》。
+3. **整包免费**（含《索引/AI能力地图》，那份只给公开资源链接和我的判断，不抄别人内容）。
+   想要完整工作流（自动采集、出图、体检门禁那一整套）和 95 题面试答案库，看包内《升级与定价.md》。
 
 ## 包里有什么
 
@@ -242,6 +345,7 @@ README = """# 自媒体 AI 写稿工具包 v1（免费引流版）
 | prompts/04 去AI味写作规则 | 原则/标题/开头三节 | 初稿写完后 |
 | prompts/05 发布前自检清单 | 机器可查的泄漏项+人查的三项 | 发布前 |
 | prompts/06 多源选题聚合 | 从一堆素材里找出独家增量 | 选题时 |
+| 索引/AI能力地图 | 公开学习资源的分类索引 + 我的判断，只给链接不抄内容 | 不知道看什么的时候 |
 | skills/article-audit | 体检脚本（Qoder/Claude 技能包） | 每篇发布前 |
 | skills/article-humanize | 定点改写纪律 | 体检不过时 |
 
@@ -257,19 +361,21 @@ README = """# 自媒体 AI 写稿工具包 v1（免费引流版）
 - **体检脚本要联网/要 API key 吗？** 不要。它只做正则与结构检查；AI 味评分那一项
   需要本机有 ai_score.py，没有就自动跳过，不影响结论。
 - **我是写小说/写公文的，能用吗？** 04、05 两节通用；01–03 是自媒体口径，按需取用。
+- **那份《AI能力地图》是抄别人的吗？** 不是。只列分类、条目名和原文链接，正文一个字没复制，
+  右边那一列"我的做法"是我自己写的判断；这类索引我打算一直免费放，回复关键字就送。
 """
 
 UPSELL = """# 升级与定价
 
 | 档 | 内容 | 价格 |
 |---|---|---|
-| 免费（本包） | 5+1 条提示词、2 个 skill、使用说明 | 0 |
+| 免费（本包） | 6 条提示词、2 个 skill、AI 能力地图索引、使用说明 | 0 |
 | 进阶 | AI 面试答案库：95 题 / 13 主题 / 19 道代码真跑过，含卖货页同款目录 | __PRICE_BANK__ |
 | 完整 | 答案库 + 整套工作流（采集→整理→出图→体检→门禁）+ 一次 1 小时配置辅导 | __PRICE_FULL__ |
 
 怎么买：公众号后台回复「升级」，或邮件 __CONTACT__。
-说明：完整档含 Dify 工作流导出文件与产线脚本，适合有技术背景、想自己搭产线的人；
-只想要内容的买进阶档就够。
+说明：完整档给的是我自己那套 Flask 工作台产线（脚本 + 发布前体检门禁），不含云服务、不代搭；
+适合有技术背景、想自己跑一条线的人。只想要内容的买进阶档就够。
 """
 
 REPLY_COPY = """# 自动回复与引导文案（直接粘到公众号后台）
@@ -277,7 +383,8 @@ REPLY_COPY = """# 自动回复与引导文案（直接粘到公众号后台）
 ## 被关注自动回复
 
 终于来了。回复【工具包】领《自媒体 AI 写稿工具包》：6 条在跑产线里真用着的提示词
-+ 2 个质检技能包，专治"AI 写的没人味"和"AI 偷偷编数字"。
++ 2 个质检技能包 + 1 份 AI 学习资源地图（只给公开链接和我的判断），专治"AI 写的没人味"
+和"AI 偷偷编数字"。全部免费。
 回复【答案库】看 95 道 AI 面试题整理（19 道代码真跑过）。
 
 ## 关键词回复
@@ -286,7 +393,14 @@ REPLY_COPY = """# 自动回复与引导文案（直接粘到公众号后台）
 回复内容：
 工具包在这：__LINK__
 三件事先说：1) 每条提示词都来自真在跑的产线，不是万能咒语；2) 先跑一次体检脚本，
-看你旧稿为什么"一眼 AI"；3) 想要完整工作流和答案库，回复【升级】。
+看你旧稿为什么"一眼 AI"；3) 包里的《索引/AI能力地图.md》是公开学习资源的分类索引，
+只给链接不抄内容；想要完整工作流和答案库，回复【升级】。
+
+关键字：地图
+回复内容：
+《AI 能力地图》在工具包里（免费，不收费）：__LINK__
+里面按"方法层/场景层/职业层/周边"排了公开知识库的分类，每条标了什么时候用得上，
+以及我自己对照产线的判断。原文不复制，点链接去原站看。
 
 关键字：答案库
 回复内容：
@@ -301,6 +415,7 @@ REPLY_COPY = """# 自动回复与引导文案（直接粘到公众号后台）
 
 - 长文结尾：「这套提示词我整理成了工具包，关注公众号回复【工具包】免费领。」
 - 图文卡片最后一张的收尾行：「想要同款提示词？关注后回复【工具包】。」
+- 知识地图那类整理帖结尾可加：「完整的学习资源分类在工具包的《AI能力地图》里，回复【地图】领。」
 - 注意：只放公众号自己的内容里。头条号规范写明不导流、不带货，别把这句带过去。
 """
 
@@ -321,6 +436,7 @@ def main():
 
     files = build_prompts()
     files.update(build_skills())
+    files["索引/AI能力地图.md"] = build_index()
     files["README-先看这个.md"] = README
     files["升级与定价.md"] = (UPSELL.replace("__PRICE_BANK__", args.price_bank)
                             .replace("__PRICE_FULL__", args.price_full)
@@ -330,9 +446,12 @@ def main():
                                   .replace("__PRICE_BANK__", args.price_bank)
                                   .replace("__PRICE_FULL__", args.price_full))
     files["版本说明.md"] = ("# 版本说明\n\n- v1 · %s · 首版：6 提示词 + 2 skill + 说明 + 回复文案\n"
+                        "- v1.1 · %s · 加《索引/AI能力地图》：公开知识库的目录级索引（只放条目名与原文链接，"
+                        "不复制他人正文）+ 与本地素材库的分类对照；整包改为免费领，回复关键字就送\n"
                         "- 规则权威源：video2text 仓库 src/draft_audit.py、src/topic_pack.py、"
                         "src/content_store.py；~/Documents/自媒体/头条出稿规范.md、ARPG去AI味写作规则-v7.md\n"
-                        % datetime.now().strftime("%Y-%m-%d"))
+                        "- 索引数据源：product/外部参考/ai-index.json（抓取记录与口径说明都在那份里）\n"
+                        % (datetime.now().strftime("%Y-%m-%d"), datetime.now().strftime("%Y-%m-%d")))
 
     for rel, text in files.items():
         target = OUT / rel
