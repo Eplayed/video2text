@@ -30,6 +30,7 @@ As this project's AI coding tool, you must follow the additional conventions bel
 
 - 三仓库架构、权威源地图、换机流程 → **media-workbench 仓库 `docs/DEV-SYNC.md`**（改策略只改权威源一处）
 - 自媒体产线双端任务分工、工作纪律 → **media-workbench 仓库 `AGENTS.md` 第七节**
+- 公众号这条线的现状与接手清单 → **`~/Documents/自媒体/公众号交接文档.md`**（2026-10-06 实测取证；含与《公众号写作铁律》v1.2 的待拍板冲突）
 
 ## 关键纪律
 
