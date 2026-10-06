@@ -12,6 +12,10 @@ def list_packages(output_dir):
     if not output_dir.exists():
         return items
     for mf in output_dir.glob("*/manifest.json"):
+        # 成品目录名就是 summary_id；像 55.bak_presanitize 这种改名留下的备份、
+        # 以及 _previews/_refs/_uploads 这类工作目录都不该当一组成品列出来。
+        if not mf.parent.name.isdigit():
+            continue
         try:
             data = json.loads(mf.read_text(encoding="utf-8"))
             items.append(data)
