@@ -487,6 +487,18 @@ textarea{resize:vertical;min-height:84px}
 .s-wx:hover{background:var(--module-1);color:#fff}
 .s-poster{margin-top:8px;display:flex;align-items:center;justify-content:center;gap:6px;font-size:12.5px;font-weight:800;color:var(--module-5);background:color-mix(in srgb,var(--module-5) 9%,transparent);border:1px solid color-mix(in srgb,var(--module-5) 32%,transparent);border-radius:8px;padding:8px 10px;cursor:pointer;transition:all .12s}
 .s-poster:hover{background:var(--module-5);color:#fff}
+/* 整理稿体检（素材档案机检）：结论徽章沿用审核台 rv-pill 口径，不另起一套颜色 */
+.s-mc{margin-top:9px;display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.s-mc-btn{font-size:12px;font-weight:800;color:var(--text-secondary);background:var(--surface-nested);border:1px solid var(--border-input);border-radius:7px;padding:5px 10px;cursor:pointer;transition:all .12s}
+.s-mc-btn:hover{border-color:var(--module-1);color:var(--module-1)}
+.s-mc-btn[disabled]{opacity:.55;cursor:progress}
+.s-mc-link{font-size:12px;color:var(--text-tertiary);cursor:pointer;text-decoration:underline dotted}
+.s-mc-time{font-size:11px;color:var(--text-tertiary);margin-left:auto}
+.s-mc-rep{margin-top:8px;background:var(--surface-nested);border:1px solid var(--border);border-radius:8px;padding:10px 11px;max-height:260px;overflow:auto}
+.s-mc-rep div{font:11.5px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace;word-break:break-word;margin-bottom:4px}
+.s-mc-rep .lv-fail{color:#b3352f}.s-mc-rep .lv-warn{color:#a2691a}
+.s-mc-rep .lv-pass{color:#1a8a4f}.s-mc-rep .lv-info{color:var(--text-tertiary)}
+@media (prefers-color-scheme:dark){.s-mc-rep .lv-fail{color:#ff8d86}.s-mc-rep .lv-warn{color:#f0b95c}.s-mc-rep .lv-pass{color:#5fd693}}
 .pk-hint{font-size:12px;line-height:1.7;color:var(--text-secondary);background:var(--surface-nested);border:1px solid var(--border);border-radius:8px;padding:9px 11px;margin-bottom:12px}
 .pk-count{font-size:12.5px;font-weight:800;margin:10px 0}
 .pk-count.bad{color:var(--danger)}
@@ -1026,6 +1038,8 @@ textarea{resize:vertical;min-height:84px}
           <option value="toutiao_mix">头条整合稿</option>
           <option value="ai_interview">AI面试题</option>
         </select>
+        <button class="btn ghost sm" id="btn-mc-all" onclick="mcRunAll()" title="把当前列表里的公众号素材逐条跑一遍机检（分节是否塌了、【关键数据】与【金句摘录】能不能回指原素材）。逐条请求，别中途关页面。">🔍 批量体检</button>
+        <span class="count" id="mc-all-tip"></span>
       </div>
       <div class="grid" id="grid-summaries">
         <div class="empty"><span class="e" data-icon="book"></span>加载中...</div>
@@ -4704,6 +4718,7 @@ function renderVideos(videos, append) {
 }
 
 function renderSummaries(items) {
+  _summaryItems = items;
   const grid = document.getElementById('grid-summaries');
   if (!items.length) {
     grid.innerHTML = '<div class="empty"><span class="e">' + iconSvg('book') + '</span>暂无整理稿</div>';
@@ -4717,6 +4732,9 @@ function renderSummaries(items) {
       ? `<div class="s-tt" onclick="event.stopPropagation();openToutiaoGenDialog(${item.id})">🔥 生成头条图文</div>` : '';
     const wxBtn = item.summary_type === 'wechat_material'
       ? `<div class="s-wx" onclick="event.stopPropagation();openWechatGenDialog(${item.id})">💬 生成公众号图文</div>` : '';
+    // 体检入口只给公众号素材（wechat_material）：机检查的是它那 7 个分节，
+    // 头条整合稿/攻略没有这套结构，套上去会整列假阳性「缺 7 节」。
+    const mcRow = item.summary_type === 'wechat_material' ? mcRowHtml(item) : '';
     // 海报走独立产线，任何类型的整理稿都能出图（不像头条/公众号各自绑定一种整合稿）
     const pkBtn = `<div class="s-poster" onclick="event.stopPropagation();openPosterDialog(${item.id})">🎨 AI 海报</div>`;
     return `<div class="summary-card" onclick="openSummary(${item.id})">
@@ -4729,9 +4747,134 @@ function renderSummaries(items) {
         <span>${esc(item.model||'')}</span>
         <span>${esc(item.updated_at||'')}</span>
       </div>
-      ${ttBtn}${wxBtn}${pkBtn}
+      ${ttBtn}${wxBtn}${mcRow}${pkBtn}
     </div>`;
   }).join('');
+}
+
+// ── 整理稿体检（公众号素材档案机检）──────────────────────────────
+// 端点 POST /api/content/summaries/<id>/material-check，机器只查两件事：
+// 七个分节塌没塌、【关键数据】的数字与【金句摘录】的说法能不能回指原素材。
+// 「像不像人写的」「有没有料」机器判不了，得走 /media-material 的人工清单。
+//
+// 结论存 localStorage 不写库：它是"改完回来看一眼"的便签，不是发布台账
+// （台账在审核台 content_reviews）。存的时候带上稿件 updated_at，正文一改
+// 结论就过期——不许拿上一次的绿灯当现状。
+let _summaryItems = [];
+let _mcCache = null, _mcOpen = {};
+const MC_LS_KEY = 'v2t_material_check';
+
+function mcStore() {
+  if (!_mcCache) {
+    try { _mcCache = JSON.parse(localStorage.getItem(MC_LS_KEY) || '{}') || {}; }
+    catch (e) { _mcCache = {}; }
+  }
+  return _mcCache;
+}
+function mcPut(id, rec) {
+  mcStore()[id] = rec;
+  try { localStorage.setItem(MC_LS_KEY, JSON.stringify(_mcCache)); } catch (e) {}
+}
+function mcOf(id) { return mcStore()[id]; }
+// 稿件改过就没有可比性：updated_at 两边都有且不一致才算过期，
+// 缺任一（老数据、字段没回传）时按"无法判断"处理，仍显示结论但标注时间。
+function mcIsStale(rec, item) {
+  return !!(rec.updated_at && item.updated_at && rec.updated_at !== item.updated_at);
+}
+function mcLevelClass(lv) {
+  return 'lv-' + String(lv || '').toLowerCase();
+}
+function mcBadgeHtml(rec, item) {
+  if (mcIsStale(rec, item)) {
+    return '<span class="rv-pill rv-warn" title="体检做于 ' + esc(rec.checked_at)
+      + '，之后正文又改过，这个结论作废——重跑一次">结论已过期</span>';
+  }
+  // 只查了结构就报「可以发」是自欺：素材拉不到时结论降级成中性灰，
+  // 让人一眼看见"数字和金句到底有没有出处，本轮没验"。
+  if (rec.verdict === 'pass' && !rec.has_source) {
+    return '<span class="rv-pill rv-idle" title="没取到原素材（视频已删或引用断了）：只查了分节和泄漏，数字与金句没有回指">结构没塌·未回指</span>';
+  }
+  const tone = RV_TONE[rec.verdict] || 'rv-idle';
+  return '<span class="rv-pill ' + tone + '">' + esc(rec.label) + '</span>'
+    + (rec.fails ? '<span class="rv-pill rv-fail">FAIL ' + rec.fails + '</span>' : '')
+    + (rec.warns ? '<span class="rv-pill rv-warn">WARN ' + rec.warns + '</span>' : '');
+}
+function mcRepHtml(rec) {
+  const rows = rec.rows || [];
+  if (!rows.length) return '<div class="lv-info">没有明细</div>';
+  return rows.map(r => '<div class="' + mcLevelClass(r[0]) + '">[' + esc(r[0]) + '] '
+    + esc(r[1]) + '：' + esc(r[2]) + '</div>').join('');
+}
+function mcRowHtml(item) {
+  return '<div id="mc-wrap-' + item.id + '" onclick="event.stopPropagation()">'
+    + mcInnerHtml(item) + '</div>';
+}
+function mcInnerHtml(item) {
+  const rec = mcOf(item.id);
+  const badge = rec ? mcBadgeHtml(rec, item)
+                   : '<span class="rv-pill rv-idle">未体检</span>';
+  const open = !!_mcOpen[item.id] && rec;
+  return '<div class="s-mc">'
+    + '<button class="s-mc-btn" id="mc-btn-' + item.id + '" onclick="mcRun(' + item.id + ')">🔍 体检</button>'
+    + badge
+    + (rec ? '<span class="s-mc-link" onclick="mcToggle(' + item.id + ')">' + (open ? '收起' : '报告') + '</span>' : '')
+    + (rec ? '<span class="s-mc-time">体检于 ' + esc(rec.checked_at) + '</span>' : '')
+    + '</div>'
+    + '<div class="s-mc-rep" id="mc-rep-' + item.id + '"' + (open ? '' : ' style="display:none"') + '>'
+    + (rec ? mcRepHtml(rec) : '') + '</div>';
+}
+function mcPaint(id) {
+  const el = document.getElementById('mc-wrap-' + id);
+  const item = _summaryItems.filter(x => x.id === id)[0];
+  if (!el || !item) return;
+  el.innerHTML = mcInnerHtml(item);
+}
+function mcToggle(id) {
+  _mcOpen[id] = !_mcOpen[id];
+  mcPaint(id);
+}
+// 返回落库的记录，失败返回 null（批量要按结果计数，不能把没跑成的算成"可以发"）
+// openReport：手动跑一条时自动展开报告；批量跑不展开，否则十张卡一起变十屏长文。
+async function mcRun(id, openReport) {
+  const btn = document.getElementById('mc-btn-' + id);
+  if (btn) { btn.disabled = true; btn.textContent = '体检中…'; }
+  let d;
+  try {
+    d = await fetch('/api/content/summaries/' + id + '/material-check', {method: 'POST'})
+      .then(r => r.json());
+  } catch (e) { d = {error: e.message}; }
+  if (btn) { btn.disabled = false; btn.textContent = '🔍 体检'; }
+  if (d.error) { alert('体检失败：' + d.error); return null; }
+  const item = _summaryItems.filter(x => x.id === id)[0] || {};
+  const rec = {
+    verdict: d.verdict, label: d.label, fails: d.fails, warns: d.warns,
+    rows: d.rows || [], has_source: !!d.has_source,
+    updated_at: item.updated_at || '',
+    checked_at: new Date().toLocaleString('zh-CN')
+  };
+  mcPut(id, rec);
+  if (openReport !== false) _mcOpen[id] = true;
+  mcPaint(id);
+  return rec;
+}
+async function mcRunAll() {
+  const btn = document.getElementById('btn-mc-all');
+  const tip = document.getElementById('mc-all-tip');
+  const targets = _summaryItems.filter(it => it.summary_type === 'wechat_material');
+  if (!targets.length) { tip.textContent = '当前列表里没有公众号素材'; return; }
+  btn.disabled = true;
+  const done = {pass: 0, warn: 0, fail: 0};
+  let errored = 0;
+  for (let i = 0; i < targets.length; i++) {
+    tip.textContent = '体检中 ' + (i + 1) + '/' + targets.length;
+    const rec = await mcRun(targets[i].id, false);
+    if (rec) done[rec.verdict] = (done[rec.verdict] || 0) + 1; else errored++;
+  }
+  btn.disabled = false;
+  // 跑失败的条数必须说出来：只报三个数会把"有 2 条根本没跑成"洗成一片绿
+  tip.textContent = '已体检 ' + (targets.length - errored) + '/' + targets.length + '：可以发 '
+    + done.pass + ' / 改完再发 ' + done.warn + ' / 不能发 ' + done.fail
+    + (errored ? ' / 失败 ' + errored : '');
 }
 
 function renderInterviewQuestions(questions) {

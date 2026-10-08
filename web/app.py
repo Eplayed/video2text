@@ -1226,6 +1226,29 @@ def api_content_summary_detail(summary_id):
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/content/summaries/<int:summary_id>/material-check", methods=["POST"])
+def api_content_material_check(summary_id):
+    """整理稿体检：只查结构是否塌了、【关键数据】与【金句摘录】能否回指素材。
+
+    为什么不复用成稿的 /api/review/*/audit：素材档案是中间产物、写成清单体，
+    禁用句式与字数区间对它没意义；它真正的风险是 LLM 那条路把数字和金句编出来。
+    """
+    try:
+        with _db_lock:
+            item = content_store.get_summary(DB_PATH, summary_id)
+            if not item:
+                return jsonify({"error": "整理稿不存在"}), 404
+            sources = content_store.material_source_text(DB_PATH, item)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    result = draft_audit.audit_material(item.get("content") or "", sources)
+    return jsonify({"summary_id": summary_id, "summary_type": item.get("summary_type"),
+                    "has_source": bool(sources), "verdict": result["verdict"],
+                    "label": result["label"], "fails": result["fails"],
+                    "warns": result["warns"], "rows": result["rows"],
+                    "report": result["report"]})
+
+
 @app.route("/api/content/summaries/<int:summary_id>/regenerate", methods=["POST"])
 def api_content_regenerate(summary_id):
     """重新生成指定整理稿。"""

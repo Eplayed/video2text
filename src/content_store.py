@@ -325,6 +325,27 @@ def list_summaries(
         conn.close()
 
 
+def material_source_text(db_path: str | Path, summary: dict[str, Any]) -> str:
+    """整理稿对应的源素材文本（标题 + 标签 + 口播正文），供数字与金句回指比对。
+
+    标题和标签要一起进：很多数字来自标题（如「53K星」），只比对口播会把正确加工判成编造。
+    合集稿的源视频存在 source_video_ids，也要一起取。
+    """
+    ids = set()
+    if summary.get("video_id"):
+        ids.add(int(summary["video_id"]))
+    try:
+        ids |= {int(x) for x in json.loads(summary.get("source_video_ids") or "[]")}
+    except (ValueError, TypeError):
+        pass
+    if not ids:
+        return ""
+    parts = []
+    for v in get_videos_by_ids(db_path, sorted(ids)):
+        parts.append(" ".join(str(v.get(k) or "") for k in ("title", "tags", "ai_tags", "transcript")))
+    return " ".join(parts)
+
+
 def get_summary(db_path: str | Path, summary_id: int) -> dict[str, Any] | None:
     conn = connect(db_path)
     try:
