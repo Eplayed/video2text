@@ -369,6 +369,49 @@ textarea{resize:vertical;min-height:84px}
 #tt-gen-overlay .modal-box{position:relative;background:var(--surface-card);border-radius:var(--radius-sheet);box-shadow:var(--shadow-overlay);width:460px;max-width:92vw;max-height:92vh;overflow-y:auto;padding:24px 26px}
 /* 选题包弹窗：样式按 id 作用域写（本文件的弹窗都是这个规矩，不共用 .modal-box 基础类） */
 #pack-overlay .modal-box{position:relative;background:var(--surface-card);border-radius:var(--radius-sheet);box-shadow:var(--shadow-overlay);width:560px;max-width:92vw;max-height:92vh;overflow-y:auto;padding:24px 26px}
+/* 去 AI 味预览面板：宽面板 + 逐条 diff 卡片（沿用审核台那套状态胶囊配色） */
+#hum-overlay .modal-box{position:relative;background:var(--surface-card);border-radius:var(--radius-sheet);box-shadow:var(--shadow-overlay);width:880px;max-width:94vw;max-height:92vh;overflow-y:auto;padding:24px 26px}
+#hum-overlay h2{font-size:17px;margin-bottom:6px}
+#hum-overlay .hum-sub{font-size:12.5px;color:var(--text-secondary);line-height:1.6;margin-bottom:16px}
+#hum-overlay .hum-stage{font-size:13px;font-weight:700;color:var(--module-2)}
+#hum-overlay .hum-bar{height:4px;border-radius:999px;background:var(--accent-muted);overflow:hidden;margin:10px 0 6px}
+#hum-overlay .hum-bar i{display:block;height:100%;width:6%;border-radius:999px;background:var(--module-2);transition:width .6s linear}
+#hum-overlay .hum-note{font-size:11.5px;color:var(--text-tertiary)}
+#hum-overlay .hum-err{border:1px solid var(--danger);background:var(--danger-muted);border-radius:var(--radius-tile);padding:14px 16px;font-size:13px;line-height:1.6;color:var(--danger)}
+#hum-overlay .hum-verdict{display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:12.5px;margin-bottom:12px}
+#hum-overlay .hum-chip{border:1px solid var(--border-input);border-radius:999px;padding:3px 10px;font-size:11.5px;color:var(--text-secondary);background:var(--surface-card)}
+#hum-overlay .hum-chip b{color:var(--text);font-weight:800}
+#hum-overlay .hum-tabs{display:flex;align-items:center;gap:6px;border-bottom:1px solid var(--border-input);padding-bottom:8px;margin-bottom:10px}
+#hum-overlay .hum-warn{border:1px solid var(--danger);background:var(--danger-muted);color:#b3352f;border-radius:var(--radius-tile);padding:10px 12px;font-size:12.5px;line-height:1.65;margin-bottom:10px}
+#hum-overlay .hum-tab{border:0;background:transparent;font-size:12.5px;color:var(--text-secondary);cursor:pointer;padding:5px 10px;border-radius:999px}
+#hum-overlay .hum-tab.on{background:var(--accent-muted);color:var(--text);font-weight:700}
+#hum-overlay .hum-spacer{flex:1}
+#hum-overlay .hum-count{font-size:11.5px;color:var(--text-tertiary);margin-right:4px}
+#hum-overlay .hum-list{display:flex;flex-direction:column;gap:8px;max-height:46vh;overflow-y:auto;padding-right:2px}
+#hum-overlay .hum-item{border:1px solid var(--border-input);border-left:3px solid var(--module-2);border-radius:var(--radius-tile);background:var(--surface-card);padding:10px 12px}
+#hum-overlay .hum-item.off{opacity:.45;border-left-color:var(--border-input)}
+#hum-overlay .hum-item-h{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--text-secondary);margin-bottom:6px}
+/* 工作台全局把 input 拉成 100% 宽，勾选框会被撑到卡片中间（截图里发现的实际走形） */
+#hum-overlay .hum-item-h input[type=checkbox]{width:auto;flex:0 0 auto;margin:0;accent-color:var(--module-2);cursor:pointer}
+#hum-overlay .hum-why{border:1px solid var(--border-input);border-radius:999px;padding:1px 8px;font-size:11px}
+#hum-overlay .hum-idx{font-weight:800;color:var(--text)}
+#hum-overlay .hum-diff{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+#hum-overlay .hum-from,#hum-overlay .hum-to{border-radius:var(--radius-control);padding:8px 10px;font-size:12.5px;line-height:1.65;white-space:pre-wrap;word-break:break-word}
+#hum-overlay .hum-from{background:var(--accent-muted);color:var(--text-secondary);text-decoration:line-through;text-decoration-color:rgba(35,34,32,.28)}
+#hum-overlay .hum-to{background:rgba(111,143,106,.14);color:var(--text)}
+#hum-overlay .hum-full{border:1px dashed var(--border-input);border-radius:var(--radius-control);padding:12px 14px;font-family:ui-monospace,Menlo,monospace;font-size:11.5px;line-height:1.7;white-space:pre-wrap;max-height:46vh;overflow-y:auto;background:var(--surface-card)}
+#hum-overlay .hum-rej{margin-top:12px;border:1px solid var(--border-input);border-radius:var(--radius-tile);padding:10px 12px;background:var(--accent-muted)}
+#hum-overlay .hum-rej-h{font-size:12px;font-weight:700;color:#a2691a;margin-bottom:6px}
+#hum-overlay .hum-rej-row{font-size:11.5px;color:var(--text-secondary);line-height:1.6;margin-bottom:4px}
+#hum-overlay .hum-rej-row b{color:var(--text)}
+#hum-overlay .hum-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:14px}
+#hum-overlay .hum-done{margin-top:12px;border:1px solid var(--module-1);background:rgba(111,143,106,.12);border-radius:var(--radius-tile);padding:12px 14px;font-size:12.5px;line-height:1.7}
+#hum-overlay .hum-done code{font-family:ui-monospace,Menlo,monospace;font-size:11px;word-break:break-all}
+@media (prefers-color-scheme:dark){
+  #hum-overlay .hum-from{text-decoration-color:rgba(244,243,240,.3)}
+  #hum-overlay .hum-to{background:rgba(111,143,106,.2)}
+  #hum-overlay .hum-rej-h{color:#f0b95c}
+}
 #pack-result textarea{width:100%;border:1px solid var(--border-input);border-radius:var(--radius-control);padding:9px 12px;font-size:12px;background:var(--surface-card);color:var(--text-primary);resize:vertical}
 /* 发布审核台：状态徽章 + 行 */
 .rv-row{display:flex;align-items:center;gap:10px;padding:11px 14px;border:1px solid var(--border-input);border-radius:var(--radius-control);background:var(--surface-card);margin-bottom:8px}
@@ -1519,6 +1562,56 @@ textarea{resize:vertical;min-height:84px}
       <div style="display:flex;gap:8px;margin-top:8px">
         <button class="btn sm ghost" onclick="copyPackCmd()">复制这段指令</button>
         <button class="btn sm ghost" onclick="revealPack()">在访达显示</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ════ 去 AI 味：改写预览（先 dry-run，勾选后才写库）════ -->
+<div class="modal-overlay" id="hum-overlay" role="dialog" aria-modal="true" aria-label="去 AI 味改写预览" onclick="humClose(event)">
+  <div class="modal-box" onclick="event.stopPropagation()">
+    <button class="close-btn" aria-label="关闭" onclick="humClose()">✕</button>
+    <h2>去 AI 味 · 定点改写</h2>
+    <div class="hum-sub">只改体检点到的句子，其余一字不动。<b>先预览，你勾选后才会写回整理稿</b>；写回前自动存一份原稿备份。</div>
+
+    <div id="hum-run">
+      <div class="hum-stage" id="hum-stage">准备中…</div>
+      <div class="hum-bar"><i id="hum-bar-i"></i></div>
+      <div class="hum-note" id="hum-note"></div>
+    </div>
+
+    <div id="hum-err" class="hum-err" style="display:none" role="alert">
+      <div id="hum-err-msg"></div>
+      <div class="hum-actions">
+        <button class="btn sm" onclick="humStart()">再试一次</button>
+        <button class="btn sm ghost" onclick="humClose()">关闭</button>
+      </div>
+    </div>
+
+    <div id="hum-body" style="display:none">
+      <div class="hum-verdict" id="hum-verdict"></div>
+      <div class="hum-warn" id="hum-warn" style="display:none"></div>
+      <div class="hum-tabs">
+        <button class="hum-tab on" id="hum-tab-list" onclick="humTab('list')">逐条对照</button>
+        <button class="hum-tab" id="hum-tab-full" onclick="humTab('full')">改后全文</button>
+        <span class="hum-spacer"></span>
+        <span class="hum-count" id="hum-count"></span>
+        <button class="btn sm ghost" onclick="humToggleAll(true)">全选</button>
+        <button class="btn sm ghost" onclick="humToggleAll(false)">全不选</button>
+      </div>
+      <div id="hum-list" class="hum-list"></div>
+      <pre id="hum-full" class="hum-full" style="display:none"></pre>
+
+      <div id="hum-rej" class="hum-rej" style="display:none">
+        <div class="hum-rej-h" id="hum-rej-h"></div>
+        <div id="hum-rej-list"></div>
+        <button class="btn sm ghost" onclick="humRetry()">只重试这几条</button>
+      </div>
+
+      <div class="hum-done" id="hum-done" style="display:none"></div>
+      <div class="hum-actions" id="hum-foot">
+        <button class="btn ghost" onclick="humDiscard()">放弃</button>
+        <button class="btn" id="hum-apply" onclick="humApply()">应用</button>
       </div>
     </div>
   </div>
@@ -4792,6 +4885,215 @@ function renderSummaryContent(text) {
   );
 }
 
+// ── 去 AI 味：先 dry-run 预览，勾选后才写库（后端只把预览放内存，不碰整理稿）──
+const HUM = { id: 0, preview: null, picked: [], timer: null, worse: false };
+function humShell(which) {
+  ['hum-run', 'hum-err', 'hum-body'].forEach(k => { document.getElementById(k).style.display = 'none'; });
+  if (which) document.getElementById(which).style.display = '';
+}
+function openHumDialog(id) {
+  HUM.id = id; HUM.preview = null; HUM.picked = [];
+  document.getElementById('hum-overlay').style.display = 'flex';
+  document.getElementById('hum-done').style.display = 'none';
+  document.getElementById('hum-foot').style.display = '';
+  humShell('hum-run');
+  document.getElementById('hum-stage').textContent = '看看有没有跑好的预览…';
+  document.getElementById('hum-note').textContent = '';
+  document.getElementById('hum-bar-i').style.width = '6%';
+  // 上一次跑出来的预览还在后台（内存里），直接拿来用——不然每次都要再等主模型三四分钟
+  fetch('/api/content/humanize/status').then(r=>r.json()).then(s=>{
+    if (s.running) { humPoll(); return; }
+    if (s.preview && s.preview.summary_id === HUM.id) {
+      HUM.preview = s.preview;
+      HUM.picked = s.preview.edits.map((_, i) => i);
+      document.getElementById('hum-note').textContent = '用的是上次跑好的预览（' + s.preview.created_at + '）';
+      humRender();
+      return;
+    }
+    humStart([]);
+  }).catch(e => humFail('读状态失败：' + e.message));
+}
+async function humStart(retry) {
+  humShell('hum-run');
+  document.getElementById('hum-bar-i').style.width = '6%';
+  document.getElementById('hum-note').textContent = '';
+  const r = await fetch('/api/content/humanize', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ summary_id: HUM.id, retry: retry || [] })
+  }).then(x => x.json()).catch(e => ({ error: e.message }));
+  if (r.error) { humFail(r.error); return; }
+  humPoll();
+}
+function humPoll() {
+  clearInterval(HUM.timer);
+  let n = 0;
+  HUM.timer = setInterval(async () => {
+    n += 1;
+    const s = await fetch('/api/content/humanize/status').then(x => x.json()).catch(() => null);
+    if (!s) return;
+    if (s.running) {
+      // 进度条按真实耗时爬（主模型这步实测 2-4 分钟），最多到 90%，不装"快好了"
+      const pct = Math.min(90, 6 + (s.elapsed || 0) / 240 * 84);
+      document.getElementById('hum-bar-i').style.width = pct.toFixed(1) + '%';
+      document.getElementById('hum-stage').textContent = s.stage || '处理中…';
+      document.getElementById('hum-note').textContent =
+        '已用 ' + (s.elapsed || 0) + ' 秒 · 三步：体检取清单 → 模型定点改 → 复检对照'
+        + '（第二步用的是主模型，通常 2-4 分钟；关掉窗口不会中断它）';
+      return;
+    }
+    clearInterval(HUM.timer); HUM.timer = null;
+    document.getElementById('hum-bar-i').style.width = '100%';
+    if (s.error) { humFail(s.error); return; }
+    if (!s.preview) { humFail('没拿到预览结果（后台线程可能异常退出）。整理稿一个字都没动。'); return; }
+    HUM.preview = s.preview;
+    HUM.picked = s.preview.edits.map((_, i) => i);
+    humRender();
+  }, 1500);
+}
+function humFail(msg) {
+  document.getElementById('hum-err-msg').innerHTML =
+    '❌ ' + esc(msg) + '<br><small>整理稿没有做任何改动，可以放心再试或去会话里手工改。</small>';
+  humShell('hum-err');
+}
+function humChip(text, tone) {
+  return '<span class="hum-chip">' + text + '</span>';
+}
+function humRender() {
+  const p = HUM.preview;
+  humShell('hum-body');   // 忘了切面板就会一直停在进度条上（实测踩过：预览算好了页面却不换）
+  if (!p.edits.length) {
+    // 模型明确交 {"edits":[]} 是有效结论（这篇没可改的），不能报成"格式跑偏"
+    document.getElementById('hum-verdict').innerHTML =
+      '<span class="rv-pill ' + (p.after.fails ? 'rv-fail' : (p.after.warns ? 'rv-warn' : 'rv-pass')) + '">'
+        + esc(p.after.label || '') + '</span>' + humChip('拟改 <b>0</b> 处')
+      + humChip('必改项 FAIL <b>' + p.before.fails + ' → ' + p.after.fails + '</b>');
+    document.getElementById('hum-list').innerHTML = '';
+    document.getElementById('hum-count').textContent = '';
+    document.getElementById('hum-rej').style.display = 'none';
+    document.getElementById('hum-full').style.display = 'none';
+    document.getElementById('hum-apply').style.display = 'none';
+    document.getElementById('hum-warn').style.display = 'none';
+    HUM.worse = false;
+    document.getElementById('hum-done').innerHTML = 'ℹ️ ' + esc(p.note || '模型认为这篇没有可改的句子。');
+    document.getElementById('hum-done').style.display = '';
+    return;
+  }
+  document.getElementById('hum-apply').style.display = '';
+  document.getElementById('hum-done').style.display = 'none';
+  const scoreTxt = (p.before.score === null || p.before.score === undefined)
+    ? '—' : Number(p.before.score).toFixed(1);
+  const scoreAfter = (p.after.score === null || p.after.score === undefined)
+    ? '—' : Number(p.after.score).toFixed(1);
+  document.getElementById('hum-verdict').innerHTML =
+    '<span class="rv-pill ' + (p.after.fails ? 'rv-fail' : (p.after.warns ? 'rv-warn' : 'rv-pass')) + '">'
+      + esc(p.after.label || '') + '</span>'
+    + humChip('拟改 <b>' + p.edits.length + '</b> 处')
+    + (p.rejected.length ? humChip('模型交不出可用改法 <b>' + p.rejected.length + '</b> 处') : '')
+    + humChip('字数 <b>' + (p.drift >= 0 ? '+' : '') + Math.round(p.drift * 100) + '%</b>')
+    + humChip('必改项 FAIL <b>' + p.before.fails + ' → ' + p.after.fails + '</b>')
+    + humChip('AI 味 <b>' + scoreTxt + ' → ' + scoreAfter + '</b>')
+    + '<span class="hum-chip" title="' + esc(p.rules_from || '') + '">纪律来自 skill 文件</span>';
+  // 复检是按「全部勾选前」算的：改完反而更差时必须先警告，别让人顺手点应用
+  const worse = (p.after.fails || 0) > (p.before.fails || 0)
+    || ((p.after.score || 0) - (p.before.score || 0)) > 5;
+  HUM.worse = worse;
+  const warn = document.getElementById('hum-warn');
+  warn.style.display = worse ? '' : 'none';
+  if (worse) {
+    warn.innerHTML = '⚠️ 这一版<b>改完体检反而变差</b>：FAIL ' + (p.before.fails || 0) + ' → ' + (p.after.fails || 0)
+      + '，AI 味 ' + Number(p.before.score || 0).toFixed(1) + ' → ' + Number(p.after.score || 0).toFixed(1)
+      + '。多半是它顺手删掉了带动作的「我」。<b>别全选</b>：只勾确实变好的那几条，'
+      + '应用后系统会按真正写进去的内容重新体检并显示结果。';
+  }
+  document.getElementById('hum-list').innerHTML = p.edits.map((e, i) => `
+    <div class="hum-item ${HUM.picked.includes(i) ? '' : 'off'}">
+      <div class="hum-item-h">
+        <input type="checkbox" id="hum-cb-${i}" ${HUM.picked.includes(i) ? 'checked' : ''}
+               onchange="humToggleOne(${i}, this.checked)" aria-label="应用第 ${i + 1} 处改动">
+        <label for="hum-cb-${i}" class="hum-idx">#${i + 1}</label>
+        <span class="hum-why">${esc(e.why || '定点改写')}</span>
+      </div>
+      <div class="hum-diff">
+        <div class="hum-from">${esc(e.from)}</div>
+        <div class="hum-to">${esc(e.to)}</div>
+      </div>
+    </div>`).join('');
+  document.getElementById('hum-full').textContent = p.preview_md || '';
+  const rej = p.rejected || [];
+  document.getElementById('hum-rej').style.display = rej.length ? '' : 'none';
+  if (rej.length) {
+    document.getElementById('hum-rej-h').textContent =
+      '这 ' + rej.length + ' 处模型给的原文定位不到（多半是它自己把原文改了），没采纳：';
+    document.getElementById('hum-rej-list').innerHTML = rej.map(e =>
+      '<div class="hum-rej-row"><b>' + esc(String(e.from || '').slice(0, 40)) + '…</b>　' + esc(e.reason || '') + '</div>'
+    ).join('');
+  }
+  humTab('list');
+  humSyncFoot();
+}
+function humTab(which) {
+  document.getElementById('hum-tab-list').className = 'hum-tab' + (which === 'list' ? ' on' : '');
+  document.getElementById('hum-tab-full').className = 'hum-tab' + (which === 'full' ? ' on' : '');
+  document.getElementById('hum-list').style.display = which === 'list' ? '' : 'none';
+  document.getElementById('hum-full').style.display = which === 'full' ? '' : 'none';
+}
+function humToggleOne(i, on) {
+  const s = new Set(HUM.picked);
+  if (on) s.add(i); else s.delete(i);
+  HUM.picked = [...s].sort((a, b) => a - b);
+  humRender();
+}
+function humToggleAll(on) {
+  HUM.picked = on ? HUM.preview.edits.map((_, i) => i) : [];
+  humRender();
+}
+function humSyncFoot() {
+  const btn = document.getElementById('hum-apply');
+  const n = HUM.picked.length;
+  btn.textContent = !n ? '至少勾一条才能应用'
+    : (HUM.worse ? '仍然应用勾选的 ' + n + ' 处（复检变差了）' : '应用勾选的 ' + n + ' 处（写回整理稿）');
+  btn.disabled = n === 0;
+  document.getElementById('hum-count').textContent =
+    '已勾 ' + n + ' / ' + HUM.preview.edits.length + ' 处';
+}
+async function humRetry() {
+  const rej = (HUM.preview && HUM.preview.rejected) || [];
+  if (!rej.length) return;
+  await humStart(rej);
+}
+async function humApply() {
+  if (!HUM.picked.length) return;
+  if (!confirm('把勾选的 ' + HUM.picked.length + ' 处写回整理稿？\n原稿会自动存一份备份。')) return;
+  const btn = document.getElementById('hum-apply');
+  btn.disabled = true; btn.textContent = '写入中…';
+  const r = await fetch('/api/content/humanize/apply', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ summary_id: HUM.id, keep: HUM.picked })
+  }).then(x => x.json()).catch(e => ({ error: e.message }));
+  btn.disabled = false;
+  if (r.error) { humFail(r.error); return; }
+  const a = r.after || {};
+  document.getElementById('hum-done').innerHTML =
+    '✅ 已写回整理稿：应用 <b>' + r.applied + '</b> 处，字数 '
+    + (r.drift >= 0 ? '+' : '') + Math.round(r.drift * 100) + '%，复检结论 <b>' + esc(a.label || '') + '</b>'
+    + '（FAIL ' + (a.fails || 0) + ' / WARN ' + (a.warns || 0) + '）。<br>'
+    + '原稿备份：<code>' + esc(r.bak || '') + '</code>';
+  document.getElementById('hum-done').style.display = '';
+  document.getElementById('hum-foot').style.display = 'none';
+  HUM.preview = null;
+  refreshReviewBadge();
+}
+async function humDiscard() {
+  await fetch('/api/content/humanize/discard', { method: 'POST' }).catch(() => {});
+  HUM.preview = null; HUM.picked = [];
+  humClose();
+}
+function humClose(event) {
+  if (event && event.target.id !== 'hum-overlay') return;
+  clearInterval(HUM.timer); HUM.timer = null;
+  document.getElementById('hum-overlay').style.display = 'none';
+}
+
 async function openSummary(id) {
   resetModal();
   showModal();
@@ -4821,6 +5123,7 @@ async function openSummary(id) {
   window.currentSummaryStructuredData = data.structured_data || '';
   document.getElementById('modal-actions').innerHTML = `
     <a href="${esc(data.video_url||'#')}" target="_blank"><button class="btn sm">▶ 观看原视频</button></a>
+    ${data.summary_type === 'toutiao_mix' ? `<button class="btn ghost sm" onclick="closeModal();openHumDialog(${id})" title="按体检清单定点改写，先预览再决定写不写回">🧹 去 AI 味</button>` : ''}
     ${data.summary_type === 'toutiao_mix' ? `<button class="btn sm" style="background:var(--module-3);border-color:var(--module-3);color:#fff" onclick="closeModal();openToutiaoGenDialog(${id})">🔥 生成头条图文</button>` : ''}
     ${data.summary_type === 'wechat_material' ? `<button class="btn sm" style="background:var(--module-1);border-color:var(--module-1);color:#fff" onclick="closeModal();openWechatGenDialog(${id})">💬 生成公众号图文</button>` : ''}
     <button class="btn sm" style="background:var(--module-5);border-color:var(--module-5);color:#fff" onclick="closeModal();openPosterDialog(${id})">🎨 AI 海报</button>

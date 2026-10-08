@@ -11,7 +11,7 @@ sys.path.insert(0, str(ROOT))
 
 import main as collector  # main.py
 from src import content_store, material_store, toutiao_graphics, ai_poster, sync_tasks, topic_pack
-from src import draft_audit, review_store, toutiao_stats
+from src import draft_audit, review_store, toutiao_stats, humanize_routes
 from src.graphics.channels import wechat as wechat_graphics
 from src.graphics.channels import toutiao as toutiao_channel
 from src.graphics import variants as graphics_variants
@@ -1390,6 +1390,13 @@ def _review_target(kind: str, ref_id: str):
         title = next((ln.strip()[2:] for ln in text.splitlines() if ln.startswith("# ")), path.stem)
         return text, "", title, str(path)
     raise ValueError("kind 只能是 toutiao / article")
+
+
+# ── 整理稿「去 AI 味」两步接口（预览 → 勾选 → 应用）──────────────────
+# 实现抽在 src/humanize_routes.py：app.py 常被多会话同改，上一轮我的端点与别人的改动
+# 相邻、git 合成同一个 hunk 拆不开。撞面从 140 行降到这 2 行。
+app.register_blueprint(humanize_routes.make_blueprint(
+    DB_PATH, OUTPUT_DIR, _ai_config, _db_lock, app.logger))
 
 
 @app.route("/api/review/items")
