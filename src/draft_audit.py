@@ -145,15 +145,26 @@ def _verify_js(draft_path: str, rows: List[Tuple[str, str, str]]) -> None:
     if not os.path.exists(VERIFY_JS):
         rows.append(("WARN", "机检", "找不到 verify_toutiao.js（生产层仓库没在预期位置）"))
         return
-    code, out = _run(["node", VERIFY_JS, draft_path])
+    # _run 把 node 的工作目录切到生产层仓库，所以这里必须传绝对路径：
+    # 传相对路径时 verify_toutiao.js 找不到文件，一行 [PASS/FAIL] 都不输出，
+    # 于是「机检静默跳过」会被读成「机检没问题」——2026-10-07 实测踩到，假绿。
+    abs_path = os.path.abspath(draft_path)
+    code, out = _run(["node", VERIFY_JS, abs_path])
+    before = len(rows)
     for line in out.splitlines():
-        m = re.search(r"\[(PASS|WARN|FAIL)\]\s*(.+?)\s*—\s*(.*)", line)
+        # detail 段可选：verify_toutiao.js 里「复制区结构」「无占位标记」「禁用句式」
+        # 通过时不带「— 说明」，早先用必须带破折号的正则去匹配会把这几行整个丢掉，
+        # 2026-10-07 实测过一次：机检 6 项只透出 3 项，看着像漏检。
+        m = re.search(r"\[(PASS|WARN|FAIL)\]\s*(.+?)(?:\s+—\s+(.*))?$", line)
         if m:
-            rows.append((m.group(1), "机检·" + m.group(2).strip(), m.group(3).strip()))
+            rows.append((m.group(1), "机检·" + m.group(2).strip(), (m.group(3) or "").strip()))
         elif "质检结论" in line:
             rows.append(("INFO", "机检·总结论", line.strip().lstrip("❌✅ ")))
     if code == 99:
         rows.append(("WARN", "机检", out))
+    if len(rows) == before:
+        rows.append(("WARN", "机检", "verify_toutiao.js 没有任何输出（多半是稿子里没有「━━━━━━ 头条号 · 复制区 ━━━━━━」标记，"
+                                     "或 node 调用失败），这次没机检，别当已通过"))
 
 
 def audit(md_text: Optional[str] = None, manifest: Optional[Dict[str, Any]] = None,
