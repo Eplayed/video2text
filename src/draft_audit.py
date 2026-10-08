@@ -168,8 +168,9 @@ def _verify_js(draft_path: str, rows: List[Tuple[str, str, str]],
         rows.append(("WARN", "机检", out))
     elif got == 0:
         rows.append(("WARN", "机检",
-                     "verify_toutiao.js 没吐出可解析的结论行（退出码 %s，输出开头：%s）——"
-                     "这不算通过，先查为什么空" % (code, out.strip()[:90])))
+                     "verify_toutiao.js 没有任何可解析输出（退出码 %s，输出开头：%s）——"
+                     "多半是稿子里没有「复制区」标记，或 node 调用失败；这次等于没机检，别当已通过"
+                     % (code, out.strip()[:90])))
 
 
 def audit(md_text: Optional[str] = None, manifest: Optional[Dict[str, Any]] = None,
@@ -195,8 +196,15 @@ def audit(md_text: Optional[str] = None, manifest: Optional[Dict[str, Any]] = No
         nums = _audit_prose(prose, rows, narrator_text=copy_text, narrator_level="WARN")
     else:
         prose = extract_body(md_text or "")
-        if use_verify and draft_path and "复制区" in (md_text or ""):
-            _verify_js(draft_path, rows, sources_path)
+        if use_verify and draft_path:
+            if "复制区" in (md_text or ""):
+                _verify_js(draft_path, rows, sources_path)
+            else:
+                # 跳过也要留痕：没有复制区标记就整段不跑机检，报告只剩本层三项，
+                # 不写这一行就会让人以为"没列出来 = 都过了"。
+                rows.append(("INFO", "机检",
+                             "跳过：稿子里没有「头条号 · 复制区」标记，verify_toutiao.js 不认这种结构，"
+                             "本次只查了泄漏/叙述者/AI 味"))
         nums = _audit_prose(prose, rows)
     if sources_text:
         _cross_check(nums, sources_text, rows)
