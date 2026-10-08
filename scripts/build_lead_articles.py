@@ -71,12 +71,12 @@ REPLY = {
 其中 %(hc)s 道手撕代码的参考实现都在 node 里跑过断言，不是"看起来对"。
 
 完整目录和样章在这里看：【填你的页面链接】
-需要的话直接回我一句「题库」，我把购买方式发你。
+完整版 %(price)s 元，购买方式：【填你的收款链接】——不用回复关键词，链接直接给你。
 
 ## 说明（为什么这么写）
 - 开头不说"感谢关注"，直接给内容——读者是来找题的，不是来寒暄的；
 - 把主题清单列出来，是为了让他在微信里就能判断"有没有我要的那块"，比一句广告语转化高；
-- 结尾留一个"再回一次"的动作，是为了把只想要免费部分的人和愿意付钱的人分开，后者才值得跟进。
+- 购买方式直接给链接，不要求"回一句 XX 才发"：那是公众号运营规范 3.3.2 的诱导关注形态，铁律 v1.2 废止、v1.9（2026-10-08）结案维持。愿意付钱的人自然会点链接。
 """
 }
 
@@ -192,7 +192,8 @@ def main():
         print("  %-34s %d 道完整题，%d 字" % (spec["file"], len(qs), len(md)))
     themes = "\n".join("- %s：%d 道" % (t, len(groups.get(t) or []))
                        for t in [x for x, _ in bib.THEMES] + [bib.FALLBACK_THEME] if groups.get(t))
-    reply = REPLY["body"] % {"total": total, "themes": themes, "hc": len(handcode)}
+    reply = REPLY["body"] % {"total": total, "themes": themes, "hc": len(handcode),
+                        "price": bib.PRICE}
     (OUT_DIR / REPLY["file"]).write_text(reply, encoding="utf-8")
     print("  %-34s %d 字" % (REPLY["file"], len(reply)))
     print("合计 %d 个文件 → %s" % (len(made) + 1, OUT_DIR))

@@ -24,8 +24,11 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import build_interview_bank as bib    # noqa: E402  版本号只有一个地方能定
+
 ROOT = Path(__file__).resolve().parent.parent
-BANK = ROOT / "product" / "AI面试答案库-v0.2.md"
+BANK = ROOT / "product" / ("AI面试答案库-v%s.md" % bib.VERSION)   # 跟着 bib 的版本走，别写死
 DB = ROOT / "output" / "video2text.db"
 OUT_HTML = ROOT / "product" / "前端面试95题知识地图.html"
 OUT_PNG = ROOT / "product" / "前端面试95题知识地图.png"

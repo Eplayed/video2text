@@ -48,13 +48,15 @@ COPY = {
     ],
     "faq": [
         ("内容哪来的？", "对公开分享（视频 / 文章）做转述整理，题目化和归纳有 AI 辅助，"
-                    "再逐条剔除「离开原视频就看不懂」的题、改写题干里的指代。"),
+                    "再逐条剔除「离开原视频就看不懂」的题、改写题干里的指代。"
+                    "这一条不是嘴上说的：`scripts/audit_answer_bank.py` 逐条复检题干指代、"
+                    "题干残缺、答案缺段、题材与小节是否对得上，v0.3 跑出来是 FAIL 0 / WARN 0。"),
         ("数字和结论能直接引用吗？", "不能。参数量、延迟、成本这类事实请自己再核一遍公开来源，"
                               "这份资料不构成任何官方说法。"),
         ("为什么手撕代码那部分可以信？", "19 道每条的参考实现都在 node 里跑过断言（脚本会逐条执行，跑不通的不进这份资料）。"
                                   "别的面经给你的是「看起来对」的代码，这里给的是执行过的代码。"),
         ("这一版还缺什么？", "场景题还没有「换成你自己项目怎么答」的填空模板，也没有项目追问清单；"
-                        "算法岗的推导题、论文题不在范围内。补上之后价格上调，已买的按下面的联系方式补发。"),
+                        "算法岗的推导题、论文题不在范围内。这些补上之后不另收费，已买的按下面的联系方式补发新版。"),
         ("多少钱、怎么买？", "见下面的价格与购买方式。【填完再对外发】"),
     ],
 }
@@ -191,7 +193,11 @@ TPL = """<!doctype html>
   <p class="price"><b>￥%(price)s</b><s>后续加题不另收费</s></p>
   <p>付款方式：<span class="todo">【待填：小报童 / 知识星球链接，或微信号】</span></p>
   <p>买完怎么发货：<span class="todo">【待填：付款后加微信发文件，还是平台自动发货】</span></p>
-  <p class="lede">v0.1 是 %(nq)s 题；补上手撕代码题之后会涨到 100 题以上，价格跟着上调，已买的按上面的联系方式补发。</p>
+  <p class="lede">为什么只卖 %(price)s 元：这份是我自己产线跑出来的东西，多卖一份不多花一分钱，
+  定价只为筛掉"完全不想为信息付费"的人，不为赚钱；真需要有人帮你把这条线搭起来，那是另一件事，
+  联系方式就在上面那两行里。</p>
+  <p class="lede">版本：v%(version)s（%(nq)s 题，含手撕 %(hc)s 道）。后续加题不另收费，
+  已买的按上面的联系方式补发新版。</p>
 </section>
 <section>
   <h2>几个老实问题</h2>
@@ -281,7 +287,7 @@ def build(groups, keep, samples, handcode):
         toc.append("<details><summary>%s<span class=\"n\">%d 题</span></summary><ol class=\"q\">%s</ol></details>"
                    % (esc(t), len(qs), items))
     faq = "".join("<dt>%s</dt><dd>%s</dd>" % (esc(a), esc(b)) for a, b in COPY["faq"])
-    price = "39.9"
+    price = bib.PRICE           # 定价统一读 build_interview_bank.PRICE，别在页面里各写一个数
     todo_marks = 2                      # 付款方式、发货方式
     themes = len([1 for x, _ in bib.THEMES if groups.get(x)] +
                  [1 for x in [bib.FALLBACK_THEME] if groups.get(x)]) + (1 if handcode else 0)
@@ -302,7 +308,7 @@ def build(groups, keep, samples, handcode):
         "toc": "".join(toc), "hc_list": hc_list, "hc_demo": hc_html(demo) if demo else "",
         "nhc": len(handcode),
         "samples": "".join(qa_html(q) for q in samples), "nsm": len(samples),
-        "faq": faq, "price": price, "warn": warn, "date": datetime.now().strftime("%Y-%m-%d"),
+        "faq": faq, "price": price, "version": bib.VERSION, "hc": len(handcode), "warn": warn, "date": datetime.now().strftime("%Y-%m-%d"),
     }, todo_marks
 
 
