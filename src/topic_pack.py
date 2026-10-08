@@ -28,6 +28,20 @@ WINDOW_HOURS = 48          # 算「同一件事」的时间窗
 MERGE_RATIO = 0.8          # 成员重叠这么多才合并；0.6 实测会把「RMT处罚」和「达拉然新副本」并成一坨
 NUM_PHRASE = re.compile(r'\d+(?:\.\d+)?\s*(?:小时|级|天|周|%|％|个|元|人|分钟|次|层|件)')
 
+# 选题包的出口渠道：包本身只做「捞全 + 对齐」，尾部给会话的指令按渠道切换。
+# 规则文件只写路径不写版本号——《公众号写作铁律》文件头标 v1.0 而正文已加到 v1.8，
+# 写死版本等于把过期口径固化进产线（同类问题见交接文档 §二 大纲版本行不一致）。
+PACK_CHANNELS = {
+    'toutiao': {'label': '头条文章', 'rules': '~/Documents/自媒体/头条出稿规范.md',
+                'gate': '先 /media-material 把素材打成档案 → content-research-writer 出稿 → '
+                        '/article-audit 拿必改清单 → 按清单 /article-humanize 定点改（补颗粒，不换词）→ '
+                        '复检到「可以发」→ 图文包在「审核台」按 头条图文 体检'},
+    'wechat': {'label': '公众号图文', 'rules': '~/Documents/自媒体/公众号写作铁律.md',
+               'gate': '先 /media-material 把素材打成档案（7 分节）→ content-research-writer 出稿 → '
+                       '/article-audit 拿必改清单 → 按清单 /article-humanize 定点改（补颗粒，不换词）→ '
+                       '复检到「可以发」→ 出图后在「审核台」按 公众号图文 体检'},
+}
+
 
 def _grams(text: str) -> set:
     raw = re.sub(r'[\s，。、！？：；「」『』（）()\[\]/\-—#*.]+', '', text or '')
@@ -35,24 +49,27 @@ def _grams(text: str) -> set:
 
 
 def _tag_tokens(tags: str) -> set:
-    """ai_tags 是模型打好的空格分词，直接拿词根当话题词。
+    """ai_tags 是模型打好的空格分词，拆成词根当话题词。
 
     为什么不用标题的滑窗 2-gram：跨词切会造出「兽无」「限服」「Be/ta」这类碎片，
     实测 60 条素材聚出 50 个簇、全是噪声。标签取首尾两字，能对上
     「经验调整 / 经验削减 / 副本经验」这种同词根不同后缀的情况。
+
+    但首尾两字只对中文适用：英文标签必须整词保留。原先对含字母的标签既加整词
+    又切首尾，Embedding 造出 em/ing、Tokenizer 造出 to/izer、RAG工程 造出 ra——
+    这些后缀几乎每条英文标签都有，于是跨素材乱聚成伪簇（AI技术线实测 24 个簇里
+    话题词是「Ag、多智、教程」「AI、ai」，就是这种噪声）。现按字符类型拆开分别处理。
     """
     out = set()
     for tag in re.split(r'[\s,，、;；/|]+', tags or ''):
-        tag = tag.strip()
-        if not tag:
-            continue
-        if re.search(r'[A-Za-z]', tag):
-            out.add(tag.lower())
-        if len(tag) <= 2:
-            out.add(tag)
-        else:
-            out.add(tag[:2])
-            out.add(tag[-2:])
+        for part in re.findall(r'[A-Za-z]+|[一-鿿]+', tag or ''):
+            if part.isascii():          # 英文/数字词：整词保留，不切
+                out.add(part.lower())
+            elif len(part) <= 2:
+                out.add(part)
+            else:                       # 中文词根：首尾两字，兼容同词根不同后缀
+                out.add(part[:2])
+                out.add(part[-2:])
     return out
 
 
@@ -170,8 +187,13 @@ def _merge_overlapping(groups: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 
 def build_pack(videos: Sequence[Dict[str, Any]], theme: str = '',
-               used_ids: Iterable[int] = ()) -> Tuple[str, Dict[str, Any]]:
-    """拼选题包 markdown，同时返回统计（前端显示用，也便于断言）。"""
+               used_ids: Iterable[int] = (), channel: str = 'toutiao') -> Tuple[str, Dict[str, Any]]:
+    """拼选题包 markdown，同时返回统计（前端显示用，也便于断言）。
+
+    channel 只影响尾部给会话的出口指令（走哪份规则、进哪个门禁 kind），
+    捞全与聚类的口径两条渠道完全一致——素材不该为渠道分家。
+    """
+    ch = PACK_CHANNELS.get(channel) or PACK_CHANNELS['toutiao']
     used = set(used_ids or ())
     fresh = [v for v in videos if v.get('id') not in used]
     clusters = find_clusters(videos)
@@ -180,13 +202,13 @@ def build_pack(videos: Sequence[Dict[str, Any]], theme: str = '',
     span = '%s ~ %s' % (min(times).date(), max(times).date()) if times else '时间未知'
     by_time_desc = sorted(videos, key=lambda v: v.get('published_at') or '', reverse=True)
 
-    lines = ['# 选题包 · %s' % (theme or '未命名主题'),
+    lines = ['# 选题包 · %s ｜ 出口：%s' % (theme or '未命名主题', ch['label']),
              '',
              '> 生成：%s ｜ 素材 %d 条 ｜ 覆盖 up 主 %d 个 ｜ 时间跨度 %s' % (
                  datetime.now().strftime('%Y-%m-%d %H:%M'), len(videos), len(authors), span),
              '> 其中 **%d 条从没进过整理稿**（%.0f%%）——这个包就是把这批沉睡素材一次用掉。' % (
                  len(fresh), 100.0 * len(fresh) / max(len(videos), 1)),
-             '> 用法：在 Qoder 会话里说「按这个包出头条文章」，走 content-research-writer + /article-audit。',
+             '> 用法：在 Qoder 会话里说「按这个包出%s」，走 content-research-writer。' % ch['label'],
              '',
              '## 一、素材清单',
              '',
@@ -237,9 +259,10 @@ def build_pack(videos: Sequence[Dict[str, Any]], theme: str = '',
         lines.append(head + '\n\n' + text + '\n')
 
     lines += ['', '---', '', '```',
-              '按这份选题包出头条文章：走 content-research-writer 流程（先大纲 → 我补 300 字 → 成稿），'
-              '规则按 ~/Documents/自媒体/头条出稿规范.md v1.1，写完跑 /article-audit 改到「可以发」。', '```', '']
+              '按这份选题包出%s：走 content-research-writer 流程（先大纲 → 我补 300 字 → 成稿），'
+              '规则按 %s，%s。' % (ch['label'], ch['rules'], ch['gate']), '```', '']
 
     stats = {'videos': len(videos), 'unused': len(fresh), 'authors': len(authors),
-             'clusters': len(clusters), 'chars': sum(len(l) + 1 for l in lines), 'truncated': cut}
+             'clusters': len(clusters), 'chars': sum(len(l) + 1 for l in lines), 'truncated': cut,
+             'channel': channel if channel in PACK_CHANNELS else 'toutiao'}
     return '\n'.join(lines), stats

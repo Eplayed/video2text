@@ -15,7 +15,9 @@ import sqlite3
 from datetime import datetime
 from typing import Any, Dict, Optional
 
-KINDS = {"toutiao": "头条图文", "article": "文章稿"}
+KINDS = {"toutiao": "头条图文", "article": "文章稿", "wechat": "公众号图文"}
+# 图文包类走同一套 manifest 体检口径（卡片文字 + 文案），产物目录分别是 output/<kind>/<id>/
+PACK_KINDS = ("toutiao", "wechat")
 LABELS = {
     "unaudited": "未体检",
     "stale": "内容已改动，需重新体检",

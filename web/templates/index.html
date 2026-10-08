@@ -1540,6 +1540,13 @@ textarea{resize:vertical;min-height:84px}
     <div class="tt-gen-title">选题包 · 把多条素材一次交给 AI 写稿</div>
     <div class="tt-gen-sub">产线原来的路子是「一条素材 → 一篇整合稿」，看不见同一件事被几个 up 主讲出了不同说法——那才是抄不到的增量。选题包只做「捞全 + 对齐」：素材清单、口播原文、口径分歧候选。写稿在 Qoder 会话里按 skill 走。</div>
     <div class="tt-gen-field">
+      <label>出口渠道 <small>（只改包尾给会话的指令：走哪份规则、进哪个门禁；捞素材与聚类口径两渠道一致）</small></label>
+      <select id="pack-channel">
+        <option value="toutiao">头条文章（按《头条出稿规范》）</option>
+        <option value="wechat">公众号图文（按《公众号写作铁律》）</option>
+      </select>
+    </div>
+    <div class="tt-gen-field">
       <label>取材范围</label>
       <select id="pack-scope" onchange="packScopeChanged()">
         <option value="selected">用我勾选的素材</option>
@@ -5503,7 +5510,8 @@ function closePackDialog(event) {
 
 async function runPack() {
   const scope = document.getElementById('pack-scope').value;
-  const body = { theme: document.getElementById('pack-theme').value.trim() };
+  const body = { theme: document.getElementById('pack-theme').value.trim(),
+                 channel: document.getElementById('pack-channel').value };
   if (scope === 'selected') {
     if (selectedVideos.size < 2) { alert('至少勾选 2 条素材，交叉核对才有意义'); return; }
     body.videos = [...selectedVideos];
@@ -5628,7 +5636,7 @@ function renderReviewList() {
       + (s.status === 'warn' || s.status === 'fail' ? btn('rvApprove', '人工放行') : '')
       + (s.can_publish ? btn('rvPublish', '标记已发布', '') : '')
       + '<button class="btn sm ghost" onclick="rvToggle(\'' + k + '\')">报告</button>';
-    return '<div class="rv-row"><span class="rv-kind">' + (it.kind === 'toutiao' ? '图文' : '文章') + '</span>'
+    return '<div class="rv-row"><span class="rv-kind">' + esc(it.kind_label || it.kind) + '</span>'
       + '<span class="rv-title" title="' + esc(it.title) + '">' + esc(it.title) + '</span>'
       + '<span class="rv-pill ' + tone + '">' + esc(s.label) + '</span>'
       + (s.fails ? '<span class="rv-pill rv-fail">FAIL ' + s.fails + '</span>' : '')

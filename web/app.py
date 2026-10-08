@@ -1294,6 +1294,9 @@ def api_topic_pack():
     theme = (data.get("theme") or "").strip()
     keyword = (data.get("keyword") or "").strip()
     game = (data.get("game") or "").strip()
+    channel = (data.get("channel") or "toutiao").strip()
+    if channel not in topic_pack.PACK_CHANNELS:
+        return jsonify({"error": "channel 只能是 %s" % " / ".join(topic_pack.PACK_CHANNELS)}), 400
     keys = data.get("videos") or []
 
     videos = []
@@ -1319,7 +1322,8 @@ def api_topic_pack():
 
     with _db_lock:
         used = content_store.used_video_ids(DB_PATH)
-    markdown, stats = topic_pack.build_pack(videos, theme or keyword, used)
+    markdown, stats = topic_pack.build_pack(videos, theme or keyword, used, channel)
+    ch = topic_pack.PACK_CHANNELS[channel]
 
     safe = re.sub(r"[^\w一-鿿-]+", "", (theme or keyword))[:24] or "未命名"
     folder = OUTPUT_DIR / PACK_DIR_NAME
@@ -1331,8 +1335,8 @@ def api_topic_pack():
         "path": str(path),
         "name": path.name,
         "stats": stats,
-        "command": "按 %s 出头条文章：走 content-research-writer（先大纲 → 我补 300 字 → 成稿），"
-                   "写完跑 /article-audit 改到可以发" % path,
+        "command": "按 %s 出%s：走 content-research-writer（先大纲 → 我补 300 字 → 成稿），"
+                   "规则按 %s，%s" % (path, ch['label'], ch['rules'], ch['gate']),
     })
 
 
@@ -1367,8 +1371,10 @@ def _review_target(kind: str, ref_id: str):
     图文包的正文是「卡片文字 + 微头条文案」（这就是要贴出去的东西）；
     对照素材用同一条的整合稿，数字出处能不能核得上就看它。
     """
-    if kind == "toutiao":
-        mpath = OUTPUT_DIR / "toutiao" / str(ref_id) / "manifest.json"
+    if kind in review_store.PACK_KINDS:
+        # 头条与公众号图文包共用一套 manifest 口径：正文都是「卡片文字 + 文案」，
+        # 差别只在产物目录名（output/toutiao | output/wechat）
+        mpath = OUTPUT_DIR / kind / str(ref_id) / "manifest.json"
         if not mpath.is_file():
             raise ValueError("图文包不存在：%s" % mpath)
         data = json.loads(mpath.read_text(encoding="utf-8"))
@@ -1381,7 +1387,8 @@ def _review_target(kind: str, ref_id: str):
             sources = (summary or {}).get("content") or ""
         except (TypeError, ValueError):
             sources = ""
-        return prose, sources, (data.get("title") or "头条图文 #%s" % ref_id), str(mpath)
+        label = "头条" if kind == "toutiao" else "公众号"
+        return prose, sources, (data.get("title") or "%s图文 #%s" % (label, ref_id)), str(mpath)
     if kind == "article":
         path = OUTPUT_DIR / ARTICLE_DIR_NAME / os.path.basename(str(ref_id))
         if not path.is_file():
@@ -1389,11 +1396,11 @@ def _review_target(kind: str, ref_id: str):
         text = path.read_text(encoding="utf-8")
         title = next((ln.strip()[2:] for ln in text.splitlines() if ln.startswith("# ")), path.stem)
         return text, "", title, str(path)
-    raise ValueError("kind 只能是 toutiao / article")
+    raise ValueError("kind 只能是 %s" % " / ".join(review_store.KINDS))
 
 
 # ── 整理稿「去 AI 味」两步接口（预览 → 勾选 → 应用）──────────────────
-# 实现抽在 src/humanize_routes.py：app.py 常被多会话同改，上一轮我的端点与别人的改动
+# 实现抽在 src/humanize_routes.py：app.py 常被多个会话同时改，上一轮我的端点与别人的改动
 # 相邻、git 合成同一个 hunk 拆不开。撞面从 140 行降到这 2 行。
 app.register_blueprint(humanize_routes.make_blueprint(
     DB_PATH, OUTPUT_DIR, _ai_config, _db_lock, app.logger))
@@ -1401,25 +1408,29 @@ app.register_blueprint(humanize_routes.make_blueprint(
 
 @app.route("/api/review/items")
 def api_review_items():
-    """一次给全审核台：图文包 + 文章稿，带各自状态（列表页拿这个合并徽章）。"""
+    """一次给全审核台：头条图文包 + 公众号图文包 + 文章稿，带各自状态（列表页拿这个合并徽章）。"""
     items = []
-    tt_root = OUTPUT_DIR / "toutiao"
-    if tt_root.is_dir():
-        for d in sorted(tt_root.iterdir(), key=lambda p: p.name, reverse=True):
+    for kind in review_store.PACK_KINDS:      # 头条图文包 + 公众号图文包，同一套 manifest 口径
+        root = OUTPUT_DIR / kind
+        if not root.is_dir():
+            continue
+        for d in sorted(root.iterdir(), key=lambda p: p.name, reverse=True):
             if not (d / "manifest.json").is_file() or not d.name.isdigit():
                 continue
             try:
-                content, _, title, _ = _review_target("toutiao", d.name)
+                content, _, title, _ = _review_target(kind, d.name)
             except Exception as e:
-                app.logger.info("跳过图文包 %s：%s", d.name, e)
+                app.logger.info("跳过图文包 %s/%s：%s", kind, d.name, e)
                 continue
-            items.append({"kind": "toutiao", "ref_id": d.name, "title": title,
-                          "state": review_store.state(DB_PATH, "toutiao", d.name, content)})
+            items.append({"kind": kind, "kind_label": review_store.KINDS.get(kind, kind),
+                          "ref_id": d.name, "title": title,
+                          "state": review_store.state(DB_PATH, kind, d.name, content)})
     art_root = OUTPUT_DIR / ARTICLE_DIR_NAME
     if art_root.is_dir():
         for f in sorted(art_root.glob("*.md"), reverse=True):
             content, _, title, _ = _review_target("article", f.name)
-            items.append({"kind": "article", "ref_id": f.name, "title": title,
+            items.append({"kind": "article", "kind_label": review_store.KINDS["article"],
+                          "ref_id": f.name, "title": title,
                           "state": review_store.state(DB_PATH, "article", f.name, content)})
     return jsonify({"items": items, "counts": review_store.counts(DB_PATH),
                     # 待处理 = 所有产物里还没过审的（含从没体检过的），侧栏徽章用这个数；
@@ -1440,13 +1451,13 @@ def api_review_get(kind, ref_id):
 
 @app.route("/api/review/<kind>/<path:ref_id>/audit", methods=["POST"])
 def api_review_audit(kind, ref_id):
-    """跑体检并落状态。图文包体检走卡稿口径，文章稿走长文稿口径。"""
+    """跑体检并落状态。图文包（头条/公众号）走卡稿口径，文章稿走长文稿口径。"""
     try:
         content, sources, _title, path = _review_target(kind, ref_id)
     except (ValueError, json.JSONDecodeError) as e:
         return jsonify({"error": str(e)}), 404
     try:
-        if kind == "toutiao":
+        if kind in review_store.PACK_KINDS:
             data = json.loads(open(path, encoding="utf-8").read())
             result = draft_audit.audit(manifest=data, sources_text=sources or None)
         else:
