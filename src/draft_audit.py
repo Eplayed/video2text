@@ -141,35 +141,40 @@ def _ai_score(prose: str, rows: List[Tuple[str, str, str]]) -> Optional[float]:
     return float(m.group(1)) if m else None
 
 
-def _verify_js(draft_path: str, rows: List[Tuple[str, str, str]]) -> None:
+def _verify_js(draft_path: str, rows: List[Tuple[str, str, str]],
+               sources_path: Optional[str] = None) -> None:
     if not os.path.exists(VERIFY_JS):
         rows.append(("WARN", "机检", "找不到 verify_toutiao.js（生产层仓库没在预期位置）"))
         return
-    # _run 把 node 的工作目录切到生产层仓库，所以这里必须传绝对路径：
-    # 传相对路径时 verify_toutiao.js 找不到文件，一行 [PASS/FAIL] 都不输出，
-    # 于是「机检静默跳过」会被读成「机检没问题」——2026-10-07 实测踩到，假绿。
-    abs_path = os.path.abspath(draft_path)
-    code, out = _run(["node", VERIFY_JS, abs_path])
-    before = len(rows)
+    # 必须传绝对路径：_run 把 cwd 切到生产层仓库目录，相对路径在那边找不到稿子，
+    # verify_toutiao.js 只打一行用法说明就退 2 —— 机检行一条都解析不到，
+    # 报告看着像"通过"。这就是本项目反复踩的静默失效，2026-10-07 实测复现过一次。
+    cmd = ["node", VERIFY_JS, os.path.abspath(draft_path)]
+    if sources_path and os.path.exists(sources_path):
+        cmd += ["--sources", os.path.abspath(sources_path)]
+    code, out = _run(cmd)
+    got = 0
     for line in out.splitlines():
-        # detail 段可选：verify_toutiao.js 里「复制区结构」「无占位标记」「禁用句式」
-        # 通过时不带「— 说明」，早先用必须带破折号的正则去匹配会把这几行整个丢掉，
-        # 2026-10-07 实测过一次：机检 6 项只透出 3 项，看着像漏检。
+        # 结论行有两种形态：带说明的「[PASS] 名称 — 实际 3 条」和不带说明的「[PASS] 无占位标记」。
+        # 早先只匹配带 — 的那种，等于把三项静默丢掉（禁用句式就在里面），报告看着像没查。
         m = re.search(r"\[(PASS|WARN|FAIL)\]\s*(.+?)(?:\s+—\s+(.*))?$", line)
         if m:
+            got += 1
             rows.append((m.group(1), "机检·" + m.group(2).strip(), (m.group(3) or "").strip()))
         elif "质检结论" in line:
+            got += 1
             rows.append(("INFO", "机检·总结论", line.strip().lstrip("❌✅ ")))
     if code == 99:
         rows.append(("WARN", "机检", out))
-    if len(rows) == before:
-        rows.append(("WARN", "机检", "verify_toutiao.js 没有任何输出（多半是稿子里没有「━━━━━━ 头条号 · 复制区 ━━━━━━」标记，"
-                                     "或 node 调用失败），这次没机检，别当已通过"))
+    elif got == 0:
+        rows.append(("WARN", "机检",
+                     "verify_toutiao.js 没吐出可解析的结论行（退出码 %s，输出开头：%s）——"
+                     "这不算通过，先查为什么空" % (code, out.strip()[:90])))
 
 
 def audit(md_text: Optional[str] = None, manifest: Optional[Dict[str, Any]] = None,
           sources_text: Optional[str] = None, draft_path: Optional[str] = None,
-          use_verify: bool = True) -> Dict[str, Any]:
+          use_verify: bool = True, sources_path: Optional[str] = None) -> Dict[str, Any]:
     """体检一份稿子。md_text 走长文稿口径，manifest 走图文卡稿口径。
 
     use_verify 只对 Dify 那种带「复制区」的成稿有意义；工作台里的图文包/文章稿
@@ -191,7 +196,7 @@ def audit(md_text: Optional[str] = None, manifest: Optional[Dict[str, Any]] = No
     else:
         prose = extract_body(md_text or "")
         if use_verify and draft_path and "复制区" in (md_text or ""):
-            _verify_js(draft_path, rows)
+            _verify_js(draft_path, rows, sources_path)
         nums = _audit_prose(prose, rows)
     if sources_text:
         _cross_check(nums, sources_text, rows)

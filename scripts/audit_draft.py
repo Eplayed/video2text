@@ -57,7 +57,7 @@ def main():
         with open(args.draft, encoding="utf-8") as fh:
             md = fh.read()
         result = draft_audit.audit(md_text=md, sources_text=sources_text, draft_path=args.draft,
-                                   use_verify=not args.no_verify)
+                                   use_verify=not args.no_verify, sources_path=args.sources)
         if args.no_verify:
             result["rows"].insert(0, ("INFO", "机检",
                                       "按 --no-verify 跳过（调度器已单独跑过 verify_toutiao.js）"))
