@@ -1,6 +1,22 @@
 # video2text 改动说明（给其他 AI / Agent）
 
-更新时间：2026-10-07
+更新时间：2026-10-08
+
+## 2026-10-08（图文成品目录不该有 html）：中间 HTML 改落临时目录，回归脚本用开关保留
+
+用户看到 `output/toutiao/69/` 里躺着 `img1.html…img4.html`，要求**图文成品不再产出 html**。
+这些 html 是渲染中间态：Playwright 要 `file://` 打开才能加载 CSS 里的 `file://` 图片资源
+（`set_content` 走 about:blank 会加载不到），所以以前直接落在成品目录——顺手成了"不知道能不能删"的垃圾。
+
+- `src/graphics/renderer.py`：新增 `render_html(page, html, png_path, w, h)`，中间文件写进
+  `tempfile.mkdtemp("v2t_render_")`，`finally` 里 rmtree 自清。两条渠道改调它，`render_card_html` 保留原样。
+- **回归不能瞎**：`e2e_toutiao_variants.py` / `e2e_wechat_variants.py` 是靠读 `img1.html` 断言
+  「三轴到底生效没有」的（这正是本项目三次静默失效的探测器）。所以渠道侧留了一个开关：
+  仅当环境变量 `V2T_KEEP_RENDER_HTML` 存在才在成品目录写 html，两个 e2e 脚本开头自己置上。
+  以后谁再加渠道，别把这个开关删掉，否则回归会从"能看 CSS"退化成"只能看图"。
+- 清场：既有 87 个中间 html 移到 `output/_trash_20261008/`（没直接删，确认后可清空）。
+- 验证：`/graphics-verify` 五条线 `ALL_OK`；重出 69 号包后目录只剩 `img1-4.png + manifest.json`，
+  临时目录无残留，体检仍「可以发」。顺带修了 manifest.assets 只记封面、不记内页横带的问题（现在 4 张都记）。
 
 ## 2026-10-07（体检器自己静默失效）：机检传相对路径 = 报告看着像通过
 

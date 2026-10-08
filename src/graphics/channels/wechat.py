@@ -12,6 +12,7 @@ Python 3.9 兼容：不用 match / X|Y 语法。
 """
 import hashlib
 import json
+import os
 import re
 import shutil
 from datetime import datetime
@@ -151,11 +152,13 @@ def _render_cards(cards, axes, out_dir, url_prefix, brand=""):
                     band = skins._pick_band_image(theme_imgs, idx)
                     hero = skins._hero_uri(card, band, skin_uri, assets_dir)
             hero_used.append(bool(photo))
-            html_path = out_dir / ("img%d.html" % idx)
             png_path = out_dir / ("img%d.png" % idx)
-            html_path.write_text(tpl["cover"](card, css, hero, ctx) if (kind == "cover" and idx == 1)
-                                 else tpl["list"](card, css, hero, ctx), encoding="utf-8")
-            renderer.render_card_html(page, html_path, png_path, CANVAS_W, CANVAS_H)
+            html = (tpl["cover"](card, css, hero, ctx) if (kind == "cover" and idx == 1)
+                    else tpl["list"](card, css, hero, ctx))
+            renderer.render_html(page, html, png_path, CANVAS_W, CANVAS_H)
+            # 同头条：只有回归脚本要看 CSS 是否真生效时才留中间 HTML
+            if os.environ.get("V2T_KEEP_RENDER_HTML"):
+                (out_dir / ("img%d.html" % idx)).write_text(html, encoding="utf-8")
             images.append({"file": png_path.name, "label": "卡片%d" % idx,
                            "url": "%s/%s" % (url_prefix, png_path.name),
                            "source": "template",

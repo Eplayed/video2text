@@ -27,6 +27,12 @@ import sys
 from pathlib import Path
 
 ROOT = Path("/Users/zhangyajun/Documents/project/video2text")
+# 成品目录默认不再留中间 HTML（2026-10-08 用户要求），但本脚本要靠 HTML 断言「三轴到底生效没有」，
+# 所以显式打开保留开关。渠道侧的判断在 channels/{toutiao,wechat}.py。
+import os
+
+os.environ["V2T_KEEP_RENDER_HTML"] = "1"
+
 sys.path.insert(0, str(ROOT))
 
 from src.graphics.channels import toutiao  # noqa: E402

@@ -9,6 +9,7 @@ generate_graphics 主流程、manifest 包管理薄封装、ToutiaoChannel 适�
 prompt 文案、【固定标签】兜底解析。Python 3.9 兼容：不用 match / X|Y 语法。
 """
 import json
+import os
 import random
 import re
 from datetime import datetime
@@ -346,10 +347,11 @@ def generate_graphics(summary, ai_config, progress_cb=None, theme="", skin="wow"
                         used_assets.append(band)
                 hero = skins._hero_uri(card, band, skin_uri, _ASSETS_DIR)
                 html = tpl["list"](card, css, hero, ctx)
-            html_path = out_dir / ("img%d.html" % idx)
             png_path = out_dir / ("img%d.png" % idx)
-            html_path.write_text(html, encoding="utf-8")
-            renderer.render_card_html(page, html_path, png_path, CANVAS_W, CANVAS_H)
+            renderer.render_html(page, html, png_path, CANVAS_W, CANVAS_H)
+            # 回归脚本要看「CSS 到底变了没有」，只有它们置了这个开关才留中间 HTML
+            if os.environ.get("V2T_KEEP_RENDER_HTML"):
+                (out_dir / ("img%d.html" % idx)).write_text(html, encoding="utf-8")
             images.append({"file": png_path.name, "label": "图%d" % idx, "url": "/media/toutiao/%d/%s" % (summary_id, png_path.name)})
         browser.close()
 
