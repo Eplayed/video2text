@@ -45,6 +45,14 @@ As this project's AI coding tool, you must follow the additional conventions bel
 - `/workbench-restart`：按端口 PID 安全重启 Flask + 语法自检 + PID/接口双确认（落实纪律 2）。
 - `/graphics-verify`：一条命令跑完 `check_variant_tokens.py` + 头条/公众号两条 e2e（脚本已收编进 `scripts/e2e_toutiao_variants.py`、`scripts/e2e_wechat_variants.py`）。
 
+## 角色路由（自媒体内容产线）
+
+内容线的活按角色走（全局 skill `~/.qoder-cn/skills/media-*`），**进会话先定渠道**（头条 / 公众号）：两渠道的素材池、规则权威源、产物目录、门禁 kind 全部分家，一条线的结论不许直接搬到另一条线。
+
+`/media-pm`（需求与验收标准）→ `/media-planner`（选题与角度；**角度门三问没答完禁止写稿**）→ `/media-ui`（版式与样张；必须有截图才算完成）→ `/media-dev`（产线代码；回归 + 按关注点提交）→ `/media-ops`（分发、台账；每周只看涨粉与钱两个数）。
+
+角色之间**用文件交接，不靠会话记忆**：落点 `output/角色交接/<日期>-<渠道>-<环节>.md`（命名与每份最低要求见该目录 README）。被打回时回对应那份文件改结论，不许口头改。
+
 # 通用工作纪律(所有 AI 工具生效)
 
 ## 沟通与输出
