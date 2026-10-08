@@ -11,7 +11,7 @@ sys.path.insert(0, str(ROOT))
 
 import main as collector  # main.py
 from src import content_store, material_store, toutiao_graphics, ai_poster, sync_tasks, topic_pack
-from src import draft_audit, review_store, toutiao_stats, humanize_routes
+from src import draft_audit, review_store, toutiao_stats, humanize_routes, ops_store
 from src.graphics.channels import wechat as wechat_graphics
 from src.graphics.channels import toutiao as toutiao_channel
 from src.graphics import variants as graphics_variants
@@ -1518,6 +1518,72 @@ def api_review_publish(kind, ref_id):
     except (FileNotFoundError, json.JSONDecodeError) as e:
         return jsonify({"error": str(e)}), 404
     return jsonify({"state": st})
+
+
+# ── 运营数据回流（每周只看两个数：涨粉、钱）───────────────────────────
+# 为什么手填：个人主体号没有官方数据接口，内置浏览器打开 mp.weixin.qq.com 是扫码页
+# （没有登录态，2026-10-08 实测），同类看板接口 wasm 加密不能 replay——所以这里
+# 不写没实测过的爬虫，先做一分钟能填完的录入 + 能自动补的条目。
+
+@app.route("/api/ops/report")
+def api_ops_report():
+    try:
+        week = (request.args.get("week") or "").strip()
+        return jsonify({"report": ops_store.report(DB_PATH, week or None),
+                        "articles": ops_store.list_articles(DB_PATH),
+                        "weeks": ops_store.list_weeks(DB_PATH, limit=12)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/ops/article", methods=["POST"])
+def api_ops_article():
+    data = request.get_json(silent=True) or {}
+    if not data:
+        return jsonify({"error": "请求体不是合法 JSON，没敢写库"}), 400
+    channel = (data.get("channel") or "wechat").strip()
+    ref_id = str(data.get("ref_id") or "").strip()
+    if channel not in ops_store.CHANNELS:
+        return jsonify({"error": "channel 只能是 %s" % " / ".join(ops_store.CHANNELS)}), 400
+    if not ref_id:
+        return jsonify({"error": "ref_id 不能空"}), 400
+    try:
+        with _db_lock:
+            row = ops_store.upsert_article(DB_PATH, channel, ref_id, data.get("fields") or {})
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    return jsonify({"row": row})
+
+
+@app.route("/api/ops/week", methods=["POST"])
+def api_ops_week():
+    data = request.get_json(silent=True) or {}
+    if not data:
+        return jsonify({"error": "请求体不是合法 JSON，没敢写库"}), 400
+    week = (data.get("week") or "").strip()
+    if not week:
+        return jsonify({"error": "week 不能空"}), 400
+    try:
+        with _db_lock:
+            row = ops_store.upsert_week(DB_PATH, week, data.get("fields") or {})
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    return jsonify({"row": row})
+
+
+@app.route("/api/ops/import-ledger", methods=["POST"])
+def api_ops_import_ledger():
+    """从 5180 台账导入公众号发布记录 + 按审核台「已发布」补空行。只补空，不覆盖手填的数。"""
+    try:
+        with _db_lock:
+            out = ops_store.import_ledger(DB_PATH)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    return jsonify(out)
 
 
 @app.route("/api/content/generate", methods=["POST"])

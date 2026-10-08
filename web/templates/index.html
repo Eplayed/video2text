@@ -424,6 +424,26 @@ textarea{resize:vertical;min-height:84px}
 .rv-idle{background:rgba(125,133,148,.16);color:var(--text-secondary)}
 .rv-report{width:100%;margin:-2px 0 10px;padding:10px 12px;border:1px dashed var(--border-input);border-radius:var(--radius-control);background:var(--surface-card);font-family:ui-monospace,Menlo,monospace;font-size:11.5px;white-space:pre-wrap;line-height:1.55}
 @media (prefers-color-scheme:dark){.rv-pass{color:#5fd693}.rv-warn{color:#f0b95c}.rv-fail{color:#ff8d86}}
+/* 运营周报：两个数在顶上，每篇明细手填、离开输入框即存 */
+.ops-why{font-size:12px;line-height:1.75;color:var(--text-secondary);background:var(--surface-nested);border:1px solid var(--border);border-left:3px solid var(--module-1);border-radius:8px;padding:10px 12px;margin:0 0 14px}
+#ops-week{flex:0 0 auto;width:186px}
+.ops-two{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:12px}
+.ops-two .wide{grid-column:1 / -1}
+.ops-card{background:var(--surface-card);border:1px solid var(--border);border-radius:var(--radius-card);padding:11px 13px;box-shadow:var(--shadow-card)}
+.ops-card span{display:block;font-size:11.5px;color:var(--text-tertiary);margin-bottom:6px}
+.ops-card input{width:100%;font-size:19px;font-weight:800;border:1px solid var(--border-input);border-radius:7px;background:var(--surface-nested);color:var(--text-primary);padding:6px 9px}
+.ops-card input#ops-f-note{font-size:13px;font-weight:600}
+.ops-card em{display:block;font-style:normal;font-size:11.5px;color:var(--text-tertiary);margin-top:5px;min-height:15px}
+.ops-sum{font-size:12.5px;color:var(--text-secondary);margin-bottom:10px;line-height:1.7}
+.ops-tbl{width:100%;border-collapse:collapse;background:var(--surface-card);border:1px solid var(--border);border-radius:var(--radius-card)}
+.ops-tbl th{font-size:11.5px;font-weight:700;color:var(--text-tertiary);text-align:left;padding:8px 10px;border-bottom:1px solid var(--border);background:var(--surface-nested)}
+.ops-tbl th.num,.ops-tbl td.num{text-align:right}
+.ops-tbl td{font-size:12.5px;padding:7px 10px;border-bottom:1px solid var(--border)}
+.ops-tbl td .t{display:block;max-width:360px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ops-tbl input{width:76px;font-size:12.5px;text-align:right;border:1px solid var(--border-input);border-radius:6px;background:var(--surface-nested);color:var(--text-primary);padding:4px 6px}
+.ops-tbl input.dt{width:120px;text-align:left}
+.ops-tbl .saved{color:#1a8a4f;font-size:11px}
+@media (max-width:1100px){.ops-two{grid-template-columns:repeat(2,1fr)}}
 #tt-gen-overlay .close-btn{position:absolute;top:14px;right:14px}
 .tt-gen-title{font-size:17px;font-weight:800}
 .tt-gen-sub{font-size:12.5px;color:var(--text-secondary);margin:4px 0 16px}
@@ -741,6 +761,7 @@ textarea{resize:vertical;min-height:84px}
       <div class="navi" id="nav-wechat" onclick="switchPage('wechat')"><span class="nav-ic" data-icon="edit"></span>公众号图文</div>
       <div class="navi" id="nav-poster" onclick="switchPage('poster')"><span class="nav-ic" data-icon="image"></span>AI 海报<span class="cnt" id="nav-poster-cnt" style="display:none">0</span></div>
       <div class="navi" id="nav-review" onclick="switchPage('review')"><span class="nav-ic" data-icon="target"></span>发布审核<span class="cnt" id="nav-review-cnt" style="display:none">0</span></div>
+      <div class="navi" id="nav-ops" onclick="switchPage('ops')"><span class="nav-ic" data-icon="chart"></span>运营周报</div>
       <div class="navi" id="nav-questions" onclick="switchPage('questions')"><span class="nav-ic" data-icon="target"></span>面试题库</div>
       <div class="nav-sep">设置</div>
       <div class="navi" id="nav-settings" onclick="switchPage('settings')"><span class="nav-ic" data-icon="settings"></span>AI 设置</div>
@@ -1471,6 +1492,40 @@ textarea{resize:vertical;min-height:84px}
       </div>
     </section>
 
+    <!-- ── 运营周报（每周只看两个数）── -->
+    <section id="page-ops">
+      <div class="header">
+        <h2>运营周报</h2>
+        <div class="spacer"></div>
+        <select id="ops-week" onchange="loadOps()"></select>
+        <button class="btn ghost sm" id="btn-ops-import" onclick="opsImportLedger()"
+          title="从 5180 台账导入已登记的公众号发布记录（滤掉 [测试] 那条），再按审核台「已发布」补空行。只补空位，不覆盖你手填过的数。">📥 从台账导入</button>
+      </div>
+      <p class="ops-why">每周只看两个数：<b>涨了多少粉</b>、<b>哪篇带来钱</b>。篇数、体检 PASS 率都是过程量，不算成绩。<br>
+        数字要你去平台后台抄：个人主体号没有官方数据接口，内置浏览器打开公众号后台是扫码页（2026-10-08 实测），
+        同类看板接口是 wasm 加密不能 replay——所以这里<b>不写没实测过的爬虫</b>，先做一分钟能填完的录入。<br>
+        没填的地方显示「未填」而不是 0：0 会被读成"这周涨粉 0"，那是个结论。改完自动存（离开输入框即写库）。</p>
+      <div class="ops-two">
+        <div class="ops-card"><span>本周新增关注</span>
+          <input id="ops-f-new" type="number" min="0" placeholder="未填" onchange="opsSaveWeek()">
+          <em id="ops-f-delta"></em></div>
+        <div class="ops-card"><span>本周钱（元）</span>
+          <input id="ops-f-rev" type="number" min="0" step="0.01" placeholder="未填" onchange="opsSaveWeek()">
+          <em id="ops-money-art"></em></div>
+        <div class="ops-card"><span>周末粉丝总数</span>
+          <input id="ops-f-total" type="number" min="0" placeholder="未填" onchange="opsSaveWeek()">
+          <em id="ops-f-updated"></em></div>
+        <div class="ops-card wide"><span>一句话备注（这周发生了什么）</span>
+          <input id="ops-f-note" placeholder="如：只发了 1 篇，推荐流没进" onchange="opsSaveWeek()"><em>&nbsp;</em></div>
+      </div>
+      <div class="ops-sum" id="ops-summary"></div>
+      <table class="ops-tbl">
+        <thead><tr><th>标题</th><th>发布日</th><th class="num">阅读</th><th class="num">在看</th>
+          <th class="num">转发</th><th class="num">涨粉</th><th class="num">钱(元)</th><th>来源</th></tr></thead>
+        <tbody id="ops-rows"><tr><td colspan="8" class="empty">加载中...</td></tr></tbody>
+      </table>
+    </section>
+
     <section id="page-questions">
       <div class="header">
         <h2>面试题库</h2>
@@ -1705,7 +1760,7 @@ document.getElementById('brand-ava').innerHTML = iconSvg('film', 22);
 // ── 全局状态 ──
 let POLLING = false;
 let currentView = 'dashboard';
-const PAGES = ['dashboard','collect','materials','radar','videos','summaries','toutiao','wechat','poster','review','questions','settings'];
+const PAGES = ['dashboard','collect','materials','radar','videos','summaries','toutiao','wechat','poster','review','ops','questions','settings'];
 let selectedVideos = new Set();
 let window_lastSelected = null;
 
@@ -1774,6 +1829,7 @@ async function loadCurrentView() {
   if (currentView === 'wechat') return showWechatList();
   if (currentView === 'poster') return showPosterList();
   if (currentView === 'review') return loadReviewList();
+  if (currentView === 'ops') return loadOps();
   if (currentView === 'settings') return loadAiConfig();
   return loadVideos();
 }
@@ -5830,6 +5886,166 @@ async function rvPublish(kind, refEnc) {
   }).then(r => r.json());
   if (d.error) { alert(d.error); return; }
   loadReviewList();
+}
+
+// ── 运营周报：每周只看两个数（涨粉、钱）──────────────────────────────
+// 数字得你去平台后台抄：个人主体号没有官方数据接口，内置浏览器打开公众号后台是扫码页
+// （2026-10-08 实测），同类看板接口 wasm 加密不能 replay——所以这一层不写没实测过的爬虫。
+// 能自动的只有"条目从哪来"：5180 台账导入 + 审核台「已发布」补空行。
+// 没填一律显示"未填"，绝不补 0：0 会被读成"这周涨粉 0"，那是个结论不是空值。
+let _ops = {articles: [], weeks: [], report: {}, week: ''};
+
+function opsNum(v) {
+  if (v === null || v === undefined || v === '') return '';
+  return isFinite(Number(v)) ? String(v) : '';
+}
+function opsTxt(v) {
+  return (v === null || v === undefined || v === '') ? '未填' : v;
+}
+function opsDelta(cur, prev) {
+  if (cur === null || cur === undefined || prev === null || prev === undefined) return '—';
+  const d = Number(cur) - Number(prev);
+  return (d > 0 ? '+' : '') + d;
+}
+function opsWeekOptions() {
+  const set = {};
+  set[_ops.report.week || _ops.week] = true;
+  (_ops.weeks || []).forEach(w => set[w.week] = true);
+  (_ops.articles || []).forEach(a => { if (a.week) set[a.week] = true; });
+  return Object.keys(set).filter(Boolean).sort().reverse();
+}
+
+async function loadOps() {
+  const sel = document.getElementById('ops-week');
+  const want = (sel && sel.value) || _ops.week || '';
+  let d;
+  try {
+    d = await fetch('/api/ops/report' + (want ? '?week=' + encodeURIComponent(want) : ''))
+      .then(r => r.json());
+  } catch (e) { d = {error: e.message}; }
+  if (d.error) { setStatus('error', '运营周报：' + d.error); return; }
+  _ops = {articles: d.articles || [], weeks: d.weeks || [], report: d.report || {},
+          week: (d.report || {}).week || ''};
+  renderOps();
+}
+
+function renderOps() {
+  const r = _ops.report;
+  const sel = document.getElementById('ops-week');
+  sel.innerHTML = opsWeekOptions().map(w => '<option value="' + esc(w) + '"'
+    + (w === r.week ? ' selected' : '') + '>' + esc(w) + ' 那周'
+    + (w === r.week && !r.week_updated_at ? '（未填）' : '') + '</option>').join('');
+  // 正在编辑或刚编辑过的框不覆盖：存完一次数如果回头把四个框按服务端重刷一遍，
+  // 用户下一个键就打在旧值上（headless 实测复现过一次：total 被上一次请求的响应清空）
+  opsSetInput('ops-f-new', opsNum(r.followers_new));
+  opsSetInput('ops-f-rev', opsNum(r.week_revenue));
+  opsSetInput('ops-f-total', opsNum(r.followers_total));
+  opsSetInput('ops-f-note', r.week_note || '');
+  renderOpsLabels();
+  renderOpsRows();
+}
+function opsSetInput(id, v) {
+  const el = document.getElementById(id);
+  if (el && document.activeElement !== el) el.value = v;
+}
+function renderOpsLabels() {
+  const r = _ops.report;
+  document.getElementById('ops-f-delta').textContent = '上周 ' + opsTxt(r.followers_new_prev)
+    + '，环比 ' + opsDelta(r.followers_new, r.followers_new_prev);
+  document.getElementById('ops-money-art').textContent = r.money_article
+    ? '钱来自：' + String(r.money_article).slice(0, 20) + '（合计 ' + r.money_sum + ' 元）'
+    : '本周没有一篇记到钱';
+  document.getElementById('ops-f-updated').textContent = r.week_updated_at
+    ? '存于 ' + r.week_updated_at : '这周还没填';
+  const weekArts = _ops.articles.filter(a => a.week === r.week);
+  document.getElementById('ops-summary').innerHTML =
+    '这一周有数据 <b>' + (r.article_count || 0) + '</b> 篇 · 阅读合计 <b>'
+    + opsTxt(r.reads_sum) + '</b>' + (r.best_read ? ' · 最高：<b>' + esc(r.best_read) + '</b>' : '')
+    + ' · 按篇加的涨粉 <b>' + weekArts.reduce((s, a) => s + (a.net_follow || 0), 0) + '</b>'
+    + '（顶上那个数是从后台抄的总量，两者对不上说明有非文章带来的关注，那部分才是推荐流/搜一搜的功劳）';
+}
+
+function renderOpsRows() {
+  const tb = document.getElementById('ops-rows');
+  if (!_ops.articles.length) {
+    tb.innerHTML = '<tr><td colspan="8" class="empty">还没有条目：点右上「从台账导入」，'
+      + '或在「发布审核」里把稿子标记已发布，这里就会补一行等你填数。</td></tr>';
+    return;
+  }
+  tb.innerHTML = _ops.articles.map(a => {
+    const key = escAttr(a.channel) + "','" + encodeURIComponent(a.ref_id);
+    const cell = k => '<td class="num"><input type="number" min="0"'
+      + (k === 'revenue' ? ' step="0.01"' : '')
+      + ' value="' + opsNum(a[k]) + '" placeholder="—" onchange="opsSaveArt(\'' + key
+      + '\',\'' + k + '\',this)"></td>';
+    return '<tr><td><span class="t" title="' + escAttr(a.title || a.ref_id) + '">'
+        + esc(a.title || '（没标题 · ' + a.ref_id + '）') + '</span></td>'
+      + '<td><input class="dt" value="' + esc(a.pub_date || '') + '" placeholder="YYYY-MM-DD"'
+        + ' onchange="opsSaveArt(\'' + key + '\',\'pub_date\',this)"></td>'
+      + cell('reads') + cell('looks') + cell('shares') + cell('net_follow') + cell('revenue')
+      + '<td><span class="rv-pill rv-idle" title="这条数据是谁写进来的">'
+        + esc(a.channel_label || a.channel) + ' · ' + esc(a.source || '手填') + '</span>'
+        + ' <span class="saved" id="ops-saved-' + encodeURIComponent(a.ref_id) + '"></span></td></tr>';
+  }).join('');
+}
+
+async function opsPost(url, body, done) {
+  let d;
+  try {
+    d = await fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body)}).then(r => r.json());
+  } catch (e) { d = {error: e.message}; }
+  if (d.error) { setStatus('error', '运营周报：' + d.error); return; }
+  if (done) done();
+}
+
+function opsSaveArt(channel, refEnc, key, el) {
+  opsPost('/api/ops/article', {channel: channel, ref_id: decodeURIComponent(refEnc),
+    fields: {[key]: el.value}}, () => {
+    const tick = document.getElementById('ops-saved-' + refEnc);
+    if (tick) { tick.textContent = '已存'; setTimeout(() => { tick.textContent = ''; }, 2500); }
+    const a = _ops.articles.filter(x => x.channel === channel
+                && encodeURIComponent(x.ref_id) === refEnc)[0];
+    if (a) a[key] = el.value === '' ? null : (key === 'pub_date' ? el.value : Number(el.value));
+  });
+}
+
+// 存完不重新拉整页：只把返回的这一行并进去改标签。
+// 之前是 opsSaveWeek → loadOps() 全量重刷，headless 实测复现过一次竞态——
+// 上一次请求的响应回来得晚，会把用户刚填进另一个框的数按旧值覆盖掉。
+async function opsSaveWeek() {
+  let d;
+  try {
+    d = await fetch('/api/ops/week', {method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({week: _ops.week, fields: {
+        followers_new: document.getElementById('ops-f-new').value,
+        revenue: document.getElementById('ops-f-rev').value,
+        followers_total: document.getElementById('ops-f-total').value,
+        note: document.getElementById('ops-f-note').value
+      }})}).then(r => r.json());
+  } catch (e) { d = {error: e.message}; }
+  if (d.error) { setStatus('error', '运营周报：' + d.error); return; }
+  const r = _ops.report;
+  r.followers_new = d.row.followers_new;
+  r.followers_total = d.row.followers_total;
+  r.week_revenue = d.row.revenue;
+  r.week_note = d.row.note;
+  r.week_updated_at = d.row.updated_at;
+  renderOpsLabels();
+}
+
+async function opsImportLedger() {
+  const btn = document.getElementById('btn-ops-import');
+  btn.disabled = true; btn.textContent = '导入中…';
+  const d = await fetch('/api/ops/import-ledger', {method: 'POST'}).then(r => r.json())
+    .catch(e => ({error: e.message}));
+  btn.disabled = false; btn.textContent = '📥 从台账导入';
+  if (d.error) { alert('导入失败：' + d.error); return; }
+  await loadOps();
+  alert('台账新增 ' + d.imported + ' 条、审核台已发布补 ' + d.seeded + ' 条'
+    + (d.skipped && d.skipped.length ? '；跳过：' + d.skipped.join(' / ') : '')
+    + '。已有的行只补空位，你手填过的数没动。');
 }
 
 function pollContentStatus() {
