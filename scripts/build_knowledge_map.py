@@ -189,7 +189,7 @@ footer .small{font-size:17px;color:#c9bda9;margin-left:auto;text-align:right;lin
 <div class="grid">__BLOCKS__</div>
 <footer>
   <span class="big">要 PDF 高清原图？</span>
-  <span class="small">公众号后台回复「地图」<br>整理于 __DATE__ · 题目与答案同库，答不到的点不算过</span>
+  <span class="small">链接随文直接给，不用回复关键词<br>整理于 __DATE__ · 题目与答案同库，答不到的点不算过</span>
 </footer>
 </div></body></html>"""
 

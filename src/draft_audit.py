@@ -46,6 +46,19 @@ EDITORIAL_VOICES = [r"待核实", r"需自行实测", r"人工核对", r"请人�
 NARRATOR = r"我(?:把|去|先|又|试|跑|核|算|花|打|翻|看|测|在)"
 NUMBER = r"(?<![\d.])\d{2,4}(?![\d.%])"
 
+# 合规红线里"机器判得了形"的那部分：《公众号写作铁律》v1.2 废止、v1.9（2026-10-08）
+# 结案维持——「关注后回复关键词领取」属公众号运营规范 3.3.2 诱导关注典型违规，
+# 轻则单篇取消推荐/封分享，重则限制关注。LLM 写卡片时爱自己加这种"获取方式"卡
+# （output/wechat/60 的 img6 就是它自己写的），所以判 FAIL 不判 WARN；
+# 确实被误伤的（比如正文在讲公众号运营本身）走审核台「人工放行」写理由留痕。
+COMPLIANCE_PATTERNS = [
+    # 「关注（公众号）+ 回复 + 领取动词」三连才判，单独出现"关注""回复"不算——
+    # AI 文里"值得关注的是模型回复很慢"这种是叙述，误杀一条就少一条真信号。
+    (r"关注[^，。；\n]{0,6}回复[^，。；\n]{0,14}(?:领取|领|获取|入口|查看)", "关注后回复领取"),
+    (r"回复[「『【][^」』】]{1,12}[」』】][^，。；\n]{0,12}(?:领|取|获得|查看|拿)", "回复关键词领取"),
+    (r"(?:私信|加我?微信|扫码)[^，。；\n]{0,8}(?:领|获取|发我)", "私下领取/站外导流"),
+]
+
 VERDICT_LABEL = {"pass": "可以发", "warn": "改完再发", "fail": "不能发"}
 
 
@@ -173,6 +186,20 @@ def _verify_js(draft_path: str, rows: List[Tuple[str, str, str]],
                      % (code, out.strip()[:90])))
 
 
+def _compliance(text: str, rows: List[Tuple[str, str, str]]) -> None:
+    """机器判得了形的合规红线：命中即 FAIL，不给"看着像可以发"。"""
+    hits = []
+    for pat, label in COMPLIANCE_PATTERNS:
+        m = re.search(pat, text or "")
+        if m:
+            hits.append("%s（%s）" % (label, re.sub(r"\s+", " ", m.group(0))[:36]))
+    if hits:
+        rows.append(("FAIL", "诱导关注/领取门槛",
+                     "；".join(hits) + " —— 交付物一律随文给（铁律 v1.2 废止、v1.9 结案维持；"
+                     "运营规范 3.3.2 诱导关注）。确属误伤（比如正文在讲公众号运营本身）"
+                     "走审核台「人工放行」写理由留痕"))
+
+
 def audit(md_text: Optional[str] = None, manifest: Optional[Dict[str, Any]] = None,
           sources_text: Optional[str] = None, draft_path: Optional[str] = None,
           use_verify: bool = True, sources_path: Optional[str] = None) -> Dict[str, Any]:
@@ -206,6 +233,8 @@ def audit(md_text: Optional[str] = None, manifest: Optional[Dict[str, Any]] = No
                              "跳过：稿子里没有「头条号 · 复制区」标记，verify_toutiao.js 不认这种结构，"
                              "本次只查了泄漏/叙述者/AI 味"))
         nums = _audit_prose(prose, rows)
+    # 图文包的卡片文案（copy_text）也在扫描范围内：违规"获取方式"卡就是 LLM 自己加的
+    _compliance(prose if manifest is None else prose + "\n" + copy_text, rows)
     if sources_text:
         _cross_check(nums, sources_text, rows)
 
@@ -359,6 +388,7 @@ def audit_material(md_text: str, source_text: str = "") -> Dict[str, Any]:
     for pat, label in MATERIAL_LEAK_PATTERNS:
         if re.search(pat, md):
             rows.append(("FAIL", "中间产物泄漏", "%s 命中" % label))
+    _compliance(md, rows)   # 素材档案里就写着"关注回复领取"，出图会照抄进卡片
     if source_text:
         src = _norm(source_text)
         src_grams = _bigrams(source_text)
