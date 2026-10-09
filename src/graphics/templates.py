@@ -606,8 +606,12 @@ h1.list.long { font-size:52px; }
 .gmap .tag { position:absolute; top:16px; right:16px; background:__G_TAG__; border:1px solid __GOLD_DEEP__;
              color:__G_GOLDTXT__; font-size:22px; font-weight:700; padding:6px 16px; border-radius:4px;
              letter-spacing:2px; }
-.rail { flex:1; margin:22px 6px 0; position:relative; display:flex; flex-direction:column;
-        justify-content:space-evenly; }
+/* 2026-10-09 内页空洞修复：原先 .rail 用 space-evenly，条目只有 3 条时被均匀拉满整屏、
+   绿线一直拖到卡片底（实测 output/toutiao/69/img2.png 半张图是空的）。现在内容块整体居中，
+   条目间距由 _list_html_guide 按条数给（少→松、多→紧，不会挤爆），竖线挪进 .rail-in
+   所以它跟着最后一条收尾，不再凭空往下长。 */
+.rail { flex:1; margin:22px 6px 0; display:flex; flex-direction:column; justify-content:center; }
+.rail-in { position:relative; display:flex; flex-direction:column; }
 .rail .line { position:absolute; left:28px; top:16px; bottom:16px; width:3px; border-radius:2px;
               background:linear-gradient(180deg, rgba(124,252,0,.85), rgba(124,252,0,.30));
               box-shadow:0 0 12px rgba(124,252,0,.55); }
@@ -686,6 +690,14 @@ h1.long { font-size:70px; }
 .tmeta .tt { font-size:34px; font-weight:900; color:__T_TEXT__; }
 .tmeta .td { font-size:25px; color:__T_MUTE__; margin-top:6px; line-height:1.45; }
 .tgrid { flex:1; display:grid; grid-template-columns:1fr 1fr; gap:16px; grid-auto-rows:1fr; }
+/* 2026-10-09 条目 ≥4 时改单列横排：两列 + grid-auto-rows:1fr 会让四格各占 ~700px 高、
+   里面只有两行字，半张图是空的（实测 69 号图文第 2 张）。单列横排后名称在左、说明在右，
+   读起来就是一张榜单表——小红书后台里「梯队/排行」那类版式的流量是单条技巧的 20-600 倍。 */
+.tgrid.one { grid-template-columns:1fr; }
+.tgrid.one .tcard { flex-direction:row; align-items:center; gap:28px; padding:26px 32px; }
+.tgrid.one .tcard .ct { flex:0 0 30%; margin-bottom:0; font-size:40px; }
+.tgrid.one .tcard .cd { flex:1; font-size:30px; line-height:1.55; }
+.tgrid.one .tchip { font-size:26px; padding:4px 16px; }
 .tcard { background:rgba(__T_PANEL_RGB__,.94); border:1px solid rgba(255,255,255,.10); border-radius:10px;
          padding:20px 22px; box-shadow:0 6px 16px rgba(0,0,0,.4); display:flex; flex-direction:column;
          justify-content:center; }
@@ -1400,6 +1412,10 @@ def _list_html_guide(card, css, hero_uri, ctx):
     note = card.get("note") or {}
     note_html = ('<div class="panelbox"><div class="rt">◆ %s ◆</div><div class="tip">%s</div></div>'
                  % (_esc(note.get("title", "效率提示")), _esc(note.get("text", "")))) if note.get("text") else ""
+    # 条目间距按条数给：3 条松、4 条中、5 条紧（prompt 限 3-5 条）。
+    # 为什么在 Python 侧算而不是纯 CSS：space-evenly 只会「摊满」不会「收缩到刚好」，
+    # 条数少就出现半张空图；CSS 又没有「按兄弟个数给间距」的写法。
+    gap = 46 if len(items) <= 3 else (30 if len(items) == 4 else 18)
     return """%s<div class="wrap" style="height:__H__px">
   <div class="frame"></div>
   <div class="wrap-in">
@@ -1407,13 +1423,13 @@ def _list_html_guide(card, css, hero_uri, ctx):
   <h1 class="list%s">%s</h1>
   %s
   <div class="gmap list"><img src="%s"><div class="edge"></div><div class="tag">%s</div></div>
-  <div class="rail"><div class="line"></div>%s</div>
+  <div class="rail"><div class="rail-in" style="gap:%dpx"><div class="line"></div>%s</div></div>
   %s
   </div>
 </div></body></html>""".replace("__H__", str(ctx["canvas_h"])) % (
     _page_open(css), _esc(ctx["brand"] or "攻略图解"), ctx["idx"], ctx["total"],
     " long" if len(str(card.get("title") or "")) > 12 else "", _esc(card.get("title", "")),
-    subbar, hero_uri, _esc(card.get("section") or "路线"), stops, note_html)
+    subbar, hero_uri, _esc(card.get("section") or "路线"), gap, stops, note_html)
 
 
 # ── tier 渲染（梯度榜：梯队大字 + 条目卡网格） ──
@@ -1469,14 +1485,14 @@ def _list_html_tier(card, css, hero_uri, ctx):
   <div class="tier %s">
     <div class="thead"><div class="tbadge">%s</div>
       <div class="tmeta"><div class="tt">%s</div>%s</div></div>
-    <div class="tgrid">%s</div>
+    <div class="tgrid%s">%s</div>
   </div>
   %s
   </div>
 </div></body></html>""".replace("__H__", str(ctx["canvas_h"])) % (
     _page_open(css), _esc(ctx["brand"] or "梯度榜"), ctx["idx"], ctx["total"],
     cls, _tier_badge(card, ctx), _esc(card.get("section") or "梯队"), sub_html,
-    cards_html, foot)
+    " one" if len(items) >= 4 else "", cards_html, foot)
 
 
 

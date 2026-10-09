@@ -70,6 +70,7 @@ __TEMPLATE_LINE__
   「ASR/转写」「待核实」「请人工核对」「本地模板生成」「详见正文」「无」这类字样。
   整合稿信息不足时，直接少写一条或把该字段留空字符串，绝不写占位说明来交代缺口。
   需要提醒读者时，只能写读者视角的话（如「测试服数值随时可能调整，以正式服为准」）。
+- 换版式/换配色打破单调（可选，别滥用）：list 卡的内容如果是「按强弱或优先级排一排」，给这张卡加 "tpl":"tier"（梯度榜）；如果是「分步骤照做」，加 "tpl":"quest"（任务面板）；不写就跟包级模板。同一张卡可另加 "palette"（gold_night 暗夜金 / ember_forge 熔炉橙 / arcane_dusk 奥术紫）换配色。整包最多一张卡设 tpl、一张卡设 palette——四张四个样不叫设计，叫花
 - copy_text：微头条文案，结构 = 钩子开头（1-2句）+ 📌 要点 4 条（每条一行，冒号+短解释）+ 收尾引导（1句）+ 空行 + 「信息来源：多位UP主公开视频内容整理（口径截至{{DATE}}，可能有调整）」+「本文图为AI辅助生成，发布时勾选AI辅助声明。」，全文 200-320 字
 
 输出 JSON（cards 数组 4 个对象，第一个 kind 为 cover，其余为 list；copy_text 为字符串）：
@@ -230,6 +231,123 @@ def _fallback_cards(summary):
     return {"cards": cards, "copy_text": copy_text}
 
 
+def _page_css(tpl_key, palette_key, font_key, layout_key, skin_key, skin_uri):
+    """按「模板×配色×字体×版式」拼一份完整 CSS。
+
+    包级和按卡覆盖共用这一个函数，不是顺手抽的：本项目在「配色/版式选了不生效」上翻过三次车，
+    两条路径各写一遍 CSS 拼装迟早会漂移，所以只留一处。
+    """
+    pal = variants.resolve_palette(skin_key, palette_key, tpl_key)
+    extra_tokens = dict(css_engine._tpl_tokens(tpl_key, skin_key))
+    extra_tokens.update(variants.palette_tokens(tpl_key, palette_key))
+    css = css_engine._build_css(templates._TEMPLATES[tpl_key]["css"], pal, skin_uri,
+                                _ASSETS_DIR, extra_tokens, CANVAS_W, CANVAS_H)
+    layout_extra = variants.layout_css(tpl_key, layout_key)
+    if layout_extra:
+        css += "\n/* layout:%s */\n%s" % (layout_key, layout_extra)
+    # tpl_key 必传：minimal 全篇只有黑体栈，没有 Songti 可替换，靠预设的按模板追加片段才生效
+    return variants.apply_font(css, font_key, tpl_key)
+
+
+def _card_style(card, tpl_key, palette_key, cache, skin_key, skin_uri, font_key, layout_key):
+    """解析单张卡实际用什么模板/配色，返回 (tpl_key, palette_key, css, 追溯 dict 或 None)。
+
+    为什么要按卡：2026-10-09 拿小红书后台数据对了一遍，同一题材里「梯队/排行/对比表」那类
+    版式（梯队表现 10279 观看、职业推荐 7323）是「单条小技巧」那类（17-373）的 20-600 倍，
+    而我们一个包四张图全用同一个模板同一套配色，读者划到第二张就没有新鲜感了。
+
+    默认零变化：卡片不带 tpl / palette 两个键时，走的就是包级参数、拿的是缓存里那份 CSS。
+    不静默失效：非法键回落包级值但仍记进追溯；模板没登记配色 token 时 palette 是空操作，
+    也照实记 palette_noop（未登记就是 no-op 是本项目明令禁止的第三种状态）。
+    """
+    want_tpl = str(card.get("tpl") or "").strip()
+    want_pal = str(card.get("palette") or "").strip()
+    use_tpl = want_tpl if want_tpl in templates._TEMPLATES else tpl_key
+    use_pal = want_pal if want_pal in variants.PALETTE_KEYS else palette_key
+    key = (use_tpl, use_pal)
+    if key not in cache:
+        cache[key] = _page_css(use_tpl, use_pal, font_key, layout_key, skin_key, skin_uri)
+    trace = None
+    if want_tpl or want_pal:
+        trace = {"tpl": use_tpl, "palette": use_pal}
+        if want_tpl and want_tpl != use_tpl:
+            trace["tpl_rejected"] = want_tpl
+        if want_pal and want_pal != use_pal:
+            trace["palette_rejected"] = want_pal
+        if want_pal and use_tpl not in variants.PALETTE_READY_TPLS:
+            trace["palette_noop"] = True
+    return use_tpl, use_pal, cache[key], trace
+
+
+def render_cards(cards, out_dir, st):
+    """卡片列表 → 落盘 img*.png，返回 (images, used_assets, card_styles)。
+
+    从 generate_graphics 里拆出来只有一个原因：改了文案想重出图，不该再花一次 LLM 的钱，
+    也不该在临时脚本里抄一遍渲染循环（抄的那份迟早和产线漂移，本项目吃过这个亏）。
+    产线出图与「改文案重出图」共用这一条路，参数由调用方给已解析好的渲染上下文。
+    """
+    tpl_key, palette_key = st["tpl_key"], st["palette_key"]
+    font_key, layout_key = st["font_key"], st["layout_key"]
+    skin_key, skin_uri = st["skin_key"], st["skin_uri"]
+    theme_imgs, cover_img, rng = st["theme_imgs"], st["cover_img"], st["rng"]
+    # 头条成品图不渲染「提醒」块（2026-09-29 用户要求「图文中移除提醒」），有皮肤垫图时背景统一走 skin。
+    # 这两条写在渲染入口、不写在 generate_graphics 里：首次出图和「改了文案重出图」必须同一条路，
+    # 否则重出那一次会漏剔除，同一份 cards 两次渲染结果不一样。
+    for card in cards:
+        if isinstance(card, dict):
+            card.pop("note", None)
+            if skin_uri:
+                card["bg"] = "skin"
+    total = len(cards)
+    images = []
+    card_styles = []
+    from playwright.sync_api import sync_playwright
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": CANVAS_W, "height": CANVAS_H})
+        brand = st["brand"]
+        cover_ratio = skins._img_ratio(cover_img) if cover_img is not None else None
+        # 本包已用素材（封面 + 各页横带），随机选图时作为排除集，避免同图重复出现
+        used_assets = [cover_img] if cover_img is not None else []
+        for idx, card in enumerate(cards, 1):
+            kind = card.get("kind") or "list"
+            c_tpl_key, c_pal_key, c_css, c_trace = _card_style(
+                card, tpl_key, palette_key, st["css_cache"], skin_key, skin_uri,
+                font_key, layout_key)
+            c_tpl = templates._TEMPLATES[c_tpl_key]
+            if c_trace:
+                entry = {"idx": idx, "tpl": c_tpl_key, "palette": c_pal_key}
+                entry.update({k: v for k, v in c_trace.items() if k in
+                              ("tpl_rejected", "palette_rejected", "palette_noop")})
+                card_styles.append(entry)
+            ctx = {"brand": brand, "idx": idx, "total": total, "skin_key": skin_key,
+                   "canvas_h": CANVAS_H, "cover_ratio": cover_ratio}
+            if kind == "cover" and idx == 1:
+                hero = skins._hero_uri(card, cover_img, skin_uri, _ASSETS_DIR)
+                html = c_tpl["cover"](card, c_css, hero, ctx)
+            else:
+                # 取图方式跟着这张卡的实际模板走：guide 是用户上传的有序攻略图，必须确定取；
+                # 其他模板才走随机不重复那套。混版式时若还按包级 tpl_key 判断会拿错图。
+                if c_tpl_key == "guide":
+                    band = theme_imgs[(idx - 1) % len(theme_imgs)] if theme_imgs else None
+                else:
+                    band = skins._pick_band_image(theme_imgs, idx, rng, exclude=used_assets)
+                    if band is not None:
+                        used_assets.append(band)
+                hero = skins._hero_uri(card, band, skin_uri, _ASSETS_DIR)
+                html = c_tpl["list"](card, c_css, hero, ctx)
+            png_path = out_dir / ("img%d.png" % idx)
+            renderer.render_html(page, html, png_path, CANVAS_W, CANVAS_H)
+            # 回归脚本要看「CSS 到底变了没有」，只有它们置了这个开关才留中间 HTML
+            if os.environ.get("V2T_KEEP_RENDER_HTML"):
+                (out_dir / ("img%d.html" % idx)).write_text(html, encoding="utf-8")
+            images.append({"file": png_path.name, "label": "图%d" % idx,
+                           "url": "/media/toutiao/%d/%s" % (st["summary_id"], png_path.name)})
+        browser.close()
+    return images, used_assets, card_styles
+
+
 def generate_graphics(summary, ai_config, progress_cb=None, theme="", skin="wow", title="", template="classic", guide_images=None, palette=None, font=None, layout=None):
     """主入口：整合稿 → manifest dict（图片落盘 output/toutiao/<summary_id>/）。
 
@@ -266,15 +384,9 @@ def generate_graphics(summary, ai_config, progress_cb=None, theme="", skin="wow"
         layout_key = variants.pick_random_layout()
     else:
         layout_key = variants.resolve_layout(layout)
-    palette = variants.resolve_palette(skin_key, palette_key, tpl_key)
-    extra_tokens = dict(css_engine._tpl_tokens(tpl_key, skin_key))
-    extra_tokens.update(variants.palette_tokens(tpl_key, palette_key))
-    css = css_engine._build_css(tpl["css"], palette, skin_uri, _ASSETS_DIR, extra_tokens, CANVAS_W, CANVAS_H)
-    layout_extra = variants.layout_css(tpl_key, layout_key)
-    if layout_extra:
-        css += "\n/* layout:%s */\n%s" % (layout_key, layout_extra)
-    # tpl_key 必传：minimal 全篇只有黑体栈，没有 Songti 可替换，靠预设的按模板追加片段才生效
-    css = variants.apply_font(css, font_key, tpl_key)
+    css = _page_css(tpl_key, palette_key, font_key, layout_key, skin_key, skin_uri)
+    # 按卡混版式/混配色的 CSS 缓存：包级那份先入表，卡片没写 tpl/palette 就命中它（零额外开销）
+    css_cache = {(tpl_key, palette_key): css}
     # 素材选图随机化（2026-09-29 用户要求「素材图片也可以是随机的，并不是第一张图片就是
     # 第一张图片素材」）：此前封面永远取比例最大的竖图、横带按固定顺序轮换，同一素材库
     # 生成多少次都是同一批图。现在每次生成建一个新随机源（_make_rng，_RNG_SEED 可固定复现），
@@ -309,51 +421,14 @@ def generate_graphics(summary, ai_config, progress_cb=None, theme="", skin="wow"
     user_title = (title or "").strip()
     if user_title and cards:
         cards[0]["title"] = summary.get("title") or user_title[:60]
-    # 头条成品图不再渲染「提醒」小结块（2026-09-29 用户要求「图文中移除提醒」）：
-    # prompt / schema 已同步禁止生成 note，但 LLM 未必听话、本地兜底卡 _fallback_cards 也仍带
-    # 「提醒」——与标题强制同一原则：渲染前代码级剔除，不留侥幸。
-    # 模板渲染函数里的 note_html 分支保留（公众号等其他渠道不受影响）。
-    for card in cards:
-        if isinstance(card, dict):
-            card.pop("note", None)
-    if skin_uri:
-        for card in cards:
-            card["bg"] = "skin"
-    total = len(cards)
-    images = []
-    _pg("渲染 %d 张信息图（模板：%s）..." % (total, tpl["label"]))
-    from playwright.sync_api import sync_playwright
-
-    with sync_playwright() as p:
-        browser = p.chromium.launch()
-        page = browser.new_page(viewport={"width": CANVAS_W, "height": CANVAS_H})
-        brand = (theme or "").strip()[:12]
-        cover_ratio = skins._img_ratio(cover_img) if cover_img is not None else None
-        # 本包已用素材（封面 + 各页横带），随机选图时作为排除集，避免同图重复出现
-        used_assets = [cover_img] if cover_img is not None else []
-        for idx, card in enumerate(cards, 1):
-            kind = card.get("kind") or "list"
-            ctx = {"brand": brand, "idx": idx, "total": total, "skin_key": skin_key,
-                   "canvas_h": CANVAS_H, "cover_ratio": cover_ratio}
-            if kind == "cover" and idx == 1:
-                hero = skins._hero_uri(card, cover_img, skin_uri, _ASSETS_DIR)
-                html = tpl["cover"](card, css, hero, ctx)
-            else:
-                if tpl_key == "guide":
-                    band = theme_imgs[(idx - 1) % len(theme_imgs)] if theme_imgs else None
-                else:
-                    band = skins._pick_band_image(theme_imgs, idx, rng, exclude=used_assets)
-                    if band is not None:
-                        used_assets.append(band)
-                hero = skins._hero_uri(card, band, skin_uri, _ASSETS_DIR)
-                html = tpl["list"](card, css, hero, ctx)
-            png_path = out_dir / ("img%d.png" % idx)
-            renderer.render_html(page, html, png_path, CANVAS_W, CANVAS_H)
-            # 回归脚本要看「CSS 到底变了没有」，只有它们置了这个开关才留中间 HTML
-            if os.environ.get("V2T_KEEP_RENDER_HTML"):
-                (out_dir / ("img%d.html" % idx)).write_text(html, encoding="utf-8")
-            images.append({"file": png_path.name, "label": "图%d" % idx, "url": "/media/toutiao/%d/%s" % (summary_id, png_path.name)})
-        browser.close()
+    # 「提醒」块剔除与皮肤背景统一已挪到 render_cards 入口（首次出图和重出图共用一条路）。
+    _pg("渲染 %d 张信息图（模板：%s）..." % (len(cards), tpl["label"]))
+    images, used_assets, card_styles = render_cards(cards, out_dir, {
+        "tpl_key": tpl_key, "palette_key": palette_key, "font_key": font_key,
+        "layout_key": layout_key, "skin_key": skin_key, "skin_uri": skin_uri,
+        "theme_imgs": theme_imgs, "cover_img": cover_img, "rng": rng,
+        "brand": (theme or "").strip()[:12], "summary_id": summary_id,
+        "css_cache": css_cache})
 
     manifest = {
         "id": summary_id,
@@ -369,6 +444,9 @@ def generate_graphics(summary, ai_config, progress_cb=None, theme="", skin="wow"
         "palette": palette_key,
         "font": font_key,
         "layout": layout_key,
+        # 按卡混版式/混配色的追溯记录：只登记「这张卡显式写了 tpl/palette」的，缺省不写。
+        # 有 tpl_rejected / palette_noop 就说明请求没生效，界面与体检能据此报警，不留静默失效。
+        "card_styles": card_styles,
         # 素材选图已随机化（2026-09-29）：记录本包实际用到的素材文件名（首个为封面主视觉），
         # 便于事后追溯「这张成品图用的是哪张素材」——随机后不能再靠目录顺序倒推。
         "assets": [p.name for p in used_assets],
