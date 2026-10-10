@@ -843,6 +843,13 @@ def generate_collection_summary(
     return _generate_collection_local(videos, summary_type), "local-template", "draft"
 
 
+# 整理稿的模型超时。原来写死 300 秒，2026-10-10 实测 5 条素材的头条整合稿
+# （qwen3.8-max，思考型）要 394 秒，直接撞线报 Request timed out；接实名参考之后提示词
+# 又长了一截，只会更容易撞。放宽到 900 秒——前端有进度条与"已耗时"显示，慢不是问题，
+# 静默失败才是。两处（单条 / 多条整合）共用这一个值。
+LLM_TIMEOUT = 900
+
+
 def _generate_with_llm(
     video: dict[str, Any],
     summary_type: str,
@@ -855,7 +862,7 @@ def _generate_with_llm(
         client = openai.OpenAI(
             api_key=ai_config["api_key"],
             base_url=ai_config.get("api_base") or "https://api.openai.com/v1",
-            timeout=300,
+            timeout=LLM_TIMEOUT,
             max_retries=1,
         )
         resp = client.chat.completions.create(
@@ -881,7 +888,7 @@ def _generate_collection_with_llm(
         client = openai.OpenAI(
             api_key=ai_config["api_key"],
             base_url=ai_config.get("api_base") or "https://api.openai.com/v1",
-            timeout=300,
+            timeout=LLM_TIMEOUT,
             max_retries=1,
         )
         resp = client.chat.completions.create(
