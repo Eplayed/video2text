@@ -59,7 +59,8 @@ def scan(text: str) -> List[Tuple[str, dict]]:
 def check(draft_text: str, source_text: Optional[str] = None) -> Dict[str, object]:
     """出一份核对报告。rows 是给体检打印用的 (级别, 名称, 说明) 三元组。"""
     terms, aliases, _ = load()
-    out = {"ready": bool(terms), "stale": [], "hit": [], "missing": [], "levels": {}, "rows": []}
+    out = {"ready": bool(terms), "stale": [], "alias": [], "hit": [], "missing": [],
+           "levels": {}, "rows": []}
     if not terms:
         out["rows"].append(("INFO", "实体实名", "名单没同步（先跑 tools/sync_wow_icons.py），本项跳过"))
         return out
@@ -74,6 +75,12 @@ def check(draft_text: str, source_text: Optional[str] = None) -> Dict[str, objec
     for old, new in aliases.items():
         if old and old in (draft_text or ""):
             out["stale"].append({"old": old, "new": new})
+    # 手工别名表：名单里有实名、稿里却用描述性写法（制皮帐篷→营地帐篷）。
+    # 和"上游改名"同一档处理——都是**确定的**错，不是猜出来的，所以判 FAIL。
+    for wrong, right, _note in _alias_pairs():
+        n = (draft_text or "").count(wrong)
+        if n and wrong != right:
+            out["alias"].append({"wrong": wrong, "right": right, "count": n})
 
     if source_text:
         in_draft = {n for n, _ in hits}
@@ -85,6 +92,10 @@ def check(draft_text: str, source_text: Optional[str] = None) -> Dict[str, objec
     if out["stale"]:
         out["rows"].append(("FAIL", "实体实名·用了改过的旧名",
                             "；".join("%s → 现名 %s" % (s["old"], s["new"]) for s in out["stale"])))
+    if out["alias"]:
+        out["rows"].append(("FAIL", "实体实名·名单里有实名",
+                            "；".join("%s → %s（%d 处）" % (a["wrong"], a["right"], a["count"])
+                                  for a in out["alias"])))
     if out["hit"]:
         lv = "、".join("%s %d 条" % (k, v) for k, v in sorted(out["levels"].items()))
         out["rows"].append(("INFO", "实体实名", "命中名单 %d 条（%s）：%s"
@@ -98,17 +109,33 @@ def check(draft_text: str, source_text: Optional[str] = None) -> Dict[str, objec
                             "%d 个（素材覆盖多主题时这条会偏多，只当线索）：%s"
                             % (len(out["missing"]),
                                "、".join(m["name"] for m in out["missing"][:12]))))
-    if not out["stale"] and not out["missing"] and out["hit"]:
+    if not out["stale"] and not out["alias"] and not out["missing"] and out["hit"]:
         out["rows"].append(("PASS", "实体实名", "名字与名单一致，素材里的实名也没漏"))
     return out
 
 
+def _alias_pairs():
+    """手工写法对照表（config/wow_aliases.json）。取不到就只跑名单，不影响其余检查。"""
+    try:
+        from . import wow_reference
+        return wow_reference.alias_pairs()[0]
+    except Exception:
+        return []
+
+
 def apply_names(text: str) -> Tuple[str, List[Tuple[str, str]]]:
-    """把稿中的旧名统一成现名（只动 aliases 命中，不做别的替换）。返回 (新文本, 改了哪些)。"""
+    """把稿里的旧名与"名单已有实名的描述性写法"统一成实名。返回 (新文本, 改了哪些)。
+
+    只动两张表里显式登记的条目，不做任何模糊匹配。
+    """
     _, aliases, _ = load()
     changed = []
     for old, new in aliases.items():
         if old and old in (text or ""):
             text = text.replace(old, new)
             changed.append((old, new))
+    for wrong, right, _note in _alias_pairs():
+        if wrong and wrong != right and wrong in (text or ""):
+            text = text.replace(wrong, right)
+            changed.append((wrong, right))
     return text, changed

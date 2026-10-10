@@ -199,6 +199,42 @@ def _compliance(text: str, rows: List[Tuple[str, str, str]]) -> None:
                      "运营规范 3.3.2 诱导关注）。确属误伤（比如正文在讲公众号运营本身）"
                      "走审核台「人工放行」写理由留痕"))
 
+# 这几节是"给编辑看的"，本来就该保留素材原话与不确定项，实名门不看它们：
+# 【原话摘录】要留 up 主说法、【口径分歧】【风险核查】要写"素材叫 A、名单叫 B，待人工确认"。
+# 拿实名规则去卡这几节，等于逼模型把引用改成通顺的话，那是造假不是纠错。
+_EDITORIAL_SECTIONS = ("原话摘录", "口径分歧", "风险核查", "来源", "待办")
+
+
+def _reader_facing(text: str) -> str:
+    """去掉编辑节，只留读者会看到的正文。"""
+    lines, skip = [], False
+    for ln in (text or "").splitlines():
+        head = re.match(r"^\s*[【\[](.{2,8})[】\]]", ln)
+        if head:
+            skip = head.group(1) in _EDITORIAL_SECTIONS
+        if not skip:
+            lines.append(ln)
+    return "\n".join(lines)
+
+
+def _term_gate(text: str, rows: List[Tuple[str, str, str]]) -> None:
+    """实体实名门：名单里有实名、正文却用描述性写法或改过的旧名 → FAIL。
+
+    口径 2026-10-10 由用户升级：「名单里有实名就一律统一」，不再要求"读不通才改"。
+    规则本身在 config/wow_aliases.json（人工维护，目标实名必须在同步下来的名单里存在）；
+    这里只负责拦，不改——替换走 scripts/check_terms.py --fix，由人决定要不要落盘。
+    名单没同步时整项跳过并留 INFO，不静默放行。
+    """
+    try:
+        from . import term_check
+        rep = term_check.check(_reader_facing(text))
+    except Exception as exc:                      # 名单缺失/表损坏都不该让体检崩掉
+        rows.append(("INFO", "实体实名", "本项跳过：%s" % str(exc)[:60]))
+        return
+    for level, name, detail in rep.get("rows") or []:
+        if name.startswith("实体实名"):
+            rows.append((level, name, detail))
+
 
 def audit(md_text: Optional[str] = None, manifest: Optional[Dict[str, Any]] = None,
           sources_text: Optional[str] = None, draft_path: Optional[str] = None,
@@ -237,6 +273,8 @@ def audit(md_text: Optional[str] = None, manifest: Optional[Dict[str, Any]] = No
     _compliance(prose if manifest is None else prose + "\n" + copy_text, rows)
     if sources_text:
         _cross_check(nums, sources_text, rows)
+    # 实名门放在 AI 味之前：名字错了属于事实层问题，比"像不像 AI 写的"更该先挡住
+    _term_gate(prose if manifest is None else prose + "\n" + copy_text, rows)
 
     score = _ai_score(prose, rows)
     if score is not None:

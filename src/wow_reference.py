@@ -23,6 +23,7 @@ from typing import Any, Dict, List
 
 ROOT = Path(__file__).resolve().parents[1]
 TERMS_FILE = ROOT / "output" / "_assets" / "wow_terms.json"
+ALIAS_FILE = ROOT / "config" / "wow_aliases.json"
 
 # 认题材：game 字段最权威，标题与标签兜底（订阅没填 game 的素材也得能命中）
 WOW_HINT = re.compile(r"(魔兽|魔兽世界|艾泽拉斯|wow|正式服|怀旧服|无限服)", re.I)
@@ -51,6 +52,62 @@ def is_wow(video: Dict[str, Any]) -> bool:
     return bool(WOW_HINT.search(blob))
 
 
+_alias_cache = {"sig": None, "pairs": [], "dropped": []}
+
+
+def alias_pairs():
+    """读「描述性写法 / 错字 → 实名」对照表，返回 (可用对照[(错写, 实名, 备注)], 被降级的条目)。
+
+    这张表为什么必须手工维护：名单能给出实名「营地帐篷」，但推不出素材里的「制皮帐篷」
+    说的是同一个东西——那是人的判断。所以自动映射不做，只认这张表。
+
+    每条都要过一道校验：**目标必须还在名单里**。上游（客户端解包）改了名而这张表还往
+    旧名上靠，比不替换更糟。校验不过的自动降级进 needs_review 并回给调用方，不静默丢。
+    表按修改时间热加载，改完不用重启工作台（和 term_glossary 同一套）。
+    """
+    try:
+        sig = ALIAS_FILE.stat().st_mtime
+    except OSError:
+        return [], []
+    if _alias_cache["sig"] == sig:
+        return _alias_cache["pairs"], _alias_cache["dropped"]
+    try:
+        doc = json.loads(ALIAS_FILE.read_text(encoding="utf-8"))
+    except (ValueError, OSError):
+        return [], []
+    terms = (_load_terms() or {}).get("terms") or {}
+    pairs, dropped = [], []
+    for it in doc.get("fixes") or []:
+        wrong = str(it.get("wrong") or "").strip()
+        right = str(it.get("right") or "").strip()
+        if not wrong or not right:
+            continue
+        if right not in terms:
+            dropped.append({"word": wrong, "why": "目标实名「%s」不在名单里（上游改名或没同步），本条暂不生效" % right})
+            continue
+        pairs.append((wrong, right, str(it.get("note") or "")))
+    _alias_cache.update(sig=sig, pairs=pairs, dropped=dropped)
+    return pairs, _alias_cache["dropped"]
+
+
+def normalize(text: str):
+    """按对照表做确定性替换。返回 (新文本, [(错写, 实名, 次数)])。
+
+    只替换表里显式登记的条目，不做任何模糊匹配。
+    调用方决定要不要落盘——这一步**不自动写库**：整理稿可能已经被人改过，
+    静默替换等于替用户做编辑决定。命令行 `scripts/check_terms.py --fix` 才真改文件。
+    """
+    pairs, _ = alias_pairs()
+    changed = []
+    out = text or ""
+    for wrong, right, _note in pairs:
+        n = out.count(wrong)
+        if n and wrong != right:
+            out = out.replace(wrong, right)
+            changed.append((wrong, right, n))
+    return out, changed
+
+
 def _bigrams(text: str) -> set:
     t = re.sub(r"\s+", "", text or "")
     return set(t[i:i + 2] for i in range(len(t) - 1))
@@ -74,12 +131,14 @@ def build_block(videos: List[Dict[str, Any]]) -> str:
     lines = []
     head = [
         "【魔兽实名参考 · 来自 wow-forever 数据库（客户端解包与官方公告，非第三方攻略）】",
-        "用法纪律，三条都必守：",
-        "① 只用来**统一写法和纠正同音错字**：素材确实在讲这个东西、而转写写法明显读不通时，按名单改"
-        "（如「税代」→舒适的睡袋、「魚鋼」→鱼缸、「彭韵」→烹饪）。",
-        "② **不许拿名单引入新实体**：素材没讲的东西，名单里有也不写进去；名单里没有的名字保留素材原话，"
-        "并写进【风险核查】提示人工核对，绝不换个相近的词凑上。",
-        "③ 名单里带「未跟官方核对」分级的条目（多为天赋名），写法可以用，"
+        "用法纪律，四条都必守：",
+        "① **名单里有实名，就用实名写**，不管转写里那个说法读不读得通："
+        "「制皮帐篷」→营地帐篷、「烧焦的遗骸」→焦焚残骸、「税代」→舒适的睡袋。"
+        "统一写法比「看得懂」重要——读者拿着稿子里的名字进游戏搜不到东西。",
+        "② 只有名单里查得到的才换。查不到的（混调干果、鱼缸这类上游自己都没拆的）"
+        "**保留素材原话**，并写进【风险核查】提示人工核对，绝不换个相近的词凑上。",
+        "③ 不许拿名单**引入新实体**：素材没讲的东西，名单里有也不写进去。",
+        "④ 名单里带「未跟官方核对」分级的条目（多为天赋名），写法可以用，"
         "但**不许在稿子里称其为官方名称**；数值、点数上限、等级门槛一律以素材为准，名单只给名字。",
     ]
     # 纪律说明本身要先从预算里扣掉——早先没扣，八组名单一路放到 1788 字才停
@@ -93,10 +152,17 @@ def build_block(videos: List[Dict[str, Any]]) -> str:
         lines.append(s)
         return True
 
-    # ① 改名对照：这是真错误，优先级最高
+    # ① 改名对照（上游给的）+ 手工别名表（我们实测攒的）：这两类是真错误，优先级最高
     if aliases:
-        emit("已改名（素材若用旧名，一律换成现名）：" +
+        emit("上游标了改名的（素材若用旧名一律换成现名）：" +
              "；".join("%s→%s" % (o, n) for o, n in sorted(aliases.items())[:12]))
+    pairs, dropped = alias_pairs()
+    if pairs:
+        emit("写法对照（照这个统一，不用判断读不读得通）：" +
+             "；".join("%s→%s" % (w, r) for w, r, _n in pairs))
+    if dropped:
+        emit("以下对照暂时不生效（目标实名不在名单里）：%s"
+             % "；".join("%s：%s" % (d["word"], d["why"]) for d in dropped[:4]))
 
     # ② 素材点到的职业：把整棵天赋树的名字给它（天赋名最容易在口播里被念错）。
     #    判定要严：只在标题里出现、或正文提到 ≥3 次才算"这篇在讲这个职业"。
