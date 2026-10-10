@@ -1280,7 +1280,7 @@ def _prompt(video: dict[str, Any], summary_type: str) -> str:
   {schema},
   "keywords": ["关键词1", "关键词2"]
 }}
-{_glossary_block()}
+{_glossary_block()}{_wow_block([video])}
 视频标题：{video.get('title') or ''}
 作者：{video.get('author') or ''}
 游戏：{video.get('game') or ''}
@@ -1304,6 +1304,20 @@ def _glossary_block() -> str:
     except Exception:
         return ""
     return ("\n" + text + "\n") if text else ""
+
+
+def _wow_block(videos: list) -> str:
+    """魔兽题材额外注入「实名参考」：名单来自 wow-forever 数据库同步下来的副本。
+
+    和上面那张手工词表同一个道理——整理稿纪律「只基于输入材料」会连纠错一起挡掉，
+    得有依据才敢改。区别是这张表由数据派生、按本篇相关性挑条目，不手工维护。
+    非魔兽题材返回空串，一个字都不加。逻辑与纪律说明见 src/wow_reference.py。
+    """
+    try:
+        from . import wow_reference
+        return wow_reference.build_block(videos or [])
+    except Exception:
+        return ""
 
 
 def _collection_prompt(videos: list[dict[str, Any]], summary_type: str) -> str:
@@ -1400,7 +1414,7 @@ def _collection_prompt(videos: list[dict[str, Any]], summary_type: str) -> str:
   {schema},
   "keywords": ["关键词1", "关键词2"]
 }}
-{_glossary_block()}
+{_glossary_block()}{_wow_block(videos)}
 输入视频：
 {chr(10).join(blocks)}
 """
