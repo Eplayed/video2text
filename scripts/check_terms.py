@@ -69,6 +69,10 @@ def main():
             print("  [%-5s] %-16s %s" % (lv, nm, dt))
         bad = sum(1 for lv, _, _ in rep["rows"] if lv in ("FAIL", "WARN"))
         print("━━━━━━ 判定：%s ━━━━━━" % ("有要改的" if bad else "实名这块没问题"))
+        # 和发布体检口径不同这件事必须自己说清楚，否则下次看到"CLI 报 3 处、体检却通过"会以为漏检：
+        # 这里查全文（含【原话摘录】【风险核查】等编辑节），draft_audit 的实名门只查读者会看到的正文。
+        print("说明：本命令查全文；发布门（draft_audit._term_gate）会先剥掉"
+              "【原话摘录】【口径分歧】【风险核查】等编辑节，两边计数可以不同。")
     return 1 if any(lv == "FAIL" for lv, _, _ in rep["rows"]) else 0
 
 
