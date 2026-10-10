@@ -702,7 +702,7 @@ h1.long { font-size:70px; }
    读起来就是一张榜单表——小红书后台里「梯队/排行」那类版式的流量是单条技巧的 20-600 倍。 */
 .tgrid.one { grid-template-columns:1fr; }
 .tgrid.one .tcard { flex-direction:row; align-items:center; gap:28px; padding:26px 32px; }
-.tgrid.one .tcard .ct { flex:0 0 30%; margin-bottom:0; font-size:40px; }
+.tgrid.one .tcard .ct { flex:0 0 auto; min-width:28%; margin-bottom:0; font-size:40px; white-space:nowrap; }
 .tgrid.one .tcard .cd { flex:1; font-size:30px; line-height:1.55; }
 .tgrid.one .tchip { font-size:26px; padding:4px 16px; }
 /* 9 条以上再压一档：天赋表/技能表就是要一行一条列满，不压会溢出被裁（实测 12 条时第 10 条起没了）。
@@ -710,7 +710,7 @@ h1.long { font-size:70px; }
 .tgrid.one.dense { gap:10px; }
 .tgrid.one.dense .tcard { padding:13px 22px; }
 .tgrid.one.dense .tcard .iic { width:48px; height:48px; }
-.tgrid.one.dense .tcard .ct { flex:0 0 38%; flex-wrap:nowrap; font-size:31px; }
+.tgrid.one.dense .tcard .ct { flex:0 0 auto; min-width:34%; flex-wrap:nowrap; white-space:nowrap; font-size:31px; }
 .tgrid.one.dense .tcard .cd { font-size:24px; line-height:1.4; }
 .tgrid.one.dense .tchip { font-size:20px; padding:2px 11px; }
 .tcard { background:rgba(__T_PANEL_RGB__,.94); border:1px solid rgba(255,255,255,.10); border-radius:10px;

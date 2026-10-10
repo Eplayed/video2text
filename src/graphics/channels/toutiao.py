@@ -281,7 +281,7 @@ def _card_style(card, tpl_key, palette_key, cache, skin_key, skin_uri, font_key,
 
 
 def render_cards(cards, out_dir, st):
-    """卡片列表 → 落盘 img*.png，返回 (images, used_assets, card_styles, icon_report)。
+    """卡片列表 → 落盘 img*.png，返回 (images, used_assets, card_styles, icon_report, term_report)。
 
     从 generate_graphics 里拆出来只有一个原因：改了文案想重出图，不该再花一次 LLM 的钱，
     也不该在临时脚本里抄一遍渲染循环（抄的那份迟早和产线漂移，本项目吃过这个亏）。
@@ -302,6 +302,13 @@ def render_cards(cards, out_dir, st):
     # 条目真图标：按条目显式写的 icon 去本地暴雪图标库查（查不到就不画，规矩见 src/graphics/icons.py）。
     # 缺了哪些名字照实带回 manifest.icons——静默少图会被读成"这套版本来就没图标"，那就永远不会去补。
     icon_report = icons.attach(cards)
+    # 实体实名核对：名字对不对、有没有用改过的旧名，一并记进 manifest（判定口径见 src/term_check.py）
+    from src import term_check
+    blob = "\n".join([str(c.get("title") or "") + str(c.get("subtitle") or "") for c in cards if isinstance(c, dict)]
+                     + [str(it.get("name") or "") + str(it.get("desc") or "")
+                        for c in cards if isinstance(c, dict)
+                        for it in (c.get("items") or []) + (c.get("hooks") or [])])
+    term_report = term_check.check(blob)
     total = len(cards)
     images = []
     card_styles = []
@@ -349,7 +356,7 @@ def render_cards(cards, out_dir, st):
             images.append({"file": png_path.name, "label": "图%d" % idx,
                            "url": "/media/toutiao/%d/%s" % (st["summary_id"], png_path.name)})
         browser.close()
-    return images, used_assets, card_styles, icon_report
+    return images, used_assets, card_styles, icon_report, term_report
 
 
 def generate_graphics(summary, ai_config, progress_cb=None, theme="", skin="wow", title="", template="classic", guide_images=None, palette=None, font=None, layout=None):
@@ -427,7 +434,7 @@ def generate_graphics(summary, ai_config, progress_cb=None, theme="", skin="wow"
         cards[0]["title"] = summary.get("title") or user_title[:60]
     # 「提醒」块剔除与皮肤背景统一已挪到 render_cards 入口（首次出图和重出图共用一条路）。
     _pg("渲染 %d 张信息图（模板：%s）..." % (len(cards), tpl["label"]))
-    images, used_assets, card_styles, icon_report = render_cards(cards, out_dir, {
+    images, used_assets, card_styles, icon_report, term_report = render_cards(cards, out_dir, {
         "tpl_key": tpl_key, "palette_key": palette_key, "font_key": font_key,
         "layout_key": layout_key, "skin_key": skin_key, "skin_uri": skin_uri,
         "theme_imgs": theme_imgs, "cover_img": cover_img, "rng": rng,
@@ -454,6 +461,10 @@ def generate_graphics(summary, ai_config, progress_cb=None, theme="", skin="wow"
         # 图标实况：{attached, missing[], map_ready}。missing 非空就是「这些条目名查不到真图标」，
         # 要么补 wow-forever 那边、要么这条目本来就不是游戏实体，不能装作没这回事。
         "icons": icon_report,
+        # 实体实名核对（wow-forever 名单）：stale 非空就是用了上游标了改名的旧名，属真错误。
+        # 分级只记在这里与体检输出，绝不上图——图上出现「L2」是编辑向泄漏。
+        "terms": {"hit": term_report.get("hit"), "stale": term_report.get("stale"),
+                  "levels": term_report.get("levels"), "ready": term_report.get("ready")},
         # 素材选图已随机化（2026-09-29）：记录本包实际用到的素材文件名（首个为封面主视觉），
         # 便于事后追溯「这张成品图用的是哪张素材」——随机后不能再靠目录顺序倒推。
         "assets": [p.name for p in used_assets],
