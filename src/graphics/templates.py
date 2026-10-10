@@ -98,6 +98,10 @@ h2 { font-family:"Songti SC","Noto Serif SC","STSong",serif; font-size:62px; fon
          border:1px solid __PANEL_B__; border-radius:12px; padding:26px 30px; flex:1;
          box-shadow:0 6px 16px rgba(0,0,0,.38); }
 .panel .bd { flex:1; min-width:0; }
+/* 条目真图标：图片由 src/graphics/icons.py 从本地暴雪图标库按名字查出来补进 icon_uri。
+   查不到就不画这个 <img>，不留空框——空框比没框更像缺东西。 */
+.panel .iic { width:64px; height:64px; border-radius:8px; object-fit:cover; flex-shrink:0;
+              border:1px solid rgba(255,255,255,.22); box-shadow:0 0 12px rgba(0,0,0,.5); }
 .panel .pt { font-family:"Songti SC","Noto Serif SC","STSong",serif; font-size:33px; font-weight:800;
              color:__GOLD_HI__; margin-bottom:8px; display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
 .panel .pd { font-size:27px; line-height:1.55; color:__TEXT__; }
@@ -616,6 +620,9 @@ h1.list.long { font-size:52px; }
               background:linear-gradient(180deg, rgba(124,252,0,.85), rgba(124,252,0,.30));
               box-shadow:0 0 12px rgba(124,252,0,.55); }
 .stop { display:flex; align-items:center; gap:22px; }
+/* 条目真图标（见 icons.py）：路线点/道具名查得到就上，查不到整块不渲染 */
+.stop .iic { width:60px; height:60px; border-radius:7px; object-fit:cover; flex-shrink:0;
+             border:1px solid rgba(__G_GOLD_RGB__,.5); box-shadow:0 0 10px rgba(0,0,0,.55); }
 .stop .no { width:56px; height:56px; border-radius:50%; flex-shrink:0; position:relative; z-index:1;
             background:radial-gradient(circle at 35% 30%, #14330a, #0a1f06); border:3px solid #7cfc00;
             box-shadow:0 0 14px rgba(124,252,0,.65); display:flex; align-items:center; justify-content:center;
@@ -698,9 +705,19 @@ h1.long { font-size:70px; }
 .tgrid.one .tcard .ct { flex:0 0 30%; margin-bottom:0; font-size:40px; }
 .tgrid.one .tcard .cd { flex:1; font-size:30px; line-height:1.55; }
 .tgrid.one .tchip { font-size:26px; padding:4px 16px; }
+/* 9 条以上再压一档：天赋表/技能表就是要一行一条列满，不压会溢出被裁（实测 12 条时第 10 条起没了）。
+   同时把名称列放宽，否则「上限5」这种角标在 30% 宽里放不下会掉到第二行。 */
+.tgrid.one.dense { gap:10px; }
+.tgrid.one.dense .tcard { padding:13px 22px; }
+.tgrid.one.dense .tcard .iic { width:48px; height:48px; }
+.tgrid.one.dense .tcard .ct { flex:0 0 38%; flex-wrap:nowrap; font-size:31px; }
+.tgrid.one.dense .tcard .cd { font-size:24px; line-height:1.4; }
+.tgrid.one.dense .tchip { font-size:20px; padding:2px 11px; }
 .tcard { background:rgba(__T_PANEL_RGB__,.94); border:1px solid rgba(255,255,255,.10); border-radius:10px;
          padding:20px 22px; box-shadow:0 6px 16px rgba(0,0,0,.4); display:flex; flex-direction:column;
          justify-content:center; }
+.tcard .iic { width:62px; height:62px; border-radius:7px; object-fit:cover; flex-shrink:0;
+              border:1px solid rgba(255,255,255,.24); }
 .tier.a .tcard { border-left:5px solid #c41e3a; }
 .tier.b .tcard { border-left:5px solid #d4a017; }
 .tier.c .tcard { border-left:5px solid #4a3f8c; }
@@ -776,6 +793,9 @@ h1.list.long { font-size:48px; }
                background:linear-gradient(180deg, rgba(255,140,50,.9), rgba(255,80,30,.35));
                box-shadow:0 0 12px rgba(255,120,50,.6); }
 .step { display:flex; align-items:center; gap:20px; }
+/* 步骤条目的真图标（见 icons.py），查不到就不画 */
+.step .iic { width:58px; height:58px; border-radius:7px; object-fit:cover; flex-shrink:0;
+             border:1px solid rgba(255,180,90,.45); }
 .step .no { width:52px; height:52px; border-radius:50%; flex-shrink:0; position:relative; z-index:1;
             background:radial-gradient(circle at 35% 30%, #4a2408, #2a1204); border:3px solid #ff8c32;
             box-shadow:0 0 14px rgba(255,140,50,.65); display:flex; align-items:center; justify-content:center;
@@ -796,6 +816,16 @@ h1.list.long { font-size:48px; }
 
 def _esc(text):
     return (str(text or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+
+
+def _icon_html(it):
+    """条目左侧的真图标（天赋/技能/道具）。
+
+    只认 `src/graphics/icons.py` 查出来后补进去的 `icon_uri`：查不到就不输出这个 <img>，
+    既不画空框占位、也绝不拿相近的图凑数——配错图印出去就是错攻略，比空着严重得多。
+    """
+    uri = str((it or {}).get("icon_uri") or "").strip()
+    return '<img class="iic" src="%s">' % _esc(uri) if uri else ""
 
 
 def _page_open(css):
@@ -857,9 +887,9 @@ def _list_html_classic(card, css, hero_uri, ctx):
         tag = _esc(it.get("tag", ""))
         # 2026-09-29 用户要求：移除条目名首字圆环（原 <div class="ring">共</div>），行内只留标题+描述
         rows.append(
-            '<div class="panel %s"><div class="bd">'
+            '<div class="panel %s">%s<div class="bd">'
             '<div class="pt">%s%s</div><div class="pd">%s</div></div></div>'
-            % (f_cls, name,
+            % (f_cls, _icon_html(it), name,
                ('<span class="chip">%s</span>' % tag) if tag else "",
                _esc(it.get("desc", "")))
         )
@@ -1400,9 +1430,9 @@ def _cover_html_guide(card, css, hero_uri, ctx):
 def _list_html_guide(card, css, hero_uri, ctx):
     items = card.get("items") or []
     stops = "".join(
-        '<div class="stop"><div class="no">%d</div><div class="bd">'
+        '<div class="stop"><div class="no">%d</div>%s<div class="bd">'
         '<div class="t">%s%s</div><div class="d">%s</div></div></div>'
-        % (i + 1, _esc(it.get("name", "")),
+        % (i + 1, _icon_html(it), _esc(it.get("name", "")),
            ('<span class="gchip">%s</span>' % _esc(it.get("tag", ""))) if it.get("tag") else "",
            _esc(it.get("desc", "")))
         for i, it in enumerate(items))
@@ -1415,7 +1445,7 @@ def _list_html_guide(card, css, hero_uri, ctx):
     # 条目间距按条数给：3 条松、4 条中、5 条紧（prompt 限 3-5 条）。
     # 为什么在 Python 侧算而不是纯 CSS：space-evenly 只会「摊满」不会「收缩到刚好」，
     # 条数少就出现半张空图；CSS 又没有「按兄弟个数给间距」的写法。
-    gap = 46 if len(items) <= 3 else (30 if len(items) == 4 else 18)
+    gap = 46 if len(items) <= 3 else (30 if len(items) == 4 else (18 if len(items) <= 8 else 8))
     return """%s<div class="wrap" style="height:__H__px">
   <div class="frame"></div>
   <div class="wrap-in">
@@ -1469,8 +1499,8 @@ def _cover_html_tier(card, css, hero_uri, ctx):
 def _list_html_tier(card, css, hero_uri, ctx):
     items = card.get("items") or []
     cards_html = "".join(
-        '<div class="tcard"><div class="ct">%s%s</div><div class="cd">%s</div></div>'
-        % (_esc(it.get("name", "")),
+        '<div class="tcard">%s<div class="ct">%s%s</div><div class="cd">%s</div></div>'
+        % (_icon_html(it), _esc(it.get("name", "")),
            ('<span class="tchip">%s</span>' % _esc(it.get("tag", ""))) if it.get("tag") else "",
            _esc(it.get("desc", "")))
         for it in items)
@@ -1492,7 +1522,7 @@ def _list_html_tier(card, css, hero_uri, ctx):
 </div></body></html>""".replace("__H__", str(ctx["canvas_h"])) % (
     _page_open(css), _esc(ctx["brand"] or "梯度榜"), ctx["idx"], ctx["total"],
     cls, _tier_badge(card, ctx), _esc(card.get("section") or "梯队"), sub_html,
-    " one" if len(items) >= 4 else "", cards_html, foot)
+    " one dense" if len(items) >= 9 else (" one" if len(items) >= 4 else ""), cards_html, foot)
 
 
 
@@ -1540,9 +1570,9 @@ def _cover_html_quest(card, css, hero_uri, ctx):
 def _list_html_quest(card, css, hero_uri, ctx):
     items = card.get("items") or []
     steps = "".join(
-        '<div class="step"><div class="no">%d</div><div class="bd">'
+        '<div class="step"><div class="no">%d</div>%s<div class="bd">'
         '<div class="t">%s%s</div><div class="d">%s</div></div></div>'
-        % (i + 1, _esc(it.get("name", "")),
+        % (i + 1, _icon_html(it), _esc(it.get("name", "")),
            ('<span class="qchip">%s</span>' % _esc(it.get("tag", ""))) if it.get("tag") else "",
            _esc(it.get("desc", "")))
         for i, it in enumerate(items))

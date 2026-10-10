@@ -11,8 +11,13 @@ Card dict 约定字段（渠道无关骨架）：
   subtitle:   str   副标题（可空）
   section:    str   条目分组名（list 卡）
   icon:       str   单字图标（list 卡）
-  items:      list  [{name, desc, tag, faction}]（list 卡）
-  hooks:      list  [{t, d}]（cover 卡）
+  items:      list  [{name, desc, tag, faction, icon}]（list 卡）
+              icon 可选：写游戏内真实条目名（天赋/技能/道具），渲染前由 src/graphics/icons.py
+              查本地图标库补出 icon_uri；查不到就不画图。绝不从 name 猜——同名不同职业会配错图。
+  hooks:      list  [{t, d, icon}]（cover 卡）
+  tpl:        str   可选，本卡单独换模板（如 tier/quest），不写就跟包级模板
+  palette:    str   可选，本卡单独换配色（variants.PALETTE_KEYS 闭集）
+  class:      str   可选，本卡内容的职业中文名（如「圣骑士」），给图标查表定范围
   note:       dict  {title, text}（可空）
   bg:         str   "neutral" | "alliance" | "horde" | "skin"（背景）
   timeline / timeline_label / timeline_note / badge / faction / faction_text:

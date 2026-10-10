@@ -15,7 +15,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from .. import skins, css_engine, templates, renderer, package, ir, variants, gate
+from .. import skins, css_engine, templates, renderer, package, ir, variants, gate, icons
 from .base import ChannelAdapter
 
 # ── 头条渠道目录 / 画布常量（原 toutiao_graphics.py L22-26）──
@@ -59,6 +59,7 @@ __TEMPLATE_LINE__
 - 第 1 张 kind="cover"：title 大标题（≤18字，含数字）；subtitle 一句话（≤20字，可空）；timeline（≤22字，如「11月4日开服 → 12月7日开团本」）；timeline_note（≤28字）；timeline_label（如「关键时间线」）；hooks 3-4 条，每条 t（≤14字）+ d（≤20字）；bg 可选，"neutral"=通用史诗背景
 - 第 2-4 张 kind="list"：title（≤14字）；section（条目分组名，≤6字）；icon 单字（如 盾/火/剑）；items 3-5 条，每条 name（≤8字）+ desc（≤30字）+ tag（≤4字，可空，如"最稳""T0"）+ faction（可选，"alliance"或"horde"，仅当该条内容阵营专属时填）；不要输出 note 字段（成品图已不再渲染「提醒」小结块，写了也会被丢弃）
 - 阵营主题背景：整卡内容阵营专属时 card 加 bg 字段（"alliance"=联盟蓝金大教堂 / "horde"=部落暗红峡谷）+ faction 字段 + faction_text（如"联盟专属"）；混合阵营内容不要设 bg，用条目级 faction 区分
+- 真图标（有本地图标库时才用）：条目名是游戏内真实的天赋/技能/道具时，给该条目加 "icon":"和 name 一样的真名"，并在卡上加 "class":"圣骑士"（职业中文名）。为什么非要带职业：同名不同职业是两回事，实测裸名查「复仇」会命中德鲁伊那条，配错图印出去就是错攻略。库查不到就不画图，**不许换个近似名字硬凑**。天赋表/技能表这类清单 items 可到 12 条，普通清单仍 3-5 条
 - 每张卡内容要留呼吸感：条目宁少勿多，desc 一句话讲完，超长会被截断
 - 所有文字精简口语化；只能用整合稿里的事实，严禁编造
 - 原话与黑话（人味的来源，别退回书面语）：整合稿的【原话摘录】是给作者挑词的原料，
@@ -280,7 +281,7 @@ def _card_style(card, tpl_key, palette_key, cache, skin_key, skin_uri, font_key,
 
 
 def render_cards(cards, out_dir, st):
-    """卡片列表 → 落盘 img*.png，返回 (images, used_assets, card_styles)。
+    """卡片列表 → 落盘 img*.png，返回 (images, used_assets, card_styles, icon_report)。
 
     从 generate_graphics 里拆出来只有一个原因：改了文案想重出图，不该再花一次 LLM 的钱，
     也不该在临时脚本里抄一遍渲染循环（抄的那份迟早和产线漂移，本项目吃过这个亏）。
@@ -298,6 +299,9 @@ def render_cards(cards, out_dir, st):
             card.pop("note", None)
             if skin_uri:
                 card["bg"] = "skin"
+    # 条目真图标：按条目显式写的 icon 去本地暴雪图标库查（查不到就不画，规矩见 src/graphics/icons.py）。
+    # 缺了哪些名字照实带回 manifest.icons——静默少图会被读成"这套版本来就没图标"，那就永远不会去补。
+    icon_report = icons.attach(cards)
     total = len(cards)
     images = []
     card_styles = []
@@ -345,7 +349,7 @@ def render_cards(cards, out_dir, st):
             images.append({"file": png_path.name, "label": "图%d" % idx,
                            "url": "/media/toutiao/%d/%s" % (st["summary_id"], png_path.name)})
         browser.close()
-    return images, used_assets, card_styles
+    return images, used_assets, card_styles, icon_report
 
 
 def generate_graphics(summary, ai_config, progress_cb=None, theme="", skin="wow", title="", template="classic", guide_images=None, palette=None, font=None, layout=None):
@@ -423,7 +427,7 @@ def generate_graphics(summary, ai_config, progress_cb=None, theme="", skin="wow"
         cards[0]["title"] = summary.get("title") or user_title[:60]
     # 「提醒」块剔除与皮肤背景统一已挪到 render_cards 入口（首次出图和重出图共用一条路）。
     _pg("渲染 %d 张信息图（模板：%s）..." % (len(cards), tpl["label"]))
-    images, used_assets, card_styles = render_cards(cards, out_dir, {
+    images, used_assets, card_styles, icon_report = render_cards(cards, out_dir, {
         "tpl_key": tpl_key, "palette_key": palette_key, "font_key": font_key,
         "layout_key": layout_key, "skin_key": skin_key, "skin_uri": skin_uri,
         "theme_imgs": theme_imgs, "cover_img": cover_img, "rng": rng,
@@ -447,6 +451,9 @@ def generate_graphics(summary, ai_config, progress_cb=None, theme="", skin="wow"
         # 按卡混版式/混配色的追溯记录：只登记「这张卡显式写了 tpl/palette」的，缺省不写。
         # 有 tpl_rejected / palette_noop 就说明请求没生效，界面与体检能据此报警，不留静默失效。
         "card_styles": card_styles,
+        # 图标实况：{attached, missing[], map_ready}。missing 非空就是「这些条目名查不到真图标」，
+        # 要么补 wow-forever 那边、要么这条目本来就不是游戏实体，不能装作没这回事。
+        "icons": icon_report,
         # 素材选图已随机化（2026-09-29）：记录本包实际用到的素材文件名（首个为封面主视觉），
         # 便于事后追溯「这张成品图用的是哪张素材」——随机后不能再靠目录顺序倒推。
         "assets": [p.name for p in used_assets],
