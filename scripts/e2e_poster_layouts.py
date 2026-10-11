@@ -334,6 +334,70 @@ def main():
     except ai_poster.PosterError as e:
         ck("没有页时直接报错而不是白跑模型", "还没有页" in str(e), str(e))
 
+    # ── 无字底图提示词（豆包手动那条与付费那条共用 build_art_prompt）──
+    # 2026-10-11 豆包 Seedream 4.5 实测四张底图全废：文字区被发光面板占满、图上全是假字。
+    # 那些翻车点每一个都是一条静默失效，所以全部钉成断言，改 prompt 的人碰一下就报警。
+    art = ai_poster.build_art_prompt(plan(cards=4), RATIO)
+    ck("底图提示词里没有 Markdown 星号（粘进豆包会被照抄进画面）", "**" not in art)
+    ck("底图提示词不提「留给文字/文字区」（提文字它就把字画上去）",
+       "留给文字" not in art and "文字区" not in art)
+    ck("底图提示词里没有那句通用道具清单（仪表盘/日历/面板）",
+       "仪表盘" not in art and "日历" not in art)
+    ck("站位那句排在主视觉前面（先定站位再说画什么）",
+       art.index("先定站位") < art.index("主视觉："))
+    tail = art.split("【底线】", 1)[-1]
+    ck("末尾再复述一次空带位置（只说一次压不住模型）",
+       "%" in tail or "下沿" in tail, tail.strip()[:40])
+    ck("画风那段里带卡片/屏幕/面板的字样有总闸兜住",
+       "只画背景氛围" in art)
+
+    scene_line = [x for x in art.splitlines() if x.startswith("- 主视觉：")][0]
+    ck("主视觉里的「界面 / 图标」被换成不带字的形",
+       "界面" not in scene_line and "图标" not in scene_line, scene_line)
+
+    p2 = plan(cards=2)
+    p2["scene"] = "亡灵圣骑士手握发光大剑“狼独草”，40 级后在门口排 3 个人"
+    p2["cards"] = [{"t": "先看这个", "d": "说明", "v": "登录界面截图"},
+                   {"t": "再看这个", "d": "说明", "v": "发光的圣光大剑，剑身刻有狼头符文"},
+                   {"t": "换不掉的", "d": "说明", "v": "用衬线字体排的一列排版稿"}]
+    a2 = ai_poster.build_art_prompt(p2, RATIO)
+    scene_line = [x for x in a2.splitlines() if x.startswith("- 主视觉：")][0]
+    ck("引号里的装备名不进底图（进去了就被当成要写的字）", "狼独草" not in a2)
+    ck("主视觉那句里不留数字", not re.search(r"\d", scene_line), scene_line)
+    ck("卡片配图里的界面/截图换成不带字的形之后仍然保留",
+       "登录界面" not in a2 and "截图" not in a2 and "场景" in a2)
+    ck("换不成形的道具（还带着「字体」那种词）整条丢掉",
+       "字体" not in a2 and "排版稿" not in a2)
+
+    p3 = plan(cards=1)
+    p3["title"] = "狼独草：前期亡灵圣骑神器"
+    p3["subtitle"] = "20 级就能拿"
+    p3["scene"] = "背上的圣光大剑狼独草发出光芒，圣骑士站在银松森林"
+    p3["cards"] = [{"t": "属性", "d": "三倍伤害", "v": "狼人身上跳出伤害数字"}]
+    a3 = ai_poster.build_art_prompt(p3, RATIO)
+    ck("这一页要排的主标题字样不从画面描述里再出现一次（实测会被刻在剑身上）",
+       "狼独草" not in a3, [x for x in a3.splitlines() if x.startswith("- 主视觉：")][0])
+    ck("「伤害数字」这种词换成光效，不留数字", "数字" not in a3.split("【底线】")[0])
+    ck("平台水印词剥掉后才算干净（豆包那张右下角一定有）",
+       ai_poster._base_stray_text("豆包AI生成") == "" and
+       ai_poster._base_stray_text("豆包AI生成 狼独草") == "狼独草")
+    ck("「刻有符文」改成发光纹路（照抄就画出鬼画符）",
+       "符文" not in a2 and "发光纹路" in a2)
+
+    two = {"title": "整组标题", "subtitle": "", "footer": "内容整理自公开分享",
+           "style_key": "game_epic", "scene": "月光下的银松森林",
+           "pages": [{"title": "第一页", "cards": [{"t": "a", "d": "b", "v": ""}],
+                      "style_key": None, "layout_key": "bottom_art"},
+                     {"title": "第二页", "cards": [{"t": "c", "d": "d", "v": ""}],
+                      "layout_key": "left_text"}]}
+    mp = ai_poster.manual_prompts_for(two, RATIO, "typeset")
+    ck("多页时每页继承顶层风格键（不回落成默认皮肤的配色）",
+       len(mp) == 2 and "暗色云雾" in mp[0]["copy"] and "深蓝紫渐变" not in mp[0]["copy"])
+    ck("每页的站位跟着自己那页的布局走",
+       "画面上部" in mp[0]["copy"] and "画面左侧" in mp[1]["copy"])
+    ck("模型只给页内不带 style_key 时，页码与全文说明照样齐",
+       "【第 1/2 页" in mp[0]["copy"] and "豆包" in mp[0]["full"])
+
     print()
     if FAILS:
         print("FAIL %d 项：%s" % (len(FAILS), "、".join(FAILS)))

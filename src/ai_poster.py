@@ -35,7 +35,13 @@ ROOT = Path(__file__).resolve().parents[1]
 OUTPUT_DIR = ROOT / "output" / "poster"
 
 IMAGE_MODEL = "qwen-image-max"      # 中文文字渲染主力；列表里还有 qwen-image-3.0
-OCR_MODEL = "qwen3-vl-flash"        # 转录型视觉模型（qwen-vl-ocr 只回坐标框，不能用）
+# 转录型视觉模型（qwen-vl-ocr 只回坐标框，不能用）。
+# 2026-10-11 实测：配置里那个中转端点的 models.list 有 175 个模型，但已经没有
+# qwen3-vl-flash 了，调用直接 404「Model not exist」——而这三道看图检查（回读校验、
+# 视觉评审、底图体检）都把异常吞成 skipped，界面上只写着「跳过」，从 10-09 晚上换端点
+# 起就一直在静默失败。换成端点上确实在的 qwen3-vl-plus；以后端点再改名，
+# 配置里加一行 AI_MODEL_VISION 就能顶掉这里，不用改代码。
+OCR_MODEL = "qwen3-vl-plus"
 
 # 端点尺寸上限 1664x1664：传 1024*1792 会直接 InvalidParameter
 SIZES = {"9:16": "936*1664", "3:4": "1248*1664", "1:1": "1664*1664"}
@@ -1088,58 +1094,173 @@ def _canvas_px(ratio):
     return int(w), int(h)
 
 
-def build_art_prompt(plan, ratio="9:16"):
+# ── 无字底图专用：把「画面线索」洗成能安全交给出图模型的话 ──
+# 这些词一进 prompt，模型就真会把带字的东西画进来。2026-10-11 拿豆包 Seedream 4.5
+# 实测：scene 里那句「一个角色在门前进度条」「三种材料图标」「剑身刻有狼头符文」
+# 直接对应四张底图里三张画出发光 UI 面板 + 鬼画符，白扔了 4 次生成。
+# 「与 NPC 对话」也一样——对话必带气泡，气泡里必带字。
+# 判定：这类线索对底图是负资产，宁可丢掉那条装饰，也不留着它勾出字。
+_ART_DROP_RE = re.compile(
+    r"(进度条|血条|蓝条|读条|界面|屏幕|显示器|窗口|面板|仪表盘|表格|图表|曲线|清单|列表|"
+    r"截图|二维码|文字|字样|字体|标签|贴纸|印章|签名|水印|logo|LOGO|Logo|标题栏|按钮|"
+    r"图标|排行榜|榜单|评分|打分|箭头|对话|聊天|说话|气泡|对话框|"
+    r"数字|数值|写着|标注|铭牌|牌匾|名字|标题|等级显示)")
+# 只画外形就够的：把"刻着字"换成"带光纹"，主体不丢
+_ART_FIX = [("刻有", "带着"), ("刻着", "带着"), ("符文", "发光纹路"), ("铭文", "花纹"),
+             ("刻字", "花纹"), ("碑文", "石碑"), ("招牌", "木牌"), ("书页", "空白书页")]
+# 引号里的装备名／人名：模型会照着把「狼独草」仨字画在剑身上，一律摘掉
+_QUOTE_RE = re.compile(u"[“\"『「][^”\"』」]{1,24}[”\"』」]")
+# 数字同理：底图上的数字是插画里的鬼画符，真实数字由程序排上去。
+# 只换数字、单位留着（"40 级后"→"若干级后"）：连单位一起吃掉会写成"若干后"这种断句
+_NUM_RE = re.compile(r"\d+(?:[.,]\d+)?")
+_PUNCT_DUP_RE = re.compile(r"[，、]{2,}")
+
+
+def _art_safe_text(text):
+    """洗一段画面描述：去引号内的实名、把数字换成"若干"、把"刻字"改成"光纹"、清标点。
+
+    洗完还剩东西才回给调用方；什么都不剩回空串，让上层把这一行整条删掉，
+    免得留下「主视觉：」后面跟个空的怪句子。
+
+    数字换成「若干」而不是直接删：实测直接删会得到「手握发光大剑，后在门口排 人」
+    这种断句，模型看得懂但画面线索也丢了；「若干级后在门口排若干个人」既不带数字
+    又不残句。
+    """
+    s = _QUOTE_RE.sub("", str(text or ""))
+    for a, b in _ART_FIX:
+        s = s.replace(a, b)
+    s = re.sub(r"若干(?:\s*若干)+", "若干", _NUM_RE.sub("若干", s))
+    # "排 3 个人"换完是"排 若干个人"，中文里那格空格是残渣，只清「若干」前后的
+    s = re.sub(r"\s+(?=若干)|(?<=若干)\s+", "", s)
+    s = _PUNCT_DUP_RE.sub("，", s).strip("，、 ：:；;")
+    return s
+
+
+# 主视觉那句不能整条丢（它就是这张图的主角），所以改用"换掉诱饵词"而不是"丢掉这条"：
+# 界面/屏幕/图标/进度条这些东西在真实海报里由程序画，底图只要留个发光的形就够了。
+# 实测豆包拿到"商栈界面打开，坐骑图标闪烁"就画出一块带假字的 UI 面板。
+_ART_SCENE_FIX = [("界面截图", "场景全景"), ("登录界面", "走进场景"), ("伤害数字", "一团爆发光效"),
+                  ("等级显示", "头顶一圈光环"), ("数字", "光效"), ("数值", "光带"),
+                  ("进度条", "发光的能量条"), ("血条", "发光的能量条"), ("读条", "一段光"),
+                  ("列表", "一列色块"), ("清单", "一列色块"), ("表格", "色块阵列"),
+                  ("图表", "发光曲线"), ("屏幕", "发光箱体"), ("显示器", "发光箱体"),
+                  ("写着", "带着"), ("标注", "描边"), ("窗口", "光框"), ("面板", "石板"),
+                  ("排行榜", "一列光条"), ("图标", "小图形"), ("按钮", "发光方块"),
+                  ("二维码", "光纹"), ("标签", "色块"), ("文字", "纹理"), ("字样", "纹样"),
+                  ("水印", "斑痕"), ("对话", "并肩而立"), ("气泡", "光晕"), ("箭头", "一道光束"),
+                  ("界面", "场景")]
+
+# 主题词切分：标题「狼独草：前期亡灵圣骑神器」→ ["狼独草", "前期亡灵圣骑神器"]
+_ART_SPLIT_RE = re.compile(r"[：:，,、。/·—\-\s！？!?（）()《》]+")
+
+
+def _art_topic_words(plan):
+    """这篇要排出去的主题词（主标题/副标题里的词段），底图里一个都不许再出现。
+
+    实测第 4 页模型把「背上的圣光大剑狼独草发出光芒」照字画成了剑身上的三个汉字——
+    而「狼独草」本来就是程序要排上去的主标题。同一句话被画两遍，既丑又容易错字。
+    """
+    out = []
+    for key in ("title", "subtitle"):
+        for seg in _ART_SPLIT_RE.split(str((plan or {}).get(key) or "")):
+            seg = seg.strip()
+            if len(seg) >= 2 and seg not in out:
+                out.append(seg)
+    return out[:8]
+
+
+def _art_scene_text(text, topic_words=()):
+    """主视觉与道具那条线专用：换掉诱饵词、摘掉主题实名，只留能被画成"形"的描述。"""
+    s = _art_safe_text(text)
+    for a, b in _ART_SCENE_FIX:
+        s = s.replace(a, b)
+    for wd in topic_words:
+        s = s.replace(wd, "")
+    s = re.sub(r"[，、]{2,}", "，", s)
+    return s.strip("，、 ：:；;")
+
+
+def build_art_prompt(plan, ratio="9:16", extra_topics=None):
     """程序排字模式用的出图 prompt：只要一张**没有字的底图**。
 
-    关键是那句"下部只画底纹、别画具体物体"——分区比例由 poster_typeset 按卡片内容
-    算出来，两边共用同一个函数，所以模型让出来的地方正好是程序要落字的地方。
-    卡片从 3 张变 5 张，这块区域会自己伸缩，不写死。
+    分区比例由 poster_typeset 按卡片内容算出来，出图和排版共用同一个函数，
+    所以模型让出来的地方正好是程序要落字的地方；卡片从 3 张变 5 张，这块自己伸缩。
+
+    2026-10-11 按豆包实测重排过顺序，三条都是被翻车教出来的：
+    ① 站位写在最前面（原来「主视觉」那条抢在第一句，主体就被画到画面正中，
+       该空的那半截塞满了发光面板）；末尾再复述一次，只说一次压不住。
+    ② 通篇不出现 Markdown 星号，也不出现"文字区/留给文字"这种说法——
+       提"文字"它就去画字，改成描述那块**是什么**（一片渐变、一层雾）。
+    ③ 大段"禁止…"清单换成一句底线 + 让给人填负面提示栏：扩散模型读不懂否定，
+       把汉字/数字/屏幕/卷轴列一串，等于把这些东西挨个念给它听（原第 3 条还硬
+       写了"仪表盘、日历、面板"，一张魔兽海报的底图就这么被勾成了 UI 截图）。
     """
     from . import poster_typeset as ts
     preset = _preset(plan)
     zone = ts.art_zone(plan, _canvas_px(ratio), (plan or {}).get("_skin"))
     skin = ts.skin_for(plan.get("style_key"))
-    art_line, trans_line, rest_line = ts.art_zone_hint(zone, skin)
-    scene = (plan.get("scene") or "").strip() or (preset.get("scene") or "").strip()
+    art_line, trans_line, rest_short = ts.art_zone_hint(zone, skin)
+    # 这一页自己要排出去的字（页标题/副标题里的词段）先从画面描述里摘掉：
+    # 同一句话不该被画两遍，模型照着画还会错字。整组的主标题由调用方从 extra_topics 递进来
+    topic = _art_topic_words(plan)
+    for wd in (extra_topics or []):
+        if wd not in topic:
+            topic.append(wd)
+    scene = _art_scene_text((plan.get("scene") or "").strip() or (preset.get("scene") or "").strip(),
+                            topic)
+    # 卡片配图栏在"模型画字"那条路上是给卡片画小图用的；底图模式下它只是主视觉的道具线索。
+    # 先把诱饵词换成不带字的形，换完仍然读不出画面（还带数字/字体那类词）的就丢掉，宁缺毋滥
+    props = [_art_scene_text(c.get("v"), topic) for c in (plan.get("cards") or [])]
+    props = [x for x in props if x and not _ART_DROP_RE.search(x)][:4]
     # 底图只要画风与配色那段：卡片面板和字体那两样在程序排字模式下由代码负责，
     # 让模型去画反而会跟我们排的字打架
-    style_only = _preset(plan).get("mood") or resolve_style_text(plan).split("。图上的中文")[0]
-    lines = ["一张%s信息图的底图。画完之后会有程序往上面排中文，所以这张图里现在一个字都不要有。"
+    style_only = preset.get("mood") or resolve_style_text(plan).split("。图上的中文")[0]
+    lines = ["一张%s的信息图底图。这张图上现在没有任何字，中文之后由程序排上去。"
              % RATIO_LABEL.get(ratio, "竖版 9:16"),
+             "",
+             "【第一步：先定站位 · 这张图最容易做错的就是这句】",
+             "- %s" % art_line,
+             "- %s" % trans_line,
              "",
              "【画风与配色 · 严格执行】",
              style_only,
+             # 四套预设的画风原文是给"模型画整张海"写的，里面带着"悬浮屏幕""毛玻璃面板"
+             # "手绘下划线""信息卡片纵向排列"这类词——那条路上卡片真该由模型画。底图这条路
+             # 卡片和面板由代码画，这些词留着就是勾着它画 UI。改一句总闸，比逐套预设改写稳。
+             "- 上面这段里凡是提到卡片、边框、面板、界面、屏幕、勾选框、下划线的，"
+             "一律按「只画背景氛围」理解：那些东西之后由程序画上去，这张底图里不要有。",
              "",
-             "【画面内容】",
+             "【画面内容 · 只画外形、光影和材质，表面什么都不许写】",
              "- 主视觉：%s" % (scene or "按上面画风自行构图"),
-             # 程序排字模式下每张卡片的配图没有固定位置可落，把它们当成主视觉里的道具，
-             # 免得拆解白算了这一栏，也顺便让插画跟内容更贴
-             ("- 画面里可以顺带出现的元素：%s" % "、".join(
-                 [x for x in [(c.get("v") or "").strip() for c in (plan.get("cards") or [])] if x][:4])
-              if any((c.get("v") or "").strip() for c in (plan.get("cards") or [])) else None),
-             # 这句跟着布局走：图在上就说上部，图在下就说下部，分栏就说左右，
-             # 满版就说整幅——不然换了布局底图还是老构图，中间空一条白带
-             "- 构图：%s" % art_line,
-             "- %s" % trans_line,
+             ("- 画面里可以顺带出现的道具：%s" % "；".join(props)) if props else None,
              "",
-             "【绝对禁止 · 违反就整张作废】",
-             "- 禁止出现任何汉字、字母、数字、罗马数字、标点、符号、logo、水印",
-             "- 画面里的纸张、屏幕、招牌、卷轴、书本一律用色块和线条表示，不许写任何字",
-             "- 上面列出的道具只画外形（仪表盘、日历、卷轴、剑、面板），不许在上面标数字或文字标签",
-             "- %s，禁止画成带边框的卡片或网格" % rest_line]
+             "【底线】",
+             "- 整幅画面里不许出现汉字、字母、数字、标点、符号、logo、印章；"
+             "纸张、屏幕、木牌、石碑、书本一律只画外形和色块，表面空白。",
+             "- 最后核对一遍：%s 那一块，除了底色和极淡的底纹必须是空的，"
+             "主体和任何道具都不许越进去。" % rest_short]
     return "\n".join([l for l in lines if l is not None])
 
 
 MANUAL_FOOT = """
-──────────────── 下面是给你（人）看的操作说明，不要粘进豆包 ────────────────
-1. 只把上面「一张…信息图的底图」到【绝对禁止】那一段复制进豆包，生成。
-   豆包里如果有「不想要 / 负面提示」栏，填：文字、汉字、字母、数字、水印、logo、UI 截图、卡片边框、灰底
-2. 比例选 9:16（或按上面那个像素数），**导出用「下载/另存为」，不要截图**——截图会掉清晰度，
-   贴到海报上字边缘会糊。
-3. 回工作台点这一页的「回传底图」上传这张 PNG。中文由程序排上去，位置和字号你已经点过②看过了。
-4. 豆包要是把字画上去了（哪怕一两个字），这张不能用：重新生成时把
-   「一个字都不要有」那句往前提，或者干脆让它画纯背景再回传。
-5. 走这条路 0 元，不扣 qwen-image 的 0.5 元/张。
+──────────────── 下面是给人看的操作说明，不要粘进豆包 ────────────────
+1. 只把上面从「一张…信息图的底图」到【底线】那一段复制进豆包，生成。
+   豆包要是有「不想要 / 负面提示」这一栏，往里填：
+   文字、汉字、字母、数字、标点、logo、水印、UI 界面、进度条、卡片边框、表格、截图
+   没有这一栏就跳过，正文的【底线】已经把同样的话写进去了。
+2. 比例选 9:16，尺寸按上面那个像素数；选不到就让它按这个长宽比出。
+3. 豆包一次给你 4 张，这是它的默认行为，不是出错了。一页只用一张：
+   挑「该空的那半截真的空着、画面上读不出任何字」的那张，另外 3 张不用管，
+   更别一起传上来——工作台一页只吃一张底图。
+4. 导出用「下载 / 另存为」，不要截图。截图掉清晰度，排上去的字边缘会发糊。
+5. 右下角「豆包 AI 生成」是平台盖的水印，提示词拦不住它。它在角落，程序排字的那一块
+   自带半透明底板，多数情况会盖住或挡住；只有当它压在上方那幅主视觉的正中时才重出。
+   豆包要是有「保存无水印 / 去掉水印」的入口，优先用它。
+6. 4 张都挑不出能用的，别硬传。回豆包重生成，把【第一步】里说空带那句原样抄到提示词
+   最前面再说一遍；还不行就干脆让它画纯背景底纹，回传照样能排字。
+   传上来之后工作台会自己体检那一块空不空（每页查一次），不合格会在结果里点名是第几页。
+7. 一组几页就要几页的底图。少一张工作台会当场拒收（走这条路 0 元，
+   不扣 qwen-image 的 0.5 元/张，随便试）。
 """
 
 
@@ -1150,12 +1271,18 @@ def manual_prompts_for(plan, ratio="9:16", text_mode=None):
     `full` 是给人看的完整版。分开的理由很直接：把「回工作台点上传」那句粘进豆包，
     模型可能真给你画一个上传按钮出来。
     """
-    pages = (plan or {}).get("pages") or [plan]
+    # 必须走 plan_pages：模型交的 pages[] 里每页常常不带 style_key，直接拿来用会
+    # 让 _preset 落空、皮肤回落到默认的 tool_review——实测第 1/4 页那条提示词因此
+    # 既写了「深蓝紫渐变」又写了「信息卡片纵向排列」，风格串了、还勾着模型画卡片框。
+    # plan_pages 会把顶层的 style_key/footer/scene 继承到每一页，和花钱出图那条同一份算法。
+    pages = plan_pages(plan) or [plan or {}]
+    # 整组的主标题也要从每一页的画面描述里摘掉：第 1 页的插画最容易顺手把主题名画上去
+    group_topics = _art_topic_words(plan)
     out = []
     for i, p in enumerate(pages, 1):
         w, h = _canvas_px(ratio)
         mode = text_mode or DEFAULT_TEXT_MODE
-        body = (build_art_prompt(p, ratio) if mode == "typeset"
+        body = (build_art_prompt(p, ratio, extra_topics=group_topics) if mode == "typeset"
                 else build_prompt_text(p, ratio))
         head = ["【第 %d/%d 页 · 无字底图】" % (i, len(pages)) if len(pages) > 1
                 else "【无字底图】",
@@ -1187,6 +1314,84 @@ def check_base_numbers(base_png, plan, ai_config):
     blob = v.get("transcript") or ""
     want = json.dumps(plan, ensure_ascii=False)
     return sorted({n for n in re.findall(r"\d{2,}", blob) if n not in want})
+
+
+# 回传底图的体检：问视觉模型「程序要排字的那一块里有没有东西」。
+# 为什么只问这一块：出图模型对「上部 56% 留给文字」这种比例指令经常直接无视
+# （2026-10-11 豆包 Seedream 4.5 四张全把发光面板画进了要排字的区域），而人对着
+# 缩略图也量不出边界在哪。判据取自排版层同一个 art_zone，问的位置就是排字的位置。
+_BAND_CHECK_PROMPT = """这张图是一张还没有排字的海报底图：程序之后要往「%s」这一块排上中文，所以这一块现在应该只有背景。
+只看这一块回答前两个问题，别管其余区域；第三个问题看整张图：
+1. 这一块里有没有字（汉字、字母、数字、标点，糊成一团的假字也算）
+2. 这一块里有没有具体物体（卡片、边框、面板、屏幕、图标、人物、道具都算；纯渐变、雾气、纸纹、光点不算）
+3. 把整张图里能读到的字逐字抄下来，一个都别漏，没有就留空
+只输出 JSON，不要解释：
+{"band_text":true/false,"band_object":true/false,"all_text":"抄下来的字","note":"不超过 30 个中文字，说这一块里画了什么"}"""
+
+# 平台在生成之后盖上去的水印：提示词拦不住，位置也在角落，程序排字会盖住，所以不算不合格
+_WATERMARK_WORDS = ("豆包", "AI生成", "AI 生成", "即梦", "可灵", "智谱", "通义", "千问",
+                    "AIGC", "Generated", "generated", "水印")
+
+
+def _base_stray_text(all_text):
+    """剥掉平台水印词，看这张底图上还剩多少"不该存在的字"。空串才算干净。"""
+    s = str(all_text or "")
+    for wd in _WATERMARK_WORDS:
+        s = s.replace(wd, "")
+    return re.sub(r"[\s，。、·．.]+", "", s)[:40]
+
+
+def check_base_band(base_png, page_plan, ai_config, ratio="9:16", timeout=120):
+    """回传底图专项体检：该空的那块被画上字/物体了没有，顺带把整张图上的字抄下来比一遍。
+
+    只回警告用，不拦路——那块被占了人还可以照常用（程序排的字带半透明底板，压得住），
+    但必须让他知道是哪一页、占成什么样，否则下次还是白抽四张。
+    模型调用失败时回 checked=False，绝不能因为体检跑不通就把人的图判死。
+    """
+    from . import poster_typeset as ts
+    out = {"band": "", "band_text": False, "band_object": False, "note": "", "why": "",
+           "stray": "", "numbers": [], "bad": False, "checked": False}
+    try:
+        w, h = _canvas_px(ratio)
+        zone = ts.art_zone(page_plan, (w, h), (page_plan or {}).get("_skin"))
+        skin = ts.skin_for((page_plan or {}).get("style_key"))
+        band = ts.art_zone_hint(zone, skin)[2]
+        out["band"] = band
+        api_key, api_base, _ = _require_ai(ai_config)
+        import openai
+
+        client = openai.OpenAI(api_key=api_key, base_url=api_base or "https://api.openai.com/v1",
+                               timeout=timeout, max_retries=1)
+        b64 = base64.b64encode(base_png).decode()
+        resp = client.chat.completions.create(
+            model=_ocr_model(ai_config),
+            messages=[{"role": "user", "content": [
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64," + b64}},
+                {"type": "text", "text": _BAND_CHECK_PROMPT % band}]}],
+            max_tokens=600)
+        data = _parse_json(resp.choices[0].message.content or "") or {}
+    except Exception as e:
+        out["note"] = "体检没跑成（%s）" % str(e)[:60]
+        return out
+    all_text = str(data.get("all_text") or "")
+    want = json.dumps(page_plan, ensure_ascii=False)
+    # 整张图上有字就算不合格，光查那块空带不够：实测模型会把装备名（狼独草）直接刻在剑身上，
+    # 而剑身在插画区。平台水印已经在上一步剥掉了。
+    stray = _base_stray_text(all_text)
+    out["stray"] = stray
+    out.update({"band_text": bool(data.get("band_text")), "band_object": bool(data.get("band_object")),
+                "note": str(data.get("note") or "")[:60], "checked": True,
+                "numbers": sorted({n for n in re.findall(r"\d{2,}", all_text) if n not in want})})
+    out["bad"] = bool(out["band_text"] or out["band_object"] or out["stray"])
+    why = []
+    if out["band_text"]:
+        why.append("要排字那块上有字")
+    if out["band_object"]:
+        why.append("要排字那块被画了具体物体")
+    if out["stray"]:
+        why.append("画面上有字：%s" % out["stray"])
+    out["why"] = "、".join(why)
+    return out
 
 
 def template_base(style_key):
@@ -1337,6 +1542,14 @@ def _norm(text):
     return _PUNCT_RE.sub("", str(text or ""))
 
 
+def _ocr_model(ai_config):
+    """看图那档模型名：配置给了 AI_MODEL_VISION 就用它，否则用这里的默认值。
+
+    写死一个名字的代价已经付过一次（见 OCR_MODEL 那段），所以三道看图检查统一走这里。
+    """
+    return ((ai_config or {}).get("vision_model") or "").strip() or OCR_MODEL
+
+
 def verify_image(png_bytes, plan, ai_config, timeout=120):
     """转录图面文字并与文案计划比对，返回 {ok, missing, extra, transcript}。
 
@@ -1349,7 +1562,7 @@ def verify_image(png_bytes, plan, ai_config, timeout=120):
                            timeout=timeout, max_retries=1)
     b64 = base64.b64encode(png_bytes).decode()
     resp = client.chat.completions.create(
-        model=OCR_MODEL,
+        model=_ocr_model(ai_config),
         messages=[{"role": "user", "content": [
             {"type": "image_url", "image_url": {"url": "data:image/png;base64," + b64}},
             {"type": "text", "text": "逐字转录图中所有简体中文文字，按从上到下顺序每行一条，只输出文字本身"}]}],
@@ -1414,7 +1627,7 @@ def review_image(png_bytes, ai_config, timeout=120):
                            timeout=timeout, max_retries=1)
     b64 = base64.b64encode(png_bytes).decode()
     resp = client.chat.completions.create(
-        model=OCR_MODEL,
+        model=_ocr_model(ai_config),
         messages=[{"role": "user", "content": [
             {"type": "image_url", "image_url": {"url": "data:image/png;base64," + b64}},
             {"type": "text", "text": _REVIEW_PROMPT}]}],
@@ -1441,7 +1654,7 @@ def review_image(png_bytes, ai_config, timeout=120):
             "visual_pct": _pct(data.get("visual_pct")),
             "worst": (worst[0]["key"] if worst else ""),
             "note": _clip_ws(data.get("note"), 60),
-            "model": OCR_MODEL}
+            "model": _ocr_model(ai_config)}
 
 
 # ── 编排 ──
@@ -1588,8 +1801,8 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
             lab = _ts.LAYOUTS[_ts.resolve_layout(p, _ts.skin_for(p.get("style_key")))]["label"]
             return ("（真图主视觉：主视觉用用户上传的图片、按「%s」排版，"
                     "不出 AI 底图，因此没有出图提示词）" % lab)
-        return (build_art_prompt(p, ratio) if text_mode == "typeset"
-                else build_prompt_text(p, ratio))
+        return (build_art_prompt(p, ratio, extra_topics=_art_topic_words(plan))
+                if text_mode == "typeset" else build_prompt_text(p, ratio))
 
     prompts = [_page_prompt(p) for p in pages]
     prompt_text = prompts[0]
@@ -1629,15 +1842,24 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
         n = 1
         _pg("多页模式：一页一张，不再抽卡（张数 × 页数会把花费翻倍）")
     stale_nums = []
+    # 每张回传底图的体检结果（{page, band, text, object, note, checked, bad}），落进 manifest
+    base_rows = []
     if tpl_base:
         _pg("复用模板底图（0 元，不再出图）...")
         if do_verify:
             _pg("核对底图里有没有上一期留下的数字...")
             stale_nums = check_base_numbers(tpl_base, plan, ai_config)
     if manual and do_verify:
-        _pg("核对回传的底图里有没有被画上字/数字...")
-        for b in manual:
-            stale_nums += check_base_numbers(b, plan, ai_config)
+        _pg("体检回传的底图：要排字的那一块空着没有（一页查一次，约 5-10 秒）...")
+        for pi, b in enumerate(manual, 1):
+            r = check_base_band(b, pages[pi - 1], ai_config, ratio)
+            stale_nums += r.get("numbers") or []
+            base_rows.append({"page": pi, "band": r.get("band") or "", "text": bool(r["band_text"]),
+                              "object": bool(r["band_object"]), "note": r["note"],
+                              "why": r.get("why") or "", "stray": r.get("stray") or "",
+                              "checked": bool(r["checked"]), "bad": bool(r["bad"])})
+            if r["bad"]:
+                _pg("第 %d 页那张不合格：%s" % (pi, r.get("why") or r["note"]))
 
     candidates, usage, page_rows = [], {}, []
     photo_name = ""
@@ -1741,6 +1963,13 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
         issues.append("warn: 这张底图里带着文案里没有的数字 %s——是上一期烙进插画的，"
                       "换内容时确认它们还对不对；不对就换一套不带底图的风格重出一张"
                       % "、".join(stale_nums[:6]))
+    bad_bands = ["第 %d 页：%s" % (x["page"], x.get("why") or x["note"] or "要排字那块被占了")
+                 for x in base_rows if x.get("bad")]
+    if bad_bands:
+        # 只提醒不拦：卡片有半透明底板，压得住一点杂；但必须让他知道是哪一页、占成什么样
+        issues.append("warn: 这几张回传的底图不合格 —— %s。回豆包重出这一页时，把提示词"
+                      "【第一步】里那句空带描述抄到最前面再说一遍；赶时间也能直接用，"
+                      "卡片有半透明底板，只是没这么干净" % "；".join(bad_bands))
 
     manifest = {
         "id": summary_id,
@@ -1779,12 +2008,14 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
         "text_mode": text_mode,
         "typeset": ts_chk,
         "image_model": "" if photo else IMAGE_MODEL,
-        "ocr_model": OCR_MODEL,
+        "ocr_model": _ocr_model(ai_config),
         "usage": usage,
         "cost_yuan_estimate": (0 if (tpl_base or photo)
                                else PRICE_PER_IMAGE_YUAN * max(1, paid or 1)),
         "base_reused": bool(tpl_base),
         "base_stale_numbers": stale_nums,
+        # 豆包等外部底图的体检结果：一页一条，bad 的那些已经变成上面的 warn
+        "base_check": base_rows,
         "auto_notes": notes,
         "draft_override": overrode,
         "verify": check,

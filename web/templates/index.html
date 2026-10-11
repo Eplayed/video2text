@@ -3571,6 +3571,9 @@ function pkRenderManual() {
   const n = _pkManual.length, ready = _pkBases.filter(Boolean).length;
   let h = '<div class="pm-h"><b>三步：复制提示词 → 豆包出图（比例选 9:16，用「下载」别截图）→ 回传这张。</b> '
     + '中文由程序排，所以底图里<b>一个字都不要有</b>；豆包要是画上字了那张不能用，重生成。'
+    + '<br>豆包一次给 4 张是正常的，<b>一页只挑 1 张</b>：挑"该空的那半截真空着、读不出任何字"的那张。'
+    + '右下角「豆包 AI 生成」是平台后盖的水印，提示词拦不住、也不用管，它在角落。'
+    + '回传之后工作台会自己体检：那一块空不空、画面上有没有字，不合格会点名是第几页。'
     + (n > 1 ? '<br>这组 ' + n + ' 页，<b>要么每页都回传、要么一张都别传</b>——一半豆包一半 AI 会两种风格打架。' : '')
     + '</div>';
   _pkManual.forEach(function (m, i) {
@@ -3601,7 +3604,7 @@ function pkCopyManual(i, full, btn) {
     btn.textContent = '已复制 ✓';
     setTimeout(function () { btn.textContent = old; }, 1600);
   };
-  const bad = function () { alert('浏览器不让直接复制。手动长按上面那段文字复制即可（要粘进豆包的是「一张…底图」到【绝对禁止】那一段）。'); };
+  const bad = function () { alert('浏览器不让直接复制。手动长按上面那段文字复制即可（要粘进豆包的是「一张…底图」到【底线】那一段）。'); };
   if (navigator.clipboard && navigator.clipboard.writeText) {
     navigator.clipboard.writeText(text).then(ok).catch(function () { pkCopyFallback(text, ok, bad); });
   } else {
