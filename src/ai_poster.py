@@ -34,7 +34,20 @@ from .graphics.channels.toutiao import _parse_json
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT_DIR = ROOT / "output" / "poster"
 
-IMAGE_MODEL = "qwen-image-max"      # 中文文字渲染主力；列表里还有 qwen-image-3.0
+# 中文文字渲染主力。2026-10-11 实测：这个中转端点把 qwen-image-max 下线了
+# （models.list 里只剩 qwen-image-2.x / 3.0 / 2.1-pro / wan2.7-image / z-image-turbo），
+# 调用直接 404「Model not exist」——出图那一下是**会报错**的，不像看图那三处被吞成 skipped，
+# 所以这条是当场能发现的。换到 qwen-image-3.0-pro 实测一张 936×1664 出图正常（1.69MB PNG）。
+# ⚠ 没核实的两件事：① 这个档在聚合站的单价（原来 max 是 0.5 元/张、账单核对过；
+#    新档大概率更贵，界面按钮上写的"0.5 元/张"要以账单为准，别当已核实）；
+# ② 它的中文逐字稳定率没重测（0.5 元那张的 63 字翻车记录是 max 的，见 CHANGELOG 10-01）。
+#    要重测跑 `python3 scripts/probe_poster_stability.py 5 9:16`（5 张 ≈ 2.5 元）。
+IMAGE_MODEL = "qwen-image-3.0-pro"
+
+
+def _image_model(ai_config):
+    """出图模型名：配置里给了 AI_MODEL_IMAGE 就用它，理由同 _ocr_model——别再写死。"""
+    return ((ai_config or {}).get("image_model") or "").strip() or IMAGE_MODEL
 # 转录型视觉模型（qwen-vl-ocr 只回坐标框，不能用）。
 # 2026-10-11 实测：配置里那个中转端点的 models.list 有 175 个模型，但已经没有
 # qwen3-vl-flash 了，调用直接 404「Model not exist」——而这三道看图检查（回读校验、
@@ -1499,7 +1512,7 @@ def generate_image(prompt_text, size, ai_config, timeout=300):
     """
     api_key, api_base, _ = _require_ai(ai_config)
     url = _api_root(api_base) + "/api/v1/services/aigc/multimodal-generation/generation"
-    payload = {"model": IMAGE_MODEL,
+    payload = {"model": _image_model(ai_config),
                "input": {"messages": [{"role": "user", "content": [{"text": prompt_text}]}]},
                "parameters": {"size": size}}
     headers = {"Authorization": "Bearer " + api_key, "Content-Type": "application/json",
@@ -2007,10 +2020,13 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
         "preview_clicks": int(preview_clicks or 0),
         "text_mode": text_mode,
         "typeset": ts_chk,
-        "image_model": "" if photo else IMAGE_MODEL,
+        "image_model": "" if photo else _image_model(ai_config),
         "ocr_model": _ocr_model(ai_config),
         "usage": usage,
-        "cost_yuan_estimate": (0 if (tpl_base or photo)
+        # 一分钱没花的三种情况都要写 0：复用模板底图、用上传的真图、用豆包回传的图。
+        # 原来漏了 manual 这一支，实测回传成品那张 manifest 写着 0.5 元——人就是冲着 0 元
+        # 走这条路的，账记错比不记更糟。
+        "cost_yuan_estimate": (0 if (tpl_base or photo or manual)
                                else PRICE_PER_IMAGE_YUAN * max(1, paid or 1)),
         "base_reused": bool(tpl_base),
         "base_stale_numbers": stale_nums,

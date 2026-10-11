@@ -111,9 +111,11 @@ def _ai_config():
         model = collector.config_get(config, "AI_MODEL", "gpt-4o-mini")
     cfg = {"method": method, "api_key": api_key, "api_base": api_base, "model": model,
            "fast_model": collector.config_get(config, "AI_MODEL_FAST", ""),
-           # 看图那类活（拆参考图做模板）单独一档，默认走 qwen3-vl-flash；
+           # 看图那类活（拆参考图做模板）单独一档，默认走 qwen3-vl-plus；
            # 以后想换更强的视觉模型只改配置里的 AI_MODEL_VISION，不用动代码
-           "vision_model": collector.config_get(config, "AI_MODEL_VISION", "")}
+           "vision_model": collector.config_get(config, "AI_MODEL_VISION", ""),
+           # 出图那一档同理（2026-10-11 端点把 qwen-image-max 下线过一次，写死就全线出不了图）
+           "image_model": collector.config_get(config, "AI_MODEL_IMAGE", "")}
     return cfg
 
 
