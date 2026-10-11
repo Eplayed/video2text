@@ -1130,6 +1130,46 @@ def build_art_prompt(plan, ratio="9:16"):
     return "\n".join([l for l in lines if l is not None])
 
 
+MANUAL_FOOT = """
+──────────────── 下面是给你（人）看的操作说明，不要粘进豆包 ────────────────
+1. 只把上面「一张…信息图的底图」到【绝对禁止】那一段复制进豆包，生成。
+   豆包里如果有「不想要 / 负面提示」栏，填：文字、汉字、字母、数字、水印、logo、UI 截图、卡片边框、灰底
+2. 比例选 9:16（或按上面那个像素数），**导出用「下载/另存为」，不要截图**——截图会掉清晰度，
+   贴到海报上字边缘会糊。
+3. 回工作台点这一页的「回传底图」上传这张 PNG。中文由程序排上去，位置和字号你已经点过②看过了。
+4. 豆包要是把字画上去了（哪怕一两个字），这张不能用：重新生成时把
+   「一个字都不要有」那句往前提，或者干脆让它画纯背景再回传。
+5. 走这条路 0 元，不扣 qwen-image 的 0.5 元/张。
+"""
+
+
+def manual_prompts_for(plan, ratio="9:16", text_mode=None):
+    """整组（每页一份）手动出图材料。plan 里没有 pages 就是单页。
+
+    每页回两个字段：`copy` 是要粘进豆包的那段（含尺寸与禁止事项，不含操作说明），
+    `full` 是给人看的完整版。分开的理由很直接：把「回工作台点上传」那句粘进豆包，
+    模型可能真给你画一个上传按钮出来。
+    """
+    pages = (plan or {}).get("pages") or [plan]
+    out = []
+    for i, p in enumerate(pages, 1):
+        w, h = _canvas_px(ratio)
+        mode = text_mode or DEFAULT_TEXT_MODE
+        body = (build_art_prompt(p, ratio) if mode == "typeset"
+                else build_prompt_text(p, ratio))
+        head = ["【第 %d/%d 页 · 无字底图】" % (i, len(pages)) if len(pages) > 1
+                else "【无字底图】",
+                "目标尺寸：%d×%d（%s）。选不到这个比例就按该长宽比出图。"
+                % (w, h, RATIO_LABEL.get(ratio, "竖版 9:16"))]
+        if mode != "typeset":
+            head.append("⚠ 这一版是「AI 直出文字」模式：下面列出的中文要模型自己画上去，"
+                        "错字漏字查得出来但改不了。想不错字就把文案模式切回「程序排字」。")
+        copy = "\n".join(head) + "\n\n" + body
+        out.append({"page": i, "total": len(pages), "copy": copy,
+                    "full": copy + MANUAL_FOOT})
+    return out
+
+
 def check_base_numbers(base_png, plan, ai_config):
     """复用底图时专设的一道提醒：底图是上一期那张，插画里可能写着上一期的数字。
 
@@ -1484,7 +1524,7 @@ def choose_candidate(summary_id, index):
 def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
                     progress_cb=None, do_verify=True, plan=None, publish=None, force=False,
                     copies=1, do_review=True, text_mode=DEFAULT_TEXT_MODE, photo=None,
-                    preview_clicks=0):
+                    preview_clicks=0, bases=None):
     """整理稿 → 海报一张。返回 manifest dict（已落盘 output/poster/<summary_id>/）。
 
     plan / publish 非空时跳过 LLM 拆解（前端审改过文案再出图走这条）：plan 是要画进图的
@@ -1567,25 +1607,37 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
         n = 1
     n = max(1, min(n, MAX_COPIES))
 
+    # 手动底图（在豆包等外部生成的无字底图，一页一张回传）。给了就必须每页都给：
+    # 一半豆包一半 qwen 会打架，而且人会以为整组都 0 元——宁可当场拒。
+    manual = [b for b in (bases or []) if b]
+    if manual and len(manual) != len(pages):
+        raise PosterError("手动底图要每页一张：这组共 %d 页，只收到 %d 张。"
+                          "补齐再出，或者全部让 AI 出图。" % (len(pages), len(manual)))
     # 带底图的模板：换文案时复用那张已经验收的底图，不再出图。同一张底图多出几张
     # 只会得到完全一样的成品，所以这里强制单张。真图模式同理（不随机，多张必重复）。
     # 多页时也不套用：那张底图的插画位置是按单页版面算的，翻页会跟文字打架。
-    tpl_base = None if (photo or multi) else (template_base(plan.get("style_key"))
-                                              if text_mode == "typeset" else None)
+    tpl_base = None if (photo or multi or manual) else (template_base(plan.get("style_key"))
+                                                        if text_mode == "typeset" else None)
     if photo:
         n = 1
         _pg("用你上传的图排主视觉（0 元，不出 AI 底图）"
             + ("，其余 %d 页用纯色底" % (len(pages) - 1) if multi else "") + "...")
+    elif manual:
+        n = 1
+        _pg("用你回传的 %d 张底图排版（0 元，不出 AI 底图）..." % len(manual))
     elif multi:
         n = 1
         _pg("多页模式：一页一张，不再抽卡（张数 × 页数会把花费翻倍）")
     stale_nums = []
     if tpl_base:
-        n = 1
         _pg("复用模板底图（0 元，不再出图）...")
         if do_verify:
             _pg("核对底图里有没有上一期留下的数字...")
             stale_nums = check_base_numbers(tpl_base, plan, ai_config)
+    if manual and do_verify:
+        _pg("核对回传的底图里有没有被画上字/数字...")
+        for b in manual:
+            stale_nums += check_base_numbers(b, plan, ai_config)
 
     candidates, usage, page_rows = [], {}, []
     photo_name = ""
@@ -1603,6 +1655,8 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
             if photo:
                 raw = _ts.placeholder_base(page_plan.get("style_key"), w, h, 0.6,
                                            art_hint=False, plan=page_plan)
+            elif manual:
+                raw = manual[pi - 1]
             elif tpl_base:
                 raw = tpl_base
             else:

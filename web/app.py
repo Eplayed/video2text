@@ -2338,7 +2338,9 @@ def api_poster_plan():
                                   "draft_warning": warning,
                                   "prompt_text": (ai_poster.build_art_prompt(plan, ratio)
                                                   if text_mode == "typeset"
-                                                  else ai_poster.build_prompt_text(plan, ratio))}
+                                                  else ai_poster.build_prompt_text(plan, ratio)),
+                                  # 每页一份、自包含的"拿去豆包手动出图"提示词（0 元那条路）
+                                  "manual_prompts": ai_poster.manual_prompts_for(plan, ratio, text_mode)}
         _poster_status["progress"] = ("✅ 文案已拆解（合计 %d 字 · 模型 %s）"
                                       % (ai_poster.plan_chars(plan), cfg.get("model") or "?")
                                       + ("；自动压缩：" + "、".join(notes) if notes else "")
@@ -2420,6 +2422,11 @@ def api_poster_generate():
     except ai_poster.PosterError as e:
         return jsonify({"error": str(e)}), 400
     try:
+        # 手动底图（在豆包出的无字底图）：一页一张，引用同样只认 _photo 目录里我们发出去的名字
+        bases = [b for b in (_photo_read(r) for r in (data.get("bases") or [])[:ai_poster.PAGE_MAX]) if b]
+    except ai_poster.PosterError as e:
+        return jsonify({"error": str(e)}), 400
+    try:
         clicks = int(data.get("preview_clicks") or 0)   # 采纳率要用：平均点几次预览才满意
     except (TypeError, ValueError):
         clicks = 0
@@ -2431,7 +2438,8 @@ def api_poster_generate():
                                              ratio=ratio, progress_cb=cb, plan=plan,
                                              publish=publish, force=force, copies=copies,
                                              do_review=do_review, text_mode=text_mode,
-                                             photo=photo, preview_clicks=clicks)
+                                             photo=photo, preview_clicks=clicks,
+                                             bases=bases or None)
         v = manifest.get("verify") or {}
         rv = manifest.get("review") or {}
         ts_chk = manifest.get("typeset") or {}
@@ -2569,6 +2577,51 @@ def api_poster_photo():
         png = out.getvalue()
     except Exception as e:
         return jsonify({"error": "这张图读不出来：%s" % str(e)[:120]}), 400
+    name = uuid.uuid4().hex[:10] + ".png"
+    PHOTO_DIR.mkdir(parents=True, exist_ok=True)
+    (PHOTO_DIR / name).write_bytes(png)
+    _prune_previews(PHOTO_DIR, keep=24)
+    return jsonify({"ref": name, "url": "/media/poster/_photo/%s" % name,
+                    "w": w, "h": h, "bytes": len(png)})
+
+
+@app.route("/api/poster/base", methods=["POST"])
+def api_poster_base():
+    """收一张"在豆包手动生成的无字底图"，回传到这一次出图里用（0 元那条路的回程）。
+
+    和配图的区别：配图是当主视觉贴在一块区域里，底图要铺满整张画布再往上排字，
+    所以这里卡两条硬指标——短边够大（排版按像素算，太小一放就糊）、
+    长宽比跟目标比例对得上（差太多会被裁掉一大块画面，那种成品不如不出）。
+    """
+    f = request.files.get("file")
+    if not f:
+        return jsonify({"error": "没收到图片"}), 400
+    ratio = str(request.form.get("ratio") or "9:16").strip()[:5]
+    try:
+        tw, th = (ai_poster.SIZES.get(ratio) or ai_poster.SIZES["9:16"]).split("*")
+        tw, th = int(tw), int(th)
+    except (ValueError, AttributeError):
+        return jsonify({"error": "比例不认识：%s" % ratio}), 400
+    blob = f.read()
+    if len(blob) > PHOTO_MAX_BYTES:
+        return jsonify({"error": "图片超过 8MB，压一下再传"}), 400
+    try:
+        from PIL import Image, ImageOps
+        im = ImageOps.exif_transpose(Image.open(io.BytesIO(blob)))
+        w, h = im.size
+    except Exception as e:
+        return jsonify({"error": "这张图读不出来：%s" % str(e)[:120]}), 400
+    if min(w, h) < 700:
+        return jsonify({"error": "底图太小（%d×%d），短边至少要 700，"
+                                 "豆包导出时选大一点的尺寸" % (w, h)}), 400
+    ar, tar = float(w) / h, float(tw) / th
+    if abs(ar - tar) / tar > 0.15:
+        return jsonify({"error": "比例对不上：这张是 %.2f，海报要 %.2f（%s）。"
+                                 "差太多贴上去会裁掉一大块，回豆包按 %s 重新生成一张"
+                         % (ar, tar, ratio, ratio)}), 400
+    out = io.BytesIO()
+    im.convert("RGB").save(out, format="PNG")
+    png = out.getvalue()
     name = uuid.uuid4().hex[:10] + ".png"
     PHOTO_DIR.mkdir(parents=True, exist_ok=True)
     (PHOTO_DIR / name).write_bytes(png)
