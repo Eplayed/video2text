@@ -398,6 +398,20 @@ def main():
     ck("模型只给页内不带 style_key 时，页码与全文说明照样齐",
        "【第 1/2 页" in mp[0]["copy"] and "豆包" in mp[0]["full"])
 
+    # ── 「直出成品」那一档（字由模型画）：提示词与说明必须整套换掉 ──
+    md = ai_poster.manual_prompts_for(two, RATIO, "model")
+    ck("直出档回显 mode，界面才知道该不该用这份提示词",
+       md[0].get("mode") == "model" and mp[0].get("mode") == "typeset")
+    ck("直出档的提示词要模型把中文画进去（含逐字渲染那块）",
+       "成品图" in md[0]["copy"] and "逐字" in md[0]["copy"] and "无字底图" not in md[0]["copy"])
+    ck("直出档不再要求那半截空着（它反过来要字画满）",
+       "先定站位" not in md[0]["copy"] and "必须是空的" not in md[0]["copy"])
+    ck("给人看的说明分两档写，各自只说各自那条路的判据",
+       "该空的那半截" in mp[0]["full"] and "该空的那半截" not in md[0]["full"]
+       and "逐字" in md[0]["full"])
+    ck("提示词里不夹自我吐槽（那句「想不错字就切回程序排字」是给我们看的，不是给豆包的）",
+       "想不错字" not in md[0]["copy"])
+
     print()
     if FAILS:
         print("FAIL %d 项：%s" % (len(FAILS), "、".join(FAILS)))

@@ -1351,53 +1351,57 @@ textarea{resize:vertical;min-height:84px}
       <div class="modal-box" style="width:880px;max-width:94vw" onclick="event.stopPropagation()">
         <button class="close-btn" onclick="closePosterDialog()"><span data-icon="close" class="ic14"></span></button>
         <div class="tt-gen-title">🎨 AI 海报</div>
-        <div class="tt-gen-sub">整合稿 #<span id="pk-id"></span> · <span id="pk-mode">底图 AI 现画，中文由程序排版</span></div>
+        <div class="tt-gen-sub">整合稿 #<span id="pk-id"></span> · <span id="pk-mode">字由程序排，不会错字</span></div>
         <div class="pk-bar">
           <label>比例<select id="pk-ratio">
             <option value="9:16" selected>9:16 小红书</option>
             <option value="3:4">3:4 公众号</option>
             <option value="1:1">1:1 方形</option>
           </select></label>
+          <label>出法<select id="pk-text-mode" title="排版：AI 只画图，中文由工作台用真字体排上去，字不会错（上限 200 字）。直出：AI 把字画进图里，看到的就是成品，但实测做不到每张都对，字要你自己逐字核（上限 64 字）" onchange="pkModeChanged()">
+            <option value="typeset" selected>排版 · 字不会错</option>
+            <option value="model">直出 · 字要自己核</option>
+          </select></label>
           <label>张数<select id="pk-copies" title="同一份文案画几次好坏不一样，多出几张挑比不满意重出省事">
             <option value="1" selected>1 张</option>
             <option value="3">3 张挑 1</option>
           </select></label>
           <label>风格<select id="pk-style-key-top" onchange="pkSyncStyle(this.value)"><option value="">载入中…</option></select></label>
-          <label><span id="pk-layout-label">布局</span><select id="pk-layout-key-top" onchange="pkSyncLayout(this.value)" title="文字和图各占画面哪一块。默认跟着风格走，也可以单独换，换完自动免费重排"><option value="">跟着风格</option></select></label>
-          <label>配图<span class="pk-photo" id="pk-photo"><button type="button" class="btn ghost sm" onclick="pkPhotoPick()">＋ 用你的图</button></span></label>
+          <label id="pk-layout-wrap"><span id="pk-layout-label">布局</span><select id="pk-layout-key-top" onchange="pkSyncLayout(this.value)" title="文字和图各占画面哪一块。默认跟着风格走，也可以单独换，换完自动免费重排"><option value="">跟着风格</option></select></label>
+          <label>配图<span class="pk-photo" id="pk-photo"><button type="button" class="btn ghost sm" onclick="pkPhotoPick()" title="有真实截图（坐骑、装备、界面）就传上来当主视觉：这条不出 AI 底图、0 元">＋ 用你的图</button></span></label>
           <label class="pk-grow">题材<input id="pk-theme" placeholder="选填，例：魔兽怀旧服 塔卡"></label>
           <label class="pk-check"><input type="checkbox" id="pk-review" checked>出图后打分</label>
         </div>
         <div class="pk-actions">
           <button class="btn ghost sm" onclick="posterPlan()">① 拆文案</button>
-          <button class="btn ghost sm" onclick="posterPreview()" title="不花钱、当场出：用出图时同一个排版函数先看版面">② 看版面 · 免费</button>
+          <button class="btn ghost sm" id="pk-preview-top" onclick="posterPreview()" title="不花钱、当场出：用出图时同一个排版函数先看版面">② 看版面 · 免费</button>
           <button class="btn sm pk-go" id="pk-go-top" onclick="posterGenerate()">③ 出图 · 0.5 元/张</button>
-          <button class="btn ghost sm" id="pk-manual-btn" onclick="pkManualToggle()" title="复制提示词去豆包出底图，回来上传这张，中文仍由程序排——整条 0 元">③b 豆包手动 · 0 元</button>
+          <button class="btn ghost sm" id="pk-manual-btn" onclick="pkManualToggle()" title="不想花那五毛：复制提示词去豆包出图，回来传上这张，整条 0 元">③b 豆包 · 回传底图</button>
         </div>
         <div id="pk-layout-hint" style="font-size:11.5px;color:var(--text-secondary);margin:2px 0 8px;min-height:16px"></div>
         <div class="pk-tpls" id="pk-tpls" style="display:none"></div>
         <div class="pk-break" id="pk-break" style="display:none"></div>
-        <div class="pk-one" id="pk-one">字由程序排版，不会错字也不会漏，200 字上限只是版面放得下。<b>改完文案多点几次②，一次都不花钱。</b>有真实截图（坐骑、装备、界面）就点「＋ 用你的图」当主视觉，那条不出 AI 底图、0 元。</div>
-        <!-- 三步操作卡：只在第一次用得着，收过一次就记住，不长期占地方 -->
-        <details class="pk-guide" id="pk-guide" open>
+        <div class="pk-one" id="pk-one">改完文案多点几次②，一次都不花钱。</div>
+        <!-- 三步操作卡：只在第一次用得着，所以默认收起；收过一次就记住 -->
+        <details class="pk-guide" id="pk-guide">
           <summary>怎么用 · 三步</summary>
           <ol>
-            <li><b>① 拆文案</b>（约 30 秒）：拿到可编辑文案。先看「主线」那句成不成链，散了就重新拆，别拿着散文案花钱。</li>
-            <li><b>② 看版面</b>（免费）：字号、折行、卡片放不放得下、配色都是真的，只有上面那块灰框出图时会被插画替换。改一次文案点一次。旁边那个<b>布局</b>下拉换的是"图和文字各占画面哪一块"——不选就跟着风格走，选了也是 0 元，多点几次对比一下。</li>
-            <li><b>③ 出图</b>（0.5 元/张）：AI 现画底图，出完自动打分，满分 25、18 以下会建议换一张或重出。出 3 张时点小图就换选。</li>
-            <li><b>③b 豆包手动</b>（0 元）：不想花那五毛就点它。按页复制提示词 → 去豆包出<b>无字底图</b>（比例选 9:16、用下载别截图）→ 回传这张 → 中文照旧由程序排，版面和②看到的一模一样。多页时每页都要回传。</li>
+            <li><b>① 拆文案</b>（约 30 秒）：先看「主线」那句成不成链，散了就重拆，别拿着散文案花钱。</li>
+            <li><b>② 看版面</b>（免费）：字号、折行、配色都是真的，只有那块灰框出图时会被插画替换。</li>
+            <li><b>③ 出图</b>（0.5 元/张）：出完自动打分，满分 25、18 以下会建议换一张。</li>
+            <li><b>③b 豆包</b>（0 元）：按页复制提示词去豆包出图，回来传上这张，说明在「复制全文」里。</li>
           </ol>
-          <div class="pk-guide-f">风格四选一：攻略/数值→游戏史诗风 · 工具实测→工具测评风 · 清单避坑→清单笔记风 · 单观点→极简杂志风。被「整合稿不合格」挡住＝这条当初转写失败只剩骨架，自己核过数字再点「仍然出图」。发之前记得勾后台的「内容由 AI 生成」。</div>
+          <div class="pk-guide-f">被「整合稿不合格」挡住＝这条当初转写失败只剩骨架，自己核过数字再点「仍然出图」。发之前记得勾后台的「内容由 AI 生成」。</div>
         </details>
         <div id="pk-plan"></div>
-        <!-- 豆包手动出图：复制每页提示词 → 外部出无字底图 → 回传，中文仍由程序排 -->
+        <!-- 豆包手动出图：复制每页提示词 → 外部出图 → 回传（排版档传底图、直出档传成品） -->
         <div class="pk-manual" id="pk-manual" style="display:none"></div>
         <!-- 文案编辑区末尾再放一次动作条：改完就在眼前，不用滚回顶部找按钮 -->
         <div class="pk-actions">
           <button class="btn ghost sm" onclick="posterPlan()">① 重新拆文案</button>
-          <button class="btn ghost sm" onclick="posterPreview()">② 看版面 · 免费</button>
+          <button class="btn ghost sm" id="pk-preview-bot" onclick="posterPreview()">② 看版面 · 免费</button>
           <button class="btn sm pk-go" id="pk-go-bot" onclick="posterGenerate()">③ 出图 · 0.5 元/张</button>
-          <button class="btn ghost sm" onclick="pkManualToggle()">③b 豆包手动 · 0 元</button>
+          <button class="btn ghost sm" id="pk-manual-btn-2" onclick="pkManualToggle()">③b 豆包 · 回传底图</button>
         </div>
         <div id="pk-result"></div>
       </div>
@@ -2959,7 +2963,7 @@ function openPosterDialog(id) {
   _pkLast = null;
   _pkSource = null;          // 原文缓存按整理稿存，换一条必须重取
   _pkPhoto = null;           // 配图也是这条素材的，换整理稿要清掉
-  _pkManual = []; _pkBases = []; _pkManualOpen = false;   // 豆包手动那条同样属于这条素材
+  _pkManual = []; _pkManualRaw = []; _pkBases = []; _pkManualOpen = false;   // 豆包那条同样属于这条素材
   _pkPages = []; _pkCur = 0; // 分页同样属于这条素材，不清会把上一条的页带过来
   _pkRec = null; _pkWhy = ''; _pkPreviewClicks = 0;
   document.getElementById('pk-id').textContent = id;
@@ -2968,6 +2972,8 @@ function openPosterDialog(id) {
   document.getElementById('pk-theme').value = '';
   document.getElementById('pk-overlay').classList.add('show');
   pkGuideInit();
+  pkApplyLimits();
+  pkApplyModeChrome();      // 按钮名/②与布局的显隐跟着「出法」走，开弹窗就得先对一次
   pkPhotoLabel();
   loadPosterStyles();
   loadPosterTemplates();
@@ -2985,7 +2991,8 @@ async function pkHydrate(id) {
     return;
   }
   if (st.plan && st.plan.plan) {
-    _pkManual = st.plan.manual_prompts || [];      // 每页一份"拿去豆包手动出图"的材料
+    _pkManualRaw = st.plan.manual_prompts || [];   // 每页一份"拿去豆包手动出图"的材料
+    _pkManual = pkTakeManual(_pkManualRaw);
     pkRenderManual();
     pkRenderPlan(st.plan.plan, st.plan.publish);
   }
@@ -3000,7 +3007,8 @@ async function pkHydrate(id) {
 }
 // 三步操作卡：默认展开，收过一次就记住——学会之后不必每次挡在动作条下面。
 // 每次开弹窗都按存的状态摆一次，否则同一页面里收起再开还是摊开的，记了个寂寞。
-const PK_GUIDE_KEY = 'posterGuideOpen';
+// 键名带 2：三步卡从"默认展开"改成"默认收起"，老浏览器里存着 '1' 的人不该被旧值顶回来
+const PK_GUIDE_KEY = 'posterGuideOpen2';
 function pkGuideInit() {
   const d = document.getElementById('pk-guide');
   if (!d) return;
@@ -3031,10 +3039,68 @@ const PK_BY_MODE = {
   model:   {title: 12, subtitle: 10, footer: 14, cardT: 6, cardD: 10, total: 64}
 };
 const PK_LIMITS = Object.assign({}, PK_BASE, PK_BY_MODE.typeset);
-function pkTextMode() { return 'typeset'; }
+// 「出法」这一档决定两件事：字由谁写（上限 200 还是 64）、豆包回传的是底图还是成品。
+// 原来这个函数写死 return 'typeset'，界面上根本没有入口，"模型画字"那套后端能力是空跑的。
+function pkTextMode() {
+  const el = document.getElementById('pk-text-mode');
+  return el && el.value === 'model' ? 'model' : 'typeset';
+}
 function pkApplyLimits() {
-  const src = (_pkLimitsByMode && _pkLimitsByMode.typeset) || PK_BY_MODE.typeset;
-  Object.keys(PK_BY_MODE.typeset).forEach(k => { PK_LIMITS[k] = (src && src[k]) || PK_BY_MODE.typeset[k]; });
+  const mode = pkTextMode();
+  const base = PK_BY_MODE[mode] || PK_BY_MODE.typeset;
+  const src = (_pkLimitsByMode && _pkLimitsByMode[mode]) || base;
+  Object.keys(base).forEach(k => { PK_LIMITS[k] = (src && src[k]) || base[k]; });
+}
+// 换档要把界面上"这一档没有的东西"藏掉：② 看版面与「布局」都只有程序排版档才成立，
+// 留着就是让界面说假话（直出档的版面归模型定，我们排的那张预览跟它不是一回事）。
+function pkApplyModeChrome() {
+  const direct = pkTextMode() === 'model';
+  const mode = document.getElementById('pk-mode');
+  if (mode) mode.textContent = pkModeLine();
+  ['pk-preview-top', 'pk-preview-bot', 'pk-layout-wrap'].forEach(function (id) {
+    const el = document.getElementById(id);
+    if (el) el.style.display = direct ? 'none' : '';
+  });
+  const mbTxt = direct ? '③b 豆包 · 回传成品' : '③b 豆包 · 回传底图';
+  ['pk-go-top', 'pk-go-bot'].forEach(function (id) {
+    const el = document.getElementById(id); if (el) el.textContent = pkGoLabel();
+  });
+  ['pk-manual-btn', 'pk-manual-btn-2'].forEach(function (id) {
+    const el = document.getElementById(id); if (el) el.textContent = mbTxt;
+  });
+}
+function pkModeChanged() {
+  pkApplyLimits();
+  pkApplyModeChrome();
+  // 提示词是按档算的（排版档要无字底图、直出档要连中文一起画），换档后旧的必须作废，
+  // 否则他拿着"无字底图"那段去出成品、或反过来。重拆一次才给新的。
+  // 提示词只含拆解时那一档；换档后从原始那份里筛，筛不出来就是空的——面板会提示重拆。
+  // 回传的图一律作废：排版档传的是无字底图，直出档传的是成品，混不得。
+  _pkManual = pkTakeManual(_pkManualRaw);
+  _pkBases = [];
+  pkRenderManual();
+  const hint = document.getElementById('pk-layout-hint');
+  if (hint) {
+    const has = !!document.getElementById('pk-count');
+    // 上限是"每页"的数，所以取当前各组里最满的那一页（表单正在改的这一页要算进去）
+    let pages = [];
+    if (has) {
+      pages = _pkPages.length > 1 ? _pkPages.slice() : [];
+      if (pages.length) pages[_pkCur] = pkReadPlan();
+      else pages = [pkReadPlan()];
+    }
+    const worst = pages.length ? Math.max.apply(null, pages.map(pkChars)) : 0;
+    if (!has) hint.textContent = '';
+    else if (pkTextMode() === 'model' && worst > PK_LIMITS.total) {
+      hint.textContent = '直出档每页上限 ' + PK_LIMITS.total + ' 字（实测 63 字就开始改写和画错），'
+        + '最满的一页 ' + worst + ' 字。点「① 拆文案」按这一档重拆，或切回「排版」。';
+    } else {
+      hint.textContent = pkTextMode() === 'model'
+        ? '直出档没有"先看版面"这一步：版面由模型定，所以②和布局已经收起，每页上限回到 '
+          + PK_LIMITS.total + ' 字。' : '';
+    }
+  }
+  pkCount();   // 只刷字数条与校验；不能 pkRenderPlan——那会把表单打回上次存的值，吃掉他没存的修改
 }
 // 风格预设名单由后端下发（配方原文只有一份，前端抄一遍必然漂移）
 let _pkStyles = [];
@@ -3549,7 +3615,8 @@ let _pkPhoto = null;
 // ── 豆包手动出图（0 元那条路）──
 // 为什么要这条：qwen-image 0.5 元/张还限流每分钟 2 张，豆包订阅里就能出、这类内容质量够用。
 // 分工照旧：外部只出**无字底图**，中文仍由排版引擎排——所以"AI 把字画错"这个死穴不在这条路上。
-let _pkManual = [];      // 后端按页给的 {page,total,copy,full}
+let _pkManual = [];      // 后端按页给的 {page,total,copy,full,mode}，已按当前「出法」筛过
+let _pkManualRaw = [];   // 后端原样回的那一份（只含拆解时用的那一档），切换出法时从这里筛
 let _pkBases = [];       // 回传的底图，和页一一对应；空 = 这页还没回传
 let _pkManualOpen = false;
 
@@ -3558,38 +3625,48 @@ function pkManualToggle() {
   pkRenderManual();
 }
 
+// 提示词是按「出法」算的（排版档要无字底图、直出档要连中文一起画）。档对不上就当没有，
+// 让他重拆一次拿新的——拿着旧档的提示词去出图，回来的整组都不能用。
+// 老缓存里没有 mode 字段，一律按当时的唯一档位 typeset 认。
+function pkTakeManual(list) {
+  const mode = pkTextMode();
+  return (list || []).filter(function (m) { return (m.mode || 'typeset') === mode; });
+}
+
 function pkRenderManual() {
   const box = document.getElementById('pk-manual');
   if (!box) return;
   box.style.display = _pkManualOpen ? '' : 'none';
   if (!_pkManualOpen) return;
+  const direct = pkTextMode() === 'model';
+  const what = direct ? '成品' : '底图';
   if (!_pkManual.length) {
-    box.innerHTML = '<div class="pm-h">还没有提示词——先点「① 拆文案」。拆完这里会按页列出来，'
-      + '一页一段，去豆包出哪页就复制哪页。</div>';
+    box.innerHTML = '<div class="pm-h">先点「① 拆文案」，这里按页列出提示词'
+      + (direct ? '（直出档：连中文一起画）' : '') + '。</div>';
     return;
   }
   const n = _pkManual.length, ready = _pkBases.filter(Boolean).length;
-  let h = '<div class="pm-h"><b>三步：复制提示词 → 豆包出图（比例选 9:16，用「下载」别截图）→ 回传这张。</b> '
-    + '中文由程序排，所以底图里<b>一个字都不要有</b>；豆包要是画上字了那张不能用，重生成。'
-    + '<br>豆包一次给 4 张是正常的，<b>一页只挑 1 张</b>：挑"该空的那半截真空着、读不出任何字"的那张。'
-    + '右下角「豆包 AI 生成」是平台后盖的水印，提示词拦不住、也不用管，它在角落。'
-    + '回传之后工作台会自己体检：那一块空不空、画面上有没有字，不合格会点名是第几页。'
-    + (n > 1 ? '<br>这组 ' + n + ' 页，<b>要么每页都回传、要么一张都别传</b>——一半豆包一半 AI 会两种风格打架。' : '')
+  // 表头只留一句操作，挑图标准/水印/体检这些细节在「复制全文」里——原来这里三行、
+  // 每页再摊 450 字说明，用户原话是"干扰的文字太多，看了眼花缭乱"。
+  let h = '<div class="pm-h"><b>复制 → 豆包出图 → 回传这张。</b>'
+    + '一页一张，比例 9:16，用「下载」别截图。'
+    + (n > 1 ? '这组 ' + n + ' 页，要么全传要么一张都别传。' : '')
     + '</div>';
   _pkManual.forEach(function (m, i) {
     const b = _pkBases[i];
     h += '<div class="pm-page"><div class="pm-t">第 ' + m.page + ' / ' + m.total + ' 页</div>'
-      + '<pre>' + esc(m.full) + '</pre><div class="pm-row">'
-      + '<button class="btn ghost sm" id="pk-copy-' + i + '" onclick="pkCopyManual(' + i + ',0,this)">复制这页提示词</button>'
+      + '<pre>' + esc(m.copy) + '</pre><div class="pm-row">'
+      + '<button class="btn ghost sm" id="pk-copy-' + i + '" onclick="pkCopyManual(' + i + ',0,this)">复制提示词</button>'
       + '<button class="btn ghost sm" onclick="pkCopyManual(' + i + ',1,this)">复制全文（含说明）</button>'
-      + '<button class="btn ghost sm" onclick="pkBasePick(' + i + ')">' + (b ? '换这张底图' : '回传底图') + '</button>'
+      + '<button class="btn ghost sm" onclick="pkBasePick(' + i + ')">' + (b ? '换这张' : '回传' + what) + '</button>'
       + (b ? '<img class="pm-thumb" src="' + esc(b.url) + '"><span class="pm-done">✓ 已就绪</span>'
            : '<span class="pm-wait">还没回传</span>')
       + '</div></div>';
   });
   if (ready) {
     h += '<div class="pm-row"><button class="btn sm pk-go" onclick="posterGenerate()">'
-      + '用回传的 ' + ready + ' 张底图出图 · 0 元</button></div>';
+      + (direct ? '用回传的 ' + ready + ' 张成品出包 · 0 元'
+                : '用回传的 ' + ready + ' 张底图排版 · 0 元') + '</button></div>';
   }
   box.innerHTML = h;
 }
@@ -3604,7 +3681,7 @@ function pkCopyManual(i, full, btn) {
     btn.textContent = '已复制 ✓';
     setTimeout(function () { btn.textContent = old; }, 1600);
   };
-  const bad = function () { alert('浏览器不让直接复制。手动长按上面那段文字复制即可（要粘进豆包的是「一张…底图」到【底线】那一段）。'); };
+  const bad = function () { alert('浏览器不让直接复制。长按上面那段文字手动复制即可（粘进豆包的就是这一整段）。'); };
   if (navigator.clipboard && navigator.clipboard.writeText) {
     navigator.clipboard.writeText(text).then(ok).catch(function () { pkCopyFallback(text, ok, bad); });
   } else {
@@ -3690,19 +3767,32 @@ function pkPhotoLabel() {
   }
   // 出图按钮跟着变：真图模式不出 AI 底图，再写 0.5 元/张就是骗人；
   // 多页时花费按页数翻倍，按钮上就把总数写出来，别等确认框才看见
-  const n = Math.max(1, _pkPages.length);
-  const tip = _pkPhoto
-    ? (n > 1 ? '③ 出图 · 0 元（' + n + ' 页，首页用你的图）' : '③ 出图 · 0 元（用你的图）')
-    : (n > 1 ? '③ 出图 · ' + n + ' 页共 ' + (n * 0.5).toFixed(1) + ' 元' : '③ 出图 · 0.5 元/张');
   ['pk-go-top', 'pk-go-bot'].forEach(id => {
     const b = document.getElementById(id);
-    if (b) b.textContent = tip;
+    if (b) b.textContent = pkGoLabel();
   });
   // 顶部那句说明也得跟着改：这时候底图不是 AI 画的。只改这一个 span——
   // 重排整句会再生成一份 #pk-id，getElementById 就会挑到错的那个元素
   const mode = document.getElementById('pk-mode');
-  if (mode) mode.textContent = _pkPhoto ? '主视觉用你上传的真图，中文由程序排版'
-                                        : '底图 AI 现画，中文由程序排版';
+  if (mode) mode.textContent = pkModeLine();
+}
+// ③ 那颗按钮写的是"这次要点几下、花几毛"，三处变量（真图 / 页数 / 出法）都会改它，
+// 所以算式只留这一份：pkPhotoLabel 和切档都要用，两边各写一遍迟早对不上。
+function pkGoLabel() {
+  const n = Math.max(1, _pkPages.length);
+  if (_pkPhoto) {
+    return n > 1 ? '③ 出图 · 0 元（' + n + ' 页，首页用你的图）' : '③ 出图 · 0 元（用你的图）';
+  }
+  if (pkTextMode() === 'model') {
+    return n > 1 ? '③ 出图 · ' + n + ' 页共 ' + (n * 0.5).toFixed(1) + ' 元（字也画）'
+                 : '③ 出图 · 0.5 元（字也画）';
+  }
+  return n > 1 ? '③ 出图 · ' + n + ' 页共 ' + (n * 0.5).toFixed(1) + ' 元' : '③ 出图 · 0.5 元/张';
+}
+function pkModeLine() {
+  if (_pkPhoto) return '主视觉用你上传的真图，中文由程序排版';
+  return pkTextMode() === 'model' ? '字由 AI 画，看到的就是成品 · 传上来会逐字核对'
+                                  : '底图 AI 现画，中文由程序排版';
 }
 
 // 上一次免费重排的产物留在手里：点缩略图切页时直接重画，不再请求后端。
@@ -3765,6 +3855,14 @@ function pkPaintPreview(cur) {
 
 async function posterPreview() {
   if (!document.getElementById('pk-title')) { setStatus('error', '先点「① AI 拆解文案」拿到文案'); return; }
+  if (pkTextMode() === 'model') {
+    // 直出档没有"程序排的版面"这回事：这张预览排出来的是排版档的样子，跟模型画的版面无关。
+    // 按钮在这档已经收起，走到这里只可能是「我的模板」那条自动调用，所以给一句话而不是静默出图。
+    document.getElementById('pk-result').innerHTML =
+      '<div class="pk-verify mild">直出档没有免费预览：版面由出图模型定，这张预览是「排版」档的样子，'
+      + '对不上。要看真实版面就把出法切回「排版」。</div>';
+    return;
+  }
   const box = document.getElementById('pk-result');
   _pkPreviewClicks++;          // 每次免费重排都计数（含换布局/切页自动重排），当"改了几次才满意"用
   box.innerHTML = '<div class="pk-verify mild">⏳ 正在按当前文案排'
@@ -3803,23 +3901,28 @@ async function posterGenerate(force) {
   // 豆包手动底图：要么每页都给、要么一张都别给（混着出两种风格打架，也会让人以为整组 0 元）
   const baseRefs = _pkBases.slice(0, npages).map(b => (b && b.ref) ? b.ref : null);
   const nBase = baseRefs.filter(Boolean).length;
+  const direct = pkTextMode() === 'model';
+  const what = direct ? '成品' : '底图';
   if (nBase && _pkPhoto) {
-    alert('「＋ 用你的图」是把真图当主视觉贴在一块区域，「豆包底图」是铺满整张再往上排字，两件事只能选一个。');
+    alert('「＋ 用你的图」是把真图当主视觉贴在一块区域，「豆包' + what + '」是整张图都用它，两件事只能选一个。');
     return;
   }
   if (nBase && nBase !== npages) {
-    alert('手动底图要每页都回传：现在 ' + nBase + '/' + npages + ' 页。补齐再出，或全部撤掉改走 AI 出图。');
+    alert('豆包那张要每页都回传：现在 ' + nBase + '/' + npages + ' 页。补齐再出，或全部撤掉改走 AI 出图。');
     return;
   }
-  if (nBase) copies = 1;                       // 同一张底图多出几张只会得到一样的成品
-  // 确认框文案按"这次底图从哪来"分四种情况说清楚，别让人以为都在花钱。
+  if (nBase) copies = 1;                       // 同一张图多出几张只会得到一样的成品
+  // 确认框文案按"这次图从哪来"分四种情况说清楚，别让人以为都在花钱。
   // 原来是一串嵌套三元，加一个分支就得数括号——改成平铺，读得下去也配得平。
   let tip;
   if (force) {
     tip = '这条整合稿被判定为规则版骨架。\n确认你已人工复核过拆解出的文案、仍要出图？';
   } else if (nBase) {
-    tip = `出 ${npages} 页：底图全用你从豆包回传的这几张，不再出 AI 底图，整组 0 元、几秒钟。`
-        + '\n中文由程序排，所以版面和你点②看到的一致。已有海报会被覆盖。';
+    tip = direct
+        ? `出 ${npages} 页：成品全用你从豆包回传的这几张，不再出图，整组 0 元、几秒钟。\n`
+          + '字是模型画的，传上来会跑一次逐字核对，但"通过"不等于字对——发布前你自己再看一眼。已有海报会被覆盖。'
+        : `出 ${npages} 页：底图全用你从豆包回传的这几张，不再出 AI 底图，整组 0 元、几秒钟。`
+          + '\n版面和②看到的一致，已有海报会被覆盖。';
   } else if (_pkPhoto) {
     tip = multi
         ? `出 ${npages} 页：第 1 页用你上传的真图，其余 ${npages - 1} 页用纯色底，整组 0 元、几秒钟。`
@@ -3895,8 +3998,9 @@ function pollPoster(stage, task) {
       return;
     }
     if (st.plan && st.plan.plan) {
-      _pkManual = st.plan.manual_prompts || [];      // 每页一份"拿去豆包手动出图"的材料
-      _pkBases = [];                                 // 文案换了，之前回传的底图就不作数了
+      _pkManualRaw = st.plan.manual_prompts || [];   // 每页一份"拿去豆包手动出图"的材料
+      _pkManual = pkTakeManual(_pkManualRaw);
+      _pkBases = [];                                 // 文案换了，之前回传的图就不作数了
       pkRenderManual();
       pkRenderPlan(st.plan.plan, st.plan.publish);
       _pkPreviewPages = [];              // 结构换了，上一轮的预览图作废
@@ -3987,12 +4091,18 @@ async function renderPosterResult(id) {
   } else {
     imgHtml = `<img class="pk-img" src="${m.url}?t=${Date.now()}" onclick="window.open('${m.url}','_blank')" title="点击看原图">`;
   }
+  // 决定"这张能不能直接发"的那两条顶到第一行（图 → 字 → 分 → 其余提示）。
+  // 原来它们混在 warns 里排在评分条下面，等于让人先看好不好看、再看字对不对——顺序反了。
+  const TOP_RE = /回传的底图不合格|底图里带着文案里没有的数字/;
+  const topWarns = warns.filter(s => TOP_RE.test(s));
+  const restWarns = warns.filter(s => !TOP_RE.test(s));
   document.getElementById('pk-result').innerHTML =
     imgHtml
+    + (topWarns.length ? `<div class="pk-verify fail">${topWarns.map(esc).join('<br>')}</div>` : '')
     + `<div class="pk-verify ${cls}">${esc(txt)}</div>`
     + (isPhoto ? '<div class="pk-verify mild">真图主视觉不做画面评审：那五项打的是 AI 插画画得好不好，你的图不需要它打分。</div>'
                : pkReviewHtml(m.review))
-    + (warns.length ? `<div class="pk-verify mild">${warns.map(esc).join('<br>')}</div>` : '')
+    + (restWarns.length ? `<div class="pk-verify mild">${restWarns.map(esc).join('<br>')}</div>` : '')
     + `<div class="pk-sub">发布文案（${m.text_chars} 字上图 · 风格 ${esc(m.style_label || m.style_key || '未指定')}）</div>`
     + `<pre class="pk-pub">${esc(pub)}</pre>`
     + `<div class="pk-sub">发布前逐条人工过</div><ul class="pk-ck">${ck}</ul>`

@@ -1255,34 +1255,47 @@ def build_art_prompt(plan, ratio="9:16", extra_topics=None):
     return "\n".join([l for l in lines if l is not None])
 
 
-MANUAL_FOOT = """
-──────────────── 下面是给人看的操作说明，不要粘进豆包 ────────────────
-1. 只把上面从「一张…信息图的底图」到【底线】那一段复制进豆包，生成。
+# 给人看的操作说明，分两档：默认那档（程序排版）与「直出成品」那档（模型把字画好）。
+# 为什么分开写：两档对"这张算不算能用"的判断完全相反——排版档要那半截空着、有字就废；
+# 直出档反过来要模型把字画全，检查的是字对不对。合成一段只能写成"看情况"，那是废话。
+_MANUAL_COMMON = """──────────────── 下面是给人看的操作说明，不要粘进豆包 ────────────────
+1. 只把上面从「一张…」到最后一个【】块那一段复制进豆包，生成。
    豆包要是有「不想要 / 负面提示」这一栏，往里填：
    文字、汉字、字母、数字、标点、logo、水印、UI 界面、进度条、卡片边框、表格、截图
-   没有这一栏就跳过，正文的【底线】已经把同样的话写进去了。
+   没有这一栏就跳过，正文里已经把同样的话写过了。
 2. 比例选 9:16，尺寸按上面那个像素数；选不到就让它按这个长宽比出。
-3. 豆包一次给你 4 张，这是它的默认行为，不是出错了。一页只用一张：
-   挑「该空的那半截真的空着、画面上读不出任何字」的那张，另外 3 张不用管，
-   更别一起传上来——工作台一页只吃一张底图。
-4. 导出用「下载 / 另存为」，不要截图。截图掉清晰度，排上去的字边缘会发糊。
-5. 右下角「豆包 AI 生成」是平台盖的水印，提示词拦不住它。它在角落，程序排字的那一块
-   自带半透明底板，多数情况会盖住或挡住；只有当它压在上方那幅主视觉的正中时才重出。
-   豆包要是有「保存无水印 / 去掉水印」的入口，优先用它。
-6. 4 张都挑不出能用的，别硬传。回豆包重生成，把【第一步】里说空带那句原样抄到提示词
-   最前面再说一遍；还不行就干脆让它画纯背景底纹，回传照样能排字。
-   传上来之后工作台会自己体检那一块空不空（每页查一次），不合格会在结果里点名是第几页。
-7. 一组几页就要几页的底图。少一张工作台会当场拒收（走这条路 0 元，
-   不扣 qwen-image 的 0.5 元/张，随便试）。
+3. 豆包一次给你 4 张，这是它的默认行为，不是出错了。一页只用一张，另外 3 张不用管，
+   更别一起传上来——工作台一页只吃一张。
+4. 导出用「下载 / 另存为」，不要截图。截图掉清晰度，字边缘会发糊。
+   右下角「豆包 AI 生成」是平台后盖的水印，提示词拦不住，它在角落不用管。
+5. 一组几页就要几页的图，少一张工作台当场拒收。走这条路 0 元
+   （不扣 qwen-image 那 0.5 元/张），不满意就回豆包重出再传。
+"""
+
+MANUAL_FOOT = _MANUAL_COMMON + """【排版档 · 这张要当底图用】
+6. 挑那张「该空的那半截真的空着、画面上读不出任何字」的。中文是工作台排上去的，
+   豆包画了字就等于跟我们要排的字打架。
+7. 四张都挑不出来：把正文【第一步】里说空带那句抄到提示词最前面再说一遍；
+   还不行就让它只画纯背景底纹，回来照样能排字。
+8. 传上来工作台会自己体检那一块空不空、图上有没有字，不合格会在结果第一行点名第几页。
+"""
+
+MANUAL_FOOT_DIRECT = _MANUAL_COMMON + """【直出档 · 这张就是成品】
+6. 这一档中文由豆包画，所以挑那张**字最全、最清楚**的：把图上的字跟我们列的文案逐字对一遍，
+   多字、少字、数字被改写、笔画画错都算废。
+7. 实测这一档做不到每张都对（模型会把"10月8开启"写成"10月8日"、把数字加一位），
+   而自动回读用的也是视觉模型、它会把错字读成对的——**所以这一档必须你本人逐字看**。
+   字多（>64 字）就别用这档，切回「排版」，那档字不会错。
+8. 传上来工作台会跑一次回读校验，缺字漏字会在结果第一行点名，但"通过"不等于字对。
 """
 
 
 def manual_prompts_for(plan, ratio="9:16", text_mode=None):
     """整组（每页一份）手动出图材料。plan 里没有 pages 就是单页。
 
-    每页回两个字段：`copy` 是要粘进豆包的那段（含尺寸与禁止事项，不含操作说明），
+    每页回两个字段：`copy` 是要粘进豆包的那段（含尺寸与要求，不含操作说明），
     `full` 是给人看的完整版。分开的理由很直接：把「回工作台点上传」那句粘进豆包，
-    模型可能真给你画一个上传按钮出来。
+    模型可能真给你画一个上传按钮出来。界面上一律只显示 copy，说明走「复制全文」。
     """
     # 必须走 plan_pages：模型交的 pages[] 里每页常常不带 style_key，直接拿来用会
     # 让 _preset 落空、皮肤回落到默认的 tool_review——实测第 1/4 页那条提示词因此
@@ -1291,22 +1304,22 @@ def manual_prompts_for(plan, ratio="9:16", text_mode=None):
     pages = plan_pages(plan) or [plan or {}]
     # 整组的主标题也要从每一页的画面描述里摘掉：第 1 页的插画最容易顺手把主题名画上去
     group_topics = _art_topic_words(plan)
+    mode = text_mode or DEFAULT_TEXT_MODE
+    direct = mode != "typeset"
+    tag = "成品图（中文也画）" if direct else "无字底图"
+    foot = MANUAL_FOOT_DIRECT if direct else MANUAL_FOOT
     out = []
     for i, p in enumerate(pages, 1):
         w, h = _canvas_px(ratio)
-        mode = text_mode or DEFAULT_TEXT_MODE
-        body = (build_art_prompt(p, ratio, extra_topics=group_topics) if mode == "typeset"
-                else build_prompt_text(p, ratio))
-        head = ["【第 %d/%d 页 · 无字底图】" % (i, len(pages)) if len(pages) > 1
-                else "【无字底图】",
+        body = (build_prompt_text(p, ratio) if direct
+                else build_art_prompt(p, ratio, extra_topics=group_topics))
+        head = ["【第 %d/%d 页 · %s】" % (i, len(pages), tag) if len(pages) > 1
+                else "【%s】" % tag,
                 "目标尺寸：%d×%d（%s）。选不到这个比例就按该长宽比出图。"
                 % (w, h, RATIO_LABEL.get(ratio, "竖版 9:16"))]
-        if mode != "typeset":
-            head.append("⚠ 这一版是「AI 直出文字」模式：下面列出的中文要模型自己画上去，"
-                        "错字漏字查得出来但改不了。想不错字就把文案模式切回「程序排字」。")
         copy = "\n".join(head) + "\n\n" + body
-        out.append({"page": i, "total": len(pages), "copy": copy,
-                    "full": copy + MANUAL_FOOT})
+        out.append({"page": i, "total": len(pages), "mode": mode, "copy": copy,
+                    "full": copy + foot})
     return out
 
 
@@ -1862,7 +1875,8 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
         if do_verify:
             _pg("核对底图里有没有上一期留下的数字...")
             stale_nums = check_base_numbers(tpl_base, plan, ai_config)
-    if manual and do_verify:
+    if manual and do_verify and text_mode == "typeset":
+        # 只有排版档才查"那块空不空"：直出档那块本来就该被字占满，问它是答错的
         _pg("体检回传的底图：要排字的那一块空着没有（一页查一次，约 5-10 秒）...")
         for pi, b in enumerate(manual, 1):
             r = check_base_band(b, pages[pi - 1], ai_config, ratio)
