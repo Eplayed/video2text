@@ -569,6 +569,50 @@ def main():
        all((ROOT / "output" / "poster" / str(TEST_ID) / ("poster_p%d.png" % i)).exists()
            for i in (1, 2)))
 
+    print("== P 帧池：裁完不留中间帧（一条素材 5.6 MB → 2.7 MB）==")
+    from src import frame_pool as fpool
+    sandbox = ROOT / "temp" / "_pool_probe"
+    if sandbox.exists():
+        shutil.rmtree(str(sandbox))
+    _old_pool_dir = fpool.POOL_DIR
+    fpool.POOL_DIR = sandbox
+    try:
+        def mk(name, band, checked, keep_raw=True):
+            d = sandbox / name
+            (d / "raw").mkdir(parents=True)
+            (d / "clean").mkdir(parents=True)
+            frames = []
+            for i in range(1, 3):
+                rp = d / "raw" / ("f_%03d.jpg" % i)
+                cp = d / "clean" / ("c_f_%03d.jpg" % i)
+                rp.write_bytes(b"R" * 4096)
+                cp.write_bytes(b"C" * 2048)
+                frames.append({"i": i, "ts": "00:0%d" % i, "file": str(cp),
+                               "raw": str(rp) if keep_raw else "", "band": band,
+                               "checked": checked, "clean": True, "subject": "画面"})
+            json.dump({"aweme_id": name, "frames": frames, "checked": checked},
+                      open(str(d / "frames.json"), "w", encoding="utf-8"),
+                      ensure_ascii=False)
+            return d
+        judged = mk("p_judged", [70, 78], True)
+        unjudged = mk("p_unjudged", [70, 78], False)
+        noband = mk("p_noband", None, True)
+        r = fpool.prune_raw()
+        ck("判过帧、横幅已定位的池子：raw 中间帧删掉并省了盘子",
+           r["files"] == 2 and r["bytes"] == 2 * 4096 and not (judged / "raw" / "f_001.jpg").exists(), json.dumps(r))
+        ck("没判过的池子默认留着 raw（将来补第二刀要从原帧量位置）",
+           (unjudged / "raw" / "f_001.jpg").exists())
+        ck("定位不到横幅的池子绝不删原帧（那是唯一可用来源）",
+           (noband / "raw" / "f_001.jpg").exists())
+        meta = json.load(open(str(judged / "frames.json"), encoding="utf-8"))
+        ck("删完把 frames.json 里的 raw 字段也清掉（不留悬空路径）",
+           all(not f.get("raw") for f in meta["frames"]))
+        ck("clean 帧一张没动（版面读的就是它）",
+           (judged / "clean" / "c_f_001.jpg").exists())
+    finally:
+        fpool.POOL_DIR = _old_pool_dir
+        shutil.rmtree(str(sandbox), ignore_errors=True)
+
     print()
     if FAILS:
         print("FAIL %d 项：%s" % (len(FAILS), "、".join(FAILS)))

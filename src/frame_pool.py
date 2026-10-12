@@ -198,12 +198,22 @@ def build(video_path, aweme_id, ai_config=None, segments=None, progress_cb=None,
         if band:
             cut = clean_dir / ("c_%s" % os.path.basename(path))
             src = crop_away(path, band, cut)
-        item = {"i": idx, "ts": ts, "file": str(src), "raw": path,
+        item = {"i": idx, "ts": ts, "file": str(src), "raw": str(path),
                 "band": list(band) if band else None, "checked": False,
                 "clean": None, "subject": "", "near": near_text(segments, ts)}
+        if band and not (judge and ai_config and ai_config.get("api_key")):
+            # 像素判据已经定位并裁掉了横幅 → 原帧就是中间产物，留着等于每条素材白占一倍盘子。
+            # 但 judge 那一档要保留：万一模型说"还有后期字、位置在别处"，
+            # 补第二刀必须从**没裁过的原帧**上量，拿已裁的图再裁一次位置就错了。
+            _drop_raw(path)
+            item["raw"] = ""
         if judge and ai_config and ai_config.get("api_key"):
             tok = _judge_item(item, ai_config)
             tokens += tok
+            if item.get("band"):
+                # 判完了（含可能的第二刀）就不再需要原帧：补裁只在 _judge_item 内部发生
+                _drop_raw(item.get("raw"))
+                item["raw"] = ""
         pool.append(item)
         if progress_cb and judge and (idx % 5 == 0 or idx == len(frames)):
             progress_cb("判帧 %d/%d" % (idx, len(frames)))
@@ -214,6 +224,67 @@ def build(video_path, aweme_id, ai_config=None, segments=None, progress_cb=None,
             "tokens": tokens, "engine": "frame_pool"}
     _dump(aweme_id, meta)
     return meta
+
+
+def _drop_raw(path):
+    """删掉裁切用的中间产物。失败不响——省盘子的事，不该把整条采集卡住。"""
+    try:
+        if path and os.path.exists(str(path)):
+            os.remove(str(path))
+    except OSError:
+        pass
+
+
+def prune_raw(keep_unjudged=True, progress_cb=None):
+    """给已经落盘的旧帧池补一刀：把没用了的 raw/ 删掉。
+
+    判过帧（checked）的池子说明"要不要补第二刀"这件事已经有结论了，raw 就可以删；
+    没判过的默认留着（keep_unjudged）——那些还没定位横幅的帧，将来判的时候
+    得从原帧上量位置。返回 {池子数, 删掉的帧数, 省下的字节}。
+    """
+    out = {"pools": 0, "files": 0, "bytes": 0}
+    if not POOL_DIR.is_dir():
+        return out
+    for name in sorted(os.listdir(str(POOL_DIR))):
+        fp = POOL_DIR / name / "frames.json"
+        if not fp.exists():
+            continue
+        try:
+            with open(str(fp), encoding="utf-8") as f:
+                meta = json.load(f)
+        except Exception:
+            continue
+        changed = False
+        for it in meta.get("frames") or []:
+            raw = it.get("raw") or ""
+            if not raw or not os.path.exists(raw):
+                continue
+            if keep_unjudged and not it.get("checked"):
+                continue
+            if not it.get("band"):
+                continue      # 没定位到横幅的池子，原帧还是唯一可用来源，留着
+            try:
+                out["bytes"] += os.path.getsize(raw)
+            except OSError:
+                pass
+            _drop_raw(raw)
+            it["raw"] = ""
+            changed = True
+            out["files"] += 1
+        if changed:
+            with open(str(fp), "w", encoding="utf-8") as f:
+                json.dump(meta, f, ensure_ascii=False, indent=1)
+            out["pools"] += 1
+            rd = fp.parent / "raw"
+            try:
+                if rd.is_dir() and not os.listdir(str(rd)):
+                    os.rmdir(str(rd))     # 空壳目录留着只会让人以为还有原帧
+            except OSError:
+                pass
+    if progress_cb:
+        progress_cb("清掉 %d 个池子的 %d 张中间帧，省 %.1f MB" % (
+            out["pools"], out["files"], out["bytes"] / 1048576.0))
+    return out
 
 
 def _judge_item(item, ai_config):
@@ -265,6 +336,9 @@ def ensure_judged(aweme_id, ai_config, limit=8, progress_cb=None):
     spent = 0
     for n, it in enumerate(todo, 1):
         spent += _judge_item(it, ai_config)
+        if it.get("band"):
+            _drop_raw(it.get("raw"))
+            it["raw"] = ""
         if progress_cb:
             progress_cb("看图判帧 %d/%d" % (n, len(todo)))
     meta["tokens"] = int(meta.get("tokens") or 0) + spent
