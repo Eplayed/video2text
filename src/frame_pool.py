@@ -210,7 +210,7 @@ def build(video_path, aweme_id, ai_config=None, segments=None, progress_cb=None,
         if judge and ai_config and ai_config.get("api_key"):
             tok = _judge_item(item, ai_config)
             tokens += tok
-            if item.get("band"):
+            if item.get("checked"):
                 # 判完了（含可能的第二刀）就不再需要原帧：补裁只在 _judge_item 内部发生
                 _drop_raw(item.get("raw"))
                 item["raw"] = ""
@@ -304,9 +304,15 @@ def _judge_item(item, ai_config):
             except (TypeError, ValueError):
                 bt = bb = 0
             if gb.get("has_band") and bb > bt:
-                cut = os.path.join(os.path.dirname(item["file"]),
-                                   "v_%s" % os.path.basename(item["file"]))
-                item["file"] = str(crop_away(item["raw"], (bt, bb, 0.0), cut))
+                # 第二刀必须从**没裁过的原帧**上量；成品一律落 clean/，
+                # 不然模型补裁的那张会留在 raw/ 里——盘子上"raw=中间产物"这条账就错了
+                src = item.get("raw") or item["file"]
+                cut_dir = Path(item["file"]).parent
+                if cut_dir.name == "raw":
+                    cut_dir = cut_dir.parent / "clean"
+                    os.makedirs(str(cut_dir), exist_ok=True)
+                cut = str(cut_dir / ("v_%s" % os.path.basename(item["file"])))
+                item["file"] = str(crop_away(src, (bt, bb, 0.0), cut))
                 item["band"] = [bt, bb, 0.0]
                 g3, t3 = _ask_vision(item["file"], Q_JUDGE, ai_config) or ({}, 0)
                 tok += t3
@@ -336,7 +342,10 @@ def ensure_judged(aweme_id, ai_config, limit=8, progress_cb=None):
     spent = 0
     for n, it in enumerate(todo, 1):
         spent += _judge_item(it, ai_config)
-        if it.get("band"):
+        # 判过就不再留原帧：补第二刀只在 _judge_item 这一次调用里发生，之后没人再读它。
+        # 条件写成 checked 而不是 band——像素那条横幅检不出来、靠模型定位的帧（实测 8 张里 7 张）
+        # 原来会把原帧留在盘上，一条素材白占一倍
+        if it.get("checked"):
             _drop_raw(it.get("raw"))
             it["raw"] = ""
         if progress_cb:

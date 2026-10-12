@@ -871,6 +871,12 @@ def typeset_guide(base_png, plan, ratio="9:16", skin=None, page=None):
     title = (plan.get("title") or "").strip()
     subtitle = (plan.get("subtitle") or "").strip()
     kicker = (plan.get("kicker") or "").strip()
+    # 页码是"这一组是一套"的记号，对标那五页每页都有；模型只肯写在第 1 页，
+    # 所以页码不许跟着栏目名一起消失——有页号就照样画页眉这一行
+    try:
+        _pg_txt = "%02d / %02d" % (int(page[0]), int(page[1]))
+    except (TypeError, ValueError, IndexError):
+        _pg_txt = ""
     footer = (plan.get("footer") or "").strip()
     cards = [c for c in (plan.get("cards") or []) if (c.get("t") or c.get("d"))]
     photos = [_photo_src(p) for p in (plan.get("photos") or []) if p]
@@ -882,7 +888,7 @@ def typeset_guide(base_png, plan, ratio="9:16", skin=None, page=None):
     # ── 第一遍：逐块量高（只算不画）──
     y = int(H * 0.030)
     f_kick = _font(skin["body_face"], max(15, int(H * 0.0195)))
-    kick_h = int(H * 0.030) + int(H * 0.014) if kicker else 0
+    kick_h = int(H * 0.030) + int(H * 0.014) if (kicker or _pg_txt) else 0
 
     # 标题/副标/问句统一走 _fit_head：先死磕一行，两行时尾行不许只剩一两个字
     f_title, t_lines, t_size = _fit_head(title, skin["title_face"], int(H * 0.056),
@@ -979,17 +985,13 @@ def typeset_guide(base_png, plan, ratio="9:16", skin=None, page=None):
     sp = min(int(max(0, room - photo_used) / n_sp), int(H * 0.045)) if n_sp else 0
 
     # ── 第二遍：从上往下画 ──
-    if kicker:
-        kw = _chip(draw, (m, y), kicker, f_kick, gold, _rgb(skin["panel"]) + (150,),
-                   int(H * 0.012), int(H * 0.006), int(H * 0.020))
-        try:
-            k, total = int(page[0]), int(page[1])
-            ptxt = "%02d / %02d" % (k, total)
-        except (TypeError, ValueError, IndexError):
-            ptxt = ""
-        if ptxt:
+    if kicker or _pg_txt:
+        if kicker:
+            _chip(draw, (m, y), kicker, f_kick, gold, _rgb(skin["panel"]) + (150,),
+                  int(H * 0.012), int(H * 0.006), int(H * 0.020))
+        if _pg_txt:
             pf = _font(skin["body_face"], max(15, int(H * 0.0195)))
-            draw.text((W - m - pf.getlength(ptxt), y + int(H * 0.006)), ptxt,
+            draw.text((W - m - pf.getlength(_pg_txt), y + int(H * 0.006)), _pg_txt,
                       font=pf, fill=_rgb(skin["muted"]))
         ry = y + kick_h - int(H * 0.014)
         draw.line([(m, ry), (W - m, ry)], fill=rule + (255,), width=2)

@@ -3132,7 +3132,7 @@ function pkApplyModeChrome() {
   // 攻略页没有"底图"可传：那个按钮留着就是骗人去豆包白跑一趟
   ['pk-manual-btn', 'pk-manual-btn-2'].forEach(function (id) {
     const el = document.getElementById(id);
-    if (el) el.style.display = _pkGuideOnly ? 'none' : '';
+    if (el) el.style.display = pkGuideChrome() ? 'none' : '';
   });
   pkRenderFramesHint();
 }
@@ -3148,15 +3148,63 @@ async function pkFramesProbe(id) {
   } catch (e) { _pkFrames = null; }
   pkRenderFramesHint();
 }
+// 补画面是一条后台任务（重下视频 + 抽帧 + 逐帧裁字幕 + 判帧），前端 3 秒问一次
+let _pkFramesTimer = null;
+function pkFramesPoll() {
+  clearTimeout(_pkFramesTimer);
+  _pkFramesTimer = setTimeout(function () { pkFramesProbe(_pkId); }, 3000);
+}
+async function pkBuildFrames(btn) {
+  if (btn) { btn.disabled = true; btn.textContent = '正在补...'; }
+  try {
+    const d = await fetch('/api/poster/frames/build', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({summary_id: _pkId})
+    }).then(r => r.json());
+    if (d && d.error) { alert(d.error); if (btn) { btn.disabled = false; btn.textContent = '补画面'; } return; }
+    // 任务已经在后台跑起来了，先把这一格填成"进行中"，别让他对着一个空按钮等 3 秒
+    _pkFrames = {building: true, progress: '排队中...', usable: 0, total: 0};
+    pkRenderFramesHint();
+  } catch (e) {
+    alert('补画面请求失败：' + e);
+    if (btn) { btn.disabled = false; btn.textContent = '补画面'; }
+  }
+  pkFramesPoll();
+}
 function pkRenderFramesHint() {
   const box = document.getElementById('pk-frames-hint');
   if (!box) return;
   const f = _pkFrames;
-  if (!f || !f.usable) { box.style.display = 'none'; box.innerHTML = ''; return; }
+  if (!f) { box.style.display = 'none'; box.innerHTML = ''; return; }
+  if (f.building) {
+    box.style.display = '';
+    box.innerHTML = '⏳ 正在补画面：' + esc(f.progress || '排队中...')
+      + '<span style="color:var(--text-tertiary)">（重下这条视频 → 抽帧 → 逐帧裁掉字幕条 → 看图确认，约 1-2 分钟）</span>';
+    pkFramesPoll();
+    return;
+  }
+  if (f.build_error) {
+    box.style.display = '';
+    box.innerHTML = '<span style="color:var(--danger,#d9694a)">补画面没成：' + esc(f.build_error) + '</span>';
+    return;
+  }
+  if (!f.usable) {
+    // 老素材（抽帧流程上线前采的、或转写时视频已删）以前在界面上完全看不出来，
+    // 于是"攻略页"这条 0 元路线对所有人都是隐形的——这里给一个补的入口
+    box.style.display = '';
+    box.innerHTML = '这条素材还没有可用画面（抽帧流程上线前采的）。'
+      + '<button class="btn ghost sm" onclick="pkBuildFrames(this)" '
+      + 'title="重新下载这条视频 → 抽帧 → 逐帧裁掉 up主 压的字幕条 → 看图模型确认，约 1-2 分钟；判帧会花一点 token"'
+      + '>补画面</button>'
+      + '<span style="color:var(--text-tertiary)">补完就能选「攻略页」那一档，出图不花钱</span>';
+    return;
+  }
+  clearTimeout(_pkFramesTimer);
+  const left = Math.max(0, (f.total || 0) - (f.judged || 0));
   const isGuide = (document.getElementById('pk-layout-key-top') || {}).value === 'guide';
   box.style.display = '';
   box.innerHTML = '这条素材有 <b>' + f.usable + '</b> 张干净画面（已挑掉带 up主 字幕条的帧）'
-    + (f.checked ? '' : '，第一次出图时会看图确认')
+    + (left > 0 ? '，另有 ' + left + ' 张还没看图，用到才看' : '')
     + (isGuide ? ' · <b>正在用攻略页那一档，出图 0 元</b>'
                : ' · 版式选「攻略页」= 一页一个论点配真帧带图注，<b>不花出图费</b> '
                  + '<button class="btn ghost sm" onclick="pkUseGuideLayout()">改成攻略页</button>');
@@ -3271,6 +3319,9 @@ function pkSyncLayout(v) {
   const l = pkLayout(v);
   const hint = document.getElementById('pk-layout-hint');
   if (hint) hint.textContent = l ? l.when : '';
+  // 点成「攻略页」= 这一组不叫 AI 底图：按钮上那句价格和豆包回传那块的显隐
+  // 必须同一拍跟着改，不然界面上会一边说"用素材真帧"一边写着 0.5 元/张
+  pkApplyModeChrome();
   // 页签上那行"跟着风格 / 满版大图"要跟着改，否则切页时看着像没生效
   const tabs = document.getElementById('pk-tabs');
   if (tabs && _pkPages[_pkCur]) { _pkPages[_pkCur].layout_key = v; tabs.outerHTML = pkTabsHtml(); }
@@ -3718,6 +3769,14 @@ let _pkPhoto = null;
 let _pkManual = [];      // 后端按页给的 {page,total,copy,full,mode}，已按当前「出法」筛过
 let _pkManualRaw = [];   // 后端原样回的那一份（只含拆解时用的那一档），切换出法时从这里筛
 let _pkGuideOnly = false;   // 整组都是攻略页：画面=素材真帧，不需要底图，也不该看见豆包那一块
+// 界面上「这一组不叫 AI 底图」的判断只留这一份口径：
+// 拆过文案就以后端回的那份为准（它知道每一页真实用的什么版式）；
+// 还没拆的时候，用户把布局点成「攻略页」就是他对每一页的意图——
+// 这时候不认，界面会一边写着"用素材真帧"一边挂着 0.5 元/张和「③b 回传底图」，说的假话。
+function pkGuideChrome() {
+  if (_pkPages.length) return !!_pkGuideOnly;
+  return !!_pkGuideOnly || pkLayoutKey() === 'guide';
+}
 let _pkFrames = null;       // 这条素材的可用画面数 {total, usable, checked}，打开弹窗时问一次
 let _pkBases = [];       // 回传的底图，和页一一对应；空 = 这页还没回传
 let _pkManualOpen = false;
@@ -3742,7 +3801,7 @@ function pkRenderManual() {
   if (!_pkManualOpen) return;
   const direct = pkTextMode() === 'model';
   const what = direct ? '成品' : '底图';
-  if (_pkGuideOnly) {
+  if (pkGuideChrome()) {
     // 攻略页这一档压根不叫出图模型：这里再让他"去豆包画一张无字底图"就是自相矛盾，
     // 传回来反而把素材真帧的位置盖掉。所以只说这一档怎么出、多少钱。
     box.innerHTML = '<div class="pm-h"><b>这一档不用底图。</b>画面全部来自素材真帧，'
@@ -3889,7 +3948,7 @@ function pkPhotoLabel() {
 // 所以算式只留这一份：pkPhotoLabel 和切档都要用，两边各写一遍迟早对不上。
 function pkGoLabel() {
   const n = Math.max(1, _pkPages.length);
-  if (_pkGuideOnly) {
+  if (pkGuideChrome()) {
     // 攻略页整组一张 AI 底图都不叫（画面是素材真帧），写 0.5 元/张就是虚报价格——
     // 号主就是冲着不花钱走这条的，账和文案都得跟着改口
     return n > 1 ? '③ 出图 · 0 元（' + n + ' 页，用素材真帧）' : '③ 出图 · 0 元（用素材真帧）';
@@ -3904,7 +3963,7 @@ function pkGoLabel() {
   return n > 1 ? '③ 出图 · ' + n + ' 页共 ' + (n * 0.5).toFixed(1) + ' 元' : '③ 出图 · 0.5 元/张';
 }
 function pkModeLine() {
-  if (_pkGuideOnly) return '画面用素材真帧（已挑掉带字幕条的帧），中文与图注由程序排';
+  if (pkGuideChrome()) return '画面用素材真帧（已挑掉带字幕条的帧），中文与图注由程序排';
   if (_pkPhoto) return '主视觉用你上传的真图，中文由程序排版';
   return pkTextMode() === 'model' ? '字由 AI 画，看到的就是成品 · 传上来会逐字核对'
                                   : '底图 AI 现画，中文由程序排版';

@@ -2700,17 +2700,143 @@ def api_poster_frames():
         return jsonify({"error": "整合稿不存在"}), 404
     aid = str(summary.get("aweme_id") or "").strip()
     if not aid:
-        return jsonify({"aweme_id": "", "total": 0, "usable": 0, "checked": False})
+        return jsonify({"aweme_id": "", "total": 0, "usable": 0, "judged": 0, "checked": False})
     try:
         from src import frame_pool
     except ImportError:
         import frame_pool
     meta = frame_pool.load(aid)
     frames = (meta or {}).get("frames") or []
+    job = _frames_job(sid)
+    if job.get("done") and not job.get("running"):
+        # 补完画面就把这条任务的成功态收掉；失败原因留着让人看得见
+        if not job.get("error"):
+            job = {}
     return jsonify({"aweme_id": aid, "total": len(frames),
                     "usable": len(frame_pool.usable(meta)),
+                    "judged": len([f for f in frames if f.get("checked")]),
                     "checked": bool((meta or {}).get("checked")),
-                    "duration": (meta or {}).get("duration") or 0})
+                    "duration": (meta or {}).get("duration") or 0,
+                    "building": bool(job.get("running")),
+                    "progress": job.get("progress") or "",
+                    "build_error": job.get("error") or ""})
+
+
+_frames_jobs = {}          # {summary_id: {"running","progress","done","error","usable","total"}}
+_frames_lock = threading.Lock()
+
+
+def _frames_job(sid):
+    with _frames_lock:
+        return dict(_frames_jobs.get(sid) or {})
+
+
+def _frames_set(sid, **kw):
+    with _frames_lock:
+        j = _frames_jobs.setdefault(sid, {"running": False, "progress": "", "done": False,
+                                          "error": "", "usable": 0, "total": 0})
+        j.update(kw)
+
+
+def _frames_resolve_url(video, aweme_id, sid):
+    """取这条视频的可下载地址：本地直链缓存/解析器优先，其次真实浏览器抓详情。
+
+    浏览器那一路实测会抖：它是等 aweme/detail 那个 XHR（脚本里上限 15 秒），
+    自动同步的订阅批量抓正在跑同一台机器时，页面加载慢就直接超时。
+    所以这里不是"失败就判死"，而是最多试 3 次，每次都把进度报出去。
+    """
+    url = _resolve_download_url(video, retries=2)
+    if url:
+        return url
+    try:
+        from src.browser_fetch import browser_fetch_video_detail
+    except Exception as be:
+        print("[frames] 浏览器模块都进不去:", be)
+        return ""
+    page = (video.get("video_url") or video.get("source_url") or "").strip() \
+        or "https://www.douyin.com/video/%s" % aweme_id
+    for attempt in (1, 2, 3):
+        _frames_set(sid, progress="直链解析被风控，改用浏览器抓（第 %d 次）..." % attempt)
+        try:
+            info = browser_fetch_video_detail(page) or {}
+        except Exception as be:
+            print("[frames] 浏览器兜底第 %d 次异常:" % attempt, be)
+            info = {}
+        url = (info.get("nwm_url") or "").strip()
+        if url:
+            return url
+        if attempt < 3:
+            time.sleep(4)      # 给自动同步那一拨让开 CPU
+    return ""
+
+
+def _frames_worker(sid, video, aweme_id, cfg):
+    """下载 → 抽帧 → 逐帧裁掉 up主 压的字幕 → 判帧。整条在后台线程里跑，进度回写 job。"""
+    import tempfile
+    import shutil as _shutil
+    from src import frame_pool, material_store
+    tmp = Path(tempfile.mkdtemp(prefix="v2t_pool_"))
+    mp4 = tmp / "video.mp4"
+    try:
+        _frames_set(sid, running=True, progress="解析视频直链...")
+        url = _frames_resolve_url(video, aweme_id, sid)
+        if not url:
+            _frames_set(sid, running=False, done=True,
+                        error="拿不到这条视频的下载地址：直链解析被抖音风控（Argus：Uifid Not Found，"
+                              "cookie 只剩 sessionid 不够用），浏览器兜底试了 3 次也没等到 detail 接口。"
+                              "补 vendor/douyin_parse/douyin_cookie.txt 的完整 cookie 后重试；"
+                              "订阅自动同步正在跑的时候也容易挤不上，隔一两分钟再点一次")
+            return
+        _frames_set(sid, progress="下载视频...")
+        if not material_store.download_video(url, mp4):
+            _frames_set(sid, running=False, done=True, error="视频下载失败（链接可能已过期）")
+            return
+        _frames_set(sid, progress="抽帧并裁掉字幕条...")
+        # 抽帧这一刀不花钱；判帧花钱，所以走 ensure_judged 那条封顶的路（只判 8 张、
+        # 按时间均匀取），和出图那一刻用的是同一个函数，不在这儿另开一套烧钱的判法
+        meta = frame_pool.build(mp4, aweme_id, progress_cb=lambda m: _frames_set(sid, progress=m))
+        total = len(meta.get("frames") or [])
+        _frames_set(sid, progress="看图确认 %d 张里哪些还带后期字..." % min(total, 8))
+        meta = frame_pool.ensure_judged(
+            aweme_id, cfg, limit=8,
+            progress_cb=lambda m: _frames_set(sid, progress=m)) or meta
+        usable = len(frame_pool.usable(meta))
+        _frames_set(sid, running=False, done=True, usable=usable, total=total,
+                    progress="完成：%d 张可用（抽了 %d 张，%d 张被判定还带后期字）" % (
+                        usable, total, total - usable))
+    except Exception as e:
+        traceback.print_exc()
+        _frames_set(sid, running=False, done=True, error=str(e)[:200])
+    finally:
+        _shutil.rmtree(str(tmp), ignore_errors=True)
+
+
+@app.route("/api/poster/frames/build", methods=["POST"])
+def api_poster_frames_build():
+    """给一条素材补画面池。以前只有"新采集的素材"才会自动抽帧，
+    老素材（转写时还没这套流程、或视频已删）在界面上永远看不到攻略页那句提示——
+    这条就是那座桥：点一下重新下载、抽帧、裁字幕、判帧。"""
+    data = request.get_json(force=True) or {}
+    try:
+        sid = int(data.get("summary_id") or 0)
+    except (TypeError, ValueError):
+        sid = 0
+    summary = _poster_get_summary(sid)
+    if not summary:
+        return jsonify({"error": "整合稿不存在"}), 404
+    aweme_id = str(summary.get("aweme_id") or "").strip()
+    if not aweme_id or not aweme_id.isdigit():
+        return jsonify({"error": "这条不是抖音视频（没有 aweme_id），补不了画面"}), 400
+    job = _frames_job(sid)
+    if job.get("running"):
+        return jsonify({"started": False, "reason": "already_running",
+                        "progress": job.get("progress") or ""})
+    video = content_store.get_video_by_source(DB_PATH, summary.get("source_sheet"),
+                                              summary.get("source_row")) or dict(summary)
+    _frames_set(sid, running=True, done=False, error="", progress="排队中...")
+    threading.Thread(target=_frames_worker, daemon=True,
+                     args=(sid, video, aweme_id, _ai_config())).start()
+    return jsonify({"started": True, "summary_id": sid, "aweme_id": aweme_id})
 
 
 @app.route("/api/poster/styles")

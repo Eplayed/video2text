@@ -444,6 +444,16 @@ def main():
     ck("页码走对标那种两位格式（02 / 05），不是 2 / 5",
        gchk.get("page") == [2, 5] and "%02d / %02d" % (2, 5) == "02 / 05")
 
+    # 页眉那一行不跟栏目名绑死：模型常常只在第 1 页写栏目名，内页也得有"第几页/共几页"
+    nk = dict(gp)
+    nk.pop("kicker")
+    _nk, nkchk = ts.typeset(None, nk, ratio=RATIO, page=(3, 5))
+    ck("没有栏目名的内页照样不超版（页眉那行是按有页码量的）",
+       nkchk["ok"], "；".join(nkchk["problems"]))
+    ck("同一页有页码 / 没页码是两张不同的图（页眉不跟着栏目名一起消失）",
+       ts.typeset(None, nk, ratio=RATIO, page=(3, 5))[0]
+       != ts.typeset(None, nk, ratio=RATIO, page=None)[0])
+
     # 剩下三样零件各占一页（对标也是一页一件事，不许全堆一页）
     gcover = dict(gp)
     gcover["photos"] = [{"bytes": FRAME, "caption": "野外营火 · 素材抽帧第 1 帧"}]
@@ -531,6 +541,14 @@ def main():
     ck("选项最多三项，模型给多了会被裁（版面放不下）",
        len(ai_poster.guide_clip({"ask": {"q": "问", "options": ["a", "b", "c", "d", "e"]}},
                                 ai_poster.TS_LIMITS)["ask"]["options"]) == 3)
+    # 栏目名是"一整套"的记号：模型只写在其中一页，其余页得由代码补上，
+    # 否则第 2、3 页左上角空着，五页看着像五张不相干的图（2026-10-12 实测就是这样）
+    pgk = [{"title": "甲", "cards": [{"t": "a", "d": "b"}]},
+           {"title": "乙", "kicker": "无限 · 传承点数", "cards": [{"t": "c", "d": "d"}]}]
+    ai_poster.bind_frames(pgk, fake)
+    ck("栏目名只写在某一页 → 其余页代码补齐（页页都有同一句栏目名）",
+       pgk[0].get("kicker") == "无限 · 传承点数"
+       and pgk[1].get("kicker") == "无限 · 传承点数", str([p.get("kicker") for p in pgk]))
     rt = ai_poster.plan_pages({"pages": [dict(pg[0], layout_key="guide")],
                                "title": "甲", "footer": "脚", "style_key": "guide_ink"})
     ck("存下来的 plan 再过一遍 plan_pages，攻略页零件不丢（重出时才不会掉回纯文字）",

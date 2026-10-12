@@ -657,6 +657,17 @@ def bind_frames(pages, items, lim=None):
             continue
     notes = []
     lim = lim or dict(TS_LIMITS)
+    # 栏目名是"这一套"的记号，模型只肯写在第 1 页 → 往下补一遍。
+    # 对标那五页每页左上角都有同一句栏目名，缺了就像五张不相干的图。
+    series_kicker = ""
+    for p in pages or []:
+        if isinstance(p, dict) and str(p.get("kicker") or "").strip():
+            series_kicker = str(p["kicker"]).strip()
+            break
+    if series_kicker:
+        for p in pages or []:
+            if isinstance(p, dict) and not str(p.get("kicker") or "").strip():
+                p["kicker"] = series_kicker
     for pi, p in enumerate(pages or [], 1):
         if not isinstance(p, dict):
             continue
