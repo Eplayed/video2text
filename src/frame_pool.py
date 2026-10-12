@@ -6,14 +6,17 @@
      那是纯搬运的铁证，读者一眼认得出来；
   ② 图必须和这一页的文案对得上，不能随便配一张。
 实测过的那条路（"挑一张干净的帧"）走不通：一条 30 秒口播素材按 2 秒抽 15 帧，
-**15/15 全挂着字幕条**。所以改成"逐帧定位横幅 → 裁掉 → 回读确认"，
-实测这条素材裁完 7/7 干净。
+**15/15 全挂着字幕条**。所以改成"逐帧定位后期层 → 能裁的裁掉 → 回读确认"。
 
-三条判据按便宜在先排：
-  1) 零成本：逐行数高饱和蓝像素，占比突起的行区间就是那条蓝色横幅；
-  2) 花钱的兜底：第 1 条检不到但模型说"有后期字"时，问一次横幅的竖直区间
-     （1 维区间比 bbox 靠谱得多，实测五帧与像素剖面逐帧吻合）；
-  3) 自检：裁完再回读一次，模型说没有后期字才算干净——不然就是自己说干净。
+判据按便宜在先排（**颜色不是判据**——六个号六种做法，只认蓝色那条一条素材 8 张里 7 张定不出来）：
+  1) 零成本快路：逐行数高饱和蓝像素，占比突起且**贴顶/贴底**的行区间就是那条蓝色横幅，
+     白捡一次定位（中部的一律不当横幅用，裁它等于把论点要用的画面切一半）；
+  2) 零成本预筛 `light_share`：横贯整幅的**亮色**纯色行占比过高 = 整帧就是作者做的卡或表
+     （实测尤安 18 帧里 17 帧、夏一可的对照表 2 帧），这种裁哪条边都救不回来，直接扔，
+     连看图模型都不用问；黑边 letterbox 算暗的、单独走，不误伤横屏素材；
+  3) 一次问齐 `_probe_item`：有没有后期字、**在哪**（top/bottom/middle/corner/full）、
+     贴边的给竖直区间、画面主体是什么。贴顶贴底的才裁，裁完再回读一次（自己说干净不算干净）；
+     压在中间、只在角落、整帧是卡的，一律弃用并记下原因（`dropped`）。
 判据都不成立的帧直接弃用，宁可不配图也不放一张带别人字幕的图出去。
 
 图注由代码组（`caption_for`）：画面里是什么（模型看这张图说出来的）+ 这一帧的时间戳。
@@ -36,6 +39,9 @@ STEP_MAX = 3.0          # 长视频最多松到 3 秒一帧
 CAP_FRAMES = 18         # 候选帧上限（再多判图的钱不值）
 FRAME_W = 900           # 抽帧宽度：排版那条带约 950px，再小就糊
 BAND_MIN_FRAC = 0.30    # 一行里蓝像素占比到多少才算横幅
+CARD_MIN_LIGHT = 0.28   # 横贯整幅的**亮色**纯色行占比到多少，就判"整帧是作者做的卡/表"
+BAND_EDGE_TOP = 35      # 贴顶的横幅：下沿不超过这个百分比才敢裁
+BAND_EDGE_BOT = 60      # 贴底的横幅：上沿不低于这个百分比才敢裁
 
 
 def dir_for(aweme_id):
@@ -107,6 +113,42 @@ def band_rows(path):
             int(100.0 * min(sh, hi[-1] + pad + 1) / sh), round(peak, 2))
 
 
+def light_share(path, width=170):
+    """零成本预筛：横贯整幅的**亮色**纯色行占多少（作者做的卡/表这一项很高）。
+
+    为什么只数亮的：真游戏画面不会有大片贯穿左右的纯色，而"整帧就是作者做的卡"
+    （粉底 + 居中花字 + 账号名）和"作者叠的对照表"（白底黑字盖住画面）都是这样。
+    黑边 letterbox 也是纯色但它是暗的，必须分开算——混进来会把横屏素材全误判成卡。
+    判不准没关系：这条只用来**免费扔掉**明显救不回来的帧，剩下的照样问看图模型。
+    没装 numpy 就返回 0.0（少一道免费预筛，不影响正确性）。
+    """
+    try:
+        import numpy as np
+        from PIL import Image
+    except ImportError:
+        return 0.0
+    try:
+        im = Image.open(str(path)).convert("RGB")
+    except Exception:
+        return 0.0
+    W, H = im.size
+    nw = min(width, W)
+    nh = max(24, int(round(H * float(nw) / W)))
+    a = np.asarray(im.resize((nw, nh), Image.BILINEAR)).astype(np.int16)
+    med = np.median(a, axis=1)
+    near = (np.abs(a - med[:, None, :]).sum(axis=2) < 30).mean(axis=1)
+    row_mx = a.max(axis=2).mean(axis=1)
+    return float(((near > 0.80) & (row_mx > 78)).mean())
+
+
+def _is_edge_band(band):
+    """只有贴顶或贴底的横幅才许裁：中部那种一裁就把论点要用的画面切一半"""
+    try:
+        return bool(band) and (band[1] <= BAND_EDGE_TOP or band[0] >= BAND_EDGE_BOT)
+    except (TypeError, IndexError):
+        return False
+
+
 def crop_away(path, band, out_path):
     """把横幅之外、留得多的那一块当成品图（横幅每帧位置会变，所以只能逐帧裁）"""
     from PIL import Image
@@ -118,15 +160,127 @@ def crop_away(path, band, out_path):
     return out_path
 
 
-Q_BAND = ('这一帧里，视频作者自己做后期压上去的字幕横幅（不属于游戏画面本身）占画面竖直方向的'
-          '哪一段？只输出一行 JSON：{"band_top": 上沿百分比0-100, "band_bot": 下沿百分比0-100, '
-          '"has_band": true/false}。游戏自己的面板、按钮、任务栏不要算。这一帧没有横幅就 '
-          "has_band 给 false。")
+# 一次问齐"有没有后期字 / 在哪 / 能不能裁一条边救回来 / 画面是什么"。
+# 为什么不再分两问（先判干净、再问横幅位置）：实测六个号有六种后期层——
+# 蓝色横幅条、底部白字黑边字幕、左上角小字免责声明、整帧作者做的卡（粉底+花字+账号名）、
+# 盖住画面的对照表、角落真人出镜小窗。**颜色与位置都没有固定规律**，只认蓝色的像素判据
+# 一条素材 8 张里 7 张定不出来；而"中部/角落/整帧"这三种裁一条边根本救不回来，
+# 以前的代码却会照裁（把画面切一半还当成品）。所以位置判断交给模型，代码只管裁不裁。
+# 形状那行只放**示例值**，字段说明写在下面：把说明塞进 JSON 模板里，模型会照抄进答案
+# （实测 post_words 里原样返回了"后期压上来的中文，最多3条，没有就空数组"这句提示词）
+Q_PROBE = ('这一帧是游戏视频里抽出来的一帧画面。只输出一行 JSON，形状照抄：'
+           '{"post_text": false, "post_words": [], "where": "none", '
+           '"band_top": 0, "band_bot": 0, "subject": ""}。'
+           '字段怎么填：post_text＝画面里有没有视频作者自己做后期压上去的东西'
+           '（字幕条、花字、标题条、账号名、水印、贴纸、真人出镜小窗），有填 true；'
+           '游戏自身界面的文字（技能名、面板、按钮、英文界面、聊天框）一律不算。'
+           'post_words＝那些后期文字，最多三条，没有就给空数组。'
+           'where＝这些后期东西主要在画面哪里：none / top（贴上边）/ bottom（贴下边）/ '
+           'middle（压在画面中间）/ corner（只在某个角落）/ full（整帧就是作者做的卡或表格，'
+           '大面积纯色底、几乎没有真实游戏画面）。band_top、band_bot＝这块后期字占画面竖直'
+           '方向的百分比（0-100，宁可多算一点也要包全）；**where 填 top 或 bottom 时这两个数'
+           '必须给，两个都填 0 等于没回答**，其余情况才填 0。'
+           'subject＝一句话说清画面里是什么，不超过 18 字。')
 
-Q_JUDGE = ('只输出一行 JSON：{"post_text": true/false, "post_words": ["图里后期压上来的中文，'
-           '没有就空数组"], "subject": "一句话说清画面里是什么，不超过18字"}。'
-           '"后期压上来"指视频作者自己加的字幕条/花字/贴纸/账号名/水印；'
-           "游戏本身界面里的文字（技能名、面板、按钮、英文界面）不算。")
+# 只补数字、不重判有无：模型说了 bottom 却不给区间时单独问一次（实测新提示词下 8 张里 7 张
+# 把 band 留成 0，光靠那一次合并问答会白扔掉本可以裁的帧）。一维区间比 bbox 靠谱得多
+Q_BAND = ('这一帧里，视频作者自己做后期压上去的字幕横幅（不属于游戏画面本身）占画面竖直方向的'
+          '哪一段？只输出一行 JSON：{"has_band": true/false, "band_top": 0, "band_bot": 0}。'
+          '游戏自己的面板、按钮、任务栏、聊天框不要算。这一帧没有那种横幅就 has_band 给 false。')
+
+_WHY_MID = {"middle": "后期字压在画面中间，裁一条边救不回来",
+            "corner": "角落有真人出镜或贴纸，裁横条切不掉",
+            "full": "整帧是作者做的卡或表，不是游戏画面"}
+
+# 模型把提示词里的字段说明抄回答案时，一定带这几个词（实测 post_words 回显过
+# "后期压上来的中文，最多3条，没有就空数组"）。宁可少记一条文字线索，也不把说明当证据
+_ECHO_WORDS = ("空数组", "最多3", "没有就", "不超过", "其余情况", "照抄", "填 0")
+
+
+def _is_echo(s):
+    return any(k in s for k in _ECHO_WORDS)
+
+
+def _crop_ok(where, bt, bb):
+    """能不能裁这一条：**只裁真的贴着边的**。
+    模型说 bottom 却给个 40-70、或者两个数都留 0，照裁等于把画面切一半当成品"""
+    try:
+        bt, bb = int(bt), int(bb)
+    except (TypeError, ValueError):
+        return False
+    if not (0 <= bt < bb <= 100) or (bb - bt) > 34:
+        return False
+    return (where == "top" and bb <= BAND_EDGE_TOP) or (where == "bottom" and bt >= BAND_EDGE_BOT)
+
+
+def apply_probe(item, got):
+    """把模型那一句 JSON 落成这一帧的处置。纯函数，不联网，好测。"""
+    got = got or {}
+    where = str(got.get("where") or "").strip().lower()
+    subj = str(got.get("subject") or "").strip()[:24]
+    if subj:
+        item["subject"] = subj
+    words = got.get("post_words") or []
+    if isinstance(words, list):
+        # 防一手提示词回显：模型偶尔把字段说明原样抄回来（实测过 "…没有就空数组" 这种）
+        item["words"] = [w for w in (str(x).strip()[:20] for x in words)
+                         if w and not _is_echo(w)][:3]
+    item["where"] = where
+    if not got.get("post_text"):
+        item["clean"] = True
+        item["why"] = ""
+        item["crop_to"] = None
+        return item
+    item["clean"] = False
+    try:
+        bt, bb = int(got.get("band_top")), int(got.get("band_bot"))
+    except (TypeError, ValueError):
+        bt = bb = -1
+    if _crop_ok(where, bt, bb):
+        item["crop_to"] = (bt, bb)
+        item["why"] = ""
+    else:
+        item["crop_to"] = None
+        item["why"] = _WHY_MID.get(where, "有后期字，但它不贴着边上，裁不动")
+    return item
+
+
+def _probe_item(item, ai_config):
+    """一帧走完整判据：问一次 → 若是贴边的一条就裁掉再回读一次。返回花掉的 token。"""
+    tok = 0
+    try:
+        got, t1 = _ask_vision(item["file"], Q_PROBE, ai_config) or ({}, 0)
+        tok += t1
+        item["checked"] = True
+        apply_probe(item, got)
+        if not item.get("crop_to") and str(item.get("where") or "") in ("top", "bottom"):
+            # 模型说了贴边却没给数（新提示词下实测 8 张里 7 张把 band 留成 0）：
+            # 只补问一次数字，不重判有无。不补这一问，本可以裁的帧会被整批白扔掉
+            gb, t2 = _ask_vision(item["file"], Q_BAND, ai_config) or ({}, 0)
+            tok += t2
+            if gb.get("has_band") and _crop_ok(item["where"], gb.get("band_top"),
+                                               gb.get("band_bot")):
+                item["crop_to"] = (int(gb["band_top"]), int(gb["band_bot"]))
+                item["why"] = ""
+        if item.get("crop_to"):
+            src = item.get("raw") or item["file"]
+            bt, bb = item["crop_to"]
+            cut_dir = Path(item["file"]).parent
+            if cut_dir.name == "raw":
+                cut_dir = cut_dir.parent / "clean"
+                os.makedirs(str(cut_dir), exist_ok=True)
+            cut = str(cut_dir / ("v_%s" % os.path.basename(item["file"])))
+            item["file"] = str(crop_away(src, (bt, bb, 0.0), cut))
+            item["band"] = [bt, bb, 0.0]
+            got2, t2 = _ask_vision(item["file"], Q_PROBE, ai_config) or ({}, 0)
+            tok += t2
+            apply_probe(item, got2)
+            if not item.get("clean") and not item.get("why"):
+                item["why"] = "裁掉一条字幕条之后回读，仍有后期字"
+    except Exception as e:
+        item["error"] = str(e)[:80]
+    item.pop("crop_to", None)
+    return tok
 
 
 def _ask_vision(img_path, question, ai_config, max_tokens=200, timeout=90):
@@ -192,35 +346,49 @@ def build(video_path, aweme_id, ai_config=None, segments=None, progress_cb=None,
     if progress_cb:
         progress_cb("抽帧 %d 张（%.0f 秒视频）" % (len(frames), dur))
     pool, tokens = [], 0
+    judging = bool(judge and ai_config and ai_config.get("api_key"))
     for idx, (path, ts) in enumerate(frames, 1):
         band = band_rows(path)
+        if band and not _is_edge_band(band):
+            # 蓝色判据在别的号身上会乱指（实测尤安那种"卡中卡"它指到 25-28%），
+            # 中部的一律不当横幅用——裁它等于把论点要用的画面切一半
+            band = None
         src = path
         if band:
             cut = clean_dir / ("c_%s" % os.path.basename(path))
             src = crop_away(path, band, cut)
         item = {"i": idx, "ts": ts, "file": str(src), "raw": str(path),
                 "band": list(band) if band else None, "checked": False,
-                "clean": None, "subject": "", "near": near_text(segments, ts)}
-        if band and not (judge and ai_config and ai_config.get("api_key")):
-            # 像素判据已经定位并裁掉了横幅 → 原帧就是中间产物，留着等于每条素材白占一倍盘子。
-            # 但 judge 那一档要保留：万一模型说"还有后期字、位置在别处"，
-            # 补第二刀必须从**没裁过的原帧**上量，拿已裁的图再裁一次位置就错了。
+                "clean": None, "subject": "", "why": "", "near": near_text(segments, ts)}
+        if judging and light_share(path) >= CARD_MIN_LIGHT:
+            # 免费的先扔：整帧是作者做的卡/表，裁哪条边都救不回来，没必要花一次看图的钱
+            item.update(checked=True, clean=False, why="整帧是作者做的卡或表（大面积亮色横贯整幅）")
             _drop_raw(path)
             item["raw"] = ""
-        if judge and ai_config and ai_config.get("api_key"):
-            tok = _judge_item(item, ai_config)
-            tokens += tok
-            if item.get("checked"):
-                # 判完了（含可能的第二刀）就不再需要原帧：补裁只在 _judge_item 内部发生
-                _drop_raw(item.get("raw"))
+        else:
+            if band and not judging:
+                # 像素判据已经定位并裁掉了横幅 → 原帧就是中间产物，留着等于每条素材白占一倍盘子。
+                # 但 judge 那一档要保留：万一模型说"还有后期字、位置在别处"，
+                # 补第二刀必须从**没裁过的原帧**上量，拿已裁的图再裁一次位置就错了。
+                _drop_raw(path)
                 item["raw"] = ""
+            if judging:
+                tokens += _probe_item(item, ai_config)
+                if item.get("checked"):
+                    # 判完了（含裁一条再回读）就不再需要原帧：补裁只在 _probe_item 内部发生
+                    _drop_raw(item.get("raw"))
+                    item["raw"] = ""
         pool.append(item)
-        if progress_cb and judge and (idx % 5 == 0 or idx == len(frames)):
+        if progress_cb and judging and (idx % 5 == 0 or idx == len(frames)):
             progress_cb("判帧 %d/%d" % (idx, len(frames)))
     usable = [p for p in pool if p.get("clean") or (p.get("checked") is False and p.get("band"))]
     meta = {"aweme_id": str(aweme_id), "duration": round(dur, 1), "frames": pool,
-            "usable": len(usable), "checked": bool(judge and ai_config
-                                                   and ai_config.get("api_key")),
+            # usable = 已确认能进版面的（判过且干净）；candidates = 裁过或还没判、值得再看一眼的。
+            # 以前只有笼统一个 usable，判完帧后没人重算，卡/表素材的清单上会留着"usable=17"
+            # 这种和界面（0 张）对不上的数——下一个读这个文件的人就得猜哪个是真的
+            "usable": len([p for p in pool if p.get("clean")]),
+            "candidates": len(usable),
+            "checked": bool(judge and ai_config and ai_config.get("api_key")),
             "tokens": tokens, "engine": "frame_pool"}
     _dump(aweme_id, meta)
     return meta
@@ -287,42 +455,6 @@ def prune_raw(keep_unjudged=True, progress_cb=None):
     return out
 
 
-def _judge_item(item, ai_config):
-    """一帧走完整判据：裁后回读 → 说还有后期字且像素没定位到 → 再问一次位置补一刀"""
-    tok = 0
-    try:
-        got, t1 = _ask_vision(item["file"], Q_JUDGE, ai_config) or ({}, 0)
-        tok += t1
-        item["checked"] = True
-        item["clean"] = not bool(got.get("post_text"))
-        item["subject"] = str(got.get("subject") or "").strip()[:24]
-        if got.get("post_text") and not item.get("band"):
-            gb, t2 = _ask_vision(item["file"], Q_BAND, ai_config) or ({}, 0)
-            tok += t2
-            try:
-                bt, bb = int(gb.get("band_top")), int(gb.get("band_bot"))
-            except (TypeError, ValueError):
-                bt = bb = 0
-            if gb.get("has_band") and bb > bt:
-                # 第二刀必须从**没裁过的原帧**上量；成品一律落 clean/，
-                # 不然模型补裁的那张会留在 raw/ 里——盘子上"raw=中间产物"这条账就错了
-                src = item.get("raw") or item["file"]
-                cut_dir = Path(item["file"]).parent
-                if cut_dir.name == "raw":
-                    cut_dir = cut_dir.parent / "clean"
-                    os.makedirs(str(cut_dir), exist_ok=True)
-                cut = str(cut_dir / ("v_%s" % os.path.basename(item["file"])))
-                item["file"] = str(crop_away(src, (bt, bb, 0.0), cut))
-                item["band"] = [bt, bb, 0.0]
-                g3, t3 = _ask_vision(item["file"], Q_JUDGE, ai_config) or ({}, 0)
-                tok += t3
-                item["clean"] = not bool(g3.get("post_text"))
-                item["subject"] = str(g3.get("subject") or "").strip()[:24] or item["subject"]
-    except Exception as e:
-        item["error"] = str(e)[:80]
-    return tok
-
-
 def ensure_judged(aweme_id, ai_config, limit=8, progress_cb=None):
     """出图时才判帧：只判 limit 张、按时间均匀取，钱花在真正会进版面的那几张上。
 
@@ -341,8 +473,12 @@ def ensure_judged(aweme_id, ai_config, limit=8, progress_cb=None):
         todo = todo[::stride][:limit]
     spent = 0
     for n, it in enumerate(todo, 1):
-        spent += _judge_item(it, ai_config)
-        # 判过就不再留原帧：补第二刀只在 _judge_item 这一次调用里发生，之后没人再读它。
+        if light_share(it.get("raw") or it.get("file") or "") >= CARD_MIN_LIGHT:
+            # 同 build 里那道免费预筛：整帧是作者做的卡/表，裁哪条边都救不回来
+            it.update(checked=True, clean=False, why="整帧是作者做的卡或表（大面积亮色横贯整幅）")
+        else:
+            spent += _probe_item(it, ai_config)
+        # 判过就不再留原帧：补第二刀只在 _probe_item 这一次调用里发生，之后没人再读它。
         # 条件写成 checked 而不是 band——像素那条横幅检不出来、靠模型定位的帧（实测 8 张里 7 张）
         # 原来会把原帧留在盘上，一条素材白占一倍
         if it.get("checked"):
@@ -351,6 +487,11 @@ def ensure_judged(aweme_id, ai_config, limit=8, progress_cb=None):
         if progress_cb:
             progress_cb("看图判帧 %d/%d" % (n, len(todo)))
     meta["tokens"] = int(meta.get("tokens") or 0) + spent
+    # 判完必须把两个数重算一遍：只留旧值的话，"整帧都是卡"这种素材的 frames.json
+    # 会一直写着 usable=17，而界面显示 0 张——同一件事两份账，谁先信谁都得错一次
+    meta["usable"] = len(usable(meta))
+    meta["candidates"] = len([f for f in frames
+                              if f.get("clean") or (not f.get("checked") and f.get("band"))])
     _dump(aweme_id, meta)
     return meta
 
@@ -382,6 +523,23 @@ def usable(pool):
         fp = it.get("file") or ""
         if fp and os.path.exists(fp):
             out.append(it)
+    return out
+
+
+def dropped(pool):
+    """判过但进不了版面的帧，按原因归堆：{(原因, 有没有原帧可裁): 张数}
+
+    为什么要把原因摆出来：一条素材抽 18 帧可能只留 3 张——号主看到"18 张里 15 张被扔"
+    会以为程序坏了。其实那 15 张是作者自己做的卡、盖了张对照表、或者花字压在画面正中，
+    裁一条边救不回来。原因不摆出来，"宁缺毋滥"就长得像 bug。
+    """
+    out = {}
+    for it in (pool or {}).get("frames") or []:
+        if it.get("clean") or not it.get("checked"):
+            continue
+        why = str(it.get("why") or "").strip() or "回读后仍有后期字"
+        key = (why, bool(it.get("band")))
+        out[key] = out.get(key, 0) + 1
     return out
 
 

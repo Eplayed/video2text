@@ -2700,7 +2700,8 @@ def api_poster_frames():
         return jsonify({"error": "整合稿不存在"}), 404
     aid = str(summary.get("aweme_id") or "").strip()
     if not aid:
-        return jsonify({"aweme_id": "", "total": 0, "usable": 0, "judged": 0, "checked": False})
+        return jsonify({"aweme_id": "", "total": 0, "usable": 0, "judged": 0,
+                        "dropped": [], "checked": False})
     try:
         from src import frame_pool
     except ImportError:
@@ -2712,9 +2713,14 @@ def api_poster_frames():
         # 补完画面就把这条任务的成功态收掉；失败原因留着让人看得见
         if not job.get("error"):
             job = {}
+    drops = frame_pool.dropped(meta)
     return jsonify({"aweme_id": aid, "total": len(frames),
                     "usable": len(frame_pool.usable(meta)),
                     "judged": len([f for f in frames if f.get("checked")]),
+                    # 扔掉的那些为什么不能用（整帧是卡 / 花字在中间 / 裁完回读还有字）——
+                    # 号主看到"18 张只剩 3 张"要能一眼看懂，否则就像程序坏了
+                    "dropped": [{"why": w, "n": n} for (w, _c), n in
+                                sorted(drops.items(), key=lambda kv: -kv[1])][:3],
                     "checked": bool((meta or {}).get("checked")),
                     "duration": (meta or {}).get("duration") or 0,
                     "building": bool(job.get("running")),
@@ -2791,7 +2797,7 @@ def _frames_worker(sid, video, aweme_id, cfg):
         if not material_store.download_video(url, mp4):
             _frames_set(sid, running=False, done=True, error="视频下载失败（链接可能已过期）")
             return
-        _frames_set(sid, progress="抽帧并裁掉字幕条...")
+        _frames_set(sid, progress="抽帧并挑掉后期压上去的字...")
         # 抽帧这一刀不花钱；判帧花钱，所以走 ensure_judged 那条封顶的路（只判 8 张、
         # 按时间均匀取），和出图那一刻用的是同一个函数，不在这儿另开一套烧钱的判法
         meta = frame_pool.build(mp4, aweme_id, progress_cb=lambda m: _frames_set(sid, progress=m))

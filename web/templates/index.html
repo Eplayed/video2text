@@ -3179,7 +3179,7 @@ function pkRenderFramesHint() {
   if (f.building) {
     box.style.display = '';
     box.innerHTML = '⏳ 正在补画面：' + esc(f.progress || '排队中...')
-      + '<span style="color:var(--text-tertiary)">（重下这条视频 → 抽帧 → 逐帧裁掉字幕条 → 看图确认，约 1-2 分钟）</span>';
+      + '<span style="color:var(--text-tertiary)">（重下这条视频 → 抽帧 → 逐帧挑掉后期压的字/整帧卡 → 看图确认，约 1-2 分钟）</span>';
     pkFramesPoll();
     return;
   }
@@ -3189,21 +3189,34 @@ function pkRenderFramesHint() {
     return;
   }
   if (!f.usable) {
+    box.style.display = '';
+    if (f.total) {
+      // 抽过帧但一张没留下：这条素材整条都是作者做的卡/表，或花字压在画面正中。
+      // 不写清楚的话，"18 帧全被扔"看着就像程序坏了
+      const why = (f.dropped && f.dropped[0] && f.dropped[0].why) || '回读后仍有后期字';
+      box.innerHTML = '这条素材抽了 ' + f.total + ' 帧，判下来一张都不能用——最多的一种原因是'
+        + '<b>「' + esc(why) + '」</b>'
+        + '<span style="color:var(--text-tertiary)">；这一档宁可不配图，也不放一张带别人字幕或别人版式的图。'
+        + '换一条素材，或这一版走普通图文（不用真帧）</span>';
+      return;
+    }
     // 老素材（抽帧流程上线前采的、或转写时视频已删）以前在界面上完全看不出来，
     // 于是"攻略页"这条 0 元路线对所有人都是隐形的——这里给一个补的入口
-    box.style.display = '';
     box.innerHTML = '这条素材还没有可用画面（抽帧流程上线前采的）。'
       + '<button class="btn ghost sm" onclick="pkBuildFrames(this)" '
-      + 'title="重新下载这条视频 → 抽帧 → 逐帧裁掉 up主 压的字幕条 → 看图模型确认，约 1-2 分钟；判帧会花一点 token"'
+      + 'title="重新下载这条视频 → 抽帧 → 逐帧挑掉作者后期压的字幕条/花字/整帧卡 → 看图模型确认，约 1-2 分钟；判帧会花一点 token"'
       + '>补画面</button>'
       + '<span style="color:var(--text-tertiary)">补完就能选「攻略页」那一档，出图不花钱</span>';
     return;
   }
   clearTimeout(_pkFramesTimer);
   const left = Math.max(0, (f.total || 0) - (f.judged || 0));
+  const drop = (f.dropped && f.dropped[0]) ? f.dropped[0] : null;
   const isGuide = (document.getElementById('pk-layout-key-top') || {}).value === 'guide';
   box.style.display = '';
-  box.innerHTML = '这条素材有 <b>' + f.usable + '</b> 张干净画面（已挑掉带 up主 字幕条的帧）'
+  box.innerHTML = '这条素材有 <b>' + f.usable + '</b> 张干净画面'
+    + (drop ? '（抽了 ' + (f.total || 0) + ' 张，扔掉的 ' + drop.n + ' 张是：' + esc(drop.why) + '）'
+            : '（已挑掉字幕条/花字/作者做的整帧卡）')
     + (left > 0 ? '，另有 ' + left + ' 张还没看图，用到才看' : '')
     + (isGuide ? ' · <b>正在用攻略页那一档，出图 0 元</b>'
                : ' · 版式选「攻略页」= 一页一个论点配真帧带图注，<b>不花出图费</b> '
@@ -3963,7 +3976,7 @@ function pkGoLabel() {
   return n > 1 ? '③ 出图 · ' + n + ' 页共 ' + (n * 0.5).toFixed(1) + ' 元' : '③ 出图 · 0.5 元/张';
 }
 function pkModeLine() {
-  if (pkGuideChrome()) return '画面用素材真帧（已挑掉带字幕条的帧），中文与图注由程序排';
+  if (pkGuideChrome()) return '画面用素材真帧（后期压的字、整帧卡都挑掉了），中文与图注由程序排';
   if (_pkPhoto) return '主视觉用你上传的真图，中文由程序排版';
   return pkTextMode() === 'model' ? '字由 AI 画，看到的就是成品 · 传上来会逐字核对'
                                   : '底图 AI 现画，中文由程序排版';

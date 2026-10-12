@@ -241,7 +241,7 @@ def asr_transcribe(video_url: str, model_size: str = "base",
                     tag: str = "") -> str:
     """下载视频 → 提取音频 → faster-whisper 转写。
 
-    给了 aweme_id 就顺手把「帧池」抽出来（零成本：只抽帧、只裁掉 up主 压的字幕条，
+    给了 aweme_id 就顺手把「帧池」抽出来（零成本：只抽帧、只裁掉作者后期压的字幕条，
     不调任何模型），落在删视频之前——视频一删，这条素材的画面就再也补不回来了。
     """
     log = tag or (aweme_id[:10] if aweme_id else "ASR")

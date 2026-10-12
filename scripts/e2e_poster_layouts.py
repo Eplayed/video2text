@@ -10,6 +10,7 @@
 """
 import io
 import json
+import os
 import re
 import shutil
 import sqlite3
@@ -630,6 +631,113 @@ def main():
     finally:
         fpool.POOL_DIR = _old_pool_dir
         shutil.rmtree(str(sandbox), ignore_errors=True)
+
+    print("== Q 帧池判据：不认颜色、认位置；裁不动的就弃用 ==")
+    from src import frame_pool as fp2
+    from PIL import Image, ImageDraw
+
+    def probe(got):
+        it = {"checked": False, "clean": None, "subject": "", "why": ""}
+        fp2.apply_probe(it, got)
+        return it
+
+    okp = probe({"post_text": False, "where": "none", "subject": "角色站在城门口"})
+    ck("模型说没有后期字 → 判干净、不裁", okp["clean"] is True and okp["crop_to"] is None)
+    btp = probe({"post_text": True, "where": "bottom", "band_top": 86, "band_bot": 96})
+    ck("贴底的字幕条（白字黑边、什么颜色都行）→ 记下要裁哪一条", btp["crop_to"] == (86, 96))
+    midp = probe({"post_text": True, "where": "middle", "band_top": 40, "band_bot": 62})
+    ck("花字压在画面中间 → 不许裁，直接弃用并写原因",
+       midp["clean"] is False and midp["crop_to"] is None and "中间" in midp["why"], midp["why"])
+    corp = probe({"post_text": True, "where": "corner", "band_top": 78, "band_bot": 99})
+    ck("角落真人小窗 → 裁横条切不掉，弃用（这种以前会被当成品发出去）",
+       corp["crop_to"] is None and "角落" in corp["why"], corp["why"])
+    fullp = probe({"post_text": True, "where": "full", "band_top": 0, "band_bot": 100})
+    ck("整帧就是作者做的卡/表 → 弃用", fullp["crop_to"] is None and "卡" in fullp["why"])
+    liep = probe({"post_text": True, "where": "bottom", "band_top": 40, "band_bot": 70})
+    ck("模型说 bottom 却给个不贴边的区间 → 照样不许裁（裁了等于把画面切一半）",
+       liep["crop_to"] is None)
+    echop = probe({"post_text": True, "where": "bottom", "band_top": 85, "band_bot": 95,
+                   "post_words": ["后期压上来的中文，最多3条，没有就空数组", "拍卖行"]})
+    ck("提示词被原样抄回来时不当证据用（只留真正的后期文字）",
+       echop["words"] == ["拍卖行"], str(echop["words"]))
+    ck("蓝色那条像素判据只在贴顶/贴底时才当横幅用，中部的一律不信",
+       fp2._is_edge_band((22, 30, 0.4)) and not fp2._is_edge_band((40, 62, 0.4)))
+
+    card_png = ROOT / "temp" / "_q_card.jpg"
+    scene_png = ROOT / "temp" / "_q_scene.jpg"
+    im = Image.new("RGB", (720, 1280), (250, 216, 224))        # 粉底整幅
+    dd = ImageDraw.Draw(im)
+    dd.rounded_rectangle([80, 250, 640, 420], 26, fill=(255, 255, 255), outline=(20, 20, 20))
+    dd.text([150, 300], "魔兽世界：无限", fill=(20, 20, 20))
+    dd.text([220, 700], "排骨人春天来了", fill=(250, 220, 40))
+    dd.text([250, 1150], "@某某的魔兽世界", fill=(230, 60, 90))
+    im.save(str(card_png), quality=92)
+    noise = Image.effect_noise((720, 1280), 90).convert("RGB")
+    noise.save(str(scene_png), quality=92)
+    ck("整帧是卡：免费预筛就能扔掉，一次看图的钱都不花",
+       fp2.light_share(str(card_png)) >= fp2.CARD_MIN_LIGHT,
+       "亮块 %.2f ≥ %.2f" % (fp2.light_share(str(card_png)), fp2.CARD_MIN_LIGHT))
+    ck("真画面不误判成卡（黑边 letterbox 走暗的那一档，不混进来）",
+       fp2.light_share(str(scene_png)) < fp2.CARD_MIN_LIGHT,
+       "亮块 %.2f" % fp2.light_share(str(scene_png)))
+    drp = fp2.dropped({"frames": [
+        {"checked": True, "clean": False, "why": "整帧是作者做的卡或表", "band": None},
+        {"checked": True, "clean": False, "why": "整帧是作者做的卡或表", "band": None},
+        {"checked": True, "clean": True, "why": ""},
+        {"checked": False, "clean": None, "why": ""}]})
+    ck("扔掉的帧按原因归堆（没判过的不算扔）",
+       sum(drp.values()) == 2 and max(drp.values()) == 2, str(dict(drp)))
+
+    # 整条 ensure_judged 走一遍：_ask_vision 换成假答案，不联网、不花钱
+    sb = ROOT / "temp" / "_q_pool"
+    if sb.exists():
+        shutil.rmtree(str(sb))
+    d0 = sb / "q_flow"
+    (d0 / "raw").mkdir(parents=True)
+    (d0 / "clean").mkdir(parents=True)
+    frames = []
+    for i in (1, 2):
+        rp = d0 / "raw" / ("f_%03d.jpg" % i)
+        shutil.copyfile(str(scene_png), str(rp))
+        frames.append({"i": i, "ts": "00:0%d" % i, "file": str(rp), "raw": str(rp),
+                       "band": None, "checked": False, "clean": None, "subject": "", "why": ""})
+    json.dump({"aweme_id": "q_flow", "frames": frames, "usable": 0, "tokens": 0},
+              open(str(d0 / "frames.json"), "w", encoding="utf-8"), ensure_ascii=False)
+    _old_pool, _old_ask = fp2.POOL_DIR, fp2._ask_vision
+    fp2.POOL_DIR = sb
+    seen = []
+
+    def fake_ask(img_path, question, ai_config, **kw):
+        seen.append(str(img_path))
+        if "has_band" in question:            # 只补问一次数字（模型说贴边却没给区间才走到这）
+            return {"has_band": True, "band_top": 85, "band_bot": 95}, 31
+        if "v_" in os.path.basename(str(img_path)):     # 裁过的那张：干净了
+            return {"post_text": False, "where": "none", "subject": "角色属性界面"}, 77
+        return {"post_text": True, "where": "bottom", "band_top": 0, "band_bot": 0,
+                "post_words": ["预计得打18层"], "subject": "带字幕的画面"}, 99
+    fp2._ask_vision = fake_ask
+    try:
+        meta = fp2.ensure_judged("q_flow", {"api_key": "sk-test"}, limit=8)
+        it = meta["frames"][0]
+        ck("模型说 bottom 却没给区间 → 只补问一次数字，照样裁得回来（不白扔一整批）",
+           len(seen) == 6 and it["clean"] is True and (it["band"] or [])[:2] == [85, 95],
+           "调用 %d 次 band=%s clean=%s" % (len(seen), it.get("band"), it.get("clean")))
+        ck("模型补裁的成品帧落 clean/，不落 raw/（raw 只放中间产物这条账才对）",
+           os.path.basename(it["file"]).startswith("v_")
+           and str(d0 / "clean") in it["file"] and os.path.exists(it["file"]))
+        ck("判完不留原帧", not it.get("raw") and not (d0 / "raw" / "f_001.jpg").exists())
+        ck("frames.json 里的 usable 判完重算（不留着没判时的旧数）",
+           meta["usable"] == 2 and len(fp2.usable(meta)) == 2,
+           "usable=%s candidates=%s" % (meta.get("usable"), meta.get("candidates")))
+        ck("token 记的是这一帧所有调用之和（账要能对上）", meta["tokens"] == (99 + 31 + 77) * 2,
+           str(meta["tokens"]))
+    finally:
+        fp2.POOL_DIR = _old_pool
+        fp2._ask_vision = _old_ask
+        shutil.rmtree(str(sb), ignore_errors=True)
+        for p in (card_png, scene_png):
+            if p.exists():
+                os.remove(str(p))
 
     print()
     if FAILS:
