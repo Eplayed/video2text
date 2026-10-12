@@ -63,7 +63,7 @@ def render(p, photo=None):
 
 
 def main():
-    print("== A 十种构图的版面指纹 ==")
+    print("== A 各构图的版面指纹 ==")
     fp = {}
     for key in ts.LAYOUT_ORDER:
         p = plan(layout=key)
@@ -84,10 +84,12 @@ def main():
         ck("%s 的 art 槽位=%s" % (key, zone["slot"]),
            zone["slot"] == ts.LAYOUTS[key]["art"], "卡片区 %d..%d" % (top, boxes[-1]["y1"]))
     sigs = [v[0] for v in fp.values()]
-    ck("十种构图版面指纹互不相同", len(set(sigs)) == len(sigs),
+    ck("%d 种构图版面指纹互不相同" % len(ts.LAYOUT_ORDER),
+       len(set(sigs)) == len(sigs),
        "重复: %s" % [k for k, v in fp.items() if sigs.count(v[0]) > 1] if len(set(sigs)) != len(sigs) else "")
     imgs = [v[1] for v in fp.values()]
-    ck("十种构图渲染结果互不相同（不是只换颜色）", len(set(imgs)) == len(imgs))
+    ck("%d 种构图渲染结果互不相同（不是只换颜色）" % len(ts.LAYOUT_ORDER),
+       len(set(imgs)) == len(imgs))
 
     print("== B 默认路径零变化（皮肤自带布局仍然是它自己） ==")
     expect = {"game_epic": "top_art", "tool_review": "grid2",
@@ -497,6 +499,72 @@ def main():
        all(k not in ts.TYPE_SKINS[s] for s in ("game_epic", "tool_review",
                                                "checklist", "minimal")
            for k in ("warn_bg", "gold", "rule")))
+    ck("攻略页进了界面版式下拉（不然号主选不到这一档）",
+       "guide" in ts.LAYOUT_ORDER and any(c["key"] == "guide" for c in ts.layout_choices()))
+
+    print("== O 拆解层接线：帧编号→真文件、图注由代码写 ==")
+    fake = [{"i": 3, "ts": "00:12", "file": "/tmp/f3.jpg", "subject": "游戏内天赋树界面"},
+            {"i": 7, "ts": "00:24", "file": "/tmp/f7.jpg", "subject": "角色旁有半透明小熊"}]
+    ck("没有可用帧时，提示词里那条「铁律六」整段不出现（不占预算也不误导模型）",
+       ai_poster.guide_rules_text([], 200) == "" and
+       "铁律六" in ai_poster.guide_rules_text(fake, 200))
+    ck("帧清单带编号、时间戳和画面描述，模型只能照抄编号",
+       "F3｜00:12" in ai_poster.guide_rules_text(fake, 200) and
+       "游戏内天赋树界面" in ai_poster.guide_rules_text(fake, 200))
+    pg = [{"title": "甲", "cards": [{"t": "a", "d": "b"}],
+           "photos": [{"frame": "F7"}, {"frame": "F99"}],
+           "kicker": "无限 · 传承点数", "bignum": {"v": "3 棵", "label": "天赋树"},
+           "warn": {"t": "别按这页加点", "d": "素材只给了名字"},
+           "ask": {"q": "你先点哪棵？", "options": ["专业", "冒险", "不点"]}}]
+    bn = ai_poster.bind_frames(pg, fake)
+    ck("模型点了不存在的编号 → 丢掉那张图并留一句人话（不静默出空位）",
+       len(pg[0]["photos"]) == 1 and any("F99" in x for x in bn), "；".join(bn))
+    ck("图注由代码按那一帧自己的记录写，不是模型编的",
+       pg[0]["photos"][0]["caption"] == "角色旁有半透明小熊 · 素材画面 00:24",
+       pg[0]["photos"][0]["caption"])
+    ck("攻略页零件过一遍清洗后形状可用（kicker/bignum/warn/ask 都在）",
+       pg[0].get("kicker") and pg[0]["bignum"]["v"] == "3 棵"
+       and pg[0]["warn"]["t"] and len(pg[0]["ask"]["options"]) == 3)
+    ck("选项最多三项，模型给多了会被裁（版面放不下）",
+       len(ai_poster.guide_clip({"ask": {"q": "问", "options": ["a", "b", "c", "d", "e"]}},
+                                ai_poster.TS_LIMITS)["ask"]["options"]) == 3)
+    rt = ai_poster.plan_pages({"pages": [dict(pg[0], layout_key="guide")],
+                               "title": "甲", "footer": "脚", "style_key": "guide_ink"})
+    ck("存下来的 plan 再过一遍 plan_pages，攻略页零件不丢（重出时才不会掉回纯文字）",
+       rt[0].get("photos") and rt[0].get("bignum") and rt[0].get("ask"),
+       str(list(rt[0].keys())))
+
+    # 整条出图路径跑一遍：攻略页一张 AI 底图都不该叫，账必须记 0 元
+    frame_file = ROOT / "temp" / "e2e_frame.jpg"
+    with open(str(frame_file), "wb") as f:
+        f.write(FRAME)
+    gplan = {"style_key": "guide_ink", "footer": "整理自公开分享",
+             "recommended": {"page_count": 2, "style_key": "guide_ink",
+                             "layouts": ["guide", "guide"], "why": "测试用推荐"},
+             "pages": [
+                 {"role": "封面", "layout_key": "guide", "style_key": "guide_ink",
+                  "title": "传承点数，三棵树怎么点", "subtitle": "口播整理",
+                  "footer": "整理自公开分享",
+                  "kicker": "无限 · 传承点数",
+                  "photos": [{"path": str(frame_file), "caption": "天赋树界面 · 素材画面 00:12"}],
+                  "bignum": {"v": "3 棵", "label": "天赋树：专业 / 冒险 / 资源利用"},
+                  "cards": [{"t": "怎么拿", "d": "完成独特挑战换点数"}]},
+                 {"role": "避坑", "layout_key": "guide", "style_key": "guide_ink",
+                  "title": "素材没说的别当结论", "footer": "整理自公开分享",
+                  "warn": {"t": "别按这页加点", "d": "三棵树给什么，口播只报了名字"},
+                  "ask": {"q": "你先点哪棵？", "options": ["专业", "冒险", "资源利用"]}}]}
+    gmf = ai_poster.generate_poster(
+        {"id": TEST_ID, "title": "测试攻略", "content": "完成独特挑战获得传承点数，可点在三种天赋树。",
+         "summary_type": "game_guide", "status": "ai"},
+        {"method": "openai", "api_key": "x", "api_base": "http://127.0.0.1:1", "model": "x"},
+        plan=gplan, text_mode="typeset", ratio="9:16", do_verify=False, do_review=False)
+    ck("整组都是攻略页 → manifest 记 0 元（账记错比不记更糟，这条已经错过一次）",
+       gmf.get("cost_yuan_estimate") == 0, str(gmf.get("cost_yuan_estimate")))
+    ck("攻略页不出底图 → image_model 留空，不假装调用过出图模型",
+       (gmf.get("image_model") or "") == "", repr(gmf.get("image_model")))
+    ck("攻略页成品落盘：两页 png 都在，页码跟着页走",
+       all((ROOT / "output" / "poster" / str(TEST_ID) / ("poster_p%d.png" % i)).exists()
+           for i in (1, 2)))
 
     print()
     if FAILS:

@@ -173,6 +173,20 @@ STYLE_PRESETS = {
                   "卡片是极细分割线隔开的纯排版区块，靠字号体量差拉层级（主标题极大、说明极小），"
                   "主标题用超粗中文无衬线，留白充足、栅格严整，严禁装饰堆砌、严禁渐变、严禁花哨边框"),
     },
+    # 攻略页专用：画面是素材真帧，不是模型插画，所以这套配方描述的是"版面底色与字色"，
+    # 只有当有人拿它去出插画海报时 mood/style 才真正喂给画图模型。
+    "guide_ink": {
+        "label": "攻略页（深墨绿 · 真帧当证据）",
+        "when": "多页图文攻略：一页一个论点，配素材真帧 + 图注 + 大字数字",
+        "scene": "不画主视觉插画：版面靠真帧截图当证据，底色是安静的深墨绿渐变",
+        "mood": "深墨绿底 #182721 到 #0a1410 的安静渐变，米金标题 #f0d9a0，砖红警示块 #5f2a24，"
+                "正文米白 #e6e6df，图注与脚注灰绿 #93a497；版面像一本摊开的攻略手册，"
+                "严禁炫光科技感的界面面板、严禁花哨边框、严禁把画面塞满装饰",
+        "card_visual": "每条论点前面是米金色小标题，正文一行行排下来，不画图标也不画面板",
+        "style": ("深墨绿底中文攻略页，米金色超粗中文黑体标题配砖红警示块，正文米白、图注灰绿，"
+                  "版面是一页一个论点的攻略手册结构，靠字号体量差拉层级，"
+                  "严禁科技风玻璃面板、严禁花哨边框、严禁把画面塞满装饰"),
+    },
     "auto": {
         "label": "自由发挥（沿用拆解写的那句风格）",
         "when": "上面四套都不合题材时",
@@ -557,6 +571,126 @@ def _resplit(pages, want, lim):
                  % (want, len(pages), len(flat), n, short))
 
 
+# ── 攻略页（真帧当证据那一档）与拆解层的接线 ─────────────────────
+# 这一档和"插画海报"的根本差别：画面不靠模型画，靠素材里那一帧真画面当证据。
+# 于是多了两件必须代码管住的事：
+#   ① 模型只许从"已判过、确认没被 up主 压过字"的帧里挑编号，不许凭空点名一张图；
+#   ② 图注由代码按那一帧自己的记录写（画面里是什么 + 第几秒），**不让模型写 caption**——
+#      它没看过那张图，写出来的就是照着文案倒推的假图注。
+GUIDE_KEYS = ("kicker", "photos", "bignum", "contrast", "warn", "ask")
+
+_GUIDE_RULES = """
+铁律六·攻略页（这一档不靠模型画插画，画面全部来自素材真帧）：
+可用画面只有下面这些，编号是 F+数字，**一张都不许多编，也不许说画面里有它没说的东西**：
+__FRAMES__
+每页按内容需要给这几样，用不上就别给，别硬凑：
+- "photos": [{"frame": "F7"}] —— 这一页的证据图，最多 2 张，只能填上面的编号。
+  图注由程序按那一帧自己的记录写，**你不要写 caption**。挑图只有一条标准：
+  这一页在讲的那件事，画面里真的看得见；看不见就不给图。
+- "kicker": "栏目名 · 本篇主题"（≤14 字，整组同一句，只填在第一页）
+- "bignum": {"v": "约 +20%", "label": "这个数字说的是什么"} —— v 里的数字必须在素材原文里出现过
+- "contrast": [{"t": "已改", "d": "…"}, {"t": "没改", "d": "…"}] —— 两行讲清改了/没改
+- "warn": {"t": "一句提醒", "d": "限制是什么、为什么"} —— 素材没说的写在这儿，别编成结论
+- "ask": {"q": "一个能直接回答的问题", "options": ["不超过三项"]} —— 只给最后一页
+这一档每页正文仍守 ≤__TOTAL2__ 字，但卡片建议 2-3 条，把地方留给图。
+"""
+
+
+def guide_rules_text(items, total):
+    """帧清单进提示词；没有可用帧就返回空串（这一档整段不出现，不占预算）"""
+    if not items:
+        return ""
+    try:
+        from . import frame_pool
+    except ImportError:
+        import frame_pool
+    return (_GUIDE_RULES
+            .replace("__FRAMES__", frame_pool.index_text(items))
+            .replace("__TOTAL2__", str(total)))
+
+
+def guide_clip(page, lim):
+    """把模型给的攻略页零件洗成排版能直接用的形状（裁字数、丢空项）"""
+    out = {}
+    k = (page.get("kicker") or "").strip()
+    if k:
+        out["kicker"] = _clip_ws(k, 16)
+    bn = page.get("bignum")
+    if isinstance(bn, dict) and str(bn.get("v") or "").strip():
+        out["bignum"] = {"v": _clip_ws(bn.get("v"), 12),
+                         "label": _clip_ws(bn.get("label"), 20),
+                         "note": _clip_ws(bn.get("note"), 30)}
+    con = []
+    for c in (page.get("contrast") or [])[:3]:
+        if isinstance(c, dict) and (c.get("t") or c.get("d")):
+            con.append({"t": _clip_ws(c.get("t"), 8),
+                        "d": _clip(c.get("d"), lim["cardD"])})
+    if con:
+        out["contrast"] = con
+    wn = page.get("warn")
+    if isinstance(wn, dict) and (wn.get("t") or wn.get("d")):
+        out["warn"] = {"t": _clip_ws(wn.get("t"), 12),
+                       "d": _clip(wn.get("d"), lim["cardD"] * 2)}
+    ak = page.get("ask")
+    if isinstance(ak, dict) and str(ak.get("q") or "").strip():
+        opts = [_clip_ws(o, 8) for o in (ak.get("options") or [])[:3] if str(o).strip()]
+        out["ask"] = {"q": _clip(ak.get("q"), lim["title"]), "options": opts}
+    return out
+
+
+def bind_frames(pages, items, lim=None):
+    """模型给的 {"frame":"F7"} → 真文件 + 程序写的图注；编号对不上就丢掉并留一句人话。
+
+    返回说明列表（给人看，不抛错）：哪一页点了不存在的编号、哪一页因此没图，
+    都得在界面上看得见——否则"这页为什么空着"又变成要猜的事。
+    """
+    try:
+        from . import frame_pool
+    except ImportError:
+        import frame_pool
+    by = {}
+    for it in items or []:
+        try:
+            by["F%d" % int(it.get("i") or 0)] = it
+        except (TypeError, ValueError):
+            continue
+    notes = []
+    lim = lim or dict(TS_LIMITS)
+    for pi, p in enumerate(pages or [], 1):
+        if not isinstance(p, dict):
+            continue
+        p.update(guide_clip(p, lim))
+        raw = p.get("photos")
+        if not isinstance(raw, list) or not raw:
+            continue
+        kept = []
+        for ph in raw[:2]:
+            fid = ""
+            if isinstance(ph, str):
+                fid = ph.strip().upper()
+            elif isinstance(ph, dict):
+                fid = str(ph.get("frame") or ph.get("id") or "").strip().upper()
+                if not fid and ph.get("path"):
+                    # 人手工在界面上选过图：路径直给，图注也保留人写的那句
+                    kept.append({"path": str(ph.get("path")),
+                                 "caption": _clip_ws(ph.get("caption"), 40)})
+                    continue
+            it = by.get(fid)
+            if not it:
+                notes.append("第 %d 页点了 %s，可用画面里没有这个编号，这张图已丢掉"
+                             % (pi, fid or "空编号"))
+                continue
+            kept.append({"path": it.get("file"), "frame": fid,
+                         "caption": frame_pool.caption_for(it),
+                         "ts": it.get("ts") or ""})
+        if kept:
+            p["photos"] = kept
+        else:
+            p.pop("photos", None)
+            notes.append("第 %d 页没有可用画面（编号全对不上），这一页只排文字" % pi)
+    return notes
+
+
 def normalize_page(item, lim, style_key, has_photo, idx, first_title="",
                    group_footer="", group_scene=""):
     """把模型给的一页洗成能排版的那一页：裁字数、认布局键、没图就换掉"要图"的构图。
@@ -584,6 +718,11 @@ def normalize_page(item, lim, style_key, has_photo, idx, first_title="",
          "role": _clip_ws(item.get("role"), 8),
          "footer": _clip(item.get("footer") or group_footer or "内容整理自公开分享", lim["footer"]),
          "scene": _clip_ws(item.get("scene") or (group_scene if idx == 1 else ""), SCENE_MAX)}
+    # 攻略页那几样（栏目名/真帧/大字数字/对照/警示/互动）原样带下去；清洗与
+    # "编号对不对得上真帧"统一在 bind_frames 一处做，别在这儿再洗一遍
+    for _k in GUIDE_KEYS:
+        if item.get(_k):
+            p[_k] = item.get(_k)
     p, pn = fit_plan(p, lim["total"], lim)
     notes.extend(["第 %d 页：%s" % (idx, x) for x in pn])
     return p, notes
@@ -736,7 +875,7 @@ def build_page_plan(summary, ai_config, page_index, pages, spine="", theme="",
 
 
 def build_text_plan(summary, ai_config, theme="", title="", style_key="", text_mode=DEFAULT_TEXT_MODE,
-                    has_photo=False, page_hint=0):
+                    has_photo=False, page_hint=0, frames=None):
     """调 LLM 产出文案计划 + 发布文案，并逐字段裁到字数线内。
 
     返回 (plan, publish, violations, notes)：plan 是要画进图里的文字（超预算先经 fit_plan
@@ -746,6 +885,8 @@ def build_text_plan(summary, ai_config, theme="", title="", style_key="", text_m
     style_key 显式传入且合法时直接盖掉模型选的风格：用户在弹窗里点过下拉，
     就不该再被模型自由发挥改回去。
     has_photo 只影响推荐：有真图才允许推满版大图/左右分栏那几种"没图站不住"的布局。
+    frames 是这条素材的**可用真帧清单**（frame_pool 判过、确认没被 up主 压过字的那些）：
+    给了它，提示词里才多一条"铁律六·攻略页"，模型才允许往 pages 里填 photos/bignum/… 。
     page_hint 同理用在页数上：人已经在页签里加到 3 页，再点「换一套」就是想要 3 页的结构，
     这时候页数不再由模型判断（模型给成 2 页的话，后端把要点重排成 3 页并留一句说明）。
     """
@@ -770,7 +911,8 @@ def build_text_plan(summary, ai_config, theme="", title="", style_key="", text_m
               .replace("__STYLE_FIXED__", style_fixed_prompt(style_key))
               .replace("__LAYOUT__", layout_plan_prompt(has_photo, page_hint))
               .replace("{{DATE}}", datetime.now().strftime("%m月%d日"))
-              .replace("__CONTENT__", (summary.get("content") or "")[:8000]))
+              .replace("__CONTENT__", (summary.get("content") or "")[:8000])
+              + guide_rules_text(frames, lim["total"]))
     resp = client.chat.completions.create(
         model=model or "qwen-plus",
         messages=[{"role": "user", "content": prompt}],
@@ -810,16 +952,31 @@ def build_text_plan(summary, ai_config, theme="", title="", style_key="", text_m
         pages, rn = _resplit([one], page_hint, lim)
         if rn:
             pnotes = [rn] + pnotes
+    # 攻略页那一档默认配深墨绿皮：画面是素材真帧，插画风那几套配色压不住游戏截图。
+    # 只在人没显式选风格时生效——人点过下拉就以人为准，模型和默认都不许改回去。
+    if pages and not style_key:
+        gc = sum(1 for p in pages if p.get("layout_key") == "guide")
+        if gc and gc * 2 >= len(pages):
+            key = "guide_ink"
+            for p in pages:
+                p["style_key"] = key
     if pages:
         # 顶层那几个键仍然填第 1 页：列表页、发布取图、回读校验读的都是它们，不能断
         first = pages[0]
         plan.update({"title": first["title"], "subtitle": first["subtitle"],
-                     "cards": first["cards"], "scene": first["scene"], "footer": first["footer"]})
+                     "cards": first["cards"], "scene": first["scene"], "footer": first["footer"],
+                     "style_key": key})
         if len(pages) > 1:
             plan["pages"] = pages
         if why:
             plan["why"] = why
         notes = pnotes + notes
+    # 攻略页：模型只给了帧编号，这里换成真文件 + 程序写的图注。
+    # 编号对不上就丢图并留一句人话——放一张不存在的图进版面，比不配图严重。
+    if frames:
+        bnotes = bind_frames(pages if pages else [plan], frames, lim)
+        if bnotes:
+            notes = bnotes + notes
     # 推荐快照：M4 算采纳率靠它跟最后真正出的那份对比（人改过什么一目了然）
     plan["recommended"] = {
         "page_count": len(pages) if pages else 1,
@@ -912,6 +1069,9 @@ def plan_pages(plan):
             "layout_key": (item.get("layout_key") or "").strip(),
             "role": (item.get("role") or "").strip(),
         })
+        for _k in GUIDE_KEYS:
+            if item.get(_k):
+                pages[-1][_k] = item.get(_k)
         if len(pages) >= PAGE_MAX:
             break
     return pages or [plan]
@@ -983,6 +1143,14 @@ def lint_plan(plan, lim=None, card_min=None):
         bad.append("主标题为空")
     cards = plan.get("cards") or []
     floor = CARD_MIN if card_min is None else card_min
+    # 攻略页的收尾那一页常常没有"要点卡片"：一句提问 + 三个选项就是整页内容
+    # （对标那套 05/05 就这样）。所以只要带了攻略页零件，卡片下限放到 0，
+    # 但仍然要求这一页至少有一样能读的东西，别放一页空白出去。
+    if floor and any(plan.get(k) for k in GUIDE_KEYS):
+        if not (plan.get("ask") or plan.get("warn") or plan.get("bignum")
+                or plan.get("contrast") or plan.get("photos")):
+            bad.append("攻略页这一张卡片、提问、警示、图都没有，是空白页")
+        floor = 0
     if len(cards) < floor:
         bad.append("卡片只有 %d 张，少于 %d 张" % (len(cards), floor))
     if len(cards) > CARD_MAX:
@@ -1900,8 +2068,15 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
         # 真图只当第一页的主视觉：同一张图在第 2 页再出现一次很难看。
         # 真图模式下整组都不出 AI 底图（其余页就是这套皮肤的纯色渐变），所以仍然 0 元。
         pphoto = photo if pi == 1 else None
+        # 攻略页：画面是素材真帧，本来就不该叫模型画底图——整页 0 元。
+        guide = bool(_ts and _ts._is_guide(page_plan))
+        if guide:
+            pphoto = None
         for i in range(1, n + 1):
-            if photo:
+            if guide:
+                raw = _ts.placeholder_base(page_plan.get("style_key"), w, h, 0.6,
+                                           art_hint=False)
+            elif photo:
                 raw = _ts.placeholder_base(page_plan.get("style_key"), w, h, 0.6,
                                            art_hint=False, plan=page_plan)
             elif manual:
@@ -1998,6 +2173,10 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
                       "【第一步】里那句空带描述抄到最前面再说一遍；赶时间也能直接用，"
                       "卡片有半透明底板，只是没这么干净" % "；".join(bad_bands))
 
+    # 整组都是攻略页＝一张 AI 底图都没叫（画面全部来自素材真帧），这一档必须记 0 元。
+    # 判据用 _is_guide 而不是 layout_key：手工往 plan 里塞 photos 也算攻略页。
+    guide_only = bool(pages) and bool(_ts) and all(_ts._is_guide(p) for p in pages)
+
     manifest = {
         "id": summary_id,
         "summary_id": summary_id,
@@ -2034,13 +2213,14 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
         "preview_clicks": int(preview_clicks or 0),
         "text_mode": text_mode,
         "typeset": ts_chk,
-        "image_model": "" if photo else _image_model(ai_config),
+        "image_model": "" if (photo or guide_only) else _image_model(ai_config),
         "ocr_model": _ocr_model(ai_config),
         "usage": usage,
-        # 一分钱没花的三种情况都要写 0：复用模板底图、用上传的真图、用豆包回传的图。
+        # 一分钱没花的四种情况都要写 0：复用模板底图、用上传的真图、用豆包回传的图、
+        # 整组都是攻略页（画面是素材真帧，压根不叫画图模型）。
         # 原来漏了 manual 这一支，实测回传成品那张 manifest 写着 0.5 元——人就是冲着 0 元
-        # 走这条路的，账记错比不记更糟。
-        "cost_yuan_estimate": (0 if (tpl_base or photo or manual)
+        # 走这条路的，账记错比不记更糟。攻略页第一次端到端跑出来也误记成 0.5 元，同一类错。
+        "cost_yuan_estimate": (0 if (tpl_base or photo or manual or guide_only)
                                else PRICE_PER_IMAGE_YUAN * max(1, paid or 1)),
         "base_reused": bool(tpl_base),
         "base_stale_numbers": stale_nums,

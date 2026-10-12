@@ -237,8 +237,14 @@ def _get_asr_model(model_size: str):
 
 
 def asr_transcribe(video_url: str, model_size: str = "base",
-                    language: str = "zh") -> str:
-    """下载视频 → 提取音频 → faster-whisper 转写"""
+                    language: str = "zh", aweme_id: str = "",
+                    tag: str = "") -> str:
+    """下载视频 → 提取音频 → faster-whisper 转写。
+
+    给了 aweme_id 就顺手把「帧池」抽出来（零成本：只抽帧、只裁掉 up主 压的字幕条，
+    不调任何模型），落在删视频之前——视频一删，这条素材的画面就再也补不回来了。
+    """
+    log = tag or (aweme_id[:10] if aweme_id else "ASR")
     # 先确认 ffmpeg 可用：否则白下一遍视频才失败，且临时文件已落盘
     if not FFMPEG_BIN:
         return ("[音频提取失败] 未找到可用的 ffmpeg：PATH 与 /usr/local/bin 下"
@@ -286,6 +292,7 @@ def asr_transcribe(video_url: str, model_size: str = "base",
         return "[音频提取失败] 文件不存在"
 
     # 转写
+    segs = []
     try:
         if HAS_FASTER_WHISPER:
             model = _get_asr_model(model_size)
@@ -293,7 +300,12 @@ def asr_transcribe(video_url: str, model_size: str = "base",
                 audio_path, language=language,
                 vad_filter=True, beam_size=1
             )
-            text = "".join(s.text for s in segments)
+            # 时间戳必须留一份：帧池要拿"这一帧前后在说什么"去对图和论点，
+            # 原来这里 "".join(s.text) 把 start/end 丢了，图注就只能靠编
+            segs = [{"start": float(getattr(s, "start", 0) or 0),
+                     "end": float(getattr(s, "end", 0) or 0),
+                     "text": str(getattr(s, "text", "") or "")} for s in segments]
+            text = "".join(s["text"] for s in segs)
         else:
             model = _get_asr_model(model_size)
             result = model.transcribe(audio_path, language=language)
@@ -301,6 +313,18 @@ def asr_transcribe(video_url: str, model_size: str = "base",
     except Exception as e:
         return f"[转写失败] {e}"
     finally:
+        # 抽帧必须在删视频之前：视频删了就再也补不回这条素材的画面
+        if aweme_id and os.path.exists(video_path):
+            try:
+                try:
+                    from src import frame_pool
+                except ImportError:
+                    import frame_pool
+                fp = frame_pool.build(video_path, aweme_id, segments=segs)
+                print(f"[{log}] 帧池：{fp['usable']}/{len(fp['frames'])} 张可用")
+            except Exception as fpe:
+                # 帧池失败不影响转写本身（文案比图先到库里）
+                print(f"[{log}] 帧池失败（不影响转写）: {fpe}")
         # 清理临时文件
         for f in [video_path, audio_path]:
             if os.path.exists(f):
@@ -402,7 +426,8 @@ def process_row(ws, row_idx: int, cookie: str,
     existing_asr = (ws.cell(row_idx, COL["口播原文"]).value or "").strip()
     if not existing_asr:
         print(f"[Row {row_idx}] 开始ASR转写...")
-        transcript = asr_transcribe(info["video_url"], model_size=asr_model)
+        transcript = asr_transcribe(info["video_url"], model_size=asr_model,
+                                    aweme_id=aweme_id, tag="Row %d" % row_idx)
         if transcript and not transcript.startswith("[") and not transcript.startswith("下载失败"):
             set_cell(ws, row_idx, "视频文案ASR", transcript)
             set_cell(ws, row_idx, "口播原文", transcript)

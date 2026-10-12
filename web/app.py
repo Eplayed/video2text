@@ -2303,6 +2303,33 @@ def _poster_get_summary(summary_id):
         return content_store.get_summary(DB_PATH, int(summary_id))
 
 
+def _guide_frames_for(summary, cfg, progress=None):
+    """这条素材有没有"能当攻略证据的干净帧"：读帧池 → 没判过的按出图需要判几张。
+
+    判帧要花钱，所以放在拆解这一步（而不是采集时全判），而且一次最多判 8 张：
+    批量同步 20 条素材如果每条都判 18 帧就是 38 万 token，出一次图只要 8 张。
+    没有帧池（老素材、抽帧时视频已删）就返回空，提示词里那条"铁律六"整段不出现，
+    出图仍然照走插画那条老路——不能因为没图可配就把整条产线卡住。
+    """
+    aid = str((summary or {}).get("aweme_id") or "").strip()
+    if not aid:
+        return []
+    try:
+        from src import frame_pool
+    except ImportError:
+        import frame_pool
+    try:
+        meta = frame_pool.load(aid)
+        if not meta:
+            return []
+        if not meta.get("checked"):
+            meta = frame_pool.ensure_judged(aid, cfg, limit=8, progress_cb=progress)
+        return frame_pool.usable(meta)
+    except Exception as e:
+        print("[guide] 帧池读取失败（不影响拆解，退回无真帧那一档）:", e)
+        return []
+
+
 @app.route("/api/poster/plan", methods=["POST"])
 def api_poster_plan():
     """只拆解不出图：产出可编辑的文案计划，先审文案再花钱出图。"""
@@ -2326,10 +2353,12 @@ def api_poster_plan():
 
     def fn():
         cfg = _fast_config()
+        frames = _guide_frames_for(summary, cfg)
         _poster_status["progress"] = "LLM 拆解海报文案（模型：%s）..." % (cfg.get("model") or "?")
         plan, publish, bad, notes = ai_poster.build_text_plan(summary, cfg, theme=theme, title=title,
                                                               style_key=style_key, text_mode=text_mode,
-                                                              has_photo=has_photo, page_hint=page_hint)
+                                                              has_photo=has_photo, page_hint=page_hint,
+                                                              frames=frames)
         # 骨架稿不在这里拦：拆解本身就能判断这份素材有没有料，拦在这里会让人白等一次拆解。
         # 只把风险随结果一起回给前端，出图那一步再决定是否放行。
         warning = "；".join(ai_poster.draft_gate.draft_blockers(summary))

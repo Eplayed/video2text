@@ -186,9 +186,10 @@ LAYOUTS = {
 # 老数据里存的键（内置皮肤原来写的是 stack，用户模板 JSON 里也是）照样认，不做迁移
 LAYOUT_ALIAS = {"stack": "top_art"}
 DEFAULT_LAYOUT = "top_art"
-# 界面上给的下拉顺序：七种新走向在前，四套历史布局在后（默认值不会变）
+# 界面上给的下拉顺序：七种新走向在前，四套历史布局在后（默认值不会变），
+# 最后一种是攻略页——它不走"标题+等分卡片+插画区"那套，选了它就换一条渲染路径
 LAYOUT_ORDER = ["top_art", "bottom_art", "left_text", "right_text", "full_bleed",
-                "big_type", "compare", "list", "grid2", "hero"]
+                "big_type", "compare", "list", "grid2", "hero", "guide"]
 
 
 def _norm_layout(key):
@@ -697,6 +698,13 @@ def _page_pill(draw, W, H, skin, page):
 GUIDE_BLOCKS = ("kicker", "title", "subtitle", "photos", "bignum",
                 "cards", "contrast", "warn", "ask", "footer")
 
+# 字号层级（占屏高比例）——放大只用来标重点，一页只能有一个最大的那块：
+#   bignum 0.072 > title 0.056 > ask.q 0.030 > card.t 0.0255 > subtitle 0.0235
+#   > card.d 0.0205 > contrast.d 0.0205 > warn.d 0.0205 > caption/footer 0.0175
+# 有 bignum 时数字必须比标题大（那页的重点就是那个数），没 bignum 时标题最大。
+GUIDE_SIZES = {"bignum": 0.072, "title": 0.056, "ask": 0.030, "card_t": 0.0255,
+               "subtitle": 0.0235, "body": 0.0205, "caption": 0.0175}
+
 
 def _guide_bg(W, H, skin):
     """攻略页的底：纵向纯色渐变。对标那六页背景就是平的，没有插画——
@@ -761,6 +769,24 @@ def _fit_keep(text, face, size, w, max_lines, min_size):
         s -= 2
     f = _font(face, max(12, int(min_size)))
     return f, _wrap(text, f, w), f.size
+
+
+def _fit_head(text, face, size, w, one_min, two_min, orphan=2):
+    """标题/副标/问句这类"要一眼读完"的行：先死磕一行，不行才折两行。
+
+    为什么要专门写一个：_fit_lines 只保证"不超过 max_lines"，两行时第二行常常只剩
+    一个字（实测「这回，点数能存着 / 花」「…你选哪个方 / 向？」），比字号小一档难看得多。
+    尾行 ≤orphan 个字就判失败，退回更小字号的一行档；一行档压到 one_min 还压不下才认两行。
+    """
+    f1, l1, s1 = _fit_keep(text, face, size, w, 1, one_min)
+    if len(l1) == 1:
+        return f1, l1, s1
+    f2, l2, s2 = _fit_keep(text, face, size, w, 2, two_min)
+    if len(l2) > 1 and len(l2[-1].strip()) <= orphan:
+        f3, l3, s3 = _fit_keep(text, face, size, w, 1, int(one_min * 0.82))
+        if len(l3) == 1:
+            return f3, l3, s3
+    return f2, l2, s2
 
 
 def _photo_band(img, src, box, skin, radius):
@@ -858,31 +884,23 @@ def typeset_guide(base_png, plan, ratio="9:16", skin=None, page=None):
     f_kick = _font(skin["body_face"], max(15, int(H * 0.0195)))
     kick_h = int(H * 0.030) + int(H * 0.014) if kicker else 0
 
-    # 标题先死磕一行：10 个字的结论式标题折成两行时，第二行常常只剩一个字
-    # （实测「这回，点数能存着 / 花」），比字号小一档难看得多。
-    f_title, t_lines, t_size = _fit_keep(title, skin["title_face"], int(H * 0.056),
-                                         inner, 1, int(H * 0.034))
-    if len(t_lines) > 1:
-        f2, l2, s2 = _fit_keep(title, skin["title_face"], int(H * 0.056),
-                               inner, 2, int(H * 0.040))
-        if len(l2) > 1 and len(l2[-1].strip()) <= 2:
-            f3, l3, s3 = _fit_keep(title, skin["title_face"], int(H * 0.056),
-                                   inner, 1, int(H * 0.028))
-            if len(l3) == 1:
-                f2, l2, s2 = f3, l3, s3
-        f_title, t_lines, t_size = f2, l2, s2
+    # 标题/副标/问句统一走 _fit_head：先死磕一行，两行时尾行不许只剩一两个字
+    f_title, t_lines, t_size = _fit_head(title, skin["title_face"], int(H * 0.056),
+                                         inner, int(H * 0.034), int(H * 0.040))
     title_h = len(t_lines) * int(t_size * 1.22) if title else 0
-    f_sub, s_lines, s_size = _fit_lines(subtitle, skin["body_face"], int(H * 0.0235),
-                                        inner, 2, min_size=int(H * 0.018))
+    f_sub, s_lines, s_size = _fit_head(subtitle, skin["body_face"], int(H * 0.0235),
+                                       inner, int(H * 0.0175), int(H * 0.019))
     sub_h = len(s_lines) * int(s_size * 1.32) if subtitle else 0
 
-    cap_f = _font(skin["body_face"], max(14, int(H * 0.0175)))
-    cap_line_h = int(cap_f.size * 1.34)
-    # 每张真帧的"额外开销"：上方留空 + 图与图注之间 + 图注本身几行。
-    # 这些必须一起算进预算，否则量的时候以为放得下、画到最后一段字掉出版面。
-    PH_PAD, CAP_GAP, POST_GAP = int(H * 0.016), int(cap_f.size * 0.55), int(H * 0.018)
-    cap_h = [len(_wrap((p.get("caption") or "").strip(), cap_f, inner)) for p in photos]
-    caps_total = sum((h * cap_line_h + PH_PAD + CAP_GAP) for h in cap_h)
+    cap_size = max(14, int(H * 0.0175))
+    # 图注压成一行：时间戳被甩到第二行单独挂着很难看（实测「…含ESRB评级 · 素材画面 / 00:00」）
+    caps = [(_fit_head((p.get("caption") or "").strip(), skin["body_face"], cap_size,
+                       inner, int(H * 0.0135), int(H * 0.015))
+             if (p.get("caption") or "").strip() else (None, [], cap_size))
+            for p in photos]
+    cap_line_hs = [len(ls) * int(f.size * 1.34) if f else 0 for f, ls, _s in caps]
+    PH_PAD, CAP_GAP, POST_GAP = int(H * 0.016), int(cap_size * 0.55), int(H * 0.018)
+    caps_total = sum((h + PH_PAD + CAP_GAP) for h in cap_line_hs)
     if photos:
         caps_total += POST_GAP + gap * (len(photos) - 1)
 
@@ -921,11 +939,12 @@ def typeset_guide(base_png, plan, ratio="9:16", skin=None, page=None):
                                inner - int(H * 0.06), 4, min_size=int(H * 0.0165))
         warn_h = int(H * 0.030) + len(wl) * int(ws * 1.32) + int(H * 0.030)
 
-    ask_h = 0
+    ask_h, ask_qf, ask_ql, ask_qs = 0, None, [], 0
     if ask:
-        _, ql, qs = _fit_lines(ask.get("q") or "", skin["title_face"], int(H * 0.030),
-                               inner, 2, min_size=int(H * 0.022))
-        ask_h = len(ql) * int(qs * 1.30) + int(H * 0.056)
+        ask_qf, ask_ql, ask_qs = _fit_head(ask.get("q") or "", skin["title_face"],
+                                           int(H * 0.030), inner,
+                                           int(H * 0.022), int(H * 0.024))
+        ask_h = len(ask_ql) * int(ask_qs * 1.30) + int(H * 0.056)
 
     foot_f = _font(skin["body_face"], max(14, int(H * 0.0165)))
     foot_h = int(H * 0.030) if footer else 0
@@ -946,18 +965,18 @@ def typeset_guide(base_png, plan, ratio="9:16", skin=None, page=None):
             if len(photos) > 1:
                 problems.append("一页放两张真帧会压到看不清，已只留第 1 张")
                 photos = photos[:1]
-                caps_total = cap_h[0] * cap_line_h + PH_PAD + CAP_GAP + POST_GAP
+                caps_total = cap_line_hs[0] + PH_PAD + CAP_GAP + POST_GAP
                 per_photo = min(int(room - caps_total), cap_hi)
             if per_photo < int(H * 0.10):
                 problems.append("这一页文字太多，真帧放不下，已退回纯文字版面")
                 photos, per_photo, caps_total = [], 0, 0
     photo_used = (caps_total + per_photo * len(photos)) if photos else 0
-    # 剩下的空白不要堆在一处（半屏空洞最难看），按"这一页实际有几块"平摊，
-    # 每块之前留同一口气；单块最多加到 5% 屏高，再多就该拆页了。
+    # 剩下的空白不要堆在一处（半屏空洞最难看），按"这一页实际有几块"平摊。
+    # 但块间距最多给到 4.5% 屏高——再大就比块内的行距还宽，读起来像字被到处乱放。
     n_sp = ((1 if title else 0) + (1 if subtitle else 0) + (1 if photos else 0)
             + (1 if big_h else 0) + (1 if card_hs else 0) + (1 if con_hs else 0)
             + (1 if warn_h else 0) + (1 if ask_h else 0))
-    sp = min(int(max(0, room - photo_used) / n_sp), int(H * 0.085)) if n_sp else 0
+    sp = min(int(max(0, room - photo_used) / n_sp), int(H * 0.045)) if n_sp else 0
 
     # ── 第二遍：从上往下画 ──
     if kicker:
@@ -1012,11 +1031,11 @@ def typeset_guide(base_png, plan, ratio="9:16", skin=None, page=None):
         draw = ImageDraw.Draw(img, "RGBA")     # 贴过图要重开一支笔，否则画在旧层上
         draw.rounded_rectangle(bx, radius=rad, outline=rule + (255,), width=2)
         y = bx[3] + CAP_GAP
-        cap = (p.get("caption") or "").strip()
-        if cap:
-            for ln in _wrap(cap, cap_f, inner):
-                _draw_text(draw, (m, y), ln, cap_f, _rgb(skin["muted"]))
-                y += cap_line_h
+        cf, clines, _cs = caps[i] if i < len(caps) else (None, [], cap_size)
+        if cf and clines:
+            for ln in clines:
+                _draw_text(draw, (m, y), ln, cf, _rgb(skin["muted"]))
+                y += int(cf.size * 1.34)
     if photos:
         y += POST_GAP
 
@@ -1103,13 +1122,10 @@ def typeset_guide(base_png, plan, ratio="9:16", skin=None, page=None):
 
     if ask:
         y += sp
-        q = (ask.get("q") or "").strip()
         opts = [str(o).strip() for o in (ask.get("options") or []) if str(o).strip()][:4]
-        _, ql, qs = _fit_lines(q, skin["title_face"], int(H * 0.030), inner, 2,
-                               min_size=int(H * 0.022))
-        for ln in ql:
-            _draw_text(draw, (m, y), ln, _font(skin["title_face"], qs), gold)
-            y += int(qs * 1.30)
+        for ln in ask_ql:
+            _draw_text(draw, (m, y), ln, ask_qf, gold)
+            y += int(ask_qs * 1.30)
         y += int(H * 0.010)
         of = _font(skin["body_face"], max(15, int(H * 0.021)))
         ox, oy = m, y
@@ -1146,6 +1162,12 @@ def typeset_guide(base_png, plan, ratio="9:16", skin=None, page=None):
                ("footer", footer)) if v]}
     if page and int(page[1] or 1) > 1:
         chk["page"] = [int(page[0]), int(page[1])]
+    # 这页"最大的那块字"是谁——放大只该给重点，两个块抢同一个字号就是没层级
+    emph = "bignum" if big_h else ("title" if title_h else ("ask" if ask_h else "cards"))
+    chk["emphasis"] = emph
+    if big_h and t_size >= int(H * GUIDE_SIZES["bignum"] * 0.96):
+        problems.append("这页的数字块和标题一样大，重点没拉开")
+        chk["ok"] = False
     return out.getvalue(), chk
 
 
