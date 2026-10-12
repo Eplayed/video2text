@@ -1211,8 +1211,23 @@ def api_content_summaries():
             _sync_content_db()
         summary_type = request.args.get("type", "")
         q = request.args.get("q", "")
-        items = content_store.list_summaries(DB_PATH, summary_type=summary_type, query=q)
-        return jsonify({"items": items, "total": len(items)})
+        # 每页最多 50 篇：整理稿列表原先一次全量返回（limit 默认 200），
+        # 条数上来之后首屏渲染与搜索框防抖都跟着变肉。面试题那一页要全量，
+        # 它自己显式传 page_size=500，不跟着这个默认值走。
+        try:
+            page = max(1, int(request.args.get("page") or 1))
+        except (TypeError, ValueError):
+            page = 1
+        try:
+            size = min(500, max(1, int(request.args.get("page_size") or 50)))
+        except (TypeError, ValueError):
+            size = 50
+        total = content_store.count_summaries(DB_PATH, summary_type=summary_type, query=q)
+        items = content_store.list_summaries(DB_PATH, summary_type=summary_type, query=q,
+                                            limit=size, offset=(page - 1) * size)
+        return jsonify({"items": items, "total": total,
+                        "page": page, "page_size": size,
+                        "pages": max(1, (total + size - 1) // size)})
     except Exception as e:
         return jsonify({"error": str(e), "items": [], "total": 0}), 500
 

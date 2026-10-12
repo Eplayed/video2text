@@ -284,26 +284,51 @@ def get_author_sec_uid(db_path: str | Path, author: str) -> str:
         conn.close()
 
 
+def _summary_where(summary_type: str = "", query: str = "") -> tuple:
+    """整理稿列表的筛选条件，list / count 共用一份——两边不一致的话页码会骗人
+    （显示"共 120 篇"实际能翻出 80 篇，是这类 bug 的标准长相）。"""
+    where, params = [], []
+    if summary_type:
+        where.append("s.summary_type = ?")
+        params.append(summary_type)
+    if query:
+        like = f"%{query}%"
+        where.append(
+            "(s.title LIKE ? OR s.content LIKE ? OR v.title LIKE ? OR v.author LIKE ?)"
+        )
+        params.extend([like, like, like, like])
+    clause = "WHERE " + " AND ".join(where) if where else ""
+    return clause, params
+
+
+def count_summaries(
+    db_path: str | Path,
+    summary_type: str = "",
+    query: str = "",
+) -> int:
+    conn = connect(db_path)
+    try:
+        clause, params = _summary_where(summary_type, query)
+        row = conn.execute(
+            f"""SELECT COUNT(*) AS c FROM ai_summaries s
+                JOIN videos v ON v.id = s.video_id {clause}""",
+            params,
+        ).fetchone()
+        return int(row["c"]) if row else 0
+    finally:
+        conn.close()
+
+
 def list_summaries(
     db_path: str | Path,
     summary_type: str = "",
     query: str = "",
     limit: int = 200,
+    offset: int = 0,
 ) -> list[dict[str, Any]]:
     conn = connect(db_path)
     try:
-        where = []
-        params: list[Any] = []
-        if summary_type:
-            where.append("s.summary_type = ?")
-            params.append(summary_type)
-        if query:
-            like = f"%{query}%"
-            where.append(
-                "(s.title LIKE ? OR s.content LIKE ? OR v.title LIKE ? OR v.author LIKE ?)"
-            )
-            params.extend([like, like, like, like])
-        clause = "WHERE " + " AND ".join(where) if where else ""
+        clause, params = _summary_where(summary_type, query)
         rows = conn.execute(
             f"""
             SELECT
@@ -316,9 +341,9 @@ def list_summaries(
             JOIN videos v ON v.id = s.video_id
             {clause}
             ORDER BY s.updated_at DESC, s.id DESC
-            LIMIT ?
+            LIMIT ? OFFSET ?
             """,
-            [*params, limit],
+            [*params, limit, max(0, int(offset or 0))],
         ).fetchall()
         return [_dict(row) for row in rows]
     finally:

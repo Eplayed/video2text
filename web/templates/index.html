@@ -1096,6 +1096,7 @@ textarea{resize:vertical;min-height:84px}
       <div class="grid" id="grid-summaries">
         <div class="empty"><span class="e" data-icon="book"></span>加载中...</div>
       </div>
+      <div id="summaries-pager"></div>
     </section>
 
     <!-- ── 头条图文 ── -->
@@ -2043,7 +2044,7 @@ async function loadCategoryOptions() {
 
 // 素材库一次塞 1000+ 张卡片进 DOM 要 0.9 秒、三万个节点，每敲一个搜索字符都重来一遍。
 // 改成按页取、点「加载更多」追加；筛选与分页互不干扰（分页在过滤+排序之后）。
-const VID_PAGE = 90;
+const VID_PAGE = 50;   // 每批最多 50 条（号主 2026-10-12 定的口径）
 let _vidPage = 1, _vidBusy = false, _vidTimer = null;
 
 function onVideoSearch() {
@@ -2263,15 +2264,43 @@ async function saveGame(sheet, row, game) {
   }
 }
 
-async function loadSummaries() {
+// 整理稿分页：以前一次全量返回（后端默认 limit=200），列表一长首屏就肉。
+// 每页最多 50 篇；换了筛选或搜索必须回第 1 页，否则"停在第 4 页 × 新筛选"就是空白页。
+const SUM_PAGE = 50;
+let _sumPage = 1, _sumSig = null;
+
+async function loadSummaries(page) {
   const q = getSearchValue();
   const type = document.getElementById('summary-type-filter').value;
+  const sig = type + '|' + q;
+  let p = page || _sumPage || 1;
+  if (_sumSig !== null && sig !== _sumSig) p = 1;
+  _sumSig = sig;
   const params = new URLSearchParams();
   if (q) params.set('q', q);
   if (type) params.set('type', type);
+  params.set('page', p);
+  params.set('page_size', SUM_PAGE);
   const data = await fetch('/api/content/summaries?' + params).then(r=>r.json());
+  if (_sumSig !== sig) return;              // 请求在飞的路上人又换了筛选，旧结果不许盖上来
+  _sumPage = data.page || p;
   renderSummaries(data.items || []);
   document.getElementById('count-summaries').textContent = (data.total||0) + ' 篇';
+  renderSumPager(data);
+}
+
+function renderSumPager(d) {
+  const el = document.getElementById('summaries-pager');
+  if (!el) return;
+  const total = d.total || 0, pages = d.pages || 1, cur = d.page || 1;
+  if (!total) { el.innerHTML = ''; return; }
+  const btn = (label, to, dis) => '<button class="btn ghost sm"' + (dis ? ' disabled' : '')
+    + ' onclick="loadSummaries(' + to + ')">' + label + '</button>';
+  el.innerHTML = '<div style="display:flex;gap:10px;align-items:center;justify-content:center;margin-top:16px;flex-wrap:wrap;font-size:12px;color:var(--text-tertiary)">'
+    + btn('上一页', cur - 1, cur <= 1)
+    + '<span>第 ' + cur + ' / ' + pages + ' 页 · 共 ' + total + ' 篇（每页 ' + (d.page_size || SUM_PAGE) + '）</span>'
+    + btn('下一页', cur + 1, cur >= pages)
+    + '</div>';
 }
 
 // ── 自动同步任务 ──
@@ -5047,7 +5076,15 @@ async function loadInterviewQuestions() {
   const q = getSearchValue();
   const params = new URLSearchParams({type: 'ai_interview'});
   if (q) params.set('q', q);
+  // 这一页要的是"把全部面试题汇成一张表"，不是列表分页，所以显式要一大页。
+  // 不写这一行的话，整理稿列表改成每页 50 篇会把它悄悄截断成前 50 篇的题。
+  params.set('page', 1);
+  params.set('page_size', 500);
   const data = await fetch('/api/content/summaries?' + params).then(r=>r.json());
+  if ((data.total || 0) > (data.items || []).length) {
+    warn('面试题只取了最近 ' + data.items.length + ' 篇整理稿（全库 ' + data.total
+         + ' 篇），要全量得再翻页', null);
+  }
   const questions = [];
   (data.items || []).forEach(item => {
     let structured = {};
