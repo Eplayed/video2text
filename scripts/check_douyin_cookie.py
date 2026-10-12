@@ -25,15 +25,20 @@ sys.path.insert(0, str(ROOT / "vendor" / "douyin_parse"))
 
 from src import path_config                                    # noqa: E402
 
-# 必需键：少任何一个都会被 Argus 挡在门外（实测缺 UIF_ID 的报错就是 "Uifid Not Found"）
+# 必需键：少任何一个都会被 Argus 挡在门外。
+# 键名以浏览器实测为准：抖音写的是 **UIFID**（没有下划线），而 Argus 的报错写成 "Uifid Not Found"，
+# 照报错去配就会永远"缺一个键"。所以按别名组比对。
+# sessionid / ttwid 是 httpOnly，document.cookie 抓不到，只能从请求头里整行复制——
+# 缺 sessionid 时接口也可能通（未登录读公开视频详情），所以它单独一档，只提示不拦。
 REQUIRED = [
-    ("sessionid", "登录态。只有它不够，别以为有 sessionid 就算配好了"),
-    ("ttwid", "抖音的访客标识，第一次访问网页时由站点下发"),
-    ("UIF_ID", "风控要的用户指纹——现在缺的就是它，报错原话是 Uifid Not Found"),
-    ("__ac_nonce", "反爬一次性串，和 __ac_signature 成对出现"),
-    ("__ac_signature", "同上，缺一即被拦"),
+    ("UIFID", ["uifid", "uif_id"], "风控要的用户指纹——缺了就是那句 Uifid Not Found"),
+    ("__ac_nonce", ["__ac_nonce"], "反爬一次性串，和 __ac_signature 成对出现"),
+    ("__ac_signature", ["__ac_signature"], "同上，缺一即被拦"),
 ]
-NICE = [("msToken", "多数请求要带，浏览器会自己续"), ("webid", "设备/浏览器 id")]
+SOFT = [("sessionid", ["sessionid"], "登录态；读公开视频详情不一定需要，但列表/收藏类接口要"),
+        ("ttwid", ["ttwid"], "访客标识，多数接口要带")]
+NICE = [("msToken", ["mstoken"], "多数请求要带，浏览器会自己续"),
+        ("webid", ["webid"], "设备/浏览器 id")]
 TEST_AWEME = "7691087995755187506"
 
 
@@ -52,19 +57,20 @@ def main():
     if p.exists():
         raw = p.read_text(encoding="utf-8").strip()
     keys = parse_keys(raw)
+    low = {k.lower() for k in keys}   # parse_keys 已把键小写；这里再显式一次，别靠上游约定
     print("cookie 文件：%s（%d 字节，%d 个键）" % (p, len(raw), len(keys)))
     if not raw:
         print("  文件是空的。")
-    missing = [(k, why) for k, why in REQUIRED if k.lower() not in {x.lower() for x in keys}]
     print("  现有键：%s" % ("、".join(sorted(keys)) or "无"))
+    missing = [(k, why) for k, alts, why in REQUIRED if not any(a in low for a in alts)]
     if missing:
         print("  缺必需键 %d 个：" % len(missing))
         for k, why in missing:
             print("     - %-14s %s" % (k, why))
     else:
         print("  必需键齐了。")
-    for k, why in NICE:
-        if k.lower() not in {x.lower() for x in keys}:
+    for k, alts, why in SOFT + NICE:
+        if not any(a in low for a in alts):
             print("  建议补：%s（%s）" % (k, why))
 
     print("\n真打一次接口（拿一条真实视频，看风控放不放行）…")
@@ -104,12 +110,19 @@ if __name__ == "__main__":
     print(__doc__.split("\n\n")[0])
     rc = main()
     print("""
-补齐步骤（一次拷整串，别只拷 sessionid——今天就是只留了 sessionid 才全被拦）：
+补齐步骤（一次拷整串，别只拷 sessionid）：
   1. 用 Chrome 打开 https://www.douyin.com/ 并确认是登录状态（右上角能看到自己头像）；
   2. F12 → Network 网络 → 在地址栏回车任意一条视频页 → 找到名字带 aweme/detail 的那条请求；
   3. 点开它 → Headers 请求头 → 把 **Cookie 那一整行** 全选复制（很长，通常 1500-3000 字）；
   4. 粘进 %s 覆盖原内容，保存（这一行就是一整串 k=v; k=v;…，不要换行、不要加引号）；
   5. 重跑本脚本，看到 ✅ 就通了；界面「采集中心」的抖音 cookie 状态也会跟着变。
   注意：这个文件在 .gitignore 里，不会被提交（公开仓库，绝不能进）。
+
+但**别把这条当成补画面的前提**。2026-10-12 实测：cookie 补到 68 个键、必需键全齐，
+这份 Python 解析器照样被抖音挡——先 `Uifid Not Found`，把 uifid 当 URL 参数补上又变
+`Signature Not Found`（下一步要的 msToken 是页面 JS 现算的、几十分钟一换）。
+抖音换了规则，不是 cookie 没配好。所以「补画面」取直链现在**优先走真实浏览器那一路**
+（`src/browser_fetch.browser_fetch_video_detail`，实测能拿到直链），解析器只当顺手一试。
+这里 ❌ 不代表补画面用不了；这里 ✅ 只代表列表类接口多一条快路。
 """ % path_config.get_cookie_path())
     sys.exit(rc)

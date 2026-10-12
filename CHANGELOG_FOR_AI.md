@@ -189,6 +189,24 @@ Uifid Not Found` 原话贴回来）。命令行版是 `scripts/check_douyin_cook
 **回归**：`/graphics-verify` 五条线 ALL_OK（结果在 `temp/gate_1012_night.log`）；
 `e2e_poster_layouts.py` 的 Q 段 16 条继续钉住帧池判据。改完 `.py` 全部走 `/workbench-restart`。
 
+**同日补（号主让我去浏览器里抓 cookie，结果把"解析器这条路"判死了）**：从 `browser-use`
+连上他那个已登录的抖音页，`document.cookie` 抓到 3955 字 / 38 键（含 `UIFID`、`__ac_nonce`、
+`__ac_signature`），**并回**旧文件里的 `sessionid`/`ttwid` 等 httpOnly 键（那 30 个键是他自己
+已经补进去的——我一开始直接覆盖，靠事先备份 + 合并才没丢东西）→ 现在 7795 字 / 68 键，
+`check_douyin_cookie.py` 报"必需键齐了"。可**接口照样 403**：
+`Uifid Not Found` → 把 `uifid` 当 **URL 参数**补上 → 变成 `Signature Not Found`
+（下一步要的 `msToken` 是页面 JS 现算、几十分钟一换，Python 侧拿不到）。
+对照浏览器自己发的每个 `/aweme/v1/web/...` 请求：`uifid`、`msToken`、`webid`、`verifyFp`、`fp`
+**全都在 URL 参数里**，Argus 那句 "Uifid Not Found" 说的是参数，不是 cookie 键。
+
+结论写进代码里了，别再往 cookie 上找：**`vendor/douyin_parse` 那条 Python 解析器已过不了抖音风控，
+不是配置问题**。所以 `_frames_resolve_url` 的取链顺序改成
+**缓存 → 真实浏览器（最多 3 次，每次报进度）→ 解析器只顺手试一次不退避**。
+实测 73 号从零补一条帧池：以前先白等解析器退避 ~45 秒，现在 **33 秒拿到 18 帧、tokens=0**。
+体检脚本末尾也改了口：这里 ❌ 不代表补画面用不了，✅ 只代表列表类接口多一条快路。
+顺带修两个我自己的错：`DY_COOKIE_REQUIRED` 以前照报错写成 `UIF_ID`（真实键名是 `UIFID`，
+没有下划线），体检脚本的键比对忘了小写 → 明明有 UIFID 却报"缺 UIFID"。
+
 ## 2026-10-11（第三刀）：工作台其余界面的干扰文字——只动"说几次"，不动"能不能点"
 
 上一刀只减了海报弹窗。这次把同样的减负推到**头条图文弹窗、公众号图文弹窗、数据与同步、

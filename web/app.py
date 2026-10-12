@@ -88,7 +88,12 @@ def _setup_parser_and_cookie(cookie_str: str):
 # 为什么要这个：Argus 的报错是一句 "Uifid Not Found"，界面以前只会说"cookie 无效"，
 # 人不知道该补什么。以前那个输入框占位符还写着 `sessionid=xxxx`，等于教人只粘一个键，
 # 结果就是今天这样：文件里只剩 42 字节，直链解析全被拦，帧池补画面走不通。
-DY_COOKIE_REQUIRED = ["sessionid", "ttwid", "UIF_ID", "__ac_nonce", "__ac_signature"]
+# 键名以浏览器实测为准：抖音写的是 **UIFID**（没有下划线），Argus 的报错却写成 "Uifid"，
+# 以前照报错写成 UIF_ID，结果体检永远报"缺 UIF_ID"——两道判据都对不上号。
+# 所以这里按别名组比对，sessionid/ttwid 是 httpOnly（document.cookie 抓不到），缺了只提示不拦。
+DY_COOKIE_REQUIRED = [("sessionid", ["sessionid"]), ("UIFID", ["uifid", "uif_id"]),
+                    ("__ac_nonce", ["__ac_nonce"]), ("__ac_signature", ["__ac_signature"])]
+DY_COOKIE_NICE = [("ttwid", ["ttwid"]), ("msToken", ["mstoken"]), ("webid", ["webid"])]
 
 
 def _cookie_keys(raw):
@@ -108,8 +113,9 @@ def _douyin_cookie_state():
     except OSError:
         pass
     keys = _cookie_keys(raw)
-    missing = [k for k in DY_COOKIE_REQUIRED if k.lower() not in keys]
-    return {"bytes": len(raw), "nkeys": len(keys), "missing": missing,
+    missing = [name for name, alts in DY_COOKIE_REQUIRED if not any(a in keys for a in alts)]
+    soft = [name for name, alts in DY_COOKIE_NICE if not any(a in keys for a in alts)]
+    return {"bytes": len(raw), "nkeys": len(keys), "missing": missing, "missing_soft": soft,
             "complete": not missing, "path": str(p)}
 
 
@@ -2833,34 +2839,52 @@ def _frames_set(sid, **kw):
 
 
 def _frames_resolve_url(video, aweme_id, sid):
-    """取这条视频的可下载地址：本地直链缓存/解析器优先，其次真实浏览器抓详情。
+    """取这条视频的可下载地址：**先读缓存，再走真实浏览器，最后才试解析器**。
 
-    浏览器那一路实测会抖：它是等 aweme/detail 那个 XHR（脚本里上限 15 秒），
-    自动同步的订阅批量抓正在跑同一台机器时，页面加载慢就直接超时。
-    所以这里不是"失败就判死"，而是最多试 3 次，每次都把进度报出去。
+    顺序是 2026-10-12 实测出来的，不是随手排的：
+      · Python 那条 `douyin_parse` 解析器**已经彻底过不了 Argus**——cookie 补到 68 个键、
+        必需键全齐，接口照样回 `Uifid Not Found`；把 `uifid` 当 URL 参数补上，报错就变成
+        `Signature Not Found`（下一步要 msToken，那是页面 JS 现算的、几十分钟就换）。
+        也就是说这条路不是"cookie 没配好"，是抖音换了规则，补 cookie 补不出来。
+      · 真实浏览器那条一路 `browser_fetch_video_detail` 实测能拿到 nwm 直链（今天成过三次），
+        它抖不抖取决于机器忙不忙——自动同步批量抓的时候容易等不到 detail 那个 XHR，
+        所以这里最多试 3 次、每次报进度，而不是一次定生死。
+      · 解析器留在最后当"顺手捡一下"：只试一次、不退避，成了省时间，不成也不拖。
     """
-    url = _resolve_download_url(video, retries=2)
-    if url:
-        return url
+    cached = _load_cached_nwm_url(aweme_id)
+    if cached:
+        _frames_set(sid, progress="用上了缓存里的直链（没走网络）")
+        return cached
     try:
         from src.browser_fetch import browser_fetch_video_detail
     except Exception as be:
         print("[frames] 浏览器模块都进不去:", be)
-        return ""
+        browser_fetch_video_detail = None
     page = (video.get("video_url") or video.get("source_url") or "").strip() \
         or "https://www.douyin.com/video/%s" % aweme_id
-    for attempt in (1, 2, 3):
-        _frames_set(sid, progress="直链解析被风控，改用浏览器抓（第 %d 次）..." % attempt)
-        try:
-            info = browser_fetch_video_detail(page) or {}
-        except Exception as be:
-            print("[frames] 浏览器兜底第 %d 次异常:" % attempt, be)
-            info = {}
-        url = (info.get("nwm_url") or "").strip()
-        if url:
-            return url
-        if attempt < 3:
-            time.sleep(4)      # 给自动同步那一拨让开 CPU
+    url = ""
+    if browser_fetch_video_detail:
+        for attempt in (1, 2, 3):
+            _frames_set(sid, progress="真实浏览器取直链（第 %d 次）..." % attempt)
+            try:
+                info = browser_fetch_video_detail(page) or {}
+            except Exception as be:
+                print("[frames] 浏览器第 %d 次异常:" % attempt, be)
+                info = {}
+            url = (info.get("nwm_url") or "").strip()
+            if url:
+                break
+            time.sleep(3)
+    if not url:
+        _frames_set(sid, progress="浏览器没拿到，再试一次本地解析器...")
+        url = _resolve_download_url(dict(video, aweme_id=aweme_id), retries=1, backoff=1.0)
+    if url:
+        return url
+    _frames_set(sid, running=False, done=True,
+                error="取不到下载地址：浏览器那一路试了 3 次都没等到 aweme/detail 的响应"
+                      "（自动同步正在批量抓的时候最容易挤不上）。"
+                      "本地解析器现在必被抖音风控（缺 msToken，那是页面 JS 现算的），"
+                      "不是 cookie 的问题——隔一两分钟再点一次通常就成了")
     return ""
 
 
@@ -2888,15 +2912,10 @@ def _frames_worker(sid, video, aweme_id, cfg, judge=False):
     tmp = Path(tempfile.mkdtemp(prefix="v2t_pool_"))
     mp4 = tmp / "video.mp4"
     try:
-        _frames_set(sid, running=True, progress="解析视频直链...")
+        _frames_set(sid, running=True, progress="准备取视频直链...")
         url = _frames_resolve_url(video, aweme_id, sid)
         if not url:
-            _frames_set(sid, running=False, done=True,
-                        error="拿不到这条视频的下载地址：直链解析被抖音风控（Argus：Uifid Not Found，"
-                              "cookie 只剩 sessionid 不够用），浏览器兜底试了 3 次也没等到 detail 接口。"
-                              "补 vendor/douyin_parse/douyin_cookie.txt 的完整 cookie 后重试；"
-                              "订阅自动同步正在跑的时候也容易挤不上，隔一两分钟再点一次")
-            return
+            return                          # 失败原因 _frames_resolve_url 已经写进 job 了
         _frames_set(sid, progress="下载视频...")
         if not material_store.download_video(url, mp4):
             _frames_set(sid, running=False, done=True, error="视频下载失败（链接可能已过期）")
@@ -2922,7 +2941,12 @@ def _frames_worker(sid, video, aweme_id, cfg, judge=False):
 def api_poster_frames_build():
     """给一条素材补画面池。以前只有"新采集的素材"才会自动抽帧，
     老素材（转写时还没这套流程、或视频已删）在界面上永远看不到攻略页那句提示——
-    这条就是那座桥：点一下重新下载、抽帧、裁字幕、判帧。"""
+    这条就是那座桥：点一下重新下载、抽帧、裁掉后期压上去的字。
+
+    两个档，分开收费（号主 10-12 定的口径：判帧只补真要发的那几条）：
+      action=build（默认）＝**零成本**，只抽不判；
+      action=judge＝只判帧（要已有帧池），这是花钱的那一下，必须号主亲手点。
+    """
     data = request.get_json(force=True) or {}
     try:
         sid = int(data.get("summary_id") or 0)
