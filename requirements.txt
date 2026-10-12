@@ -8,6 +8,8 @@ requests==2.32.3            # 采集 / AI 接口
 faster-whisper==1.2.1       # ASR 主引擎（CPU 推理）
 openai-whisper==20250625    # ASR 兜底引擎（main.py 内 try 导入）
 playwright==1.40.0          # 图文渲染出图 + 抖音风控兜底开页
+opencc-python-reimplemented==0.1.7   # src/asr_fix.py 转写繁转简（没装则跳过这一道，不影响采集）
+numpy==1.26.4                # src/frame_pool.py 的 light_share 逐行统计（没装则跳过免费预筛）
 pillow==11.3.0              # 素材图片尺寸/比例判定
 
 # 未使用但常被认为需要（确认过仓库内无 import，别误装）：python-docx、pandas

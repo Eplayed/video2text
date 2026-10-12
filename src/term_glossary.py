@@ -50,6 +50,61 @@ def observed_pairs():
     return out
 
 
+def confirmed_pairs():
+    """observed 里**在真实素材里见过**的那些（seen_in 没写"待确认"的）。
+
+    为什么要分这一档：表里有三条是"推断，待确认"（陛下宝→首领宝宝 这种），那是猜的。
+    拿猜的映射去静默改转写，等于把一种错字换成另一种，还查不出来。
+    这一档只做确定性替换；待确认的仍然只进提示词，由模型带着上下文判断。
+    """
+    out = []
+    for w, c, d, seen in observed_pairs():
+        if "待确认" in (seen or ""):
+            continue
+        out.append((w, c, d))
+    return out
+
+
+def apply_confirmed(text):
+    """按已确认的误写对做确定性替换。返回 (新文本, [(错写, 正写, 次数)])。
+
+    长的先替换：不然"上赛径"会被"赛径→赛季"那条切成"上赛季"之外的半截。
+    """
+    out = text or ""
+    changed = []
+    for w, c, _d in sorted(confirmed_pairs(), key=lambda x: -len(x[0])):
+        n = out.count(w)
+        if n and w != c:
+            out = out.replace(w, c)
+            changed.append((w, c, n))
+    return out, changed
+
+
+def asr_prompt(max_chars=110):
+    """给 Whisper 的 initial_prompt：只塞标准写法，让它朝这些词解码。
+
+    为什么要塞：同音错字是**解码阶段**选错了词，下游再怎么提示模型都只是补救。
+    实测这条产线上的高频错字（装等/官宣/上赛季/晋升）全部来自领域专名，
+    给一句术语开头，解码时这些词的权重就上来了。
+    为什么不塞长：Whisper 的提示词吃的是那 224 token 的上下文，给长了会挤掉音频、
+    还会让模型开始复读提示词。所以先放"已经错过的那批正确写法"，再补标准词表。
+    """
+    need = []
+    for _w, c, _d in confirmed_pairs():
+        if c and c not in need:
+            need.append(c)
+    for g in load().get("groups") or []:
+        for t in (g.get("terms") or []):
+            if t and t not in need:
+                need.append(t)
+    parts = []
+    for t in need:
+        if len("、".join(parts + [t])) > max_chars:
+            break
+        parts.append(t)
+    return "、".join(parts)
+
+
 def render_prompt(max_chars=1400):
     """拼成塞进整理稿提示词的一段。超预算就只保留已确认的误写对，标准写法清单往后放。"""
     data = load()

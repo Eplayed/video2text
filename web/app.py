@@ -41,20 +41,22 @@ def _setup_parser_and_cookie(cookie_str: str):
     if cookie_str and "sessionid=" not in cookie_str:
         cookie_str = f"sessionid={cookie_str}"
 
-    # ── Cookie 合并保护（2026-09-21）：短 cookie（纯 sessionid）不覆盖完整 Cookie ──
-    # 抖音 Argus 风控要求完整安全 Cookie（UIFID/ttwid/msToken 等），前端 localStorage
+    # ── Cookie 合并保护（2026-09-21，2026-10-12 修好）：短 cookie 不覆盖键更多的完整串 ──
+    # 抖音 Argus 风控要求完整安全 Cookie（UIF_ID/ttwid/msToken 等），前端 localStorage
     # 里可能仍存着旧的纯 sessionid，直接写入会把完整串冲掉，导致同步全部返回空。
+    # 原来这道保护查的是 `"uifid=" in existing`，而抖音真实的键叫 **UIF_ID**（带下划线），
+    # 小写比对永远匹配不上 → 它从来没生效过，今天文件里只剩 42 字节就是这么来的。
+    # 改成"谁的键多谁赢"，不再依赖某一个键名。
     try:
         cookie_path = get_cookie_path()
         if cookie_str and len(cookie_str) < 200 and cookie_path.exists():
             existing = cookie_path.read_text(encoding="utf-8").strip()
-            if len(existing) > len(cookie_str) and "uifid=" in existing.lower():
-                import re as _re
-                m_new = _re.search(r"sessionid=([^;]+)", cookie_str)
-                m_old = _re.search(r"sessionid=([^;]+)", existing)
+            if len(_cookie_keys(existing)) > len(_cookie_keys(cookie_str)):
+                m_new = re.search(r"sessionid=([^;]+)", cookie_str)
+                m_old = re.search(r"sessionid=([^;]+)", existing)
                 if m_new and m_old and m_new.group(1) != m_old.group(1):
                     # sessionid 变了（重新登录）：只更新完整串里的 sessionid 值
-                    existing = _re.sub(
+                    existing = re.sub(
                         r"sessionid=[^;]*", "sessionid=" + m_new.group(1), existing, count=1
                     )
                 cookie_str = existing
@@ -80,6 +82,92 @@ def _setup_parser_and_cookie(cookie_str: str):
     # 直接设置 cookie，避免依赖 os.chdir
     parser.set_cookie(cookie_str)
     return parser
+
+
+# ── 抖音 cookie 体检：少哪个键、真打一次过不过风控 ──────────────────────
+# 为什么要这个：Argus 的报错是一句 "Uifid Not Found"，界面以前只会说"cookie 无效"，
+# 人不知道该补什么。以前那个输入框占位符还写着 `sessionid=xxxx`，等于教人只粘一个键，
+# 结果就是今天这样：文件里只剩 42 字节，直链解析全被拦，帧池补画面走不通。
+DY_COOKIE_REQUIRED = ["sessionid", "ttwid", "UIF_ID", "__ac_nonce", "__ac_signature"]
+
+
+def _cookie_keys(raw):
+    out = {}
+    for part in (raw or "").split(";"):
+        if "=" in part:
+            k, v = part.split("=", 1)
+            out[k.strip().lower()] = len(v.strip())
+    return out
+
+
+def _douyin_cookie_state():
+    p = get_cookie_path()
+    raw = ""
+    try:
+        raw = p.read_text(encoding="utf-8").strip()
+    except OSError:
+        pass
+    keys = _cookie_keys(raw)
+    missing = [k for k in DY_COOKIE_REQUIRED if k.lower() not in keys]
+    return {"bytes": len(raw), "nkeys": len(keys), "missing": missing,
+            "complete": not missing, "path": str(p)}
+
+
+def _douyin_cookie_live(aweme_id):
+    """真发一次详情请求。返回 (通不通过, 给人看的一句话)"""
+    try:
+        ensure_parser_on_path()
+        import requests
+        from douyin_video_parser import DouyinVideoParser
+    except Exception as e:
+        return False, "解析器进不去：%s" % repr(e)[:80]
+    parser = DouyinVideoParser()
+    parser.set_cookie(get_cookie_path().read_text(encoding="utf-8").strip()
+                      if get_cookie_path().exists() else "")
+    params = dict(parser.BASE_PARAMS)
+    params["aweme_id"] = aweme_id
+    url = parser._sign_abogus_url("https://www.douyin.com/aweme/v1/web/aweme/detail/", params)
+    if not url:
+        return False, "签名（a_bogus）没生成，多半是 vendor/douyin_parse 那份解析器坏了"
+    try:
+        r = requests.get(url, headers=parser._build_headers(
+            "https://www.douyin.com/video/%s" % aweme_id), timeout=25)
+    except Exception as e:
+        return False, "请求没发出去：%s" % repr(e)[:90]
+    body = (r.text or "").strip()
+    if r.status_code == 200 and '"aweme_detail"' in body:
+        return True, "风控放行，能取到视频详情（直链解析可用）"
+    return False, "HTTP %s：%s" % (r.status_code, body[:100] or "空响应")
+
+
+@app.route("/api/douyin/cookie", methods=["GET", "POST"])
+def api_douyin_cookie():
+    """GET：只报本地文件里有哪些键、缺什么（不打网络）。
+    POST：可带 cookie 先落盘，再真发一次详情请求验证能不能过风控。"""
+    st = _douyin_cookie_state()
+    if request.method == "GET":
+        return jsonify(st)
+    data = request.get_json(silent=True) or {}
+    pasted = str(data.get("cookie") or "").strip()
+    if pasted:
+        try:
+            _setup_parser_and_cookie(pasted)
+        except Exception as e:
+            return jsonify({"error": "写入失败：%s" % str(e)[:120]}), 400
+        st = _douyin_cookie_state()
+    row = None
+    try:
+        with sqlite3.connect(str(DB_PATH)) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute("SELECT aweme_id FROM videos WHERE aweme_id IS NOT NULL"
+                               " AND aweme_id GLOB '[0-9]*' ORDER BY updated_at DESC LIMIT 1").fetchone()
+    except sqlite3.Error:
+        pass
+    aid = (row["aweme_id"] or "") if row else ""
+    if not aid:
+        return jsonify(dict(st, live=None, note="库里没有抖音视频可测"))
+    ok, msg = _douyin_cookie_live(aid)
+    return jsonify(dict(st, aweme_id=aid, live={"ok": ok, "msg": msg}))
 
 
 def _sync_content_db():
@@ -876,7 +964,7 @@ def api_process():
     data = request.get_json(force=True)
     links_text = data.get("links", "").strip()
     cookie = data.get("cookie", "").strip()
-    asr_model = data.get("asr_model", "base")
+    asr_model = data.get("asr_model", "small")   # 10-12 从 base 提到 small，理由见 main.py --asr-model 注释
 
     if not links_text:
         return jsonify({"error": "请输入抖音链接"}), 400
@@ -1082,7 +1170,7 @@ def api_fetch_and_process():
     cookie = data.get("cookie", "").strip()
     max_pages = int(data.get("max_pages", 10))
     max_videos = int(data.get("max_videos") or 0)
-    asr_model = data.get("asr_model", "base")
+    asr_model = data.get("asr_model", "small")   # 10-12 从 base 提到 small，理由见 main.py --asr-model 注释
     # 前端预览阶段已抓取的视频列表（可选，传入则跳过重复抓取）
     preset_videos = data.get("videos") or []
 
@@ -2776,8 +2864,24 @@ def _frames_resolve_url(video, aweme_id, sid):
     return ""
 
 
-def _frames_worker(sid, video, aweme_id, cfg):
-    """下载 → 抽帧 → 逐帧裁掉 up主 压的字幕 → 判帧。整条在后台线程里跑，进度回写 job。"""
+def _frames_judge(sid, aweme_id, cfg, limit=8):
+    """判帧这一步单独抽出来：花钱的活只在两种时候干——号主点「先看图确认」，或者真要出图。"""
+    from src import frame_pool
+    _frames_set(sid, running=True, progress="看图确认 %d 张里哪些还带后期字..." % limit)
+    meta = frame_pool.ensure_judged(
+        aweme_id, cfg, limit=limit,
+        progress_cb=lambda m: _frames_set(sid, progress=m)) or {}
+    usable = len(frame_pool.usable(meta))
+    total = len(meta.get("frames") or [])
+    _frames_set(sid, running=False, done=True, usable=usable, total=total,
+                progress="看图完成：%d/%d 张能用（扔掉的 %d 张原因见下面那行）" % (
+                    usable, total, total - usable))
+    return meta
+
+
+def _frames_worker(sid, video, aweme_id, cfg, judge=False):
+    """下载 → 抽帧 → 逐帧裁掉后期压上去的字。**默认不判帧**（号主 10-12 定的口径：
+    判帧只补真要发的那几条，别在"先把画面备着"这一步花钱）。judge=True 才走看图那一问。"""
     import tempfile
     import shutil as _shutil
     from src import frame_pool, material_store
@@ -2798,18 +2902,15 @@ def _frames_worker(sid, video, aweme_id, cfg):
             _frames_set(sid, running=False, done=True, error="视频下载失败（链接可能已过期）")
             return
         _frames_set(sid, progress="抽帧并挑掉后期压上去的字...")
-        # 抽帧这一刀不花钱；判帧花钱，所以走 ensure_judged 那条封顶的路（只判 8 张、
-        # 按时间均匀取），和出图那一刻用的是同一个函数，不在这儿另开一套烧钱的判法
         meta = frame_pool.build(mp4, aweme_id, progress_cb=lambda m: _frames_set(sid, progress=m))
         total = len(meta.get("frames") or [])
-        _frames_set(sid, progress="看图确认 %d 张里哪些还带后期字..." % min(total, 8))
-        meta = frame_pool.ensure_judged(
-            aweme_id, cfg, limit=8,
-            progress_cb=lambda m: _frames_set(sid, progress=m)) or meta
-        usable = len(frame_pool.usable(meta))
-        _frames_set(sid, running=False, done=True, usable=usable, total=total,
-                    progress="完成：%d 张可用（抽了 %d 张，%d 张被判定还带后期字）" % (
-                        usable, total, total - usable))
+        if judge:
+            _frames_judge(sid, aweme_id, cfg)
+        else:
+            # 零成本那一档只报"抽了几张"，能用几张要等看图——那一步留给点「先看图确认」或出图
+            _frames_set(sid, running=False, done=True, usable=0, total=total,
+                        progress="抽了 %d 张（没花钱）。还没逐张看图：出图那一刻会自动看，"
+                                 "也可以现在点「先看图确认」" % total)
     except Exception as e:
         traceback.print_exc()
         _frames_set(sid, running=False, done=True, error=str(e)[:200])
@@ -2837,12 +2938,34 @@ def api_poster_frames_build():
     if job.get("running"):
         return jsonify({"started": False, "reason": "already_running",
                         "progress": job.get("progress") or ""})
+    action = str(data.get("action") or "build").strip().lower()
+    if action == "judge":
+        try:
+            from src import frame_pool
+        except ImportError:
+            import frame_pool
+        if not frame_pool.load(aweme_id).get("frames"):
+            return jsonify({"error": "这条还没有帧池，先点「补画面」抽帧（不花钱）"}), 400
+        _frames_set(sid, running=True, done=False, error="", progress="排队中...")
+        threading.Thread(target=lambda: _judge_thread(sid, aweme_id), daemon=True).start()
+        return jsonify({"started": True, "action": "judge",
+                        "summary_id": sid, "aweme_id": aweme_id})
     video = content_store.get_video_by_source(DB_PATH, summary.get("source_sheet"),
                                               summary.get("source_row")) or dict(summary)
     _frames_set(sid, running=True, done=False, error="", progress="排队中...")
     threading.Thread(target=_frames_worker, daemon=True,
-                     args=(sid, video, aweme_id, _ai_config())).start()
+                     args=(sid, video, aweme_id, _ai_config(),
+                           bool(data.get("judge")))).start()
     return jsonify({"started": True, "summary_id": sid, "aweme_id": aweme_id})
+
+
+def _judge_thread(sid, aweme_id):
+    """判帧那条后台线程：出错也要把 running 落下来，否则界面永远转圈"""
+    try:
+        _frames_judge(sid, aweme_id, _ai_config())
+    except Exception as e:
+        traceback.print_exc()
+        _frames_set(sid, running=False, done=True, error=str(e)[:200])
 
 
 @app.route("/api/poster/styles")

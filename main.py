@@ -236,7 +236,38 @@ def _get_asr_model(model_size: str):
         return _ASR_MODELS[model_size]
 
 
-def asr_transcribe(video_url: str, model_size: str = "base",
+def _asr_hotwords():
+    """给 Whisper 的一句简体术语开头（同音错字与繁体输出都靠它压）。失败返回空串。"""
+    try:
+        try:
+            from src import asr_fix
+        except ImportError:
+            import asr_fix
+        return asr_fix.hotwords()
+    except Exception as e:
+        print("[ASR] 术语提示词没拿到（不影响转写）:", e)
+        return ""
+
+
+def _asr_normalize(segs):
+    """转写完立刻规范化：繁→简 + 按已确认的误写对回改。返回 (繁体字数, 误写处数)。
+
+    为什么改在这里而不是整理稿那一步：底子脏，整理稿/图文/海报三条产线拿到的都是脏字，
+    而海报那一档是照抄整理稿的——「微望奖励」就是这么流到成品图上的。
+    实测 471 条转写里 164 条（35%）出来是繁体，这一道比纠错还值钱。
+    """
+    try:
+        try:
+            from src import asr_fix
+        except ImportError:
+            import asr_fix
+        return asr_fix.normalize(segs)
+    except Exception as e:
+        print("[ASR] 规范化失败（保留原文）:", e)
+        return (0, 0)
+
+
+def asr_transcribe(video_url: str, model_size: str = "small",
                     language: str = "zh", aweme_id: str = "",
                     tag: str = "") -> str:
     """下载视频 → 提取音频 → faster-whisper 转写。
@@ -294,22 +325,27 @@ def asr_transcribe(video_url: str, model_size: str = "base",
     # 转写
     segs = []
     try:
+        hot = _asr_hotwords()
         if HAS_FASTER_WHISPER:
             model = _get_asr_model(model_size)
             segments, info = model.transcribe(
                 audio_path, language=language,
-                vad_filter=True, beam_size=1
+                vad_filter=True, beam_size=1, initial_prompt=hot or None
             )
             # 时间戳必须留一份：帧池要拿"这一帧前后在说什么"去对图和论点，
             # 原来这里 "".join(s.text) 把 start/end 丢了，图注就只能靠编
             segs = [{"start": float(getattr(s, "start", 0) or 0),
                      "end": float(getattr(s, "end", 0) or 0),
                      "text": str(getattr(s, "text", "") or "")} for s in segments]
-            text = "".join(s["text"] for s in segs)
         else:
             model = _get_asr_model(model_size)
-            result = model.transcribe(audio_path, language=language)
-            text = result["text"].strip()
+            result = model.transcribe(audio_path, language=language,
+                                      initial_prompt=hot or None)
+            segs = [{"start": 0.0, "end": 0.0, "text": (result.get("text") or "").strip()}]
+        trad, fixed = _asr_normalize(segs)
+        text = "".join(s["text"] for s in segs)
+        if trad or fixed:
+            print("[%s] 转写规范化：繁转简 %d 字、误写回改 %d 处" % (log, trad, fixed))
     except Exception as e:
         return f"[转写失败] {e}"
     finally:
@@ -467,7 +503,10 @@ def main():
     parser.add_argument("--cookie", help="完整 cookie 字符串，或 sessionid=xxx")
     parser.add_argument("--cookie-file", help="从文件读取 cookie")
     parser.add_argument("--row", type=int, help="只处理指定行号")
-    parser.add_argument("--asr-model", default="base",
+    # 默认从 base 提到 small：2026-10-12 同一条 43 秒魔兽素材实测，
+    # base 出 11 处已知错字（中帮/关宣/上赛径/得大18层），small 出 1 处（重磅/官宣/上赛季/得打18层）；
+    # 代价是 43 秒音频从 4 秒变 14 秒。号主 10-12 的要求就是"上游转写质量提高"
+    parser.add_argument("--asr-model", default="small",
                         choices=["tiny","base","small","medium","large"])
     parser.add_argument("--ai-method", default="skip",
                         choices=["skip","openai","deepseek","openai_api","deepseek_api"])

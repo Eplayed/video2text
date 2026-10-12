@@ -850,16 +850,24 @@ textarea{resize:vertical;min-height:84px}
               <div class="hint">支持短链接格式 v.douyin.com/xxx</div>
             </div>
             <div class="form-group">
-              <label>Cookie (sessionid) <span class="req">*</span></label>
-              <input id="cookie" type="text" placeholder="sessionid=xxxxxxxxxxxx">
-              <div class="hint">浏览器 F12 → Application → Cookies → douyin.com 获取</div>
+              <label>抖音 Cookie（要整串，不是只要 sessionid） <span class="req">*</span></label>
+              <!-- 占位符以前写的是 sessionid=xxxx，等于教人只粘一个键：实测只留 sessionid 会被
+                   Argus 挡成 403 Uifid Not Found，直链解析全军覆没（帧池补画面就是被这个卡住的） -->
+              <input id="cookie" type="text" placeholder="sessionid=…; ttwid=…; UIF_ID=…; __ac_nonce=…; __ac_signature=…">
+              <div class="hint">登录 douyin.com → F12 → Network → 找 aweme/detail 那条请求 → 把请求头里
+                <b>Cookie 整行</b>复制过来（通常 1500-3000 字）。只粘 sessionid 会被风控挡。</div>
+              <div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap;align-items:center">
+                <button class="btn ghost sm" id="btn-dy-check" onclick="checkDouyinCookie()"
+                        title="真发一次详情请求，验证这串 cookie 能不能过抖音风控">测一下能不能用</button>
+                <span id="dy-cookie-hint" style="font-size:11.5px;color:var(--text-tertiary)"></span>
+              </div>
             </div>
             <div class="form-group">
               <label>ASR 模型</label>
-              <select id="asr-model">
-                <option value="tiny">Tiny（最快）</option>
-                <option value="base" selected>Base（推荐）</option>
-                <option value="small">Small（高精度）</option>
+              <select id="asr-model" title="2026-10-12 同一条 43 秒音频实测：base 不喂提示词 11 处已知错字；base 喂术语提示词 3 处；small 喂提示词 1 处（耗时 4 秒 → 14 秒）">
+                <option value="tiny">Tiny（最快，错字最多）</option>
+                <option value="base">Base（快 3 倍，错字多一档）</option>
+                <option value="small" selected>Small（推荐：实测已知错字 11 → 1 处）</option>
               </select>
             </div>
             <button class="btn block" id="btn-submit" onclick="submitTask()"><span data-icon="bolt" class="ic14"></span>开始处理</button>
@@ -1821,6 +1829,7 @@ async function init() {
 
   const savedCookie = localStorage.getItem('v2t_cookie');
   if (savedCookie) document.getElementById('cookie').value = savedCookie;
+  fetchDouyinCookie();            // 那行"缺哪几个键"要在打开页面时就看得见，别等点了同步才报错
 
   loadCategoryOptions();          // 分类名单下发到各下拉（不等它，先让首页渲染）
   await loadTopics();
@@ -3154,23 +3163,30 @@ function pkFramesPoll() {
   clearTimeout(_pkFramesTimer);
   _pkFramesTimer = setTimeout(function () { pkFramesProbe(_pkId); }, 3000);
 }
-async function pkBuildFrames(btn) {
-  if (btn) { btn.disabled = true; btn.textContent = '正在补...'; }
+async function pkFramesJob(payload, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = '正在跑...'; }
   try {
     const d = await fetch('/api/poster/frames/build', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({summary_id: _pkId})
+      body: JSON.stringify(Object.assign({summary_id: _pkId}, payload))
     }).then(r => r.json());
-    if (d && d.error) { alert(d.error); if (btn) { btn.disabled = false; btn.textContent = '补画面'; } return; }
+    if (d && d.error) {
+      alert(d.error);
+      if (btn) { btn.disabled = false; btn.textContent = payload.action === 'judge' ? '先看图确认' : '补画面 · 不花钱'; }
+      return;
+    }
     // 任务已经在后台跑起来了，先把这一格填成"进行中"，别让他对着一个空按钮等 3 秒
-    _pkFrames = {building: true, progress: '排队中...', usable: 0, total: 0};
+    _pkFrames = {building: true, progress: '排队中...', usable: 0,
+                 total: (_pkFrames && _pkFrames.total) || 0, judged: (_pkFrames && _pkFrames.judged) || 0};
     pkRenderFramesHint();
   } catch (e) {
-    alert('补画面请求失败：' + e);
-    if (btn) { btn.disabled = false; btn.textContent = '补画面'; }
+    alert('请求失败：' + e);
+    if (btn) { btn.disabled = false; btn.textContent = payload.action === 'judge' ? '先看图确认' : '补画面 · 不花钱'; }
   }
   pkFramesPoll();
 }
+function pkBuildFrames(btn) { return pkFramesJob({}, btn); }
+function pkJudgeFrames(btn) { return pkFramesJob({action: 'judge'}, btn); }
 function pkRenderFramesHint() {
   const box = document.getElementById('pk-frames-hint');
   if (!box) return;
@@ -3190,6 +3206,17 @@ function pkRenderFramesHint() {
   }
   if (!f.usable) {
     box.style.display = '';
+    if (f.total && !(f.judged > 0)) {
+      // 抽了帧但一张都没看过图。判帧花钱，号主定的口径是"只补真要发的那几条"，
+      // 所以这里只给一个不催的入口：不点也行，出图那一刻会自动看 8 张
+      box.innerHTML = '这条素材抽了 ' + f.total + ' 张画面，还没逐张看图（看图那一步才花钱）。'
+        + '<button class="btn ghost sm" onclick="pkJudgeFrames(this)" '
+        + 'title="逐张问一遍看图模型：有没有后期压上去的字、在哪、能不能裁一条边救回来。一次最多看 8 张">'
+        + '先看图确认</button>'
+        + '<span style="color:var(--text-tertiary)">不点也行，出图那一刻会自动看 8 张 · '
+        + '<a href="javascript:void(0)" onclick="pkUseGuideLayout()">直接改成攻略页</a></span>';
+      return;
+    }
     if (f.total) {
       // 抽过帧但一张没留下：这条素材整条都是作者做的卡/表，或花字压在画面正中。
       // 不写清楚的话，"18 帧全被扔"看着就像程序坏了
@@ -3201,11 +3228,11 @@ function pkRenderFramesHint() {
       return;
     }
     // 老素材（抽帧流程上线前采的、或转写时视频已删）以前在界面上完全看不出来，
-    // 于是"攻略页"这条 0 元路线对所有人都是隐形的——这里给一个补的入口
-    box.innerHTML = '这条素材还没有可用画面（抽帧流程上线前采的）。'
+    // 于是"攻略页"这条 0 元路线对所有人都是隐形的——这里给一个补的入口（这一步不花钱）
+    box.innerHTML = '这条素材还没有画面（抽帧流程上线前采的）。'
       + '<button class="btn ghost sm" onclick="pkBuildFrames(this)" '
-      + 'title="重新下载这条视频 → 抽帧 → 逐帧挑掉作者后期压的字幕条/花字/整帧卡 → 看图模型确认，约 1-2 分钟；判帧会花一点 token"'
-      + '>补画面</button>'
+      + 'title="重新下载这条视频 → 抽帧 → 挑掉后期压的字幕条/花字/整帧卡。约 1-2 分钟，这一步不花钱；逐张看图才花钱，且不会自动做"'
+      + '>补画面 · 不花钱</button>'
       + '<span style="color:var(--text-tertiary)">补完就能选「攻略页」那一档，出图不花钱</span>';
     return;
   }
@@ -5831,6 +5858,38 @@ function closeModal(e) {
   if (e && e.target !== e.currentTarget) return;
   document.getElementById('modal-overlay').classList.remove('show');
   document.body.style.overflow = '';
+}
+
+// ── 抖音 cookie 体检：只报"缺哪几个键"，别等同步全失败了才知道只粘了 sessionid ──
+function dyCookiePaint(st, live) {
+  const el = document.getElementById('dy-cookie-hint');
+  if (!el) return;
+  if (!st || st.error) { el.textContent = (st && st.error) || '问不到 cookie 状态'; return; }
+  const okColor = 'var(--success,#4a9d6e)', bad = 'var(--danger,#d9694a)';
+  let line = '本地 cookie：' + st.nkeys + ' 个键 / ' + st.bytes + ' 字';
+  if (st.missing && st.missing.length) line += ' · <span style="color:' + bad + '">缺 ' + st.missing.join('、') + '</span>';
+  else line += ' · <span style="color:' + okColor + '">必需键齐</span>';
+  if (live) line += '<br>' + (live.ok ? '<span style="color:' + okColor + '">✅ ' : '<span style="color:' + bad + '">❌ ')
+    + esc(live.msg) + '</span>';
+  el.innerHTML = line;
+}
+async function fetchDouyinCookie() {
+  try {
+    const st = await fetch('/api/douyin/cookie').then(r => r.json());
+    dyCookiePaint(st);
+  } catch (e) { dyCookiePaint({error: '问不到：' + e}); }
+}
+async function checkDouyinCookie(btn) {
+  const box = document.getElementById('dy-cookie-hint');
+  if (box) box.textContent = '正在真发一次详情请求…（约 5-20 秒）';
+  const cookie = (document.getElementById('cookie') || {}).value || '';
+  try {
+    const st = await fetch('/api/douyin/cookie', {method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({cookie: cookie.trim()})}).then(r => r.json());
+    dyCookiePaint(st, st.live);
+    if (st.live && st.live.ok) localStorage.setItem('v2t_cookie', cookie.trim());
+  } catch (e) { dyCookiePaint({error: '测不了：' + e}); }
 }
 
 // ── 提交任务 ──
