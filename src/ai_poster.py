@@ -1459,6 +1459,31 @@ MANUAL_FOOT_DIRECT = _MANUAL_COMMON + """【直出档 · 这张就是成品】
 """
 
 
+def _ts_is_guide(page):
+    """这一页是不是攻略页。poster_typeset 拿不到（极端导入环境）就当不是，别整条挂掉。"""
+    try:
+        from . import poster_typeset as _t
+    except ImportError:
+        try:
+            import poster_typeset as _t
+        except ImportError:
+            return False
+    try:
+        return bool(_t._is_guide(page))
+    except Exception:
+        return False
+
+
+def guide_only_plan(plan):
+    """整组是不是都走攻略页（画面=素材真帧）。界面据此决定要不要摆"去豆包传底图"那一块。
+
+    攻略页压根不需要底图：给它一份"画一张无字底图"的提示词是自相矛盾的指令——
+    他真去传一张回来，反而把真帧的位置盖掉。
+    """
+    pages = plan_pages(plan) or [plan or {}]
+    return bool(pages) and all(_ts_is_guide(p) for p in pages)
+
+
 def manual_prompts_for(plan, ratio="9:16", text_mode=None):
     """整组（每页一份）手动出图材料。plan 里没有 pages 就是单页。
 
@@ -1471,6 +1496,10 @@ def manual_prompts_for(plan, ratio="9:16", text_mode=None):
     # 既写了「深蓝紫渐变」又写了「信息卡片纵向排列」，风格串了、还勾着模型画卡片框。
     # plan_pages 会把顶层的 style_key/footer/scene 继承到每一页，和花钱出图那条同一份算法。
     pages = plan_pages(plan) or [plan or {}]
+    if pages and all(_ts_is_guide(p) for p in pages):
+        # 攻略页的画面是素材真帧，压根不叫出图模型——这里再给一份"去豆包画无字底图"
+        # 就是自相矛盾的指令：他真传一张回来，反而把真帧的位置盖掉。
+        return []
     # 整组的主标题也要从每一页的画面描述里摘掉：第 1 页的插画最容易顺手把主题名画上去
     group_topics = _art_topic_words(plan)
     mode = text_mode or DEFAULT_TEXT_MODE

@@ -2364,6 +2364,9 @@ def api_poster_plan():
         warning = "；".join(ai_poster.draft_gate.draft_blockers(summary))
         _poster_status["plan"] = {"plan": plan, "publish": publish, "violations": bad,
                                   "notes": notes, "chars": ai_poster.plan_chars(plan),
+                                  # 整组都是攻略页时界面不该再摆"去豆包画无字底图"那一块：
+                                  # 这一档的画面是素材真帧，传一张底图回来反而把真帧盖掉
+                                  "guide_only": ai_poster.guide_only_plan(plan),
                                   "visual": ai_poster.lint_visual(plan),
                                   "model": cfg.get("model") or "",
                                   "draft_warning": warning,
@@ -2664,6 +2667,35 @@ def api_poster_base():
 @app.route("/api/poster/status")
 def api_poster_status():
     return jsonify(_poster_status)
+
+
+@app.route("/api/poster/frames")
+def api_poster_frames():
+    """这条素材有没有"能当攻略证据的干净画面"。只读 frames.json，不判帧、不花钱。
+
+    为什么要单独问一次：攻略页这条 0 元的路以前在界面上完全隐形——他不知道哪条素材
+    有可用画面，也就永远不会去选那个版式。这里把数报出来，弹窗才提得出那句建议。
+    """
+    try:
+        sid = int(request.args.get("summary_id") or 0)
+    except (TypeError, ValueError):
+        sid = 0
+    summary = _poster_get_summary(sid)
+    if not summary:
+        return jsonify({"error": "整合稿不存在"}), 404
+    aid = str(summary.get("aweme_id") or "").strip()
+    if not aid:
+        return jsonify({"aweme_id": "", "total": 0, "usable": 0, "checked": False})
+    try:
+        from src import frame_pool
+    except ImportError:
+        import frame_pool
+    meta = frame_pool.load(aid)
+    frames = (meta or {}).get("frames") or []
+    return jsonify({"aweme_id": aid, "total": len(frames),
+                    "usable": len(frame_pool.usable(meta)),
+                    "checked": bool((meta or {}).get("checked")),
+                    "duration": (meta or {}).get("duration") or 0})
 
 
 @app.route("/api/poster/styles")

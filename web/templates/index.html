@@ -1398,6 +1398,8 @@ textarea{resize:vertical;min-height:84px}
           <button class="btn ghost sm" id="pk-manual-btn" onclick="pkManualToggle()" title="不想花那五毛：复制提示词去豆包出图，回来传上这张，整条 0 元">③b 豆包 · 回传底图</button>
         </div>
         <div id="pk-layout-hint" style="font-size:11.5px;color:var(--text-secondary);margin:2px 0 8px;min-height:16px"></div>
+        <!-- 这条素材有没有"能当证据的干净画面"：不说的话，0 元那条攻略页路线在界面上是隐形的 -->
+        <div id="pk-frames-hint" style="display:none;font-size:11.5px;line-height:1.6;margin:0 0 8px"></div>
         <div class="pk-tpls" id="pk-tpls" style="display:none"></div>
         <div class="pk-break" id="pk-break" style="display:none"></div>
         <div class="pk-one" id="pk-one" style="display:none"></div>
@@ -2990,6 +2992,8 @@ function openPosterDialog(id) {
   _pkSource = null;          // 原文缓存按整理稿存，换一条必须重取
   _pkPhoto = null;           // 配图也是这条素材的，换整理稿要清掉
   _pkManual = []; _pkManualRaw = []; _pkBases = []; _pkManualOpen = false;   // 豆包那条同样属于这条素材
+  _pkGuideOnly = false; _pkFrames = null;    // 攻略页标记与可用画面数都属于这一条素材
+  pkFramesProbe(id);
   _pkPages = []; _pkCur = 0; // 分页同样属于这条素材，不清会把上一条的页带过来
   _pkRec = null; _pkWhy = ''; _pkPreviewClicks = 0;
   document.getElementById('pk-id').textContent = id;
@@ -3018,7 +3022,9 @@ async function pkHydrate(id) {
   }
   if (st.plan && st.plan.plan) {
     _pkManualRaw = st.plan.manual_prompts || [];   // 每页一份"拿去豆包手动出图"的材料
+    _pkGuideOnly = !!st.plan.guide_only;           // 攻略页那份是空的：这一档不出底图
     _pkManual = pkTakeManual(_pkManualRaw);
+    pkApplyModeChrome();                           // ③b 那颗按钮的显隐跟着这个标记走
     pkRenderManual();
     pkRenderPlan(st.plan.plan, st.plan.publish);
   }
@@ -3094,6 +3100,45 @@ function pkApplyModeChrome() {
   ['pk-manual-btn', 'pk-manual-btn-2'].forEach(function (id) {
     const el = document.getElementById(id); if (el) el.textContent = mbTxt;
   });
+  // 攻略页没有"底图"可传：那个按钮留着就是骗人去豆包白跑一趟
+  ['pk-manual-btn', 'pk-manual-btn-2'].forEach(function (id) {
+    const el = document.getElementById(id);
+    if (el) el.style.display = _pkGuideOnly ? 'none' : '';
+  });
+  pkRenderFramesHint();
+}
+// ── 这条素材有没有可用画面：0 元的攻略页路线以前在界面上完全隐形 ──
+async function pkFramesProbe(id) {
+  const box = document.getElementById('pk-frames-hint');
+  if (box) box.style.display = 'none';
+  if (!id) return;
+  try {
+    const d = await fetch('/api/poster/frames?summary_id=' + encodeURIComponent(id)).then(r => r.json());
+    if (_pkId !== id) return;              // 人已经翻到下一条，旧结果不许盖上来
+    _pkFrames = d || null;
+  } catch (e) { _pkFrames = null; }
+  pkRenderFramesHint();
+}
+function pkRenderFramesHint() {
+  const box = document.getElementById('pk-frames-hint');
+  if (!box) return;
+  const f = _pkFrames;
+  if (!f || !f.usable) { box.style.display = 'none'; box.innerHTML = ''; return; }
+  const isGuide = (document.getElementById('pk-layout-key-top') || {}).value === 'guide';
+  box.style.display = '';
+  box.innerHTML = '这条素材有 <b>' + f.usable + '</b> 张干净画面（已挑掉带 up主 字幕条的帧）'
+    + (f.checked ? '' : '，第一次出图时会看图确认')
+    + (isGuide ? ' · <b>正在用攻略页那一档，出图 0 元</b>'
+               : ' · 版式选「攻略页」= 一页一个论点配真帧带图注，<b>不花出图费</b> '
+                 + '<button class="btn ghost sm" onclick="pkUseGuideLayout()">改成攻略页</button>');
+}
+function pkUseGuideLayout() {
+  const sel = document.getElementById('pk-layout-key-top');
+  if (sel) { sel.value = 'guide'; }
+  pkSyncLayout('guide');
+  const st = document.getElementById('pk-style-key-top');
+  if (st) { st.value = 'guide_ink'; pkSyncStyle('guide_ink'); }
+  pkRenderFramesHint();
 }
 function pkModeChanged() {
   pkApplyLimits();
@@ -3643,6 +3688,8 @@ let _pkPhoto = null;
 // 分工照旧：外部只出**无字底图**，中文仍由排版引擎排——所以"AI 把字画错"这个死穴不在这条路上。
 let _pkManual = [];      // 后端按页给的 {page,total,copy,full,mode}，已按当前「出法」筛过
 let _pkManualRaw = [];   // 后端原样回的那一份（只含拆解时用的那一档），切换出法时从这里筛
+let _pkGuideOnly = false;   // 整组都是攻略页：画面=素材真帧，不需要底图，也不该看见豆包那一块
+let _pkFrames = null;       // 这条素材的可用画面数 {total, usable, checked}，打开弹窗时问一次
 let _pkBases = [];       // 回传的底图，和页一一对应；空 = 这页还没回传
 let _pkManualOpen = false;
 
@@ -3666,6 +3713,13 @@ function pkRenderManual() {
   if (!_pkManualOpen) return;
   const direct = pkTextMode() === 'model';
   const what = direct ? '成品' : '底图';
+  if (_pkGuideOnly) {
+    // 攻略页这一档压根不叫出图模型：这里再让他"去豆包画一张无字底图"就是自相矛盾，
+    // 传回来反而把素材真帧的位置盖掉。所以只说这一档怎么出、多少钱。
+    box.innerHTML = '<div class="pm-h"><b>这一档不用底图。</b>画面全部来自素材真帧，'
+      + '直接点「' + pkGoLabel() + '」就是 0 元；要换图就在文案区改那一页的配图编号。</div>';
+    return;
+  }
   if (!_pkManual.length) {
     box.innerHTML = '<div class="pm-h">先点「① 拆文案」，这里按页列出提示词'
       + (direct ? '（直出档：连中文一起画）' : '') + '。</div>';
@@ -3806,6 +3860,11 @@ function pkPhotoLabel() {
 // 所以算式只留这一份：pkPhotoLabel 和切档都要用，两边各写一遍迟早对不上。
 function pkGoLabel() {
   const n = Math.max(1, _pkPages.length);
+  if (_pkGuideOnly) {
+    // 攻略页整组一张 AI 底图都不叫（画面是素材真帧），写 0.5 元/张就是虚报价格——
+    // 号主就是冲着不花钱走这条的，账和文案都得跟着改口
+    return n > 1 ? '③ 出图 · 0 元（' + n + ' 页，用素材真帧）' : '③ 出图 · 0 元（用素材真帧）';
+  }
   if (_pkPhoto) {
     return n > 1 ? '③ 出图 · 0 元（' + n + ' 页，首页用你的图）' : '③ 出图 · 0 元（用你的图）';
   }
@@ -3816,6 +3875,7 @@ function pkGoLabel() {
   return n > 1 ? '③ 出图 · ' + n + ' 页共 ' + (n * 0.5).toFixed(1) + ' 元' : '③ 出图 · 0.5 元/张';
 }
 function pkModeLine() {
+  if (_pkGuideOnly) return '画面用素材真帧（已挑掉带字幕条的帧），中文与图注由程序排';
   if (_pkPhoto) return '主视觉用你上传的真图，中文由程序排版';
   return pkTextMode() === 'model' ? '字由 AI 画，看到的就是成品 · 传上来会逐字核对'
                                   : '底图 AI 现画，中文由程序排版';
