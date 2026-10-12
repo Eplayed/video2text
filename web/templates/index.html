@@ -687,8 +687,8 @@ textarea{resize:vertical;min-height:84px}
   border:1px dashed var(--border);border-radius:9px;padding:9px 13px;margin:2px 0 16px}
 .oneline b{color:var(--text);font-size:13.5px;font-weight:800}
 .oneline i{font-style:normal;color:var(--border-input)}
-.oneline em{font-style:normal;cursor:pointer;text-decoration:underline dotted}
-.oneline em:hover{color:var(--module-5)}
+/* .oneline em 那两条（虚下划线 + 手型 + hover 变色）跟着 onclick 一起删了：
+   概况行现在是纯文字，留着会勾着人去点那些点不动的数字 */
 .todo-list{display:flex;flex-direction:column;gap:9px}
 .todo{display:flex;gap:14px;align-items:center;border:1px solid var(--border);border-radius:12px;
   background:var(--surface-card);box-shadow:var(--shadow-card);padding:13px 16px;cursor:pointer;transition:border .12s,transform .12s}
@@ -967,7 +967,9 @@ textarea{resize:vertical;min-height:84px}
           <span class="cic" style="background:color-mix(in srgb,var(--module-2) 14%,transparent);color:var(--module-2)" data-icon="calendar"></span>自动同步任务
           <span class="count" id="as-count" style="margin-left:auto">未开启</span>
           <label class="as-sw"><input type="checkbox" id="as-enabled" onchange="asSetEnabled(this.checked)">开总开关</label>
-          <button class="btn ghost sm" onclick="asRun(true)">全部跑一遍</button>
+          <!-- 「全部跑一遍」这颗全局按钮删掉了（2026-10-11 号主拍：同步入口收成 2 个）：
+               它和每行那颗「立刻跑」是同一件事，跑全部可以在每一行挨个按，误点代价反而更大。
+               建任务照旧走下面那排「选择订阅 ▾」，这里不放第二颗入口 -->
         </h3>
         <!-- 271 字的机制说明收起来了：留两句真正会踩的（时刻怎么算、没开就不跑），
              剩下的"时刻按任务各存""该跑了不是出错"是第一次看才需要的知识 -->
@@ -1940,13 +1942,15 @@ function renderDashOneLine(data, td) {
   const pk = (td && td.packages) || {};
   const as = (td && td.autosync) || {};
   const seg = [];
+  // 这一行原来 7 个数字全都能点（em + onclick），和左导航、待办行的「去处理」是同一批跳转，
+  // 一件事三个入口（2026-10-11 号主拍：概况行改成纯文字）。要跳就走左导航或下面的待办行。
   seg.push(`<span>素材 <b>${total}</b></span>`);
-  seg.push(`<em onclick="switchPage('videos')">已转写 <b>${withAsr}</b>（${data.asr_rate||0}%）</em>`);
-  seg.push(`<em onclick="switchPage('summaries')">整理稿 <b>${s.summaries||0}</b></em>`);
-  seg.push(`<em onclick="switchPage('poster')">海报 <b>${pk.poster||0}</b></em>`);
-  seg.push(`<em onclick="switchPage('toutiao')">头条 <b>${pk.toutiao||0}</b></em>`);
-  seg.push(`<em onclick="switchPage('wechat')">公众号 <b>${pk.wechat||0}</b></em>`);
-  seg.push(`<em onclick="switchPage('materials')">订阅 <b>${s.subs||0}</b></em>`);
+  seg.push(`<span>已转写 <b>${withAsr}</b>（${data.asr_rate||0}%）</span>`);
+  seg.push(`<span>整理稿 <b>${s.summaries||0}</b></span>`);
+  seg.push(`<span>海报 <b>${pk.poster||0}</b></span>`);
+  seg.push(`<span>头条 <b>${pk.toutiao||0}</b></span>`);
+  seg.push(`<span>公众号 <b>${pk.wechat||0}</b></span>`);
+  seg.push(`<span>订阅 <b>${s.subs||0}</b></span>`);
   seg.push(as.enabled
     ? `<span>自动同步 <b>已开</b>，下次 ${esc(as.next_due||'—')}</span>`
     : '<span>自动同步 <b>未开</b></span>');
@@ -1957,8 +1961,8 @@ function renderDashOneLine(data, td) {
     if (!d || !d.sampled || document.getElementById('dash-oneline') !== el) return;
     if (el.innerHTML.indexOf('推荐照用') >= 0) return;
     el.insertAdjacentHTML('beforeend',
-      '<i>·</i><em onclick="switchPage(\'poster\')">海报推荐照用 <b>' + d.page.rate + '%</b>（页数）'
-      + ' / ' + d.layout.rate + '%（布局）</em>');
+      '<i>·</i><span>海报推荐照用 <b>' + d.page.rate + '%</b>（页数）'
+      + ' / ' + d.layout.rate + '%（布局）</span>');
   });
 }
 
@@ -2564,6 +2568,9 @@ async function asSetRunAt(v) {
   loadAutoSync();
 }
 
+// 「全部跑一遍」那颗全局按钮删了之后，这个函数暂时没有调用方。留着不删：
+// 后端 /api/sync/tasks/run 的 all:true 那条路还在，号主要想恢复入口，挂个按钮就行，
+// 不用重新猜参数怎么传。每行那颗「立刻跑」走的是下面的 asRunOne(key)。
 async function asRun(all) {
   const r = await asPost('/api/sync/tasks/run', all ? {all: true} : {});
   if (!r) return;
@@ -5066,15 +5073,13 @@ function renderSummaries(items) {
     const typeClass = {ai_interview: 'interview', guide_article: 'article', wechat_material: 'article', toutiao_mix: 'tt'}[item.summary_type] || 'guide';
     const typeLabel = `<span class="pill ${typeClass}">${TYPE_LABELS[item.summary_type] || '整理稿'}</span>`;
     const snippet = item.content || item.outline || '';
-    const ttBtn = item.summary_type === 'toutiao_mix'
-      ? `<div class="s-tt" onclick="event.stopPropagation();openToutiaoGenDialog(${item.id})">🔥 生成头条图文</div>` : '';
-    const wxBtn = item.summary_type === 'wechat_material'
-      ? `<div class="s-wx" onclick="event.stopPropagation();openWechatGenDialog(${item.id})">💬 生成公众号图文</div>` : '';
+    // 卡片上原来挂着「生成头条图文 / 生成公众号图文 / AI 海报」三条彩色动作条，
+    // 和点开卡片后的详情弹窗里那三个按钮是同一件事（2026-10-11 号主拍：收卡片这份）。
+    // 现在卡片只当"选稿"，动作统一在弹窗里做；体检行 mcRow 留着，那是状态不是入口。
+    // 海报走独立产线，任何类型的整理稿都能出图（不像头条/公众号各自绑定一种整合稿）
     // 体检入口只给公众号素材（wechat_material）：机检查的是它那 7 个分节，
     // 头条整合稿/攻略没有这套结构，套上去会整列假阳性「缺 7 节」。
     const mcRow = item.summary_type === 'wechat_material' ? mcRowHtml(item) : '';
-    // 海报走独立产线，任何类型的整理稿都能出图（不像头条/公众号各自绑定一种整合稿）
-    const pkBtn = `<div class="s-poster" onclick="event.stopPropagation();openPosterDialog(${item.id})">🎨 AI 海报</div>`;
     return `<div class="summary-card" onclick="openSummary(${item.id})">
       <div class="s-del" title="删除" onclick="event.stopPropagation();deleteSummary(${item.id})">${iconSvg('close', 12)}</div>
       <div class="s-author">${esc(item.author||'')} ${typeLabel}</div>
@@ -5085,7 +5090,7 @@ function renderSummaries(items) {
         <span>${esc(item.model||'')}</span>
         <span>${esc(item.updated_at||'')}</span>
       </div>
-      ${ttBtn}${wxBtn}${mcRow}${pkBtn}
+      ${mcRow}
     </div>`;
   }).join('');
 }
