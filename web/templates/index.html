@@ -450,6 +450,19 @@ textarea{resize:vertical;min-height:84px}
 .tt-gen-field{margin-bottom:14px}
 .tt-gen-field label{display:block;font-size:13px;font-weight:700;margin-bottom:7px}
 .tt-gen-field label small{color:var(--text-tertiary);font-weight:400}
+/* 字段小注默认收起来：这些是"看一遍就不需要"的一次性知识，摊开就是 200 字噪音。
+   两个坑实测过：① 不能给 details 写 display:inline——那样 Chrome 不再把非 summary
+   的子节点从布局里摘掉，"折叠"是假的，字照样摊在屏幕上；② 不能放进 label 里——
+   点 summary 会连带聚焦到该字段的控件上。所以它是独立一行，放在 label 下面。 */
+.tt-axis-scope{font-size:11.5px;color:var(--text-tertiary);margin:-3px 0 7px}
+.tt-axis-scope summary{cursor:pointer;text-decoration:underline dotted;list-style:none}
+.tt-axis-scope summary::-webkit-details-marker{display:none}
+.tt-axis-scope[open]{margin-bottom:7px}
+.tt-axis-scope small,.tt-axis-scope div{font-weight:400;line-height:1.6}
+/* 页头那种"这一页是干什么的"整段说明：收起来，标题留着，点开才给全文 */
+.page-note{font-size:12px;color:var(--text-tertiary);margin:0 0 12px}
+.page-note summary{cursor:pointer;font-weight:700}
+.page-note p{margin:6px 0 0;line-height:1.65}
 .tt-gen-field select{width:100%;border:1px solid var(--border-input);border-radius:var(--radius-control);padding:9px 12px;font-size:13.5px;background:var(--surface-card);margin-bottom:8px}
 .tt-gen-field input{width:100%;border:1px solid var(--border-input);border-radius:var(--radius-control);padding:9px 12px;font-size:13px}
 .tt-gen-field input:focus,.tt-gen-field select:focus{outline:none;border-color:var(--accent)}
@@ -956,7 +969,9 @@ textarea{resize:vertical;min-height:84px}
           <label class="as-sw"><input type="checkbox" id="as-enabled" onchange="asSetEnabled(this.checked)">开总开关</label>
           <button class="btn ghost sm" onclick="asRun(true)">全部跑一遍</button>
         </h3>
-        <div class="p-sub">一个任务＝一组订阅＋<b>这一条自己的执行时刻</b>＋一个频率：勾一批号点「选择订阅」建一个任务，到点整组一起跑。<b>下次 = 上次那天 + 频率 的那天的「这一条的时刻」</b>，改完立刻重算，实际几点跑完、跑多久都不影响它（设 08:30 就一直是 08:30，不会因为哪天手动晚跑了就跟着往后漂）。<b>时刻按任务各存一份</b>：三条任务可以 09:30 / 10:00 / 08:00 各跑各的，改其中一条不动另外两条；顶上那格只是<b>下一条新任务的默认时刻</b>，改它不会把已有任务一起挪走。列表里「该跑了」不是出错，是这条已经到设定时间、等开总开关或等下一分钟触发。定时器跑在工作台进程里：<b>工作台没开的那段时间不会跑</b>，下次打开若已过点会补一轮。抖音那条会起浏览器抓主页并做本地转写，跑起来电脑会占一会儿 CPU；微信那条只是拉一次 RSS，很轻。</div>
+        <!-- 271 字的机制说明收起来了：留两句真正会踩的（时刻怎么算、没开就不跑），
+             剩下的"时刻按任务各存""该跑了不是出错"是第一次看才需要的知识 -->
+        <div class="p-sub">一个任务＝一组订阅＋这一条自己的执行时刻＋一个频率，到点整组一起跑；定时器跑在工作台进程里，<b>工作台没开的那段时间不会跑</b>。<details class="tt-axis-scope"><summary>时刻怎么算、几个容易误会的点</summary><div>下次 = 上次那天 + 频率 的那天的「这一条的时刻」，改完立刻重算，实际几点跑完、跑多久都不影响它（设 08:30 就一直是 08:30，不会因为哪天手动晚跑了就跟着往后漂）。<b>时刻按任务各存一份</b>：三条任务可以 09:30 / 10:00 / 08:00 各跑各的，改其中一条不动另外两条；顶上那格只是<b>下一条新任务的默认时刻</b>，改它不会把已有任务一起挪走。列表里「该跑了」不是出错，是这条已经到设定时间、等开总开关或等下一分钟触发。下次打开若已过点会补一轮。抖音那条会起浏览器抓主页并做本地转写，跑起来电脑会占一会儿 CPU；微信那条只是拉一次 RSS，很轻。</div></details></div>
         <div class="as-bar">
           <label title="只决定下一条新建任务的时刻，已有任务的时刻在列表里各自改">新任务默认时刻<input type="time" id="as-runat" value="09:30" onchange="asSetRunAt(this.value)"></label>
           <label>添加订阅<button type="button" class="btn ghost as-pick-btn" id="as-cand-btn" onclick="asOpenPicker()">选择订阅 ▾</button></label>
@@ -1203,7 +1218,8 @@ textarea{resize:vertical;min-height:84px}
           <div class="spacer"></div>
           <span class="count" id="count-poster">0 张</span>
         </div>
-        <p style="font-size:12px;color:var(--text-tertiary);margin:0 0 12px">链路：整理稿点「🎨 AI 海报」→ ① 拆文案（对照原文改字）→ ② 看版面（免费）→ ③ 出图（0.5 元/张，复用模板底图 0 元）→ 这里回看成品、复制发布文案。发布动作保持<b>手动</b>，不走任何自动发布通道。</p>
+        <!-- 链路说明默认收起：第二次用就不需要了，摊着就是 100 字噪音 -->
+        <details class="page-note"><summary>这条链路怎么走的</summary><p>整理稿点「🎨 AI 海报」→ ① 拆文案（对照原文改字）→ ② 看版面（免费）→ ③ 出图（0.5 元/张，复用模板底图 0 元）→ 这里回看成品、复制发布文案。发布动作保持<b>手动</b>，不走任何自动发布通道。</p></details>
         <div class="pk-adopt" id="pk-adopt" style="display:none"></div>
         <div class="pk-grid" id="grid-poster">
           <div class="empty"><span class="e" data-icon="image"></span>加载中...</div>
@@ -1279,35 +1295,36 @@ textarea{resize:vertical;min-height:84px}
           </div>
         </div>
         <div class="tt-gen-field">
-          <label>配色 / 字体 / 版式 <small id="tt-axis-scope">（预设闭集：配色对经典卡片/梯度榜/任务面板/攻略图解生效；字体对全部模板生效；版式对全部模板生效）</small></label>
+          <label>配色 / 字体 / 版式</label>
+          <details class="tt-axis-scope"><summary>各管什么</summary><small id="tt-axis-scope">（预设闭集：配色对经典卡片/梯度榜/任务面板/攻略图解生效；字体对全部模板生效；版式对全部模板生效）</small></details>
           <!-- 四个下拉的选项与上面那句生效范围，打开弹窗时由 /api/toutiao/templates 覆盖（HTML 里这份只是接口没回来时的兜底） -->
           <div style="display:flex;gap:10px">
-            <select id="tt-gen-palette" style="flex:1">
-              <option value="gold_night" selected>鎏金夜蓝（现状默认）</option>
+            <select id="tt-gen-palette" style="flex:1" title="整套卡片的配色">
+              <option value="gold_night" selected>鎏金夜蓝</option>
               <option value="ember_forge">熔火赤金</option>
               <option value="arcane_dusk">暮光奥术</option>
             </select>
-            <select id="tt-gen-font" style="flex:1">
-              <option value="serif" selected>衬线金标（现状默认）</option>
+            <select id="tt-gen-font" style="flex:1" title="标题与正文的字体">
+              <option value="serif" selected>衬线金标</option>
               <option value="heavy">硬朗黑体</option>
             </select>
-            <select id="tt-gen-layout" style="flex:1">
-              <option value="default" selected>经典排布（现状默认）</option>
+            <select id="tt-gen-layout" style="flex:1" title="图文内部各块的排布顺序">
+              <option value="default" selected>经典排布</option>
               <option value="hero_first">图先行（大图置顶）</option>
               <option value="summary_first">要点先行（摘要上浮）</option>
-              <option value="random">每次随机（自动换排布）</option>
+              <option value="random">每次随机</option>
             </select>
           </div>
         </div>
         <div class="tt-gen-field" id="tt-guide-upload-field" style="display:none">
-          <label>攻略图上传 <small>（第 1 张做封面，其余按顺序进内页；不上传则读 output/toutiao/&lt;题材&gt;攻略图/ 文件夹）</small></label>
+          <label title="第 1 张做封面，其余按顺序进内页；不上传则读 output/toutiao/<题材>攻略图/ 文件夹">攻略图上传</label>
           <div class="tt-guide-drop" onclick="document.getElementById('tt-guide-files').click()">📎 点击选择攻略图（最多 10 张 · jpg / png / webp）</div>
           <input type="file" id="tt-guide-files" accept=".jpg,.jpeg,.png,.webp,.avif" multiple hidden>
           <div class="tt-guide-thumbs" id="tt-guide-thumbs"></div>
         </div>
         <div class="tt-gen-field">
-          <label>图文卡片化题材 <small>（决定卡片标题与文案点明什么游戏）</small></label>
-          <select id="tt-gen-theme">
+          <label title="决定卡片标题与文案点明什么游戏">图文卡片化题材</label>
+          <select id="tt-gen-theme" title="决定卡片标题与文案点明什么游戏">
             <option value="">自动（按整合稿内容判断）</option>
             <option value="魔兽世界-正式服">魔兽世界-正式服</option>
             <option value="魔兽世界-无限">魔兽世界-无限</option>
@@ -1381,7 +1398,7 @@ textarea{resize:vertical;min-height:84px}
         <div id="pk-layout-hint" style="font-size:11.5px;color:var(--text-secondary);margin:2px 0 8px;min-height:16px"></div>
         <div class="pk-tpls" id="pk-tpls" style="display:none"></div>
         <div class="pk-break" id="pk-break" style="display:none"></div>
-        <div class="pk-one" id="pk-one">改完文案多点几次②，一次都不花钱。</div>
+        <div class="pk-one" id="pk-one" style="display:none"></div>
         <!-- 三步操作卡：只在第一次用得着，所以默认收起；收过一次就记住 -->
         <details class="pk-guide" id="pk-guide">
           <summary>怎么用 · 三步</summary>
@@ -1414,22 +1431,25 @@ textarea{resize:vertical;min-height:84px}
         <div class="tt-gen-title">💬 生成公众号图文</div>
         <div class="tt-gen-sub">整合稿 #<span id="wx-gen-id"></span> · 图片消息形态（画布 1080×1440，6-8 张卡片）</div>
         <div class="tt-gen-field">
-          <label>作者真实底稿<span class="wx-opt">可选</span><small>（留空＝转载模式：把他人已总结好的内容整理成图文；填写＝亲测模式：以你的亲历事实为观点源，≥300 字为佳）</small></label>
+          <label>作者真实底稿<span class="wx-opt">可选</span></label>
+          <details class="tt-axis-scope"><summary>两种模式的区别</summary><small>（留空＝转载模式：把他人已总结好的内容整理成图文；填写＝亲测模式：以你的亲历事实为观点源，≥300 字为佳）</small></details>
           <textarea class="wx-draft-area" id="wx-gen-draft" spellcheck="false" oninput="wxDraftCount();_wxShotRender()" placeholder="转载模式：直接留空即可，系统会把整合稿归纳成卡片。&#10;亲测模式：写清你亲自跑了什么、看到什么数字、踩了什么坑……"></textarea>
           <div class="wx-count" id="wx-draft-count">转载模式（底稿留空）· 填写后转亲测模式</div>
         </div>
         <div class="tt-gen-field">
-          <label>真实截图 / 展示图<small>（<b>传进来的图会排进卡片当主视觉</b>：封面用第 1 张，其余按页轮着配；同时原样留在发布包里备查。亲测模式铁律 ≥2 张；转载模式选填，有官方展示图（坐骑/装备/界面）就传）</small></label>
-          <div class="tt-guide-drop" onclick="document.getElementById('wx-shot-files').click()">📎 点击选择图片（最多 10 张 · jpg / png / webp · 会进卡片画面）</div>
+          <label>真实截图 / 展示图</label>
+          <details class="tt-axis-scope"><summary>图会怎么被用</summary><small>（<b>传进来的图会排进卡片当主视觉</b>：封面用第 1 张，其余按页轮着配；同时原样留在发布包里备查。亲测模式铁律 ≥2 张；转载模式选填，有官方展示图（坐骑/装备/界面）就传）</small></details>
+          <div class="tt-guide-drop" onclick="document.getElementById('wx-shot-files').click()">📎 点击选择图片（最多 10 张 · 亲测要 ≥2 张）</div>
           <input type="file" id="wx-shot-files" accept=".jpg,.jpeg,.png,.webp" multiple hidden>
           <div class="tt-guide-thumbs" id="wx-shot-thumbs"></div>
         </div>
         <div class="tt-gen-field">
-          <label>图文标题<small>（已代入整理稿标题，可改；留空则用整合稿标题）</small></label>
+          <label title="已代入整理稿标题，可改；留空则用整合稿标题">图文标题</label>
           <input id="wx-gen-title" placeholder="图文标题">
         </div>
         <div class="tt-gen-field">
-          <label>图文模板<small>（名单由后端 graphics 内核下发，与渠道白名单同源；换模板即时重渲染预览）</small></label>
+          <label>图文模板</label>
+          <details class="tt-axis-scope"><summary>名单哪来的</summary><small>（名单由后端 graphics 内核下发，与渠道白名单同源；换模板即时重渲染预览）</small></details>
           <select id="wx-gen-tpl" onchange="updateWxTplPreview()">
             <option value="wechat" selected>公众号信号格 · 结构化教程流（默认 · 零游戏背景）</option>
             <option value="minimal">极简清单 · 浅色知识卡</option>
@@ -1450,24 +1470,25 @@ textarea{resize:vertical;min-height:84px}
           </div>
         </div>
         <div class="tt-gen-field">
-          <label>排版参考图<small>（可选：上传你想模仿的图文样张，随包记进 manifest.ref_images，供后续「逆向拆解排版」取用；不进发布包、不参与出图）</small></label>
-          <div class="tt-guide-drop" onclick="document.getElementById('wx-ref-files').click()">📎 点击选择参考图（最多 20 张 · jpg / png / webp）</div>
+          <label title="可选：上传你想模仿的图文样张，随包记进 manifest.ref_images，供后续「逆向拆解排版」取用；不进发布包、不参与出图">排版参考图</label>
+          <div class="tt-guide-drop" onclick="document.getElementById('wx-ref-files').click()">📎 点击选择参考图（最多 20 张 · 只留样，不进发布包）</div>
           <input type="file" id="wx-ref-files" accept=".jpg,.jpeg,.png,.webp" multiple hidden>
           <div class="tt-guide-thumbs" id="wx-ref-thumbs"></div>
         </div>
         <div class="tt-gen-field">
-          <label>配色 / 字体 / 版式 <small>（三轴预设闭集，名单与配色轴生效范围均由后端 graphics 内核下发；换任一轴下方预览即时重渲染）</small></label>
+          <label>配色 / 字体 / 版式</label>
+          <details class="tt-axis-scope"><summary>各管什么</summary><small>（三轴预设闭集，名单与配色轴生效范围均由后端 graphics 内核下发；换任一轴下方预览即时重渲染）</small></details>
           <div style="display:flex;gap:10px">
-            <select id="wx-gen-palette" style="flex:1" onchange="updateWxTplPreview()">
+            <select id="wx-gen-palette" style="flex:1" onchange="updateWxTplPreview()" title="整套卡片的配色">
               <option value="gold_night" selected>默认配色（信号格微信绿 / 经典鎏金）</option>
               <option value="ember_forge">熔火暖橙（经典为赤金）</option>
               <option value="arcane_dusk">暮光紫（经典为奥术）</option>
             </select>
-            <select id="wx-gen-font" style="flex:1" onchange="updateWxTplPreview()">
+            <select id="wx-gen-font" style="flex:1" onchange="updateWxTplPreview()" title="标题与正文的字体">
               <option value="serif" selected>默认字体（信号格黑体 / 经典衬线）</option>
               <option value="heavy">硬朗黑体（标题重黑）</option>
             </select>
-            <select id="wx-gen-layout" style="flex:1" onchange="updateWxTplPreview()">
+            <select id="wx-gen-layout" style="flex:1" onchange="updateWxTplPreview()" title="卡片内部各块的排布顺序">
               <option value="default" selected>经典排布（现状默认）</option>
               <option value="hero_first">主视觉先行（瓦片/大图置顶）</option>
               <option value="summary_first">要点先行（摘要上浮）</option>
@@ -1596,19 +1617,17 @@ textarea{resize:vertical;min-height:84px}
           <div class="form-row two">
             <div class="form-group">
               <label>API Base（可选）</label>
-              <input id="ai-base" type="text" placeholder="">
-              <div class="hint">留空使用官方默认地址</div>
+              <input id="ai-base" type="text" placeholder="留空则用官方默认地址">
             </div>
             <div class="form-group">
               <label>模型（可选）</label>
-              <input id="ai-model" type="text" placeholder="">
-              <div class="hint">留空使用默认模型</div>
+              <input id="ai-model" type="text" placeholder="留空则用默认模型">
             </div>
           </div>
           <div class="form-row two">
             <div class="form-group">
               <label>快速模型（省钱省时用）</label>
-              <input id="ai-model-fast" type="text" placeholder="例：deepseek-v4-flash">
+              <input id="ai-model-fast" type="text" placeholder="例：deepseek-v4.1-flash">
               <div class="hint">海报拆解、图文卡片化走这一档（照抄压缩的活不需要主模型深思，实测快 5 倍）；留空＝跟主模型一样。必须是同一个接口下调得到的模型名</div>
             </div>
             <div class="form-group"></div>
