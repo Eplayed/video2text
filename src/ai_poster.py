@@ -195,7 +195,8 @@ STYLE_PRESETS = {
         "style": "",
     },
 }
-STYLE_ORDER = ["game_epic", "tool_review", "checklist", "minimal", "auto"]
+# 攻略页那一档排在四套插画风格之后：它不出 AI 底图，选它等于选"用素材真帧当证据"
+STYLE_ORDER = ["game_epic", "tool_review", "checklist", "minimal", "guide_ink", "auto"]
 DEFAULT_STYLE_KEY = "tool_review"
 # 字体这条不写进各套配方、单独挂：风格词里全是"质感/雕花/氛围"，模型很容易顺手把中文
 # 写成手写体或艺术字，而实测手写体的逐字准确率明显更低（主标题整块消失过一次）。

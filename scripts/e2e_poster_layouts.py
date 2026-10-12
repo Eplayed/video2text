@@ -501,6 +501,9 @@ def main():
            for k in ("warn_bg", "gold", "rule")))
     ck("攻略页进了界面版式下拉（不然号主选不到这一档）",
        "guide" in ts.LAYOUT_ORDER and any(c["key"] == "guide" for c in ts.layout_choices()))
+    ck("guide_ink 也进了风格下拉（style_choices 走的是 STYLE_ORDER，漏加就是选不到）",
+       any(s["key"] == "guide_ink" for s in ai_poster.style_choices()),
+       ",".join(s["key"] for s in ai_poster.style_choices()))
 
     print("== O 拆解层接线：帧编号→真文件、图注由代码写 ==")
     fake = [{"i": 3, "ts": "00:12", "file": "/tmp/f3.jpg", "subject": "游戏内天赋树界面"},
