@@ -16,7 +16,7 @@ Python 3.9 兼容：不用 match / X|Y 语法。
 import io
 import os
 import re
-from PIL import Image, ImageDraw, ImageFont, ImageOps
+from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
 
 # 字体候选按"找不到就往后退"排列：这台是 Intel Mac，另一台机器字体不一定齐，
 # 写死单一路径会让整条产线在新机器上直接崩。
@@ -111,6 +111,22 @@ TYPE_SKINS = {
         "bottom": "干净的纯色留白，不要任何纹理",
         "layout": "hero", "art_floor": 0.32, "art_cap": 0.58
     },
+    # ── 攻略页皮肤（2026-10-12）：对标「无限 · 副本经验调整」那套多页图文攻略 ──
+    # 深墨绿底 + 米金标题 + 砖红警示块。这套不走 AI 底图：背景就是纯色渐变，
+    # 画面全部来自素材真帧，所以出图 0 元、也不会出现"模型画错中文"那一类问题。
+    # warn_bg / gold 这两个键只有攻略页用（老路径读不到它们，字节不变）。
+    "guide_ink": {
+        "title_face": "sans_bold", "body_face": "sans_book",
+        "title": "#f0d9a0", "title_stroke": "#0d1712",
+        "ink": "#e6e6df", "muted": "#93a497", "accent": "#e8c877",
+        "panel": "#16241f", "panel_alpha": 200, "stroke": "#3a5045", "stroke_alpha": 90,
+        "bg_top": "#182721", "bg_bot": "#0a1410",
+        "radius": 10, "gap": 0.020,
+        "warn_bg": "#5f2a24", "warn_ink": "#f2ddd6", "gold": "#e8c877",
+        "rule": "#2f4a3e",
+        "bottom": "深墨绿纯色渐变，不要任何纹理",
+        "layout": "guide", "art_floor": 0.30, "art_cap": 0.52
+    },
 }
 DEFAULT_SKIN = "tool_review"
 
@@ -159,6 +175,13 @@ LAYOUTS = {
     "full_bleed": {"label": "满版大图", "rows": "stack", "art": "full",
                    "min_cards": 1, "max_cards": 2, "needs_photo": True, "overlay": True,
                    "when": "单主角内容（一只坐骑、一个界面），图就是全部"},
+    # 攻略页不是"换个摆放方式"，是另一种排法：从上到下一串**带类型的块**流式排，
+    # 图是真帧不是插画，每张图下面必须跟一行图注。所以它不进 _card_boxes 那套
+    # "标题 + 等分卡片行"的算法，单独走 typeset_guide。
+    "guide": {"label": "攻略页（真帧+图注）", "rows": "stack", "art": "band_top",
+              "min_cards": 1, "max_cards": 4, "needs_photo": False,
+              "art_floor": 0.30, "art_cap": 0.52,
+              "when": "多页图文攻略：一页一个论点，配 1-2 张素材真帧 + 图注 + 大字数字"},
 }
 # 老数据里存的键（内置皮肤原来写的是 stack，用户模板 JSON 里也是）照样认，不做迁移
 LAYOUT_ALIAS = {"stack": "top_art"}
@@ -664,6 +687,468 @@ def _page_pill(draw, W, H, skin, page):
     _draw_text(draw, (x0 + px, y0 + py - int(f.size * 0.06)), txt, f, _rgb(skin["title"]))
 
 
+# ── 攻略页：带类型的块流式排（2026-10-12）──────────────────────────
+# 为什么要另起一条渲染路径：老那条是"标题 + 等分卡片行 + 一块插画区"，
+# 对标那种攻略页要的是"一页从上到下若干**异构**块"——真帧 + 图注、大字数字、
+# 对照两行、砖红警示、互动选项，每块高度由自己内容决定。硬塞进 _card_boxes
+# 只会把图注当成一条卡片、把警示当成一条卡片，读起来就不是那个东西了。
+# 老路径一个字节都不改：plan 里没有这些字段就绝对走不到这里。
+
+GUIDE_BLOCKS = ("kicker", "title", "subtitle", "photos", "bignum",
+                "cards", "contrast", "warn", "ask", "footer")
+
+
+def _guide_bg(W, H, skin):
+    """攻略页的底：纵向纯色渐变。对标那六页背景就是平的，没有插画——
+    画面全部来自素材真帧，所以这条分支不出图、不花钱、也不会画错中文。"""
+    top = _rgb(skin.get("bg_top", "#182721"))
+    bot = _rgb(skin.get("bg_bot", "#0a1410"))
+    img = Image.new("RGB", (int(W), int(H)), top)
+    d = ImageDraw.Draw(img)
+    for y in range(int(H)):
+        r = y / float(max(1, H - 1))
+        d.line([(0, y), (W, y)],
+               fill=tuple(int(top[i] * (1 - r) + bot[i] * r) for i in range(3)))
+    return img
+
+
+def _photo_src(p):
+    """photos 里的一项：{"path":..., "bytes":..., "caption":...}，只给字符串也认。"""
+    if isinstance(p, str):
+        return {"path": p, "caption": ""}
+    return dict(p or {})
+
+
+def _photo_bytes(p):
+    if p.get("bytes"):
+        return p["bytes"]
+    path = p.get("path") or ""
+    if path and os.path.exists(path):
+        try:
+            with open(path, "rb") as f:
+                return f.read()
+        except OSError:
+            return None
+    return None
+
+
+def _fit_contain(im, w, h):
+    """真帧按"整张装得下"缩放并居中，不裁。
+
+    这里**不能**用老路径那个 crop_cover：素材帧是游戏界面截图（天赋树、任务栏），
+    居中裁会把面板右边或下面那排图标切掉，而图就是这条论点的证据本体，
+    切掉等于把证据切了一半。宁可左右留黑。
+    """
+    iw, ih = im.size
+    scale = min(w / float(iw), h / float(ih))
+    scale = min(scale, 1.0) if w >= iw and h >= ih else scale
+    nw, nh = max(1, int(round(iw * scale))), max(1, int(round(ih * scale)))
+    return im.resize((nw, nh), Image.LANCZOS), nw, nh
+
+
+def _fit_keep(text, face, size, w, max_lines, min_size):
+    """和 _fit_lines 一样从大往下试，但**宁可多折一行也不截字**。
+
+    _fit_lines 到下限还塞不下时会把多出来的行直接切掉（老路径靠这个保证不溢出，
+    标题被切一个字就是事实错误了）。攻略页的标题是大字结论，截不得，所以另写一个。
+    """
+    s = int(size)
+    while s >= int(min_size):
+        f = _font(face, s)
+        lines = _wrap(text, f, w)
+        if len(lines) <= max_lines:
+            return f, lines, s
+        s -= 2
+    f = _font(face, max(12, int(min_size)))
+    return f, _wrap(text, f, w), f.size
+
+
+def _photo_band(img, src, box, skin, radius):
+    """把一张真帧放进图区，竖版帧左右留黑太难看，就用同一张图放大裁切+模糊垫底。
+
+    前景**永远保持 contain 不裁**：素材帧是游戏界面截图（天赋树、任务栏），
+    裁掉右边一列图标等于把这条论点的证据切了一半。所以只能往后加一层氛围底，
+    不能改前景的取景方式。
+    """
+    x0, y0, x1, y1 = [int(v) for v in box]
+    w, h = max(1, x1 - x0), max(1, y1 - y0)
+    fit, fw, fh = _fit_contain(src, w - 4, h - 4)
+    base = Image.new("RGB", (w, h), _rgb(skin.get("bg_bot", "#0a1410")))
+    if fw < w * 0.86:
+        try:
+            back = crop_cover(src, w, h, focus_y=0.5).filter(ImageFilter.GaussianBlur(18))
+            base = back
+            dark = Image.new("RGBA", (w, h), (0, 0, 0, 96))
+            base = base.convert("RGBA")
+            base.alpha_composite(dark)
+        except Exception:
+            base = Image.new("RGB", (w, h), _rgb(skin.get("bg_bot", "#0a1410")))
+    base = base.convert("RGBA")
+    layer = fit.convert("RGBA")
+    layer.putalpha(_rounded_mask(fw, fh, radius))
+    base.paste(layer, ((w - fw) // 2, (h - fh) // 2), layer)
+    base.putalpha(_rounded_mask(w, h, radius))
+    img.paste(base, (x0, y0), base)
+    return (x0, y0, x0 + w, y0 + h)
+
+
+def _is_guide(plan):
+    """这一页要不要走攻略页排法：显式选了 guide 布局，或 plan 里出现任何一样攻略零件。"""
+    if not isinstance(plan, dict):
+        return False
+    if _norm_layout(plan.get("layout_key")) == "guide":
+        return True
+    for k in ("photos", "bignum", "contrast", "warn", "ask", "kicker"):
+        if plan.get(k):
+            return True
+    return False
+
+
+def _chip(draw, xy, text, font, fg, bg, pad_x, pad_y, radius, outline=None):
+    """一块圆角小色片（对照块的"已改/没改"、互动页的选项都用它）。返回宽度。"""
+    x0, y0 = int(xy[0]), int(xy[1])
+    tw = font.getlength(text)
+    w, h = int(tw + 2 * pad_x), int(font.size + 2 * pad_y)
+    draw.rounded_rectangle((x0, y0, x0 + w, y0 + h), radius=radius, fill=bg,
+                           outline=outline, width=2 if outline else 1)
+    draw.text((x0 + pad_x, y0 + pad_y - int(font.size * 0.06)), text, font=font, fill=fg)
+    return w
+
+
+def typeset_guide(base_png, plan, ratio="9:16", skin=None, page=None):
+    """把"一页攻略"排成对标那种样子：栏目名 + 页码 + 结论标题 + 真帧带图注 +
+    大字数字 + 要点 + 对照 + 警示 + 互动 + 口径脚注。
+
+    base_png 传 None 时自己画纯色底（攻略页不需要 AI 插画，0 元那条路）。
+    plan 用到的字段：kicker / title / subtitle / photos[{path|bytes,caption}] /
+    bignum{v,label,note} / cards[{t,d}] / contrast[{t,d}] / warn{t,d} /
+    ask{q,options[]} / footer。缺哪个就不画哪个，顺序固定成 GUIDE_BLOCKS。
+    """
+    plan = plan or {}
+    skin = _resolve_skin(plan.get("style_key"), skin)
+    if base_png:
+        img = Image.open(io.BytesIO(base_png)).convert("RGB")
+    else:
+        img = None
+    W, H = (img.size if img else (1080, int(round(1080 * 16.0 / 9.0))))
+    if img is None:
+        img = _guide_bg(W, H, skin)
+    draw = ImageDraw.Draw(img, "RGBA")
+    problems = []
+    m = int(W * 0.062)
+    inner = W - 2 * m
+    gap = int(W * float(skin.get("gap", 0.020)))
+    gold = _rgb(skin.get("gold") or skin.get("accent") or "#e8c877")
+    warn_bg = _rgb(skin.get("warn_bg") or "#5f2a24")
+    rule = _rgb(skin.get("rule") or "#2f4a3e")
+
+    title = (plan.get("title") or "").strip()
+    subtitle = (plan.get("subtitle") or "").strip()
+    kicker = (plan.get("kicker") or "").strip()
+    footer = (plan.get("footer") or "").strip()
+    cards = [c for c in (plan.get("cards") or []) if (c.get("t") or c.get("d"))]
+    photos = [_photo_src(p) for p in (plan.get("photos") or []) if p]
+    bignum = plan.get("bignum") if isinstance(plan.get("bignum"), dict) else None
+    contrast = [c for c in (plan.get("contrast") or []) if (c.get("t") or c.get("d"))]
+    warn = plan.get("warn") if isinstance(plan.get("warn"), dict) else None
+    ask = plan.get("ask") if isinstance(plan.get("ask"), dict) else None
+
+    # ── 第一遍：逐块量高（只算不画）──
+    y = int(H * 0.030)
+    f_kick = _font(skin["body_face"], max(15, int(H * 0.0195)))
+    kick_h = int(H * 0.030) + int(H * 0.014) if kicker else 0
+
+    # 标题先死磕一行：10 个字的结论式标题折成两行时，第二行常常只剩一个字
+    # （实测「这回，点数能存着 / 花」），比字号小一档难看得多。
+    f_title, t_lines, t_size = _fit_keep(title, skin["title_face"], int(H * 0.056),
+                                         inner, 1, int(H * 0.034))
+    if len(t_lines) > 1:
+        f2, l2, s2 = _fit_keep(title, skin["title_face"], int(H * 0.056),
+                               inner, 2, int(H * 0.040))
+        if len(l2) > 1 and len(l2[-1].strip()) <= 2:
+            f3, l3, s3 = _fit_keep(title, skin["title_face"], int(H * 0.056),
+                                   inner, 1, int(H * 0.028))
+            if len(l3) == 1:
+                f2, l2, s2 = f3, l3, s3
+        f_title, t_lines, t_size = f2, l2, s2
+    title_h = len(t_lines) * int(t_size * 1.22) if title else 0
+    f_sub, s_lines, s_size = _fit_lines(subtitle, skin["body_face"], int(H * 0.0235),
+                                        inner, 2, min_size=int(H * 0.018))
+    sub_h = len(s_lines) * int(s_size * 1.32) if subtitle else 0
+
+    cap_f = _font(skin["body_face"], max(14, int(H * 0.0175)))
+    cap_line_h = int(cap_f.size * 1.34)
+    # 每张真帧的"额外开销"：上方留空 + 图与图注之间 + 图注本身几行。
+    # 这些必须一起算进预算，否则量的时候以为放得下、画到最后一段字掉出版面。
+    PH_PAD, CAP_GAP, POST_GAP = int(H * 0.016), int(cap_f.size * 0.55), int(H * 0.018)
+    cap_h = [len(_wrap((p.get("caption") or "").strip(), cap_f, inner)) for p in photos]
+    caps_total = sum((h * cap_line_h + PH_PAD + CAP_GAP) for h in cap_h)
+    if photos:
+        caps_total += POST_GAP + gap * (len(photos) - 1)
+
+    big_lab_f = _font(skin["body_face"], max(15, int(H * 0.021)))
+    # 量的时候必须把"数字 + 下面那行小字标签 + 可选注释"三样都算上：
+    # 只算数字一行，封面页那行「天赋树：专业 / 冒险 / 资源利用」会直接压到脚注上。
+    big_h = 0
+    if bignum and str(bignum.get("v") or "").strip():
+        big_h = int(H * 0.072 * 1.16)
+        if str(bignum.get("label") or "").strip():
+            big_h += int(H * 0.028)
+        if str(bignum.get("note") or "").strip():
+            big_h += int(H * 0.0205 * 1.32 * 2)
+        big_h += int(H * 0.012)
+
+    def card_need(c):
+        h = 0
+        if (c.get("t") or "").strip():
+            h += int(H * 0.0255 * 1.42)
+        if (c.get("d") or "").strip():
+            _, ls, s = _fit_lines(c.get("d"), skin["body_face"], int(H * 0.0205),
+                                  inner, 4, min_size=int(H * 0.0165))
+            h += len(ls) * int(s * 1.32)
+        return h + int(H * 0.010)
+    card_hs = [card_need(c) for c in cards]
+
+    def contrast_need(c):
+        _, ls, s = _fit_lines(c.get("d") or "", skin["body_face"], int(H * 0.0205),
+                              inner - int(H * 0.14), 3, min_size=int(H * 0.0165))
+        return max(int(H * 0.030), len(ls) * int(s * 1.32)) + int(H * 0.012)
+    con_hs = [contrast_need(c) for c in contrast]
+
+    warn_h = 0
+    if warn:
+        _, wl, ws = _fit_lines(warn.get("d") or "", skin["body_face"], int(H * 0.0205),
+                               inner - int(H * 0.06), 4, min_size=int(H * 0.0165))
+        warn_h = int(H * 0.030) + len(wl) * int(ws * 1.32) + int(H * 0.030)
+
+    ask_h = 0
+    if ask:
+        _, ql, qs = _fit_lines(ask.get("q") or "", skin["title_face"], int(H * 0.030),
+                               inner, 2, min_size=int(H * 0.022))
+        ask_h = len(ql) * int(qs * 1.30) + int(H * 0.056)
+
+    foot_f = _font(skin["body_face"], max(14, int(H * 0.0165)))
+    foot_h = int(H * 0.030) if footer else 0
+    bottom = H - int(H * 0.024) - foot_h
+
+    fixed = (kick_h + title_h + (int(H * 0.008) if title_h else 0) + sub_h
+             + big_h + sum(card_hs) + gap * max(0, len(card_hs) - 1)
+             + sum(con_hs) + warn_h + ask_h)
+    room = bottom - y - fixed
+    per_photo = 0
+    cap_hi = int(H * float(skin.get("art_cap", 0.52)) * 1.18)
+    if photos:
+        # caps_total 已经把"图上方留空 + 图注 + 组后间距"算进去了，剩下的才是图本身
+        per_photo = min(int((room - caps_total) / float(len(photos))), cap_hi)
+        if per_photo < int(H * 0.14):
+            # 地方不够放两张：先退成一张，还放不下就干脆不贴图（宁可没图也别把
+            # 界面压成一长条——真帧是证据，压扁了就读不出来）
+            if len(photos) > 1:
+                problems.append("一页放两张真帧会压到看不清，已只留第 1 张")
+                photos = photos[:1]
+                caps_total = cap_h[0] * cap_line_h + PH_PAD + CAP_GAP + POST_GAP
+                per_photo = min(int(room - caps_total), cap_hi)
+            if per_photo < int(H * 0.10):
+                problems.append("这一页文字太多，真帧放不下，已退回纯文字版面")
+                photos, per_photo, caps_total = [], 0, 0
+    photo_used = (caps_total + per_photo * len(photos)) if photos else 0
+    # 剩下的空白不要堆在一处（半屏空洞最难看），按"这一页实际有几块"平摊，
+    # 每块之前留同一口气；单块最多加到 5% 屏高，再多就该拆页了。
+    n_sp = ((1 if title else 0) + (1 if subtitle else 0) + (1 if photos else 0)
+            + (1 if big_h else 0) + (1 if card_hs else 0) + (1 if con_hs else 0)
+            + (1 if warn_h else 0) + (1 if ask_h else 0))
+    sp = min(int(max(0, room - photo_used) / n_sp), int(H * 0.085)) if n_sp else 0
+
+    # ── 第二遍：从上往下画 ──
+    if kicker:
+        kw = _chip(draw, (m, y), kicker, f_kick, gold, _rgb(skin["panel"]) + (150,),
+                   int(H * 0.012), int(H * 0.006), int(H * 0.020))
+        try:
+            k, total = int(page[0]), int(page[1])
+            ptxt = "%02d / %02d" % (k, total)
+        except (TypeError, ValueError, IndexError):
+            ptxt = ""
+        if ptxt:
+            pf = _font(skin["body_face"], max(15, int(H * 0.0195)))
+            draw.text((W - m - pf.getlength(ptxt), y + int(H * 0.006)), ptxt,
+                      font=pf, fill=_rgb(skin["muted"]))
+        ry = y + kick_h - int(H * 0.014)
+        draw.line([(m, ry), (W - m, ry)], fill=rule + (255,), width=2)
+        y += kick_h
+
+    if title:
+        y += sp
+        for ln in t_lines:
+            _draw_text(draw, (m, y), ln, f_title, gold, _rgb(skin["title_stroke"]),
+                       max(2, int(t_size * 0.06)))
+            y += int(t_size * 1.22)
+        y += int(H * 0.008)
+    if subtitle:
+        y += sp
+        sf = _font(skin["body_face"], s_size)
+        for ln in s_lines:
+            _draw_text(draw, (m, y), ln, sf, _rgb(skin["muted"]))
+            y += int(s_size * 1.32)
+
+    if photos:
+        y += sp
+    for i, p in enumerate(photos):
+        raw = _photo_bytes(p)
+        y += PH_PAD
+        if not raw:
+            problems.append("第 %d 张真帧读不到文件，已跳过" % (i + 1))
+            y += per_photo + CAP_GAP
+            continue
+        try:
+            src = Image.open(io.BytesIO(raw)).convert("RGB")
+            src = ImageOps.exif_transpose(src)
+        except Exception as e:
+            problems.append("第 %d 张真帧打不开（%s）" % (i + 1, str(e)[:40]))
+            y += per_photo + CAP_GAP
+            continue
+        rad = int(W * 0.020)
+        box_h = max(int(H * 0.10), per_photo)
+        bx = _photo_band(img, src, (m, y, W - m, y + box_h), skin, rad)
+        draw = ImageDraw.Draw(img, "RGBA")     # 贴过图要重开一支笔，否则画在旧层上
+        draw.rounded_rectangle(bx, radius=rad, outline=rule + (255,), width=2)
+        y = bx[3] + CAP_GAP
+        cap = (p.get("caption") or "").strip()
+        if cap:
+            for ln in _wrap(cap, cap_f, inner):
+                _draw_text(draw, (m, y), ln, cap_f, _rgb(skin["muted"]))
+                y += cap_line_h
+    if photos:
+        y += POST_GAP
+
+    if bignum:
+        y += sp
+        v = str((bignum or {}).get("v") or "").strip()
+        lab = str((bignum or {}).get("label") or "").strip()
+        note = str((bignum or {}).get("note") or "").strip()
+        if v:
+            _, vl, vs = _fit_lines(v, skin["title_face"], int(H * 0.072), inner, 1,
+                                   min_size=int(H * 0.040))
+            _draw_text(draw, (m, y), vl[0], _font(skin["title_face"], vs), gold)
+            y += int(vs * 1.16)
+        if lab:
+            _draw_text(draw, (m, y), lab, big_lab_f, _rgb(skin["muted"]))
+            y += int(H * 0.026)
+        if note:
+            _, nl, ns = _fit_lines(note, skin["body_face"], int(H * 0.0205), inner, 2,
+                                   min_size=int(H * 0.0165))
+            for ln in nl:
+                _draw_text(draw, (m, y), ln, _font(skin["body_face"], ns), gold)
+                y += int(ns * 1.32)
+        y += int(H * 0.012)
+
+    if cards:
+        y += sp
+    for i, c in enumerate(cards):
+        ct = (c.get("t") or "").strip()
+        cd = (c.get("d") or "").strip()
+        if ct:
+            tf, tfl, ts = _fit_lines(ct, skin["title_face"], int(H * 0.0255), inner, 1,
+                                     min_size=int(H * 0.019))
+            _draw_text(draw, (m, y), tfl[0], tf, gold)
+            y += int(ts * 1.42)
+        if cd:
+            df, dfl, ds = _fit_lines(cd, skin["body_face"], int(H * 0.0205), inner, 4,
+                                     min_size=int(H * 0.0165))
+            for ln in dfl:
+                _draw_text(draw, (m, y), ln, df, _rgb(skin["ink"]))
+                y += int(ds * 1.32)
+        y += int(H * 0.010)
+
+    if contrast:
+        y += sp
+    for c in contrast:
+        lab = (c.get("t") or "").strip()
+        txt = (c.get("d") or "").strip()
+        lf = _font(skin["title_face"], max(15, int(H * 0.021)))
+        w = _chip(draw, (m, y), lab or "—", lf, _rgb(skin["bg_bot"]), gold,
+                  int(H * 0.012), int(H * 0.005), int(H * 0.008))
+        tx = m + w + int(H * 0.014)
+        df, dfl, ds = _fit_lines(txt, skin["body_face"], int(H * 0.0205),
+                                 max(40, W - m - tx), 3, min_size=int(H * 0.0165))
+        for j, ln in enumerate(dfl):
+            _draw_text(draw, (tx, y + (0 if j == 0 else int(H * 0.001))), ln, df,
+                       _rgb(skin["ink"]))
+            y += int(ds * 1.32)
+        y += int(H * 0.012)
+
+    if warn:
+        y += sp
+        wt = (warn.get("t") or "").strip()
+        wd = (warn.get("d") or "").strip()
+        _, wl, ws = _fit_lines(wd, skin["body_face"], int(H * 0.0205),
+                               inner - int(H * 0.06), 4, min_size=int(H * 0.0165))
+        bh = int(H * 0.030) + len(wl) * int(ws * 1.32) + int(H * 0.030)
+        if y + bh > bottom:
+            bh = max(int(H * 0.05), bottom - y)
+            problems.append("警示块放不下，已压高度（可能截字）")
+        draw.rounded_rectangle((m, y, W - m, y + bh), radius=int(H * 0.012),
+                               fill=warn_bg + (255,))
+        ty = y + int(H * 0.014)
+        if wt:
+            wf = _font(skin["title_face"], max(15, int(H * 0.0225)))
+            _draw_text(draw, (m + int(H * 0.03), ty), wt, wf,
+                       _rgb(skin.get("warn_ink") or "#f2ddd6"))
+            ty += int(H * 0.030)
+        df = _font(skin["body_face"], ws)
+        for ln in wl:
+            _draw_text(draw, (m + int(H * 0.03), ty), ln, df,
+                       _rgb(skin.get("warn_ink") or "#f2ddd6"))
+            ty += int(ws * 1.32)
+        y += bh + int(H * 0.014)
+
+    if ask:
+        y += sp
+        q = (ask.get("q") or "").strip()
+        opts = [str(o).strip() for o in (ask.get("options") or []) if str(o).strip()][:4]
+        _, ql, qs = _fit_lines(q, skin["title_face"], int(H * 0.030), inner, 2,
+                               min_size=int(H * 0.022))
+        for ln in ql:
+            _draw_text(draw, (m, y), ln, _font(skin["title_face"], qs), gold)
+            y += int(qs * 1.30)
+        y += int(H * 0.010)
+        of = _font(skin["body_face"], max(15, int(H * 0.021)))
+        ox, oy = m, y
+        for o in opts:
+            w = int(of.getlength(o)) + int(H * 0.030)
+            if ox + w > W - m:
+                ox, oy = m, oy + int(of.size * 2.0)
+            _chip(draw, (ox, oy), o, of, _rgb(skin["bg_bot"]), _rgb(skin["ink"]),
+                  int(H * 0.015), int(H * 0.008), int(H * 0.030), outline=gold)
+            ox += w + int(H * 0.012)
+        y = oy + int(of.size * 2.0)
+
+    if footer:
+        _, ffl, fs = _fit_lines(footer, skin["body_face"], int(H * 0.0165), inner, 2,
+                                min_size=int(H * 0.0135))
+        fy = H - foot_h + int(H * 0.004)
+        for ln in ffl[:2]:
+            _draw_text(draw, (m, fy), ln, _font(skin["body_face"], fs), _rgb(skin["muted"]))
+            fy += int(fs * 1.30)
+
+    if y > bottom + int(H * 0.01):
+        problems.append("内容超出版面 %d px，这一页要拆成两页" % int(y - bottom))
+
+    out = io.BytesIO()
+    img.save(out, format="PNG")
+    chk = {"ok": not problems, "problems": problems, "canvas": "%dx%d" % (W, H),
+           "engine": "pil-guide", "skin": plan.get("style_key") or DEFAULT_SKIN,
+           "layout": "guide", "layout_label": LAYOUTS["guide"]["label"],
+           "cards": len(cards), "photos": len(photos),
+           "blocks": [k for k, v in (
+               ("kicker", kicker), ("title", title), ("subtitle", subtitle),
+               ("photos", photos), ("bignum", bignum), ("cards", cards),
+               ("contrast", contrast), ("warn", warn), ("ask", ask),
+               ("footer", footer)) if v]}
+    if page and int(page[1] or 1) > 1:
+        chk["page"] = [int(page[0]), int(page[1])]
+    return out.getvalue(), chk
+
+
 def typeset(base_png, plan, ratio="9:16", skin=None, photo=None, page=None):
     """把 plan 里的中文排到 AI 底图上。返回 (png 字节, 版面自检 dict)。
 
@@ -675,6 +1160,10 @@ def typeset(base_png, plan, ratio="9:16", skin=None, photo=None, page=None):
     顺序是四遍：量标题 → 算版面 → 贴所有半透明底板 → 写所有文字。中间任何一步
     反过来都会出现"板盖字"或"字浮在板外面"。
     """
+    # 攻略页那种"异构块流式排"另走一条渲染路径（真帧 + 图注 + 大字数字 + 对照 +
+    # 警示 + 互动）；plan 里没有这些零件就绝对走不到下面那句，老产物字节不变。
+    if _is_guide(plan):
+        return typeset_guide(base_png, plan, ratio=ratio, skin=skin, page=page)
     img = Image.open(io.BytesIO(base_png)).convert("RGB")
     W, H = img.size
     skin = _resolve_skin((plan or {}).get("style_key"), skin)

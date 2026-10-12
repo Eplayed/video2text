@@ -412,6 +412,92 @@ def main():
     ck("提示词里不夹自我吐槽（那句「想不错字就切回程序排字」是给我们看的，不是给豆包的）",
        "想不错字" not in md[0]["copy"])
 
+    print("== N 攻略页：真帧 + 图注 + 大字数字 + 对照 + 警示 + 互动 ==")
+    import io as _io
+    from PIL import Image as _Img
+    buf = _io.BytesIO()
+    _Img.new("RGB", (700, 1200), (60, 90, 70)).save(buf, format="JPEG")   # 竖帧，故意非方形
+    FRAME = buf.getvalue()
+
+    plain = {"title": "普通海报标题", "subtitle": "副", "style_key": "tool_review",
+             "cards": [{"t": "一", "d": "第一条说明"}]}
+    ck("plan 里没有攻略零件 → 绝不走攻略页（老产物字节不变的那道闸）",
+       ts._is_guide(plain) is False)
+    ck("plan 里只要出现一样攻略零件就走攻略页",
+       ts._is_guide({"photos": [{"path": "x"}]}) and ts._is_guide({"layout_key": "guide"}))
+
+    gp = {"style_key": "guide_ink", "layout_key": "guide",
+          "kicker": "无限 · 传承点数", "title": "这回，点数能存着花",
+          "subtitle": "素材里出现的官方界面：Legacy Tree",
+          "photos": [{"bytes": FRAME, "caption": "传承点数界面 · 素材抽帧第 3 帧"}],
+          "cards": [{"t": "怎么拿", "d": "完成各种独特挑战，换一种叫传承点数的资源。"},
+                    {"t": "怎么花", "d": "点进三棵天赋树，解锁各种长期增益效果。"}],
+          "contrast": [{"t": "口播点了名", "d": "更快拿到双倍经验加成、缩短营火冷却时间"}],
+          "footer": "整理自单条抖音素材的口播，未做游戏内实测"}
+    gpng, gchk = ts.typeset(None, gp, ratio=RATIO, page=(2, 5))     # base=None：攻略页不出底图
+    ck("攻略页不传底图也能出图（这条分支 0 元、不叫模型）",
+       gpng[:8] == b"\x89PNG\r\n\x1a\n" and gchk["engine"] == "pil-guide")
+    ck("一页装得下：栏目名+真帧+图注+两条要点+对照+脚注，不报超版",
+       gchk["ok"], "；".join(gchk["problems"]))
+    ck("页码走对标那种两位格式（02 / 05），不是 2 / 5",
+       gchk.get("page") == [2, 5] and "%02d / %02d" % (2, 5) == "02 / 05")
+
+    # 剩下三样零件各占一页（对标也是一页一件事，不许全堆一页）
+    gcover = dict(gp)
+    gcover["photos"] = [{"bytes": FRAME, "caption": "野外营火 · 素材抽帧第 1 帧"}]
+    gcover["bignum"] = {"v": "3 棵", "label": "天赋树：专业 / 冒险 / 资源利用"}
+    gcover["contrast"] = []
+    gcover["cards"] = []
+    _c, cchk = ts.typeset(None, gcover, ratio=RATIO, page=(1, 5))
+    ck("封面那页：大字数字块进版面且不超版",
+       "bignum" in cchk["blocks"] and cchk["ok"], "；".join(cchk["problems"]))
+
+    gend = {"style_key": "guide_ink", "layout_key": "guide", "kicker": "无限 · 传承点数",
+            "title": "这三棵，你先点哪棵？",
+            "ask": {"q": "如果点数只够先开一棵，你选哪个方向？",
+                    "options": ["专业", "冒险", "资源利用"]},
+            "warn": {"t": "别按这页去加点", "d": "三棵树各自解锁什么，这条素材只给了名字。"},
+            "footer": "整理自单条抖音素材的口播，未做游戏内实测"}
+    _e, echk = ts.typeset(None, gend, ratio=RATIO, page=(5, 5))
+    ck("收尾那页：互动提问 + 警示块进版面且不超版",
+       set(["ask", "warn"]) <= set(echk["blocks"]) and echk["ok"],
+       "；".join(echk["problems"]))
+    ck("五样零件在三页里全部出现过一次（栏目名/真帧+图注/大字数字/对照+警示/互动）",
+       set(["kicker", "photos", "bignum", "contrast", "warn", "ask"])
+       <= set(gchk["blocks"]) | set(cchk["blocks"]) | set(echk["blocks"]))
+
+    # 图注口径：读不到文件必须明说，不能默默少一张（少一张=论点没证据）
+    bad = dict(gp)
+    bad["photos"] = [{"path": "/definitely/not/here.jpg", "caption": "不该出现的图注"}]
+    bad["contrast"] = []
+    _b, bchk = ts.typeset(None, bad, ratio=RATIO, page=(1, 3))
+    ck("真帧文件读不到 → 明说并跳过，不静默出空位",
+       any("读不到文件" in x for x in bchk["problems"]), "；".join(bchk["problems"]))
+
+    # 一页两张 + 文字很多：先退一张，还放不下就退回纯文字，两种都要留话
+    two = dict(gp)
+    two["photos"] = [{"bytes": FRAME, "caption": "第一帧"}, {"bytes": FRAME, "caption": "第二帧"}]
+    two["cards"] = [{"t": "长说明 %d" % i,
+                     "d": "这是一段刻意写长的说明，用来把版面挤满，看看引擎会不会硬塞两张图。" * 2}
+                    for i in range(4)]
+    _t, tchk = ts.typeset(None, two, ratio=RATIO, page=(1, 5))
+    ck("挤不下两张真帧 → 只留一张并说明原因（不压扁证据）",
+       any("只留第 1 张" in x or "退回纯文字" in x for x in tchk["problems"]),
+       "；".join(tchk["problems"]))
+    ck("退图之后不再超版（只留「退一张」这条说明，不该再报塞不下）",
+       not any("超出版面" in x for x in tchk["problems"]), "；".join(tchk["problems"]))
+
+    _f, lines, _s = ts._fit_keep("这回，点数能存着花", "sans_bold", int(H * 0.056),
+                                 int(936 - 2 * 936 * 0.062), 1, int(H * 0.034))
+    ck("10 字标题死磕一行：不出现「第二行只剩一个字」那种孤儿行",
+       len(lines) == 1, "%d 行 %s" % (len(lines), lines))
+    ck("攻略页皮肤带齐那三样专属色（深墨绿底/砖红警示/米金）",
+       all(k in ts.TYPE_SKINS["guide_ink"] for k in ("warn_bg", "gold", "rule")))
+    ck("老四套皮肤没被攻略页污染（不新增读取它们的键）",
+       all(k not in ts.TYPE_SKINS[s] for s in ("game_epic", "tool_review",
+                                               "checklist", "minimal")
+           for k in ("warn_bg", "gold", "rule")))
+
     print()
     if FAILS:
         print("FAIL %d 项：%s" % (len(FAILS), "、".join(FAILS)))
