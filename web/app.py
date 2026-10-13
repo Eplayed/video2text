@@ -2495,6 +2495,31 @@ def api_poster_plan():
                     "task_id": _poster_status["task_id"]})
 
 
+def _merge_page_into_group(group, idx, page):
+    """把重拆回来的那一页并回整组文案，返回新的整组（没有整组可并就返回 None）。
+
+    为什么在这儿并：`/api/poster/plan/page` 只交一页回来，前端那一份 `_pkPages` 才是完整结构，
+    可前端一关就没了——后台这份状态是「重新打开弹窗还能看见上次拆的文案」唯一的来源。
+    """
+    if not isinstance(group, dict):
+        return None
+    merged = dict(group)
+    gp = [dict(x) for x in (merged.get("pages") or []) if isinstance(x, dict)]
+    if not gp:
+        gp = [merged]
+    if not (1 <= idx <= len(gp)):
+        return merged
+    gp[idx - 1] = page
+    merged["pages"] = gp
+    if idx == 1:
+        # 顶层那几个键一直是"第 1 页"的镜像（列表页、发布取图、回读校验读的都是它们），不能留旧值
+        merged["title"] = page.get("title") or merged.get("title")
+        merged["subtitle"] = page.get("subtitle") or merged.get("subtitle")
+        merged["cards"] = page.get("cards") or merged.get("cards")
+        merged["scene"] = page.get("scene") or merged.get("scene")
+    return merged
+
+
 @app.route("/api/poster/plan/page", methods=["POST"])
 def api_poster_plan_page():
     """只重拆某一页：整组「换一套」会把人手动改过的别的页一起冲掉，这条是"就这页不满意"的出口。
@@ -2530,9 +2555,16 @@ def api_poster_plan_page():
         page, bad, notes = ai_poster.build_page_plan(
             summary, cfg, idx, pages, spine=spine, theme=theme, style_key=style_key,
             text_mode=text_mode, has_photo=has_photo, frames=frames)
+        prev = _poster_status.get("plan") or {}
+        merged = _merge_page_into_group(prev.get("plan"), idx, page)
         _poster_status["plan"] = {"page": page, "index": idx, "violations": bad,
                                   "notes": notes, "chars": ai_poster.plan_chars(page),
-                                  "model": cfg.get("model") or ""}
+                                  "model": cfg.get("model") or "",
+                                  # 整组那份就地换掉这一页一起留着：只重拆一页不该把"上次拆好的
+                                  # 文案"冲成只剩一页，否则关掉弹窗再打开什么都没了（只能重拆花钱）
+                                  "plan": merged, "publish": prev.get("publish"),
+                                  "guide_only": ai_poster.guide_only_plan(merged) if merged else False,
+                                  "manual_prompts": prev.get("manual_prompts")}
         _poster_status["progress"] = ("✅ 第 %d 页已重拆（%d 字 · 模型 %s）"
                                       % (idx, ai_poster.plan_chars(page), cfg.get("model") or "?")
                                       + ("；自动压缩：" + "、".join(notes) if notes else "")

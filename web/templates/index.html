@@ -3031,6 +3031,7 @@ function openPosterDialog(id) {
   _pkPhoto = null;           // 配图也是这条素材的，换整理稿要清掉
   _pkManual = []; _pkManualRaw = []; _pkBases = []; _pkManualOpen = false;   // 豆包那条同样属于这条素材
   _pkGuideOnly = false; _pkFrames = null;    // 攻略页标记与可用画面数都属于这一条素材
+  _pkGuideNote = '';                       // 上一条素材那句「整组已切成攻略页」不作数
   pkFramesProbe(id);
   _pkPages = []; _pkCur = 0; // 分页同样属于这条素材，不清会把上一条的页带过来
   _pkRec = null; _pkWhy = ''; _pkPreviewClicks = 0;
@@ -3214,7 +3215,7 @@ function pkRenderFramesHint() {
         + 'title="逐张问一遍看图模型：有没有后期压上去的字、在哪、能不能裁一条边救回来。一次最多看 8 张">'
         + '先看图确认</button>'
         + '<span style="color:var(--text-tertiary)">不点也行，出图那一刻会自动看 8 张 · '
-        + '<a href="javascript:void(0)" onclick="pkUseGuideLayout()">直接改成攻略页</a></span>';
+        + '<a href="javascript:void(0)" onclick="pkUseGuideLayout()">整组直接改成攻略页</a></span>';
       return;
     }
     if (f.total) {
@@ -3247,24 +3248,76 @@ function pkRenderFramesHint() {
     + (left > 0 ? '，另有 ' + left + ' 张还没看图，用到才看' : '')
     + (isGuide ? ' · <b>正在用攻略页那一档，出图 0 元</b>'
                : ' · 版式选「攻略页」= 一页一个论点配真帧带图注，<b>不花出图费</b> '
-                 + '<button class="btn ghost sm" onclick="pkUseGuideLayout()">改成攻略页</button>');
+                 + '<button class="btn ghost sm" onclick="pkUseGuideLayout()">整组改成攻略页</button>')
+    // 「整组改成攻略页」跑完那句结论写在这里，不写 pk-result（那边会被异步重排的预览盖掉）
+    + (_pkGuideNote ? '<br><b>' + esc(_pkGuideNote) + '</b>' : '');
 }
 async function pkUseGuideLayout() {
+  // 一次搞定：整组每页都切成攻略版面（0 元、立刻能看），再把每页逐页重拆一遍，
+  // 让模型按那一页讲的事去帧清单里挑真帧。以前这个按钮只改当前页签那一页，
+  // 三页要点三次、还要每页再点一次「只重拆这一页」才配得上图（号主 10-13 说"一次搞定"）。
   const sel = document.getElementById('pk-layout-key-top');
   if (sel) { sel.value = 'guide'; }
+  const skin = await pkGuideSkin();
+  _pkPages.forEach(p => { p.layout_key = 'guide'; });   // 先整组换版面：③ 按钮上那句钱要立刻改口
+  const st = document.getElementById('pk-style-key-top');
+  if (st) { st.value = skin; pkSyncStyle(skin); }
   pkSyncLayout('guide');
-  // 皮肤不能写死 guide_ink：做十篇就是十个一模一样的深墨绿，平台那条
-  // 「套用模板批量生产同质化内容」说的就是这个。按素材轮换，但轮换公式只在后端一份，
-  // 这里带着这条素材的 id 去问该用哪张脸——问回来什么就显示什么，下拉不会跟实际出图对不上。
-  let skin = 'guide_ink';
+  pkRenderFramesHint();
+  const n = _pkPages.length;
+  if (!n) return;
+  // 探测过且确实一张干净帧都没有，就别再重拆了（拆回来也是没图）；没探测到就照常问模型，
+  // 帧清单在后端，前端这个数只是提示，不能拿它当闸。
+  if (_pkFrames && !(_pkFrames.usable || 0)) {
+    alert('整组 ' + n + ' 页已切成攻略版面，但这条素材没有可用画面（一张干净帧都没有）——'
+        + '这一档宁可不配图，也不会拿带字幕的帧上去。');
+    return;
+  }
+  if (!confirm('整组 ' + n + ' 页都改成攻略版面（出图 0 元），然后逐页重拆把真帧配回来。\n'
+      + '重拆会把每页现在的标题与要点换成模型新写的一份——你已经手改过的话先别点，'
+      + '可以只点某一页的「只重拆这一页」。\n每页约 20-30 秒，只花模型那几厘。继续？')) {
+    setStatus('done', '整组已切成攻略版面，没重拆：这一版会排成攻略页但没有真帧');
+    return;
+  }
+  _pkGuideChain = []; _pkGuideNote = '';
+  for (let i = 2; i <= n; i++) _pkGuideChain.push(i);
+  _pkGuideTotal = n;
+  await pkPostPageRework(1);          // 剩下的页在 pollPoster 那一头一页一页接上去
+}
+// 皮肤不能写死 guide_ink：做十篇就是十个一模一样的深墨绿，平台那条
+// 「套用模板批量生产同质化内容」说的就是这个。按素材轮换，但轮换公式只在后端一份，
+// 这里带着这条素材的 id 去问该用哪张脸——问回来什么就显示什么，下拉不会跟实际出图对不上。
+async function pkGuideSkin() {
   try {
     const d = await fetch('/api/poster/styles?summary_id=' + encodeURIComponent(_pkId || 0))
       .then(r => r.json());
     const list = d.guideStyles || [];
-    if (d.guideStyle && (!list.length || list.indexOf(d.guideStyle) >= 0)) skin = d.guideStyle;
+    if (d.guideStyle && (!list.length || list.indexOf(d.guideStyle) >= 0)) return d.guideStyle;
   } catch (e) { /* 问不到就用第一张脸，至少不是假的高级感 */ }
-  const st = document.getElementById('pk-style-key-top');
-  if (st) { st.value = skin; pkSyncStyle(skin); }
+  return 'guide_ink';
+}
+// ── 「整组改成攻略页」的逐页链 ──
+// 后台一次只跑一个海报任务，所以只能串着发：每页跑完由 pollPoster 交回这里发下一页。
+let _pkGuideChain = [], _pkGuideTotal = 0, _pkGuideNote = '';
+function pkGuideAbortNote() {
+  const rest = _pkGuideChain.length;
+  _pkGuideChain = []; _pkGuideTotal = 0;      // 标记一定要清，不清单页重拆会被当成链的一部分
+  if (!rest) return;
+  setStatus('error', '整组重拆中断：还有 ' + rest + ' 页没配上真帧（版面已经是攻略页，'
+    + '想补就逐页点「只重拆这一页」）');
+}
+async function pkGuideNext() {
+  if (_pkGuideChain.length) { await pkPostPageRework(_pkGuideChain.shift()); return; }
+  if (!_pkGuideTotal) return;               // 不是这条链跑完的（单页重拆），别抢它的状态
+  _pkGuideTotal = 0;
+  const pics = _pkPages.reduce((s, p) => s + ((p.photos || []).length), 0);
+  const bare = _pkPages.filter(p => !(p.photos || []).length).length;
+  // 结论写在"这条素材有 N 张干净画面"那一行下面，不写 pk-result：
+  // pkApplyPage 会异步重排一次预览，写进 pk-result 的那句总结会被它盖掉（实测被盖过一次）
+  _pkGuideNote = '整组 ' + _pkPages.length + ' 页已切成攻略页 · 配了 ' + pics + ' 张真帧'
+    + (bare ? '；' + bare + ' 页没图上（那一页讲的事画面里看不见，宁可不配）' : '')
+    + '。出图 0 元，哪一页不满意就点那一页的「只重拆这一页」';
+  setStatus('done', _pkGuideNote);
   pkRenderFramesHint();
 }
 function pkModeChanged() {
@@ -3650,14 +3703,21 @@ async function pkRerollPage() {
   if ((cur.title || (cur.cards || []).length) &&
       !confirm('只重拆第 ' + (_pkCur + 1) + ' 页：这一页现在的标题与要点会被模型换一份，'
           + '其他 ' + (_pkPages.length - 1) + ' 页原样不动。\n（约 20-30 秒，只花模型那几厘，不出图不花钱）继续？')) return;
-  const body = {summary_id: _pkId, page_index: _pkCur + 1,
+  await pkPostPageRework(_pkCur + 1);
+}
+// 发一页的重拆请求。单页那个按钮和「整组改成攻略页」那条链共用一份，别写两遍迟早对不上。
+async function pkPostPageRework(idx) {
+  if (!_pkId) return false;
+  if (_pkPageBusy || _pkPlanBusy) { pkGuideAbortNote(); return false; }
+  pkFlushForm();
+  const body = {summary_id: _pkId, page_index: idx,
                 spine: (_pkLastPlan || {}).spine || '',
                 theme: document.getElementById('pk-theme').value.trim(),
                 ratio: document.getElementById('pk-ratio').value,
                 style_key: pkStyleKey(), text_mode: pkTextMode(),
-                pages: _pkPages.map(p => ({role: p.role, layout_key: p.layout_key,
+                pages: _pkPages.map(p => pkCarryGuide({role: p.role, layout_key: p.layout_key,
                                             title: p.title, subtitle: p.subtitle,
-                                            scene: p.scene, footer: p.footer, cards: p.cards}))};
+                                            scene: p.scene, footer: p.footer, cards: p.cards}, p))};
   if (_pkPhoto) body.photo = _pkPhoto.ref;
   pkPageBusy(true);
   let r;
@@ -3854,7 +3914,12 @@ let _pkGuideOnly = false;   // 整组都是攻略页：画面=素材真帧，不
 // 还没拆的时候，用户把布局点成「攻略页」就是他对每一页的意图——
 // 这时候不认，界面会一边写着"用素材真帧"一边挂着 0.5 元/张和「③b 回传底图」，说的假话。
 function pkGuideChrome() {
-  if (_pkPages.length) return !!_pkGuideOnly;
+  // 「整组都是攻略页」= 这一组不叫 AI 底图。后端算的是 all(_is_guide(page))，
+  // 前端必须跟着同一个判据：他在界面上手动把每一页都改成攻略页之后，
+  // 拆解那次给的 _pkGuideOnly 还是 false，③ 按钮会继续写「3 页共 1.5 元」——那是说假话。
+  if (_pkPages.length) {
+    return _pkGuideOnly || _pkPages.every(p => p.layout_key === 'guide');
+  }
   return !!_pkGuideOnly || pkLayoutKey() === 'guide';
 }
 let _pkFrames = null;       // 这条素材的可用画面数 {total, usable, checked}，打开弹窗时问一次
@@ -4245,7 +4310,27 @@ function pollPoster(stage, task) {
     if (stage === 'page' && st.plan && st.plan.page) {
       // 只重拆一页：回来的那一页替进当前结构，别的页一个字不动
       const idx = st.plan.index || (_pkCur + 1);
+      const inChain = !(_pkGuideChain.length || _pkGuideTotal);
+      if (!inChain) {
+        // 「整组改成攻略页」那条链：模型这一页可能又选回插画版式（实测末页会选 list），
+        // 必须在替进结构**之前**钉住——晚一步 pkApplyPage 已经把版式下拉刷成 list 了，
+        // 之后任何一次 pkFlushForm 都会把这一页改回去。
+        st.plan.page.layout_key = 'guide';
+      }
       pkApplyPage(st.plan.page, idx, st.plan.notes || []);
+      if (!inChain) {
+        if (_pkGuideChain.length) {
+          setStatus('running', '整组攻略页：第 ' + idx + ' 页已配完，接着配第 '
+            + _pkGuideChain[0] + ' 页…');
+          pkGuideNext();
+          return;
+        }
+        pkGuideNext();
+        const d2 = document.getElementById('pk-srcpanel');
+        if (d2) d2.open = true;
+        pkLoadSource();
+        return;
+      }
       const d = document.getElementById('pk-srcpanel');
       if (d) d.open = true;
       pkLoadSource();
