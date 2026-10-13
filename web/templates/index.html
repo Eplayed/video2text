@@ -1390,7 +1390,7 @@ textarea{resize:vertical;min-height:84px}
             <option value="typeset" selected>排版 · 字不会错</option>
             <option value="model">直出 · 字要自己核</option>
           </select></label>
-          <label>张数<select id="pk-copies" title="同一份文案画几次好坏不一样，多出几张挑比不满意重出省事">
+          <label>每页几张<select id="pk-copies" title="同一份文案画几次好坏不一样，多出几张挑比不满意重出省事">
             <option value="1" selected>1 张</option>
             <option value="3">3 张挑 1</option>
           </select></label>
@@ -3238,19 +3238,62 @@ function pkRenderFramesHint() {
     return;
   }
   clearTimeout(_pkFramesTimer);
+  const items = f.items || [];
   const left = Math.max(0, (f.total || 0) - (f.judged || 0));
-  const drop = (f.dropped && f.dropped[0]) ? f.dropped[0] : null;
-  const isGuide = (document.getElementById('pk-layout-key-top') || {}).value === 'guide';
+  const drop = (f.dropped || []).reduce((s, d) => s + (d.n || 0), 0);
+  const why = (f.dropped && f.dropped[0]) ? f.dropped[0].why : '';
+  const isGuide = pkGuideChrome();
+  const np = Math.max(1, _pkPages.length || 1);
   box.style.display = '';
-  box.innerHTML = '这条素材有 <b>' + f.usable + '</b> 张干净画面'
-    + (drop ? '（抽了 ' + (f.total || 0) + ' 张，扔掉的 ' + drop.n + ' 张是：' + esc(drop.why) + '）'
-            : '（已挑掉字幕条/花字/作者做的整帧卡）')
-    + (left > 0 ? '，另有 ' + left + ' 张还没看图，用到才看' : '')
-    + (isGuide ? ' · <b>正在用攻略页那一档，出图 0 元</b>'
-               : ' · 版式选「攻略页」= 一页一个论点配素材真帧，<b>不花出图费</b> '
-                 + '<button class="btn ghost sm" onclick="pkUseGuideLayout()">整组改成攻略页</button>')
-    // 「整组改成攻略页」跑完那句结论写在这里，不写 pk-result（那边会被异步重排的预览盖掉）
-    + (_pkGuideNote ? '<br><b>' + esc(_pkGuideNote) + '</b>' : '');
+  // 「8 张画面」和「3 页」是两件事，以前混在一句里说，号主以为点 ③ 会出 8 张图（2026-10-13）。
+  // 所以这一行固定三段：素材画面有多少 → 这一组是几页 → 图从哪来、多少钱。
+  let html = '素材画面：<b>' + f.usable + '</b> 张能用'
+    + '（抽了 ' + (f.total || 0) + ' 张，判过 ' + (f.judged || 0) + ' 张'
+    + (drop ? '，扔掉 ' + drop + ' 张（最多的一种是「' + esc(why) + '」）' : '，判过的没一张带后期字')
+    + (left > 0 ? '；另有 ' + left + ' 张没看图，用到才看' : '') + '）';
+  if (items.length) {
+    html += ' <button class="btn ghost sm" onclick="pkToggleFrameStrip()"'
+      + ' title="逐张看一遍这些画面，以及每一张被排到了第几页">'
+      + (_pkStripOpen ? '收起' : '看这 ' + items.length + ' 张') + '</button>';
+  }
+  html += isGuide
+    ? '<br>这一组 <b>' + np + ' 页</b>，一页最多配 2 张上面的画面当证据；'
+        + '<b>出图 0 元</b>（这一档不叫 AI 画底图）'
+    : '<br>出图出的是<b>页</b>：这一版 <b>' + np + ' 页</b>，底图由 AI 现画（'
+        + (np * 0.5).toFixed(1) + ' 元），<b>不会用到上面那些画面</b>。'
+        + '要用真帧就 <button class="btn ghost sm" onclick="pkUseGuideLayout()">整组改成攻略页</button>'
+        + '，那一档 0 元';
+  // 「整组改成攻略页」跑完那句结论写在这里，不写 pk-result（那边会被异步重排的预览盖掉）
+  if (_pkGuideNote) html += '<br><b>' + esc(_pkGuideNote) + '</b>';
+  if (_pkStripOpen) html += pkStripHtml(items);
+  box.innerHTML = html;
+}
+// 画面条：判过的干净帧摊成一排，每张标"已用在第几页"。
+// 图注（那一帧画面里是什么）以前印在成品上，现在只留档——那正好是这里该看的东西。
+let _pkStripOpen = false;
+function pkToggleFrameStrip() { _pkStripOpen = !_pkStripOpen; pkRenderFramesHint(); }
+function pkStripHtml(items) {
+  const used = {};
+  _pkPages.forEach(function (p, i) {
+    (p.photos || []).forEach(function (ph) {
+      const nm = String((ph && (ph.path || ph.file)) || '').split('/').pop();
+      if (nm) { if (!used[nm]) used[nm] = []; used[nm].push(i + 1); }
+    });
+  });
+  let h = '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px">';
+  (items || []).forEach(function (it) {
+    const u = used[it.name];
+    h += '<div style="width:126px">'
+      + '<img src="' + it.url + '" loading="lazy" onclick="window.open(this.src)" '
+      + 'title="点开看大图" style="width:126px;height:224px;object-fit:cover;border-radius:6px;'
+      + 'border:1px solid var(--border);cursor:zoom-in;display:block">'
+      + '<div style="font-size:11px;line-height:1.35;margin-top:2px">' + esc(it.ts || '')
+      + (u ? ' · <b style="color:var(--accent)">用在第 ' + u.join('、') + ' 页</b>'
+           : ' · <span style="color:var(--text-tertiary)">这版没用上</span>') + '</div>'
+      + '<div style="font-size:11px;line-height:1.35;color:var(--text-tertiary)">'
+      + esc(it.subject || '（没写画面里是什么）') + '</div></div>';
+  });
+  return h + '</div>';
 }
 async function pkUseGuideLayout() {
   // 一次搞定：整组每页都切成攻略版面（0 元、立刻能看），再把每页逐页重拆一遍，
@@ -3410,6 +3453,10 @@ async function loadPosterStyles(force) {
     // 存完模板要刷新名单，这时得保住用户当前选中的那套，不能跳回默认
     sel.value = (_pkStyles.some(s => s.key === keep) ? keep : 'tool_review');
   } else if (sel) { sel.innerHTML = '<option value="">名单载入失败，出图仍可用默认风格</option>'; }
+  // 名单是异步到的，比 pkHydrate 端回来的文案晚一步：这里补一次对齐，
+  // 否则接回上次结果时下拉还停在默认那套（见 pkSyncSelectors），页签上那行
+  // "跟着风格 · 4 条"也一样是名单没到之前算的——三处都得补
+  if (_pkPages.length) { pkSyncSelectors(); pkRefreshTabs(); pkRenderFramesHint(); }
   return _pkStyles;
 }
 function pkStyleKey() {
@@ -3498,7 +3545,29 @@ function _pkRow(tag, id, val, max, ph) {
   return `<div class="pk-row"><span class="pk-tag">${tag}</span>`
     + `<input id="${id}" value="${esc(val || '')}" maxlength="${max}" placeholder="${ph}" oninput="pkCount()"></div>`;
 }
+// 顶部那两个下拉要跟数据对齐。单独抽出来是因为名单是异步拉的：
+// 打开弹窗时 pkHydrate 比 /api/poster/styles 先回来，那一刻下拉里还没有 option，
+// 设 value 会被浏览器丢掉 → 风格停在默认的「工具测评风」、布局显示"跟着风格"，
+// 而实际 plan 是 game_epic + top_art/list。号主看到的"不知道哪个是哪个"有一半是这个。
+function pkSyncSelectors(pg) {
+  pg = pg || _pkPages[_pkCur] || {};
+  const plan = _pkLastPlan || {};
+  const multi = _pkPages.length > 1;
+  const top = document.getElementById('pk-style-key-top');
+  if (top && pkStyle(plan.style_key)) top.value = plan.style_key;
+  const lsel = document.getElementById('pk-layout-key-top');
+  if (!lsel) return;
+  const want = pg.layout_key || '';
+  lsel.value = (!want || pkLayout(want)) ? want : '';
+  const h = document.getElementById('pk-layout-hint');
+  if (h) h.textContent = pkLayout(lsel.value) ? pkLayout(lsel.value).when : '';
+  const lb = document.getElementById('pk-layout-label');
+  if (lb) lb.textContent = multi ? '这一页的版式' : '版式';
+}
 function pkRenderPlan(plan, publish, cur) {
+  // 重拆之前这一组是不是攻略档：换一套/重新拆文案会让模型自己重选版式，
+  // 它常常选回插画档，于是"0 元"变成"1.5 元"而没人说一声（号主 10-13：不知道哪个是哪个）
+  const wasGuide = pkGuideChrome();
   plan = plan || {}; publish = publish || {};
   _pkLastPlan = plan; _pkLastPublish = publish;
   if (cur === undefined || !_pkPages.length) {
@@ -3521,22 +3590,17 @@ function pkRenderPlan(plan, publish, cur) {
     if (!_pkFoot) { _pkFoot = (_pkPages[_pkPages.length - 1] || {}).footer || ''; }
   }
   pkNormalizeFooters();
+  // 重拆把攻略版式冲掉了必须说一声：这条素材明明有干净画面，界面上却悄悄从
+  // 「用素材真帧 0 元」变回「AI 画底图 1.5 元」，没人提示就是他说的"不知道哪个是哪个"
+  if (wasGuide && !pkGuideChrome() && _pkFrames && (_pkFrames.usable || 0)) {
+    _pkGuideNote = '注意：这次重拆把版式换回了 AI 画底图（' + _pkPages.length + ' 页 '
+      + (_pkPages.length * 0.5).toFixed(1) + ' 元）。这条素材有 ' + _pkFrames.usable
+      + ' 张干净画面，要用它们就再点一次「整组改成攻略页」';
+  }
   _pkRec = plan.recommended || null;
   _pkWhy = plan.why || '';
   const pg = _pkPages[_pkCur], multi = _pkPages.length > 1;
-  if (pkStyleKey() !== (plan.style_key || '')) {
-    const top = document.getElementById('pk-style-key-top');
-    if (top && pkStyle(plan.style_key)) top.value = plan.style_key;
-  }
-  const lsel = document.getElementById('pk-layout-key-top');
-  if (lsel) {
-    const want = pg.layout_key || '';
-    lsel.value = (!want || pkLayout(want)) ? want : '';
-    const h = document.getElementById('pk-layout-hint');
-    if (h) h.textContent = pkLayout(lsel.value) ? pkLayout(lsel.value).when : '';
-    const lb = document.getElementById('pk-layout-label');
-    if (lb) lb.textContent = multi ? '本页布局' : '布局';
-  }
+  pkSyncSelectors(pg);
   let html = pkRecHtml() + pkTabsHtml()
     + `<div class="pk-row"><span class="pk-tag">主线</span>`
     + `<input id="pk-spine" value="${esc(plan.spine || '')}" maxlength="${PK_LIMITS.spine}" placeholder="这条海报讲的一条链（不进图）"></div>`
@@ -4093,19 +4157,20 @@ function pkPhotoLabel() {
 // 所以算式只留这一份：pkPhotoLabel 和切档都要用，两边各写一遍迟早对不上。
 function pkGoLabel() {
   const n = Math.max(1, _pkPages.length);
+  const many = n > 1 ? n + ' 页 · ' : '';
   if (pkGuideChrome()) {
-    // 攻略页整组一张 AI 底图都不叫（画面是素材真帧），写 0.5 元/张就是虚报价格——
-    // 号主就是冲着不花钱走这条的，账和文案都得跟着改口
-    return n > 1 ? '③ 出图 · 0 元（' + n + ' 页，用素材真帧）' : '③ 出图 · 0 元（用素材真帧）';
+    // 攻略页那一档一张 AI 底图都不叫（画面是素材真帧），写 0.5 元/张就是虚报价格——
+    // 号主就是冲着不花钱走这条的，账和文案都得跟着改口。"用素材真帧"四个字要留在按钮上，
+    // 他才知道这一版出的是页、图是从那批画面里挑的
+    return '③ 出图 · ' + many + '用素材真帧 0 元';
   }
   if (_pkPhoto) {
-    return n > 1 ? '③ 出图 · 0 元（' + n + ' 页，首页用你的图）' : '③ 出图 · 0 元（用你的图）';
+    return '③ 出图 · ' + many + '用你上传的图 0 元';
   }
   if (pkTextMode() === 'model') {
-    return n > 1 ? '③ 出图 · ' + n + ' 页共 ' + (n * 0.5).toFixed(1) + ' 元（字也画）'
-                 : '③ 出图 · 0.5 元（字也画）';
+    return '③ 出图 · ' + many + 'AI 画底图带字 ' + (n * 0.5).toFixed(1) + ' 元';
   }
-  return n > 1 ? '③ 出图 · ' + n + ' 页共 ' + (n * 0.5).toFixed(1) + ' 元' : '③ 出图 · 0.5 元/张';
+  return '③ 出图 · ' + many + 'AI 画底图 ' + (n * 0.5).toFixed(1) + ' 元';
 }
 function pkModeLine() {
   if (pkGuideChrome()) return '画面用素材真帧（后期压的字、整帧卡都挑掉了），中文由程序排';
@@ -4149,6 +4214,8 @@ function pkPaintPreview(cur) {
     return true;
   }
   const shown = pages[idx];
+  // 有几页真的配到了素材真帧（排版引擎每页都回 check.photos，普通 AI 档没这个键）
+  const artPages = pages.filter(p => ((p.check || {}).photos || 0) > 0).length;
   const bad = (shown.check && shown.check.problems) || [];
   const img = shown.url;
   box.innerHTML = strip
@@ -4165,10 +4232,19 @@ function pkPaintPreview(cur) {
     + ((pages.length > 1)
         ? '<div class="pk-hint">' + (pages.some(p => (p.check.problems || []).length)
             ? (pages.filter(p => (p.check.problems || []).length).length + ' 页有版面提示；')
-            : (pages.length + ' 页都有图；'))
-          + '整组合计 ' + _pkPreviewChars + ' 字。点上面任意一页缩略图切过去改那一页。</div>' : '')
+            : '版面都没问题；')
+          // 别说"都有图"——以前这句在一张真帧都没配上的时候照样打印出来，号主照着以为
+          // 点 ③ 会出那 8 张画面（2026-10-13）。有几页真配上了图就说几页。
+          + '整组 ' + pages.length + ' 页、合计 ' + _pkPreviewChars + ' 字'
+          + (artPages ? '，其中 <b>' + artPages + '</b> 页配到了素材真帧' : '')
+          + '。点上面任意一页缩略图切过去改那一页。</div>' : '')
     + '<div class="pk-hint">这张预览 <b>0 元、当场出</b>，用的就是出图时同一个排版函数——字号、折行、卡片位置、配色都是真的。'
-    + '只有上面那块灰框在出图时会被 AI 插画替换掉，插画画得好不好只有真出图才知道。<b>改完文案再点一次，不花钱。</b></div>';
+    + (pkGuideChrome()
+        ? '这一档不叫 AI 底图，<b>预览看到的就是成品</b>（画面是素材真帧）。<b>改完文案再点一次，不花钱。</b>'
+        : (_pkPhoto ? '首页那块用的是你上传的真图，出图还是这张图。<b>改完文案再点一次，不花钱。</b>'
+                    : '只有上面那块灰框在出图时会被 AI 插画替换掉，插画画得好不好只有真出图才知道。'
+                      + '<b>改完文案再点一次，不花钱。</b>'))
+    + '</div>';
   return true;
 }
 
@@ -4254,7 +4330,12 @@ async function posterGenerate(force) {
     tip = '出图？约 20-60 秒 + 一次回读校验，0.5 元/张。已有海报会被覆盖。';
   }
 
-  if (!confirm(tip)) return;
+  // 花钱那条路上，如果这条素材其实有干净画面，一定要在确认框里说清楚"这一版用不到它们"——
+  // 号主就是照着"有 8 张画面"去点 ③ 的，结果出了 3 张 AI 插画（2026-10-13）
+  const artHint = (!pkGuideChrome() && !nBase && !_pkPhoto && _pkFrames && (_pkFrames.usable || 0))
+      ? '\n\n注意：这一版是 AI 画底图，不会用到那 ' + _pkFrames.usable
+        + ' 张素材画面。要用它们就取消，改点「整组改成攻略页」（那一档 0 元）。' : '';
+  if (!confirm(tip + artHint)) return;
   const body = {summary_id: _pkId, ratio: document.getElementById('pk-ratio').value,
                 theme: document.getElementById('pk-theme').value.trim(),
                 plan: plan, publish: plan ? pkReadPublish() : null,

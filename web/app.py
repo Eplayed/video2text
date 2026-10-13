@@ -2843,8 +2843,20 @@ def api_poster_frames():
         if not job.get("error"):
             job = {}
     drops = frame_pool.dropped(meta)
+    # 能用的那几张列出来给界面摆成缩略图：号主点完「看图」想知道那 8 张到底是什么，
+    # 只给一个数等于没给（2026-10-13 他原话"点了看8张图后，没地方预览"）。
+    # 只给 clean 那些（判过、确认干净的），raw 中间帧一律不暴露。
+    items = []
+    for it in frame_pool.usable(meta):
+        p = it.get("file") or ""
+        name = os.path.basename(str(p))
+        rel = "assets/frames/%s/clean/%s" % (aid, name)
+        items.append({"i": it.get("i"), "ts": it.get("ts") or "",
+                      "subject": (it.get("subject") or "").strip(),
+                      "url": "/media/" + rel, "name": name})
     return jsonify({"aweme_id": aid, "total": len(frames),
                     "usable": len(frame_pool.usable(meta)),
+                    "items": items[:24],
                     "judged": len([f for f in frames if f.get("checked")]),
                     # 扔掉的那些为什么不能用（整帧是卡 / 花字在中间 / 裁完回读还有字）——
                     # 号主看到"18 张只剩 3 张"要能一眼看懂，否则就像程序坏了
