@@ -2848,7 +2848,8 @@ def _frames_resolve_url(video, aweme_id, sid):
         也就是说这条路不是"cookie 没配好"，是抖音换了规则，补 cookie 补不出来。
       · 真实浏览器那条一路 `browser_fetch_video_detail` 实测能拿到 nwm 直链（今天成过三次），
         它抖不抖取决于机器忙不忙——自动同步批量抓的时候容易等不到 detail 那个 XHR，
-        所以这里最多试 3 次、每次报进度，而不是一次定生死。
+        所以这里最多试 5 次、每次报进度，**并且每一发之前先给自动同步排队**，
+        而不是一次定生死。
       · 解析器留在最后当"顺手捡一下"：只试一次、不退避，成了省时间，不成也不拖。
     """
     cached = _load_cached_nwm_url(aweme_id)
@@ -2864,8 +2865,12 @@ def _frames_resolve_url(video, aweme_id, sid):
         or "https://www.douyin.com/video/%s" % aweme_id
     url = ""
     if browser_fetch_video_detail:
-        for attempt in (1, 2, 3):
-            _frames_set(sid, progress="真实浏览器取直链（第 %d 次）..." % attempt)
+        for attempt in range(1, 6):
+            # 自动同步在批量抓主页时，这台机器上会同时开好几个 Chromium，
+            # 我们这一发的 detail XHR 就容易被挤到 15 秒超时——所以先排队，别硬抢
+            waited = _frames_wait_for_sync(sid)
+            _frames_set(sid, progress="真实浏览器取直链（第 %d 次%s）..." % (
+                attempt, "，刚等完同步" if waited else ""))
             try:
                 info = browser_fetch_video_detail(page) or {}
             except Exception as be:
@@ -2874,18 +2879,27 @@ def _frames_resolve_url(video, aweme_id, sid):
             url = (info.get("nwm_url") or "").strip()
             if url:
                 break
-            time.sleep(3)
+            time.sleep(3 * attempt)      # 3/6/9/12 秒，越往后越给同步让路
     if not url:
         _frames_set(sid, progress="浏览器没拿到，再试一次本地解析器...")
         url = _resolve_download_url(dict(video, aweme_id=aweme_id), retries=1, backoff=1.0)
     if url:
         return url
     _frames_set(sid, running=False, done=True,
-                error="取不到下载地址：浏览器那一路试了 3 次都没等到 aweme/detail 的响应"
-                      "（自动同步正在批量抓的时候最容易挤不上）。"
+                error="取不到下载地址：浏览器那一路试了 5 次都没等到 aweme/detail 的响应。"
                       "本地解析器现在必被抖音风控（缺 msToken，那是页面 JS 现算的），"
-                      "不是 cookie 的问题——隔一两分钟再点一次通常就成了")
+                      "不是 cookie 的问题——稍后再点一次通常就成了（一次约 30 秒）")
     return ""
+
+
+def _frames_wait_for_sync(sid, max_wait=75):
+    """自动同步正在批量抓主页时先等它跑完：两边同抢 Chromium 谁都容易超时。
+    最多等 max_wait 秒，超时照样放行（不能把补画面无限卡住）。返回等了多久（秒）。"""
+    t0 = time.time()
+    while _sub_status.get("running") and time.time() - t0 < max_wait:
+        _frames_set(sid, progress="自动同步正在抓主页，先让开（已等 %d 秒）..." % int(time.time() - t0))
+        time.sleep(5)
+    return int(time.time() - t0)
 
 
 def _frames_judge(sid, aweme_id, cfg, limit=8):
