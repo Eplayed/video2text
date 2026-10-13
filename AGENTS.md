@@ -22,9 +22,12 @@ As this project's AI coding tool, you must follow the additional conventions bel
 
 ## 开始前必读（按顺序）
 
-1. `PROJECT_STATUS.md` — 现状快照（更新到 2026-09-10，优先看它）
-2. `README.md` — 基础用法
-3. `CHANGELOG_FOR_AI.md` — 历史改动与写稿流程约定
+1. `docs/AGENT-HANDOFF.md` — **接手必读那一份**：规则有几份、skill 在哪、门禁怎么跑、
+   界面改动收尾要自己走一遍、并发提交怎么隔离、哪些口径别再翻回去
+2. `CHANGELOG_FOR_AI.md`（从顶部往下读）— 每处改动为什么改
+3. `output/角色交接/`（按日期那份）— 内容产线各角色的结论与每份文件的最低要求
+4. `README.md` — 基础用法
+5. `PROJECT_STATUS.md` — 现状快照**停在 2026-09-10**，只当历史背景读，别当现状
 
 ## 跨仓库锚（必须认）
 
@@ -39,6 +42,7 @@ As this project's AI coding tool, you must follow the additional conventions bel
 3. 运行数据不进 git：`config/config.env`（Cookie/API Key）、`video_index.json` 等索引文件、`*.json` 索引——换机时手动迁移。
 4. AI 加工未配置时静默跳过、不阻断采集主流程。
 5. 改 `src/graphics/`（配色/字体/版式三轴、模板、渠道适配）前必读 `.agents/memories/40-graphics-variants.md`——三轮「选了不生效」静默失效复盘全在其中；改完必须跑 `/graphics-verify` 三条线全绿。
+6. 界面类改动收尾前**自己把流程走一遍**：`python3 scripts/agent/ui_walk.py <整合稿id> "主题" --plan`（headless 走弹窗、把每处用户会读到的文案原样打印＋截图），再跑门禁。号主只有「截图 + 一句话」这一种反馈方式，等他指出来就已经花掉他一轮。判据要跟后端同源、别拿上次回传的标记当现状——那次抓到的是「界面写 0 元、后端照样扣钱」。
 
 ## Qoder 项目技能（`.qoder/skills/`）
 
