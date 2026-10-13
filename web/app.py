@@ -2523,10 +2523,13 @@ def api_poster_plan_page():
 
     def fn():
         cfg = _fast_config()
+        # 这一页重拆也要带着真帧清单：不带给它，模型不敢给 photos 编号，
+        # 重拆一次就把原来那页的证据图悄悄丢了（攻略页最伤的一种"字还在图没了"）
+        frames = _guide_frames_for(summary, cfg)
         _poster_status["progress"] = "只重拆第 %d 页（模型：%s）..." % (idx, cfg.get("model") or "?")
         page, bad, notes = ai_poster.build_page_plan(
             summary, cfg, idx, pages, spine=spine, theme=theme, style_key=style_key,
-            text_mode=text_mode, has_photo=has_photo)
+            text_mode=text_mode, has_photo=has_photo, frames=frames)
         _poster_status["plan"] = {"page": page, "index": idx, "violations": bad,
                                   "notes": notes, "chars": ai_poster.plan_chars(page),
                                   "model": cfg.get("model") or ""}
@@ -3020,7 +3023,12 @@ def api_poster_styles():
                     "limits": {"scene": ai_poster.SCENE_MAX, "cardVis": ai_poster.CARD_VIS_MAX,
                                "cardMin": ai_poster.CARD_MIN, "cardMax": ai_poster.CARD_MAX,
                                "spine": ai_poster.SPINE_MAX},
-                    "reviewPass": ai_poster.REVIEW_PASS})
+                    "reviewPass": ai_poster.REVIEW_PASS,
+                    # 攻略页三套皮肤按素材轮换，轮换公式只有 Python 这一份：
+                    # 前端点「改成攻略页」时带着 summary_id 来问该用哪张脸，别自己抄一遍算法，
+                    # 否则下拉显示深墨绿、拆解实际出米白，界面就在说假话。
+                    "guideStyles": list(ai_poster.GUIDE_STYLES),
+                    "guideStyle": ai_poster.guide_style_for(request.args.get("summary_id") or 0)})
 
 
 @app.route("/api/poster/adoption")

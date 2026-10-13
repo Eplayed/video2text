@@ -127,6 +127,33 @@ TYPE_SKINS = {
         "bottom": "深墨绿纯色渐变，不要任何纹理",
         "layout": "guide", "art_floor": 0.30, "art_cap": 0.52
     },
+    # 攻略页另两套：同一套结构（栏目名+页码+真帧+大字数字+要点+警示+互动），
+    # 但跨素材换脸。以前攻略页只有一套皮，做十篇就是十个一模一样的深墨绿——
+    # 平台红线里那条"套用模板批量生产同质化内容"看着说的就是这个（2026-10-13 复盘）。
+    "guide_paper": {
+        "title_face": "sans_bold", "body_face": "sans_book",
+        "title": "#2f2517", "title_stroke": "#efe7d6",
+        "ink": "#33291a", "muted": "#7c705a", "accent": "#8a6a2f",
+        "panel": "#f8f2e4", "panel_alpha": 215, "stroke": "#cbbd9d", "stroke_alpha": 110,
+        "bg_top": "#f1e9d8", "bg_bot": "#ddcfb4",
+        "radius": 8, "gap": 0.020,
+        "warn_bg": "#f2d8cd", "warn_ink": "#6b2a1c", "gold": "#8a6a2f",
+        "rule": "#c9b995",
+        "bottom": "米白纸感纯色渐变，不要纸张纹理与噪点",
+        "layout": "guide", "art_floor": 0.30, "art_cap": 0.52
+    },
+    "guide_night": {
+        "title_face": "sans_bold", "body_face": "sans_book",
+        "title": "#dfe9f5", "title_stroke": "#060a11",
+        "ink": "#d5dde8", "muted": "#8494a8", "accent": "#9fd0f0",
+        "panel": "#1b2838", "panel_alpha": 205, "stroke": "#33475e", "stroke_alpha": 95,
+        "bg_top": "#16202f", "bg_bot": "#080d16",
+        "radius": 10, "gap": 0.020,
+        "warn_bg": "#5a2f33", "warn_ink": "#f0dcd8", "gold": "#9fd0f0",
+        "rule": "#2b3f55",
+        "bottom": "暗蓝夜色纯色渐变，不要任何纹理",
+        "layout": "guide", "art_floor": 0.30, "art_cap": 0.52
+    },
 }
 DEFAULT_SKIN = "tool_review"
 
@@ -983,6 +1010,14 @@ def typeset_guide(base_png, plan, ratio="9:16", skin=None, page=None):
             + (1 if big_h else 0) + (1 if card_hs else 0) + (1 if con_hs else 0)
             + (1 if warn_h else 0) + (1 if ask_h else 0))
     sp = min(int(max(0, room - photo_used) / n_sp), int(H * 0.045)) if n_sp else 0
+    # 平摊完还剩一大截（没图没数字的那几页最常见：内容只到 65% 高，下半屏空着）。
+    # 这时候不许把空白堆在页尾——先给卡与卡之间补一点气口（上限 2% 屏高，
+    # 再大就比卡内行距还宽，读起来像字被乱放），剩下的算成整组内容上方的起排留白，
+    # 让这一页看起来是"居中排满"，不是"排到一半没词了"。
+    left = max(0, room - photo_used - sp * n_sp)
+    n_gap = max(0, len(card_hs) - 1)
+    card_sp = min(int(left / n_gap), int(H * 0.020)) if n_gap else 0
+    head_pad = min(int((left - card_sp * n_gap) / 2.0), int(H * 0.060))
 
     # ── 第二遍：从上往下画 ──
     if kicker or _pg_txt:
@@ -996,6 +1031,8 @@ def typeset_guide(base_png, plan, ratio="9:16", skin=None, page=None):
         ry = y + kick_h - int(H * 0.014)
         draw.line([(m, ry), (W - m, ry)], fill=rule + (255,), width=2)
         y += kick_h
+    # 页眉那一行钉在顶上，起排留白加在它下面（不然栏目名会跟着往下掉）
+    y += head_pad
 
     if title:
         y += sp
@@ -1078,7 +1115,8 @@ def typeset_guide(base_png, plan, ratio="9:16", skin=None, page=None):
             for ln in dfl:
                 _draw_text(draw, (m, y), ln, df, _rgb(skin["ink"]))
                 y += int(ds * 1.32)
-        y += int(H * 0.010)
+        # 卡与卡之间的气口：这一页没排满时把剩下的地方摊进来（见上面 card_sp 那段）
+        y += int(H * 0.010) + (card_sp if i < len(cards) - 1 else 0)
 
     if contrast:
         y += sp

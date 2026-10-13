@@ -2,6 +2,56 @@
 
 更新时间：2026-10-13
 
+## 2026-10-13（第二刀 · 攻略页"版面太模板化"）：五处修法 + 顺带挖出两个静默失效
+
+号主问的是："版面太模板化这个问题，我们新的图文攻略工作流中有没有？" 拿 81 号那三页自查，
+结论是**有，而且是五条**，逐条落地：
+
+1. **图注不再写来源**：`frame_pool.caption_for()` 去掉了「· 素材画面 00:12」后缀，只留
+   "画面里是什么"。时间戳仍然在 `frames.json` 与 manifest 里（我们核对图文对不对得上要用），
+   但**印在图上就等于自证"这帧是从别人视频里抽的"**——小红书那条判罚的旁证之一。
+2. **免责脚注只印末页**：`ai_poster.plan_pages()` 把"从顶层继承来的同一句 footer"只留末页，
+   前面几页清空；某页自己写过不一样的话算编辑的决定，不动。
+   前端同步改：尾注框改名「尾注（只印末页）」，新增 `_pkFoot` + `pkNormalizeFooters()`，
+   任何一页改的都是那一句，但只有末页带得出图（`pkFlushForm`/`pkApplyPage`/`pkReadPayload` 三处）。
+3. **攻略页三套皮轮换**：`poster_typeset.TYPE_SKINS` 加 `guide_paper`（米白纸感）与
+   `guide_night`（暗蓝夜色），`ai_poster.GUIDE_STYLES` + `guide_style_for(整理稿id)` 按素材换脸。
+   轮换公式**只在 Python 一份**：`/api/poster/styles?summary_id=N` 多下发 `guideStyles`/`guideStyle`，
+   前端点「改成攻略页」时带着 id 去问该用哪张脸——不抄算法，下拉就不会跟实际出图对不上。
+   实测 81→guide_ink、80→guide_night（`output/poster/80/poster_p1.png`）。
+4. **卡标题别全用四字格**：拆解铁律三、单页重拆铁律、`_GUIDE_RULES` 三处各加一句
+   （"三条全是四字格读起来就是模板"）。
+5. **攻略页下半屏空洞**：`typeset_guide()` 原来只把空白按块平摊（上限 4.5% 屏高），
+   没图没数字的那一页仍然只排到 65% 高。现在把剩下的地方先摊进卡与卡之间（上限 2% 屏高，
+   再大就比卡内行距还宽＝号主说的"乱放"），其余算成页眉下方的起排留白（上限 6% 屏高）。
+   对照：`output/poster/80/poster_p2.png` 同一页改前改后。
+
+**顺带挖出的两个洞**（都是"界面说一套、产物是另一套"那一类）：
+
+- 前端 `pkRenderPlan`/`pkReadPayload` 重拼 pages 时**把攻略页零件全丢了**
+  （kicker/photos/bignum/contrast/warn/ask 一个都不带）——拆解时看得见图，点出图就没了。
+  修法：新增 `PK_GUIDE_KEYS` + `pkCarryGuide()`，表单只改文字、零件原样带走。
+- 「只重拆这一页」这条链路**从来没拿过帧清单**：`build_page_plan` 不接 frames，
+  提示词里没有铁律六，模型不敢给 photos 编号 → 重拆一次就把那页的证据图悄悄丢了。
+  修法：`api_poster_plan_page` 也调 `_guide_frames_for()`，`page_plan_prompt` 末尾拼
+  `guide_rules_text()`，回来再过一遍 `bind_frames()`（跟整组拆解同一条函数，含栏目名对齐）。
+  同时 `normalize_page(group_footer=这一页原来的尾注)`，免得重拆把整组那句换成默认句。
+- 还有一处误拦：`lint_plan` 判"攻略页空白页"用的是 `any(GUIDE_KEYS)`，而 kicker 也在
+  GUIDE_KEYS 里且是代码补到每一页的 → **只有标题+要点的封面页被当成空白页拦下**（实测拦在 81）。
+  改成按"版式是 guide 或带了除 kicker 外的零件"判，并要求至少有一样能读的东西。
+
+**验证**：`scripts/e2e_poster_layouts.py` 新增 O2 段（脚注只印一次、三套皮键集一致且真换脸、
+轮换公式稳定、只重拆一页带帧清单才有铁律六、封面页不误拦）+ 排版换皮两条，全 `ALL_OK`；
+五条线回归见 `temp/gate_1013_*.log`。实测走的是界面那三步（拆解 → 改成攻略页 → 逐页重拆 → 出图），
+脚本 `temp/drive_guide.py`，产物 `output/poster/80/`、`output/poster/81/`，
+对照图 `temp/guide_样张/`。
+
+**仍未做 / 等号主点头**：① 渠道分叉（小红书那档生成时就不输出尾注与 keyword_reply）；
+② 角落真人小窗要横向裁（现在只裁横条，判弃用）；③ 80 号那页转写里的「赢火」是
+`term_glossary` 的 observed 对（未确认），确认后才会被确定性改回「营火」。
+④ 重出页数变少时，`output/poster/<id>/poster_p3.png` 这类上一版多出来的文件不会删
+（列表与发布读 manifest 的 pages，不会错拿，但访达里看着像还有 4 页）。
+
 ## 2026-10-13（小红书被判 AI 托管）：产线出口三处口径要分渠道
 
 10-10 11:29 发的小红书笔记《魔兽无限服国服金团随便开》（= 整理稿 77 那张两页海报，

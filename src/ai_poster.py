@@ -199,6 +199,30 @@ STYLE_PRESETS = {
                   "版面是一页一个论点的攻略手册结构，靠字号体量差拉层级，"
                   "严禁科技风玻璃面板、严禁花哨边框、严禁把画面塞满装饰"),
     },
+    "guide_paper": {
+        "label": "攻略页（米白纸感 · 真帧当证据）",
+        "when": "和「攻略页」同一套结构，换浅底深字；连着做几篇时轮换着用，别十个号一个脸",
+        "scene": "不画主视觉插画：版面靠真帧截图当证据，底色是安静的米白纸感渐变",
+        "mood": "米白底 #f1e9d8 到 #ddcfb4 的纸感渐变，深墨标题 #2f2517，暗金强调 #8a6a2f，"
+                "正文深褐 #33291a，图注与脚注灰褐 #7c705a，警示块浅砖红 #f2d8cd；"
+                "版面像一本摊开的攻略手册，严禁炫光科技感、严禁花哨边框、严禁把画面塞满装饰",
+        "card_visual": "每条论点前面是暗金色小标题，正文一行行排下来，不画图标也不画面板",
+        "style": ("米白纸感中文攻略页，深墨超粗中文黑体标题配暗金强调与浅砖红警示块，"
+                  "正文深褐、图注灰褐，版面是一页一个论点的攻略手册结构，靠字号体量差拉层级，"
+                  "严禁科技风玻璃面板、严禁花哨边框、严禁把画面塞满装饰"),
+    },
+    "guide_night": {
+        "label": "攻略页（暗蓝夜色 · 真帧当证据）",
+        "when": "同一套结构的冷色版；副本/团本/夜间题材用它，跟米白那套错开",
+        "scene": "不画主视觉插画：版面靠真帧截图当证据，底色是安静的暗蓝夜色渐变",
+        "mood": "暗蓝底 #16202f 到 #080d16 的夜色渐变，浅蓝白标题 #dfe9f5，冷蓝强调 #9fd0f0，"
+                "正文浅灰蓝 #d5dde8，图注与脚注蓝灰 #8494a8，警示块暗酒红 #5a2f33；"
+                "版面像一本摊开的攻略手册，严禁霓虹赛博朋克、严禁花哨边框、严禁把画面塞满装饰",
+        "card_visual": "每条论点前面是冷蓝色小标题，正文一行行排下来，不画图标也不画面板",
+        "style": ("暗蓝夜色中文攻略页，浅蓝白超粗中文黑体标题配冷蓝强调与暗酒红警示块，"
+                  "正文浅灰蓝、图注蓝灰，版面是一页一个论点的攻略手册结构，靠字号体量差拉层级，"
+                  "严禁霓虹赛博朋克、严禁花哨边框、严禁把画面塞满装饰"),
+    },
     "auto": {
         "label": "自由发挥（沿用拆解写的那句风格）",
         "when": "上面四套都不合题材时",
@@ -207,8 +231,27 @@ STYLE_PRESETS = {
         "style": "",
     },
 }
-# 攻略页那一档排在四套插画风格之后：它不出 AI 底图，选它等于选"用素材真帧当证据"
-STYLE_ORDER = ["game_epic", "tool_review", "checklist", "minimal", "guide_ink", "auto"]
+# 攻略页那一档排在四套插画风格之后：它不出 AI 底图，选它等于选"用素材真帧当证据"。
+# 三套攻略页皮肤同一套结构、不同脸——跨素材轮换用，免得十篇长一个样
+STYLE_ORDER = ["game_epic", "tool_review", "checklist", "minimal",
+               "guide_ink", "guide_paper", "guide_night", "auto"]
+GUIDE_STYLES = ("guide_ink", "guide_paper", "guide_night")
+
+
+def guide_style_for(seed):
+    """攻略页三套皮肤按素材轮换：同一套结构、换脸。
+
+    为什么：默认全给 `guide_ink` 的话，做十篇就是十个一模一样的深墨绿，
+    平台那条红线「套用模板批量生产同质化内容」看着说的就是这个（2026-10-13 复盘）。
+    seed 用整理稿 id——稳定可复现，同一条重出还是那张脸，不会一次一个样让人对不上账。
+    """
+    try:
+        n = int(seed or 0)
+    except (TypeError, ValueError):
+        n = 0
+    return GUIDE_STYLES[abs(n) % len(GUIDE_STYLES)]
+
+
 DEFAULT_STYLE_KEY = "tool_review"
 # 字体这条不写进各套配方、单独挂：风格词里全是"质感/雕花/氛围"，模型很容易顺手把中文
 # 写成手写体或艺术字，而实测手写体的逐字准确率明显更低（主标题整块消失过一次）。
@@ -431,6 +474,8 @@ _PLAN_PROMPT = """你是自媒体图文编辑。下面这份素材多半**已经
 **每页**卡片 3-5 张；**每页**全部文字合计 ≤__TOTAL__ 字。
 __DENSITY__
 中文标点计入字数；不要出现 markdown 符号；
+**卡片小标题别全是四字格**（"装备取舍""路线规划""收益结算"这样三连排开）：长短混着写，
+该说满的就说满。换三条素材还是那四个字，读者一眼认出模板——平台判"批量同质化"看的也是这个。
 **价格、天数、日期一律保持素材里的阿拉伯数字**（写 388 不写三八八），中文数字反而更占字数也更难读。
 
 铁律四·画面纪律（这一条决定海报是"一张插画"还是"一屏文字框"，与字数同样重要）：
@@ -606,6 +651,8 @@ __FRAMES__
 - "warn": {"t": "一句提醒", "d": "限制是什么、为什么"} —— 素材没说的写在这儿，别编成结论
 - "ask": {"q": "一个能直接回答的问题", "options": ["不超过三项"]} —— 只给最后一页
 这一档每页正文仍守 ≤__TOTAL2__ 字，但卡片建议 2-3 条，把地方留给图。
+卡片小标题长短混着写：三条全是四个字（"装备取舍""路线规划""收益结算"）看着就像模板，
+换一条素材还是那四个字，等于把十篇做成一篇。
 """
 
 
@@ -816,6 +863,7 @@ __OTHERS__
 - 主标题 ≤__TITLE__ 字；副标题 ≤__SUB__ 字；每张卡片标题 ≤__CT__ 字、说明 ≤__CD__ 字；
   **这一页**卡片 3-5 张、全部文字合计 ≤__TOTAL__ 字；中文标点计入字数；不要 markdown 符号；
   价格、天数、日期保持素材里的阿拉伯数字。
+  卡片小标题长短混着写，别和前面几页一样全是四字格——三连四字读起来就是模板。
 - scene（≤48 字）写这一页要画成什么场景，要看得见；每张卡给 v（≤24 字）写这一条画什么，
   要有形体（讲数值画仪表/钱，讲风险画断裂/警示，讲选择画岔路）。scene 与 v 不占字数预算。
 __LAYOUT__
@@ -829,11 +877,16 @@ __CONTENT__
 """
 
 
-def page_plan_prompt(page_index, pages, spine, style_key, has_photo, theme, lim, content=""):
+def page_plan_prompt(page_index, pages, spine, style_key, has_photo, theme, lim, content="",
+                     frames=None):
     """把"只重写第 k 页"这段话拼出来（纯函数，离线可测）。
 
     其他页的标题与要点会作为"别重复"的清单塞进去——不给这份清单，模型最容易出现的就是
     第二页把第一页讲过的话再说一遍。
+
+    frames 跟整组拆解同一个意思：给了才有"铁律六·攻略页"，模型才敢往这一页填 photos 编号。
+    以前这一条路不带帧清单，于是界面上「只重拆这一页」会把原来那页的真帧和图注悄悄丢掉——
+    攻略页这一档最容易踩的就是"字还在、图没了"。
     """
     others = []
     for i, p in enumerate(pages, 1):
@@ -856,15 +909,18 @@ def page_plan_prompt(page_index, pages, spine, style_key, has_photo, theme, lim,
            .replace("__TITLE__", str(lim["title"])).replace("__SUB__", str(lim["subtitle"]))
            .replace("__CT__", str(lim["cardT"])).replace("__CD__", str(lim["cardD"]))
            .replace("__TOTAL__", str(lim["total"]))
-           .replace("__CONTENT__", (content or "")[:8000]))
+           .replace("__CONTENT__", (content or "")[:8000])
+           + guide_rules_text(frames, lim["total"]))
     return txt
 
 
 def build_page_plan(summary, ai_config, page_index, pages, spine="", theme="",
-                    style_key="", text_mode=DEFAULT_TEXT_MODE, has_photo=False):
+                    style_key="", text_mode=DEFAULT_TEXT_MODE, has_photo=False, frames=None):
     """只重拆一页，返回 (page, violations, notes)。其他页由调用方原样留着。
 
     整组「换一套」会把人手动改过的别的页一起冲掉，这条就是给"这一页不满意"准备的出口。
+    frames 是这条素材的可用真帧清单：不传进来，这一页就拿不到「铁律六」，模型不会给 photos 编号，
+    重拆一次等于把原来那页的证据图悄悄丢了（2026-10-13 复盘发现的洞）。
     """
     api_key, api_base, model = _require_ai(ai_config)
     import openai
@@ -882,7 +938,7 @@ def build_page_plan(summary, ai_config, page_index, pages, spine="", theme="",
         page_index = len(pages)
     key = style_key if style_key in (set(STYLE_PRESETS) | set(_user_presets())) else DEFAULT_STYLE_KEY
     prompt = page_plan_prompt(page_index, pages, spine, key, has_photo, theme, lim,
-                              content=summary.get("content") or "")
+                              content=summary.get("content") or "", frames=frames)
     client = openai.OpenAI(api_key=api_key, base_url=api_base or "https://api.openai.com/v1",
                            timeout=300, max_retries=1)
     resp = client.chat.completions.create(
@@ -891,9 +947,18 @@ def build_page_plan(summary, ai_config, page_index, pages, spine="", theme="",
         temperature=0.5, response_format={"type": "json_object"})
     data = _parse_json(resp.choices[0].message.content)
     page, notes = normalize_page(data, lim, key, has_photo, page_index,
-                                 first_title=(pages[0].get("title") if page_index == 1 else ""))
+                                 first_title=(pages[0].get("title") if page_index == 1 else ""),
+                                 # 尾注跟着这一组走：重拆一页不该把整组那句合规声明换成默认句，
+                                 # 换了就跟别的页对不上，plan_pages 那句"只留末页"也收不掉
+                                 group_footer=((pages[page_index - 1] or {}).get("footer") or ""))
     if not page:
         raise PosterError("模型这一页什么也没给（没标题也没要点），换一套没换成")
+    if frames:
+        # 编号→真文件、程序写图注、整组栏目名对齐，全都走 bind_frames 这一条（跟整组拆解同源）。
+        # 只传这一页会怎样：别的页有栏目名而这一页没有 → 五页看着像五张不相干的图。
+        group = list(pages)
+        group[page_index - 1] = page
+        notes = list(notes) + bind_frames(group, frames, lim)
     one = {"pages": [page]}
     return page, lint_plan(one, lim), notes
 
@@ -976,12 +1041,13 @@ def build_text_plan(summary, ai_config, theme="", title="", style_key="", text_m
         pages, rn = _resplit([one], page_hint, lim)
         if rn:
             pnotes = [rn] + pnotes
-    # 攻略页那一档默认配深墨绿皮：画面是素材真帧，插画风那几套配色压不住游戏截图。
+    # 攻略页那一档默认配攻略皮：画面是素材真帧，插画风那几套配色压不住游戏截图。
     # 只在人没显式选风格时生效——人点过下拉就以人为准，模型和默认都不许改回去。
+    # 三套攻略皮按整理稿 id 轮换，别十篇一个脸（见 guide_style_for）。
     if pages and not style_key:
         gc = sum(1 for p in pages if p.get("layout_key") == "guide")
         if gc and gc * 2 >= len(pages):
-            key = "guide_ink"
+            key = guide_style_for((summary or {}).get("id"))
             for p in pages:
                 p["style_key"] = key
     if pages:
@@ -1098,6 +1164,15 @@ def plan_pages(plan):
                 pages[-1][_k] = item.get(_k)
         if len(pages) >= PAGE_MAX:
             break
+    # 免责脚注**只留末页一句**：以前每页都从顶层继承同一句，一页一张图就印一次，
+    # 跨素材还一字不差——在小红书那就是"批量搬运号"的视觉记号（2026-10-13 复盘）。
+    # 只收"从顶层继承来的同一句"；哪一页自己写过不一样的话，那是编辑的决定，不动。
+    if len(pages) > 1:
+        group = (plan.get("footer") or "").strip()
+        if group:
+            for p in pages[:-1]:
+                if (p.get("footer") or "").strip() == group:
+                    p["footer"] = ""
     return pages or [plan]
 
 
@@ -1168,10 +1243,14 @@ def lint_plan(plan, lim=None, card_min=None):
     cards = plan.get("cards") or []
     floor = CARD_MIN if card_min is None else card_min
     # 攻略页的收尾那一页常常没有"要点卡片"：一句提问 + 三个选项就是整页内容
-    # （对标那套 05/05 就这样）。所以只要带了攻略页零件，卡片下限放到 0，
-    # 但仍然要求这一页至少有一样能读的东西，别放一页空白出去。
-    if floor and any(plan.get(k) for k in GUIDE_KEYS):
-        if not (plan.get("ask") or plan.get("warn") or plan.get("bignum")
+    # （对标那套 05/05 就这样），封面那一页则常常只有标题 + 三四条要点、没有别的零件。
+    # 所以带攻略页零件或干脆是攻略版式的，卡片下限放到 0，但仍要求这一页至少有一样能读的东西。
+    # 判据别写 `any(GUIDE_KEYS)`：栏目名 kicker 也在 GUIDE_KEYS 里，而它是代码补到每一页的，
+    # 于是"只有卡片的封面页"会被当成空白页拦下（2026-10-13 实测就拦在这）。
+    guide_page = ((plan.get("layout_key") or "") == "guide"
+                  or any(plan.get(k) for k in GUIDE_KEYS if k != "kicker"))
+    if guide_page:
+        if not (cards or plan.get("ask") or plan.get("warn") or plan.get("bignum")
                 or plan.get("contrast") or plan.get("photos")):
             bad.append("攻略页这一张卡片、提问、警示、图都没有，是空白页")
         floor = 0

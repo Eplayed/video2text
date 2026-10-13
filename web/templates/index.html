@@ -3249,12 +3249,22 @@ function pkRenderFramesHint() {
                : ' · 版式选「攻略页」= 一页一个论点配真帧带图注，<b>不花出图费</b> '
                  + '<button class="btn ghost sm" onclick="pkUseGuideLayout()">改成攻略页</button>');
 }
-function pkUseGuideLayout() {
+async function pkUseGuideLayout() {
   const sel = document.getElementById('pk-layout-key-top');
   if (sel) { sel.value = 'guide'; }
   pkSyncLayout('guide');
+  // 皮肤不能写死 guide_ink：做十篇就是十个一模一样的深墨绿，平台那条
+  // 「套用模板批量生产同质化内容」说的就是这个。按素材轮换，但轮换公式只在后端一份，
+  // 这里带着这条素材的 id 去问该用哪张脸——问回来什么就显示什么，下拉不会跟实际出图对不上。
+  let skin = 'guide_ink';
+  try {
+    const d = await fetch('/api/poster/styles?summary_id=' + encodeURIComponent(_pkId || 0))
+      .then(r => r.json());
+    const list = d.guideStyles || [];
+    if (d.guideStyle && (!list.length || list.indexOf(d.guideStyle) >= 0)) skin = d.guideStyle;
+  } catch (e) { /* 问不到就用第一张脸，至少不是假的高级感 */ }
   const st = document.getElementById('pk-style-key-top');
-  if (st) { st.value = 'guide_ink'; pkSyncStyle('guide_ink'); }
+  if (st) { st.value = skin; pkSyncStyle(skin); }
   pkRenderFramesHint();
 }
 function pkModeChanged() {
@@ -3302,6 +3312,29 @@ let _pkLastPlan = null, _pkLastPublish = null;
 // 这么做是为了复用整套已有控件（字数统计、卡片输入、校验），不再写第二份表单。
 const PK_PAGE_MAX = 4;
 let _pkPages = [], _pkCur = 0;
+// 尾注（"内容整理自公开分享"这类合规声明）整组只有一句，界面上在任何一页都能改，
+// 但**只印在末页**：以前每页继承同一句，三页就印三次一模一样的话，
+// 在小红书看着就是批量搬运号的记号（2026-10-13 被判"AI 托管发文"之后的复盘）。
+let _pkFoot = '';
+function pkNormalizeFooters() {
+  if (!_pkPages.length) return;
+  for (let i = 0; i < _pkPages.length; i++) {
+    _pkPages[i].footer = i === _pkPages.length - 1 ? (_pkFoot || '') : '';
+  }
+}
+// 攻略页那五样零件（栏目名/真帧/大字数字/对照/警示/互动）是后端算好塞进 plan 的，
+// 表单里没有输入框。以前前端把 pages 重拼一份发给后端时把这些键全丢了——
+// 于是「拆解时看见图，出图回来没图」：号主昨天问的那次就是这个洞。
+// 表单只改文字，零件原样带走；只有「只重拆这一页」才会由后端重新给这一页的零件。
+const PK_GUIDE_KEYS = ['kicker', 'photos', 'bignum', 'contrast', 'warn', 'ask'];
+function pkCarryGuide(dst, src) {
+  if (!dst || !src) return dst;
+  for (let i = 0; i < PK_GUIDE_KEYS.length; i++) {
+    const k = PK_GUIDE_KEYS[i];
+    if (src[k] !== undefined && src[k] !== null && src[k] !== '') dst[k] = src[k];
+  }
+  return dst;
+}
 // AI 推荐快照与理由：拆解回来时存一份，人改过之后推荐条要显示「已改成几页」，
 // 出包时也把它写进 manifest，采纳率靠 recommended 与 final 两对照算出来。
 let _pkRec = null, _pkWhy = '', _pkPreviewClicks = 0;
@@ -3418,18 +3451,23 @@ function pkRenderPlan(plan, publish, cur) {
   if (cur === undefined || !_pkPages.length) {
     // 归一：后端可能给 pages[]（多页），也可能给平铺的一份（单页/历史素材）
     const raw = (plan.pages && plan.pages.length) ? plan.pages : [plan];
-    _pkPages = raw.slice(0, PK_PAGE_MAX).map(p => ({
+    _pkPages = raw.slice(0, PK_PAGE_MAX).map(p => pkCarryGuide({
       role: p.role || '', layout_key: p.layout_key || '', title: p.title || '',
       subtitle: p.subtitle || '', footer: plan.footer || p.footer || '',
       scene: p.scene || plan.scene || '',
       cards: (p.cards || []).slice(0, PK_LIMITS.cardMax)
-              .map(c => ({t: c.t || '', d: c.d || '', v: c.v || ''}))}));
+              .map(c => ({t: c.t || '', d: c.d || '', v: c.v || ''}))
+    }, p));
     if (!_pkPages.length) _pkPages = [{role: '', layout_key: '', title: '', subtitle: '',
                                        footer: '', scene: '', cards: []}];
     _pkCur = 0;
+    // 整组那句合规声明收进 _pkFoot（只有一句话，改哪页都是改它），页面数组里只留末页那份
+    _pkFoot = plan.footer || (_pkPages[_pkPages.length - 1] || {}).footer || '';
   } else {
     _pkCur = Math.max(0, Math.min(_pkPages.length - 1, cur));
+    if (!_pkFoot) { _pkFoot = (_pkPages[_pkPages.length - 1] || {}).footer || ''; }
   }
+  pkNormalizeFooters();
   _pkRec = plan.recommended || null;
   _pkWhy = plan.why || '';
   const pg = _pkPages[_pkCur], multi = _pkPages.length > 1;
@@ -3470,7 +3508,7 @@ function pkRenderPlan(plan, publish, cur) {
       + ' title="这一页再加一条要点（每页最多 ' + PK_LIMITS.cardMax + ' 条）">'
       + '＋ 加一条要点（本页 ' + rows.length + '/' + PK_LIMITS.cardMax + '）</button></div>';
   }
-  html += _pkRow('尾注（每页都放）', 'pk-footer', plan.footer || pg.footer, PK_LIMITS.footer, '合规转述声明')
+  html += _pkRow('尾注（只印末页）', 'pk-footer', _pkFoot, PK_LIMITS.footer, '合规转述声明')
     + `<div class="pk-row"><span class="pk-tag">风格配方</span><div id="pk-style-text" class="pk-pub" style="margin:0;max-height:76px">${esc(pkStyleText())}</div></div>`
     + `<div class="pk-row" id="pk-style-free-row" style="display:${pkStyleKey() === 'auto' ? 'flex' : 'none'}">`
     + `<span class="pk-tag">自由风格</span><input id="pk-style" value="${esc(plan.style || '')}" maxlength="120" placeholder="仅「自由发挥」时生效：配色 / 材质 / 装饰一句话"></div>`
@@ -3639,8 +3677,8 @@ async function pkRerollPage() {
 
 function pkApplyPage(page, idx, notes) {
   const i = Math.max(0, Math.min((idx || 1) - 1, _pkPages.length - 1));
-  // 尾注是整组共用的合规声明，别让模型这一页自己改出一个不一样的来
-  page.footer = _pkPages[i].footer || (_pkPages[0] || {}).footer || page.footer;
+  // 尾注是整组共用的合规声明（只印末页），别让模型这一页自己改出一个不一样的来
+  page.footer = _pkFoot || _pkPages[i].footer || page.footer;
   _pkPages[i] = page;
   if (_pkLastPlan) {
     _pkLastPlan.pages = _pkPages.map(p => ({role: p.role, layout_key: p.layout_key,
@@ -3669,7 +3707,8 @@ function pkFlushForm() {
     pg.scene = g('pk-scene'); pg.cards = cards; pg.layout_key = pkLayoutKey();
   }
   const foot = g('pk-footer');
-  _pkPages.forEach(q => { q.footer = foot; });          // 尾注是合规声明，每页同一句
+  _pkFoot = foot;
+  pkNormalizeFooters();                              // 整组一句，只挂在末页（见 pkNormalizeFooters）
   if (_pkLastPlan) { _pkLastPlan.spine = g('pk-spine'); _pkLastPlan.footer = foot; }
   _pkLastPublish = pkReadPublish();
 }
@@ -3714,15 +3753,16 @@ function pkReadPayload() {
   const tag = {};
   if (_pkRec) tag.recommended = _pkRec;
   if (_pkWhy) tag.why = _pkWhy;
-  if (_pkPages.length < 2) return Object.assign(pkReadPlan(), tag);
+  if (_pkPages.length < 2) return Object.assign(pkCarryGuide(pkReadPlan(), _pkPages[0] || {}), tag);
   pkFlushForm();
   const first = _pkPages[0];
-  return Object.assign({pages: _pkPages.map(p => ({role: p.role, layout_key: p.layout_key,
+  return Object.assign({pages: _pkPages.map(p => pkCarryGuide({role: p.role, layout_key: p.layout_key,
                                                    title: p.title, subtitle: p.subtitle,
                                                    scene: p.scene, footer: p.footer,
-                                                   cards: p.cards})),
+                                                   cards: p.cards}, p)),
                         title: first.title, style_key: pkStyleKey(),
-                        spine: (_pkLastPlan || {}).spine || '', footer: first.footer || '',
+                        spine: (_pkLastPlan || {}).spine || '',
+                        footer: _pkFoot || first.footer || '',
                         scene: first.scene || ''}, tag);
 }
 function pkCount() {

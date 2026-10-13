@@ -127,8 +127,10 @@ def main():
     ck("空页丢掉、其余保留", len(ai_poster.plan_pages(hybrid)) == 2)
     many = dict(one, pages=[{"title": "P%d" % i, "cards": one["cards"][:2]} for i in range(6)])
     ck("超过 4 页被截断", len(ai_poster.plan_pages(many)) == ai_poster.PAGE_MAX)
-    ck("每页没写 footer 时继承顶层那一句",
-       (ai_poster.plan_pages(hybrid)[0].get("footer") or "") == one["footer"])
+    ck("每页没写 footer 时继承顶层那一句，但整组只在末页印一次（10-13 收口）",
+       (ai_poster.plan_pages(hybrid)[-1].get("footer") or "") == one["footer"]
+       and not (ai_poster.plan_pages(hybrid)[0].get("footer") or ""),
+       str([p.get("footer") for p in ai_poster.plan_pages(hybrid)]))
 
     print("== F 门禁跟着页走 ==")
     lim = ai_poster.limits_for("typeset")
@@ -455,6 +457,15 @@ def main():
        ts.typeset(None, nk, ratio=RATIO, page=(3, 5))[0]
        != ts.typeset(None, nk, ratio=RATIO, page=None)[0])
 
+    # 三套攻略皮不是摆着好看的：排版真读得到色、也不因为换了底色就撑爆版面
+    for k in ("guide_paper", "guide_night"):
+        _s, schk = ts.typeset(None, dict(gp, style_key=k), ratio=RATIO, page=(2, 5))
+        ck("换皮 %s 照样排得出来且不超版" % k, schk["ok"] and _s[:8] == b"\x89PNG\r\n\x1a\n",
+           "；".join(schk["problems"]))
+    ck("换皮是真换（同一条内容、两种脸，字节不一样）",
+       ts.typeset(None, dict(gp, style_key="guide_ink"), ratio=RATIO, page=(2, 5))[0]
+       != ts.typeset(None, dict(gp, style_key="guide_paper"), ratio=RATIO, page=(2, 5))[0])
+
     # 剩下三样零件各占一页（对标也是一页一件事，不许全堆一页）
     gcover = dict(gp)
     gcover["photos"] = [{"bytes": FRAME, "caption": "野外营火 · 素材抽帧第 1 帧"}]
@@ -534,7 +545,14 @@ def main():
     ck("模型点了不存在的编号 → 丢掉那张图并留一句人话（不静默出空位）",
        len(pg[0]["photos"]) == 1 and any("F99" in x for x in bn), "；".join(bn))
     ck("图注由代码按那一帧自己的记录写，不是模型编的",
-       pg[0]["photos"][0]["caption"] == "角色旁有半透明小熊 · 素材画面 00:24",
+       pg[0]["photos"][0]["caption"] == "角色旁有半透明小熊",
+       pg[0]["photos"][0]["caption"])
+    # 图注上那句「· 素材画面 00:24」是 10-12 加的，本意是"这条有出处"；但它是印在图上的，
+    # 发小红书等于自证"这帧是从别人视频里抽的"（10-13 判"AI 托管发文/非真人分享"的旁证之一）。
+    # 时间戳仍然在 frames.json 与 manifest 里，只是不上图。
+    ck("图注不许带来源后缀（时间戳/「素材画面」字样不上图）",
+       "素材画面" not in pg[0]["photos"][0]["caption"]
+       and "00:24" not in pg[0]["photos"][0]["caption"],
        pg[0]["photos"][0]["caption"])
     ck("攻略页零件过一遍清洗后形状可用（kicker/bignum/warn/ask 都在）",
        pg[0].get("kicker") and pg[0]["bignum"]["v"] == "3 棵"
@@ -556,6 +574,49 @@ def main():
        rt[0].get("photos") and rt[0].get("bignum") and rt[0].get("ask"),
        str(list(rt[0].keys())))
 
+    print("== O2 同质化两处收口：免责脚注只印一次、攻略页三套皮轮换 ==")
+    # 免责脚注以前每页从顶层继承同一句，三页就印三次「整理自公开分享」——
+    # 既像模板套出来的，也像在替平台做申报（2026-10-13 那条"AI 托管发文"复盘）
+    ft = ai_poster.plan_pages({"footer": "脚", "style_key": "guide_ink", "title": "甲",
+                               "pages": [{"title": "甲", "cards": [{"t": "a", "d": "b"}], "footer": "脚"},
+                                         {"title": "乙", "cards": [{"t": "c", "d": "d"}], "footer": "别的话"},
+                                         {"title": "丙", "cards": [{"t": "e", "d": "f"}], "footer": "脚"}]})
+    ck("整组继承下来的免责脚注只在末页印一次",
+       [p.get("footer") for p in ft] == ["", "别的话", "脚"], str([p.get("footer") for p in ft]))
+    ck("某一页自己写过不一样的话 = 编辑的决定，不跟着一起收掉",
+       ft[1].get("footer") == "别的话", ft[1].get("footer"))
+    keys = set(ts.TYPE_SKINS["guide_ink"])
+    ck("三套攻略皮读的键完全一致（少一个键就是排版时崩一次或静默用错色）",
+       all(set(ts.TYPE_SKINS[k]) == keys for k in ("guide_paper", "guide_night")),
+       str([sorted(keys - set(ts.TYPE_SKINS[k])) for k in ("guide_paper", "guide_night")]))
+    ck("三套皮是真的换了脸（底色各不相同，不是复制一份改个名）",
+       len({ts.TYPE_SKINS[k]["bg_top"] for k in
+            ("guide_ink", "guide_paper", "guide_night")}) == 3)
+    ck("三套都进了风格下拉（选不到就等于没做）",
+       all(any(s["key"] == k for s in ai_poster.style_choices())
+           for k in ("guide_ink", "guide_paper", "guide_night")))
+    # 「只重拆这一页」以前不带帧清单：模型不敢给 photos 编号，重拆一次就把这页的证据图丢了
+    _lim = ai_poster.limits_for("typeset")
+    _p_no = ai_poster.page_plan_prompt(2, pgk, "主线", "guide_ink", False, "主题", _lim)
+    _p_fr = ai_poster.page_plan_prompt(2, pgk, "主线", "guide_ink", False, "主题", _lim, frames=fake)
+    ck("只重拆一页：给了帧清单才出现「铁律六」，且清单里就是那几个编号",
+       "铁律六" not in _p_no and "铁律六" in _p_fr and "F3｜00:12" in _p_fr)
+    # 封面页只有标题+要点，别的攻略零件都在内页——这条以前被 kicker 误判成空白页（10-13 实测）
+    cover = {"layout_key": "guide", "title": "60级直奔诺森德", "kicker": "攻略 · 60级直奔诺森德",
+             "cards": [{"t": "外域或停", "d": "官方问卷里的选项"}, {"t": "3月一阶段", "d": "节奏写在爆料里"}]}
+    ck("攻略页封面（只有 kicker + 两条要点，没图没提问）不该被当成空白页拦下",
+       not any("空白页" in x for x in ai_poster.lint_plan(cover, _lim, card_min=1)),
+       str(ai_poster.lint_plan(cover, _lim, card_min=1)))
+    empty = {"layout_key": "guide", "title": "空的", "kicker": "攻略 · 空的", "cards": []}
+    ck("攻略页真的一张能读的东西都没有 → 照样拦（这条不能跟着一起松掉）",
+       any("空白页" in x for x in ai_poster.lint_plan(empty, _lim, card_min=1)),
+       str(ai_poster.lint_plan(empty, _lim, card_min=1)))
+    ck("轮换公式：同一条素材稳定可复现、连着几条会换脸、且只在这三套里打转",
+       ai_poster.guide_style_for(81) == ai_poster.guide_style_for("81")
+       and len({ai_poster.guide_style_for(i) for i in range(9)}) == 3
+       and all(ai_poster.guide_style_for(i) in ("guide_ink", "guide_paper", "guide_night")
+               for i in list(range(20)) + [None, "", "abc"]))
+
     # 整条出图路径跑一遍：攻略页一张 AI 底图都不该叫，账必须记 0 元
     frame_file = ROOT / "temp" / "e2e_frame.jpg"
     with open(str(frame_file), "wb") as f:
@@ -568,7 +629,7 @@ def main():
                   "title": "传承点数，三棵树怎么点", "subtitle": "口播整理",
                   "footer": "整理自公开分享",
                   "kicker": "无限 · 传承点数",
-                  "photos": [{"path": str(frame_file), "caption": "天赋树界面 · 素材画面 00:12"}],
+                  "photos": [{"path": str(frame_file), "caption": "天赋树界面"}],
                   "bignum": {"v": "3 棵", "label": "天赋树：专业 / 冒险 / 资源利用"},
                   "cards": [{"t": "怎么拿", "d": "完成独特挑战换点数"}]},
                  {"role": "避坑", "layout_key": "guide", "style_key": "guide_ink",
