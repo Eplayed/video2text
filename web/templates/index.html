@@ -3247,7 +3247,7 @@ function pkRenderFramesHint() {
             : '（已挑掉字幕条/花字/作者做的整帧卡）')
     + (left > 0 ? '，另有 ' + left + ' 张还没看图，用到才看' : '')
     + (isGuide ? ' · <b>正在用攻略页那一档，出图 0 元</b>'
-               : ' · 版式选「攻略页」= 一页一个论点配真帧带图注，<b>不花出图费</b> '
+               : ' · 版式选「攻略页」= 一页一个论点配素材真帧，<b>不花出图费</b> '
                  + '<button class="btn ghost sm" onclick="pkUseGuideLayout()">整组改成攻略页</button>')
     // 「整组改成攻略页」跑完那句结论写在这里，不写 pk-result（那边会被异步重排的预览盖掉）
     + (_pkGuideNote ? '<br><b>' + esc(_pkGuideNote) + '</b>' : '');
@@ -4108,7 +4108,7 @@ function pkGoLabel() {
   return n > 1 ? '③ 出图 · ' + n + ' 页共 ' + (n * 0.5).toFixed(1) + ' 元' : '③ 出图 · 0.5 元/张';
 }
 function pkModeLine() {
-  if (pkGuideChrome()) return '画面用素材真帧（后期压的字、整帧卡都挑掉了），中文与图注由程序排';
+  if (pkGuideChrome()) return '画面用素材真帧（后期压的字、整帧卡都挑掉了），中文由程序排';
   if (_pkPhoto) return '主视觉用你上传的真图，中文由程序排版';
   return pkTextMode() === 'model' ? '字由 AI 画，看到的就是成品 · 传上来会逐字核对'
                                   : '底图 AI 现画，中文由程序排版';

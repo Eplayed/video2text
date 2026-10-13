@@ -87,6 +87,65 @@ MD_LIMITS = {"total": MAX_TOTAL_CHARS, "title": TITLE_MAX, "subtitle": SUBTITLE_
 
 def limits_for(text_mode):
     return dict(TS_LIMITS if text_mode == "typeset" else MD_LIMITS)
+
+
+# ── 上图文字的"过程词"闸 ────────────────────────────────────────────────
+# 号主 2026-10-13 点名：「访谈称」「口播」这类字眼不是要给玩家看的东西，
+# 而且他说清楚了一件事——别只改这两个词，**同一类**都得挡掉。所以我们加工素材
+# 留下的痕迹（谁说的、从哪来的、内部文件名）一律不许印到图上。
+# 比 `draft_audit.LEAK_PATTERNS` 窄：那边管正文别漏流水线标记，这里只管"会印在图上的那几行"；
+# 也**故意不收**「未核实／素材没提／疑似」——攻略页的警示块靠这些说清边界，那是诚实标注，不是过程词。
+META_WORDS = [
+    (r"口播", "口播"),
+    (r"访谈(?:称|中|说|提到)", "访谈称／访谈中"),
+    (r"据称|据报道|爆料称", "据称／爆料称"),
+    (r"素材(?:里|中|说|讲|提到|出现)", "素材里说"),
+    (r"(?:原)?视频(?:里|中)(?:说|提到|讲|看)", "视频里提到"),
+    (r"转写|ASR|整合稿|整理稿", "转写／整合稿"),
+    (r"[Uu][Pp]主|主播|博主", "UP主／主播／博主"),
+    (r"评论区|弹幕", "评论区／弹幕"),
+    (r"画面(?:里|中)看?到", "画面里看到"),
+    (r"整理(?:自|归纳)", "整理自"),
+]
+META_NAMES = "／".join(n for _p, n in META_WORDS)
+# 提示词里那一条由这份名单生成——名单与提示词各写一份，迟早对不上
+META_RULE = ("- **会印到图上的那几行字里不许出现过程词**（%s）：这些是我们加工素材留下的痕迹，"
+             "玩家不需要知道这句话是谁说的、从哪儿来的。要写成玩家视角的事实句——"
+             "「访谈称平均满级耗时约175小时」→「平均满级约 175 小时」；"
+             "「口播说团本推迟」→「团本大概率推迟 2 到 3 个 CD」。"
+             "出处与口径写进 publish.source_note（发布页那份给人看的），别印到图上。" % META_NAMES)
+
+
+def ink_texts(page):
+    """这一页**会印到图上**的文字（尾注除外：那句是合规声明，本来就得写「整理自…」）。"""
+    out = [("主标题", page.get("title")), ("副标题", page.get("subtitle")),
+           ("栏目名", page.get("kicker"))]
+    for i, c in enumerate(page.get("cards") or [], 1):
+        out += [("卡片%d标题" % i, c.get("t")), ("卡片%d说明" % i, c.get("d"))]
+    bn = page.get("bignum")
+    if isinstance(bn, dict):
+        out += [("大字数字", bn.get("v")), ("大字标签", bn.get("label")), ("大字注释", bn.get("note"))]
+    for i, c in enumerate(page.get("contrast") or [], 1):
+        out += [("对照%d" % i, c.get("t")), ("对照%d" % i, c.get("d"))]
+    wn = page.get("warn")
+    if isinstance(wn, dict):
+        out += [("警示标题", wn.get("t")), ("警示正文", wn.get("d"))]
+    ak = page.get("ask")
+    if isinstance(ak, dict):
+        out += [("互动提问", ak.get("q"))]
+        out += [("互动选项%d" % i, o) for i, o in enumerate(ak.get("options") or [], 1)]
+    return [(k, str(v or "").strip()) for k, v in out if str(v or "").strip()]
+
+
+def meta_hits(page):
+    """这一页的上图文字里有哪些过程词，返回给人看的句子列表（不抛错、不改字）。"""
+    hits = []
+    for label, txt in ink_texts(page):
+        for pat, name in META_WORDS:
+            if re.search(pat, txt):
+                hits.append("%s里有「%s」：%s" % (label, name, txt[:36]))
+                break
+    return hits
 # 画面计划（scene / 每条卡片的 v）与 spine 同理：只喂给出图模型，不落成图面文字，
 # 所以不占合计字数预算。没有这一栏，模型只会画一排空文字框——那是我们的图"土"的第一原因。
 SCENE_MAX, CARD_VIS_MAX = 48, 30
@@ -189,7 +248,7 @@ STYLE_PRESETS = {
     # 只有当有人拿它去出插画海报时 mood/style 才真正喂给画图模型。
     "guide_ink": {
         "label": "攻略页（深墨绿 · 真帧当证据）",
-        "when": "多页图文攻略：一页一个论点，配素材真帧 + 图注 + 大字数字",
+        "when": "多页图文攻略：一页一个论点，配素材真帧 + 大字数字（图注不上图，只留档）",
         "scene": "不画主视觉插画：版面靠真帧截图当证据，底色是安静的深墨绿渐变",
         "mood": "深墨绿底 #182721 到 #0a1410 的安静渐变，米金标题 #f0d9a0，砖红警示块 #5f2a24，"
                 "正文米白 #e6e6df，图注与脚注灰绿 #93a497；版面像一本摊开的攻略手册，"
@@ -451,7 +510,8 @@ def _require_ai(ai_config):
 
 
 # ── 1. LLM 拆解：整理稿 → 文案计划 ──
-_PLAN_PROMPT = """你是自媒体图文编辑。下面这份素材多半**已经是别人总结过的内容**（口播稿或攻略要点），
+_PLAN_PROMPT = """你是自媒体图文编辑。下面这份素材多半**已经是别人总结过的内容**（口播稿或攻略要点
+——这一句只是说素材的来历，这种词不许出现在图上的文字里），
 你的任务不是把它切得更碎，而是挑出一条最有价值的主线，并把推理链留在图上。
 
 本篇主题：__THEME__
@@ -459,6 +519,7 @@ _PLAN_PROMPT = """你是自媒体图文编辑。下面这份素材多半**已经
 铁律一·内容纪律（转载整理模式）：
 - 只能用素材里出现过的事实与数字，严禁编造、严禁夸大；素材没写的不要写。
 - 全程转述口吻，禁用第一人称（我实测 / 我用过）。
+__META__
 - 素材可能是从中间断开的残句（缺标点、句子被截断）。遇到这种情况要**跨段把一句话说完整**
   再落卡片，绝不允许一张卡片只承接半句话。
 
@@ -633,8 +694,9 @@ def _resplit(pages, want, lim):
 # 这一档和"插画海报"的根本差别：画面不靠模型画，靠素材里那一帧真画面当证据。
 # 于是多了两件必须代码管住的事：
 #   ① 模型只许从"已判过、确认没被 up主 压过字"的帧里挑编号，不许凭空点名一张图；
-#   ② 图注由代码按那一帧自己的记录写（画面里是什么 + 第几秒），**不让模型写 caption**——
-#      它没看过那张图，写出来的就是照着文案倒推的假图注。
+#   ② caption 由代码按那一帧自己的记录写（画面里是什么），**不让模型写**——它没看过那张图，
+#      写出来的就是照着文案倒推的假图注。这份 caption **不印到图上**（号主 10-13 点名），
+#      只留在 plan/manifest 里给我们核对"图和这句话对不对得上"用。
 GUIDE_KEYS = ("kicker", "photos", "bignum", "contrast", "warn", "ask")
 
 _GUIDE_RULES = """
@@ -643,7 +705,7 @@ _GUIDE_RULES = """
 __FRAMES__
 每页按内容需要给这几样，用不上就别给，别硬凑：
 - "photos": [{"frame": "F7"}] —— 这一页的证据图，最多 2 张，只能填上面的编号。
-  图注由程序按那一帧自己的记录写，**你不要写 caption**。挑图只有一条标准：
+  **图注不上图**（那一帧的说明由程序写进档案，只给我们自己核对），所以**你不要写 caption**。挑图只有一条标准：
   这一页在讲的那件事，画面里真的看得见；看不见就不给图。
 - "kicker": "栏目名 · 本篇主题"（≤14 字，整组同一句，只填在第一页）
 - "bignum": {"v": "约 +20%", "label": "这个数字说的是什么"} —— v 里的数字必须在素材原文里出现过
@@ -653,6 +715,9 @@ __FRAMES__
 这一档每页正文仍守 ≤__TOTAL2__ 字，但卡片建议 2-3 条，把地方留给图。
 卡片小标题长短混着写：三条全是四个字（"装备取舍""路线规划""收益结算"）看着就像模板，
 换一条素材还是那四个字，等于把十篇做成一篇。
+**图注不用你写、也不会印到图上**——那一帧的说明只留在档案里给我们自己核对，
+所以挑图只有一条标准：这一页讲的事，画面里真的看得见。
+__META__
 """
 
 
@@ -666,7 +731,8 @@ def guide_rules_text(items, total):
         import frame_pool
     return (_GUIDE_RULES
             .replace("__FRAMES__", frame_pool.index_text(items))
-            .replace("__TOTAL2__", str(total)))
+            .replace("__TOTAL2__", str(total))
+            .replace("__META__", META_RULE))
 
 
 def guide_clip(page, lim):
@@ -859,6 +925,7 @@ __OTHERS__
 铁律（与整组拆解同一套，只是范围只剩这一页）：
 - 只能用素材里出现过的事实与数字，严禁编造；全程转述口吻，禁用第一人称；
   素材是断开的残句时要把一句话说完整再落卡片。
+__META__
 - 这一页的卡片之间要构成递进，每张都能回答"所以呢"；两张卡不许讲同一件事。
 - 主标题 ≤__TITLE__ 字；副标题 ≤__SUB__ 字；每张卡片标题 ≤__CT__ 字、说明 ≤__CD__ 字；
   **这一页**卡片 3-5 张、全部文字合计 ≤__TOTAL__ 字；中文标点计入字数；不要 markdown 符号；
@@ -910,6 +977,7 @@ def page_plan_prompt(page_index, pages, spine, style_key, has_photo, theme, lim,
            .replace("__CT__", str(lim["cardT"])).replace("__CD__", str(lim["cardD"]))
            .replace("__TOTAL__", str(lim["total"]))
            .replace("__CONTENT__", (content or "")[:8000])
+           .replace("__META__", META_RULE)
            + guide_rules_text(frames, lim["total"]))
     return txt
 
@@ -1001,6 +1069,7 @@ def build_text_plan(summary, ai_config, theme="", title="", style_key="", text_m
               .replace("__LAYOUT__", layout_plan_prompt(has_photo, page_hint))
               .replace("{{DATE}}", datetime.now().strftime("%m月%d日"))
               .replace("__CONTENT__", (summary.get("content") or "")[:8000])
+              .replace("__META__", META_RULE)
               + guide_rules_text(frames, lim["total"]))
     resp = client.chat.completions.create(
         model=model or "qwen-plus",
@@ -1265,6 +1334,10 @@ def lint_plan(plan, lim=None, card_min=None):
     if total > lim["total"]:
         why = "版面会放不下并被截断" if lim is TS_LIMITS else "字数越多错字率越高，请删条目而不是缩字号"
         bad.append("合计 %d 字，超过上限 %d 字（%s）" % (total, lim["total"], why))
+    # 过程词闸（2026-10-13 号主点名）：「访谈称」「口播」这类痕迹印在图上，玩家不需要看见。
+    # 只报不自动改写：换词会连着改数字与口径，那种事得由人（或重拆）来定。
+    for h in meta_hits(plan):
+        bad.append("上图文字有过程词 —— " + h)
     return bad
 
 

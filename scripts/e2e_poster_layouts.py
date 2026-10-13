@@ -437,7 +437,7 @@ def main():
           "photos": [{"bytes": FRAME, "caption": "传承点数界面 · 素材抽帧第 3 帧"}],
           "cards": [{"t": "怎么拿", "d": "完成各种独特挑战，换一种叫传承点数的资源。"},
                     {"t": "怎么花", "d": "点进三棵天赋树，解锁各种长期增益效果。"}],
-          "contrast": [{"t": "口播点了名", "d": "更快拿到双倍经验加成、缩短营火冷却时间"}],
+          "contrast": [{"t": "官方点了名", "d": "更快拿到双倍经验加成、缩短营火冷却时间"}],
           "footer": "整理自单条抖音素材的口播，未做游戏内实测"}
     gpng, gchk = ts.typeset(None, gp, ratio=RATIO, page=(2, 5))     # base=None：攻略页不出底图
     ck("攻略页不传底图也能出图（这条分支 0 元、不叫模型）",
@@ -465,6 +465,30 @@ def main():
     ck("换皮是真换（同一条内容、两种脸，字节不一样）",
        ts.typeset(None, dict(gp, style_key="guide_ink"), ratio=RATIO, page=(2, 5))[0]
        != ts.typeset(None, dict(gp, style_key="guide_paper"), ratio=RATIO, page=(2, 5))[0])
+
+    # 图区垫底那条判据：以前"宽度不到八成才模糊垫底"，只差一点点的帧就落回纯色底。
+    # 米白那套皮的纯色底是浅的，深色游戏截图坐在浅底上看着像一张照片没贴牢（号主 10-13 说的"每张脱"）。
+    buf2 = _io.BytesIO()
+    two = _Img.new("RGB", (1000, 340), (30, 40, 160))
+    for _yy in range(0, 170):
+        for _xx in range(0, 1000, 8):
+            two.putpixel((_xx, _yy), (225, 205, 175))
+    two.save(buf2, format="JPEG")
+    buf2.seek(0)
+    mat = (241, 233, 216)          # guide_paper 的 bg_top：浅色底托深色图就是那个"脱"
+    canvas = _Img.new("RGB", (900, 300), mat)
+    ts._photo_band(canvas, _Img.open(buf2).convert("RGB"), (0, 0, 900, 300),
+                   ts.TYPE_SKINS["guide_paper"], 12)
+    edge = canvas.getpixel((6, 150))    # 左边缘中段：真帧铺不到的那一条
+    ck("图区只要有一条边没填满就用模糊垫底，不许落回浅色纯色底",
+       max(abs(int(edge[i]) - mat[i]) for i in range(3)) > 24, str(edge))
+
+    # 图注**不上图**（号主 10-13：那张图就在上面，再写一行"游戏角色站在…"是给编辑自己看的）
+    with_cap = dict(gp, photos=[{"bytes": FRAME, "caption": "游戏角色站在雾中港口高处眺望灯塔与船只"}])
+    no_cap = dict(gp, photos=[{"bytes": FRAME, "caption": ""}])
+    ck("同一页带不带 caption 排出来必须一模一样（图注只留档，不印到图上）",
+       ts.typeset(None, with_cap, ratio=RATIO, page=(2, 5))[0]
+       == ts.typeset(None, no_cap, ratio=RATIO, page=(2, 5))[0])
 
     # 剩下三样零件各占一页（对标也是一页一件事，不许全堆一页）
     gcover = dict(gp)
@@ -617,6 +641,33 @@ def main():
        and all(ai_poster.guide_style_for(i) in ("guide_ink", "guide_paper", "guide_night")
                for i in list(range(20)) + [None, "", "abc"]))
 
+    print("== O3 过程词闸：「访谈称」「口播」这类字眼不许印到图上 ==")
+    _lim2 = ai_poster.limits_for("typeset")
+    hit = {"title": "满级175小时", "footer": "内容整理自公开分享，未证实处已标注",
+           "cards": [{"t": "满级耗时", "d": "口播称从1级升到60%约175小时"},
+                     {"t": "天赋", "d": "5级可提前解锁职业天赋树"}]}
+    hits = ai_poster.meta_hits(hit)
+    ck("「口播称」这种过程词要被 lint 抓出来（号主点名要挡的不止这两个字）",
+       any("口播" in h for h in hits), str(hits))
+    ck("尾注里那句「整理自公开分享」不算过程词（那是合规声明，本来就得写）",
+       not any("整理自" in h for h in hits), str(hits))
+    honest = {"title": "先别当规则", "layout_key": "guide",
+              "warn": {"t": "别按这页加点", "d": "素材没提洗点，先别当可退"},
+              "cards": [{"t": "共享范围", "d": "只见标题提到，需自行核对"}]}
+    ck("诚实标注（素材没提／需自行核对）不该被这道闸拦下——那是边界说明不是过程词",
+       ai_poster.meta_hits(honest) == [], str(ai_poster.meta_hits(honest)))
+    for k in ("bignum", "contrast", "ask", "kicker"):
+        one = {"title": "标题", "cards": [{"t": "一", "d": "二"}, {"t": "三", "d": "四"}]}
+        one[k] = ({"v": "访谈称 3 棵", "label": "x"} if k == "bignum" else
+                  [{"t": "访谈中说", "d": "对"}] if k == "contrast" else
+                  {"q": "评论区说的那样吗？", "options": ["是"]} if k == "ask" else "口播 · 满级")
+        ck("零件里的每一行都在闸内（%s）" % k, bool(ai_poster.meta_hits(one)),
+           str(ai_poster.meta_hits(one)))
+    ck("提示词里确实写了这条禁令，且名单与代码用的是同一份（不各写一份迟早对不上）",
+       "过程词" in ai_poster.META_RULE and "口播" in ai_poster.META_RULE
+       and ai_poster.META_NAMES.split("／")[0] == "口播"
+       and "过程词" in ai_poster.guide_rules_text(fake, 200))
+
     # 整条出图路径跑一遍：攻略页一张 AI 底图都不该叫，账必须记 0 元
     frame_file = ROOT / "temp" / "e2e_frame.jpg"
     with open(str(frame_file), "wb") as f:
@@ -626,7 +677,7 @@ def main():
                              "layouts": ["guide", "guide"], "why": "测试用推荐"},
              "pages": [
                  {"role": "封面", "layout_key": "guide", "style_key": "guide_ink",
-                  "title": "传承点数，三棵树怎么点", "subtitle": "口播整理",
+                  "title": "传承点数，三棵树怎么点", "subtitle": "要点整理",
                   "footer": "整理自公开分享",
                   "kicker": "无限 · 传承点数",
                   "photos": [{"path": str(frame_file), "caption": "天赋树界面"}],
@@ -634,7 +685,7 @@ def main():
                   "cards": [{"t": "怎么拿", "d": "完成独特挑战换点数"}]},
                  {"role": "避坑", "layout_key": "guide", "style_key": "guide_ink",
                   "title": "素材没说的别当结论", "footer": "整理自公开分享",
-                  "warn": {"t": "别按这页加点", "d": "三棵树给什么，口播只报了名字"},
+                  "warn": {"t": "别按这页加点", "d": "三棵树给什么，原文只报了名字"},
                   "ask": {"q": "你先点哪棵？", "options": ["专业", "冒险", "资源利用"]}}]}
     gmf = ai_poster.generate_poster(
         {"id": TEST_ID, "title": "测试攻略", "content": "完成独特挑战获得传承点数，可点在三种天赋树。",

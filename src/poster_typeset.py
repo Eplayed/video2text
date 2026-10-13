@@ -203,12 +203,12 @@ LAYOUTS = {
                    "min_cards": 1, "max_cards": 2, "needs_photo": True, "overlay": True,
                    "when": "单主角内容（一只坐骑、一个界面），图就是全部"},
     # 攻略页不是"换个摆放方式"，是另一种排法：从上到下一串**带类型的块**流式排，
-    # 图是真帧不是插画，每张图下面必须跟一行图注。所以它不进 _card_boxes 那套
+    # 图是真帧不是插画。图注不上图（号主 10-13：那行字是给编辑自己看的），所以它不进 _card_boxes 那套
     # "标题 + 等分卡片行"的算法，单独走 typeset_guide。
-    "guide": {"label": "攻略页（真帧+图注）", "rows": "stack", "art": "band_top",
+    "guide": {"label": "攻略页（真帧+栏目名+页码）", "rows": "stack", "art": "band_top",
               "min_cards": 1, "max_cards": 4, "needs_photo": False,
               "art_floor": 0.30, "art_cap": 0.52,
-              "when": "多页图文攻略：一页一个论点，配 1-2 张素材真帧 + 图注 + 大字数字"},
+              "when": "多页图文攻略：一页一个论点，配 1-2 张素材真帧 + 大字数字"},
 }
 # 老数据里存的键（内置皮肤原来写的是 stack，用户模板 JSON 里也是）照样认，不做迁移
 LAYOUT_ALIAS = {"stack": "top_art"}
@@ -825,9 +825,13 @@ def _photo_band(img, src, box, skin, radius):
     """
     x0, y0, x1, y1 = [int(v) for v in box]
     w, h = max(1, x1 - x0), max(1, y1 - y0)
-    fit, fw, fh = _fit_contain(src, w - 4, h - 4)
+    sw, sh = max(1, w - 4), max(1, h - 4)     # _fit_contain 本来就让开 2px，别把它算成留黑
+    fit, fw, fh = _fit_contain(src, sw, sh)
     base = Image.new("RGB", (w, h), _rgb(skin.get("bg_bot", "#0a1410")))
-    if fw < w * 0.86:
+    # 只要真有一条边没填满就用同一张图放大模糊垫底。以前这条判据是"宽度不到八成才垫"，
+    # 于是差一点点的情况落回纯色底：米白那套皮的纯色底是浅的，深色的游戏截图坐在浅底上
+    # 就像一张照片没贴牢、浮在卡里（号主 10-13 说的"每张脱"）。模糊垫底在深浅两套皮上都读得出"这是垫的"。
+    if fw < sw - 2 or fh < sh - 2:
         try:
             back = crop_cover(src, w, h, focus_y=0.5).filter(ImageFilter.GaussianBlur(18))
             base = back
@@ -926,12 +930,12 @@ def typeset_guide(base_png, plan, ratio="9:16", skin=None, page=None):
     sub_h = len(s_lines) * int(s_size * 1.32) if subtitle else 0
 
     cap_size = max(14, int(H * 0.0175))
-    # 图注压成一行：时间戳被甩到第二行单独挂着很难看（实测「…含ESRB评级 · 素材画面 / 00:00」）
-    caps = [(_fit_head((p.get("caption") or "").strip(), skin["body_face"], cap_size,
-                       inner, int(H * 0.0135), int(H * 0.015))
-             if (p.get("caption") or "").strip() else (None, [], cap_size))
-            for p in photos]
-    cap_line_hs = [len(ls) * int(f.size * 1.34) if f else 0 for f, ls, _s in caps]
+    # 图注**不上图**（2026-10-13 号主点名：那张图就在上面，再写一行"游戏角色站在雾中港口高处
+    # 眺望灯塔与船只"是给编辑自己看的，玩家不需要，还白占一行）。
+    # caption 仍然留在 plan 与 manifest 里——核对"图和这一页讲的事对不对得上"要用，只是不画出去。
+    # 下面画图注那一段保留：以后要恢复，只改这一行。
+    caps = [(None, [], cap_size) for _p in photos]
+    cap_line_hs = [0 for _p in photos]
     PH_PAD, CAP_GAP, POST_GAP = int(H * 0.016), int(cap_size * 0.55), int(H * 0.018)
     caps_total = sum((h + PH_PAD + CAP_GAP) for h in cap_line_hs)
     if photos:
@@ -1070,11 +1074,7 @@ def typeset_guide(base_png, plan, ratio="9:16", skin=None, page=None):
         draw = ImageDraw.Draw(img, "RGBA")     # 贴过图要重开一支笔，否则画在旧层上
         draw.rounded_rectangle(bx, radius=rad, outline=rule + (255,), width=2)
         y = bx[3] + CAP_GAP
-        cf, clines, _cs = caps[i] if i < len(caps) else (None, [], cap_size)
-        if cf and clines:
-            for ln in clines:
-                _draw_text(draw, (m, y), ln, cf, _rgb(skin["muted"]))
-                y += int(cf.size * 1.34)
+        # 图注不上图（见上面 caps 那段）：以前画在图下面那一行，玩家不需要看见，位置也白占。
     if photos:
         y += POST_GAP
 
