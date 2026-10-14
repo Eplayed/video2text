@@ -20,8 +20,9 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Optional
 
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_LOCAL = ROOT / "config" / "config.env.local"
@@ -271,3 +272,78 @@ def match_packages(pkg_dir=None, rows=None, meta=None, threshold=0.30, use_snaps
     return {"synced_at": synced_at, "meta": meta or {}, "platform_total": len(rows),
             "matched": matched, "unmatched": unmatched,
             "platform_top": tops, "platform_unlinked": [r for r in rows if r["gid"] not in gids][:30]}
+
+
+LEDGER_DAYS = 30
+_TT_TITLE_MAX = 48
+_TT_HEAD = re.compile(r"^(.{4,%d}?)[。！？；·]" % _TT_TITLE_MAX)
+
+
+def _ledger_title(row: dict, local_titles: dict) -> str:
+    """台账那行的标题：能对上本地图文包的用包里的标题，对不上的（多半是随手发的微头条）
+    用平台标题截断。头条图文在列表里没有独立标题，title 字段是「第一句 + 整段正文」，
+    不截断会把表格撑爆——所以取到第一个句末标点为止，取不到再按字数截。"""
+    t = local_titles.get(str(row.get("gid")))
+    if t:
+        return t
+    raw = " ".join((row.get("title") or "").split())
+    m = _TT_HEAD.match(raw)
+    if m:
+        return m.group(1)
+    return raw[:_TT_TITLE_MAX] + "…" if len(raw) > _TT_TITLE_MAX else raw
+
+
+def backfill_ledger(db_path: str, days: int = LEDGER_DAYS,
+                    rows: Optional[list] = None) -> dict:
+    """把头条后台的真实数字灌进运营台账 publish_stats（channel=toutiao）。
+
+    为什么写在头条这一侧：read→reads、repin→shares 这套对照是头条口径，
+    ops_store 只管存、不该认识平台。
+
+    两条刻意的边界：
+      · 只提交数字 + 日期 + 来源，**不碰 revenue / net_follow**——那两个数只有他后台看得到，
+        upsert_article 只更新提交上来的键，所以人工填过的钱和涨粉不会被这次写入抹掉。
+      · 标题只在新行第一次写。他手改过标题的话，第二天同步不会又变回平台那串。
+
+    数字是**累计**不是当日：平台列表给的就是发布至今的总量，所以每天回填是把同一行的数
+    往上刷，行上的 updated_at 表示"这个数截至什么时候"。
+    """
+    from . import ops_store
+
+    if rows is None:
+        rows, _meta = load_snapshot()
+    if not rows:
+        return {"written": 0, "new": 0, "error": "没有头条抓取快照，先点一次「同步头条数据」"}
+
+    local_titles = {}
+    for mf in sorted(TT_DIR.glob("*/manifest.json")):
+        if not mf.parent.name.isdigit():
+            continue
+        try:
+            man = json.loads(mf.read_text(encoding="utf-8"))
+        except ValueError:
+            continue
+        perf = man.get("performance") or {}
+        if perf.get("matched") and perf.get("gid"):
+            local_titles[str(perf["gid"])] = (man.get("title") or "").strip()
+
+    floor = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+    have = {r["ref_id"] for r in ops_store.list_articles(db_path, channel="toutiao")}
+    out = {"written": 0, "new": 0, "since": floor, "error": ""}
+    for r in rows:
+        day = (r.get("publish_date") or "")[:10]
+        if not day or day < floor:
+            continue
+        ref = "tt:%s" % r.get("gid")
+        # 注意没有 shares：内容列表接口的 repin 字段 177 条实测全 0（2026-10-14 数过），
+        # 那是"这个接口不给转发数"，不是"他转发都是 0"。写进去就成了瞎填的结论，
+        # 所以转发那一列留给真看得到数的地方（单篇数据页）手填。
+        fields = {"pub_date": day, "show": r.get("show"), "reads": r.get("read"),
+                  "looks": r.get("like"), "comment": r.get("comment"),
+                  "source": "头条后台"}
+        if ref not in have:
+            fields["title"] = _ledger_title(r, local_titles)
+            out["new"] += 1
+        ops_store.upsert_article(db_path, "toutiao", ref, fields)
+        out["written"] += 1
+    return out

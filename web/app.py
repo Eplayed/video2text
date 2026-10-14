@@ -1636,12 +1636,31 @@ def api_review_publish(kind, ref_id):
 # （没有登录态，2026-10-08 实测），同类看板接口 wasm 加密不能 replay——所以这里
 # 不写没实测过的爬虫，先做一分钟能填完的录入 + 能自动补的条目。
 
+def _ops_columns():
+    """表头由后端下发（口径只有一份）：每列给出键名、三个渠道叫什么、哪些渠道根本没这个指标。
+    同一张表混排三个渠道，所以标签取各渠道名字的并集（"点赞/在看"），没有的格子界面画「—」。"""
+    out = []
+    for key in ("show", "reads", "looks", "comment", "saves", "shares", "net_follow", "revenue"):
+        labels = ops_store.COLUMN_LABELS.get(key) or {}
+        names = []
+        for ch in ("wechat", "toutiao", "xiaohongshu"):
+            v = labels.get(ch) or ""
+            if v and v != "—" and v not in names:
+                names.append(v)
+        out.append({"key": key, "label": "/".join(names) or key,
+                    "na": [c for c, v in labels.items() if v == "—"]})
+    return out
+
+
 @app.route("/api/ops/report")
 def api_ops_report():
     try:
         week = (request.args.get("week") or "").strip()
         return jsonify({"report": ops_store.report(DB_PATH, week or None),
                         "articles": ops_store.list_articles(DB_PATH),
+                        "columns": _ops_columns(),
+                        "channels": [{"key": k, "label": v}
+                                     for k, v in ops_store.CHANNELS.items()],
                         "weeks": ops_store.list_weeks(DB_PATH, limit=12)})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -2092,12 +2111,20 @@ def api_toutiao_perf_sync():
             rows, meta = toutiao_stats.collect(
                 progress_cb=lambda s: _perf_status.update({"progress": s}))
             res = toutiao_stats.match_packages(rows=rows, meta=meta)
+            # 抓到的数顺手灌进运营台账：头条这一侧从此不用手抄（2026-10-14 号主要求每日回填）。
+            # 单独 try：台账写失败不能把已经抓回来的同步结果一起报成失败。
+            try:
+                led = toutiao_stats.backfill_ledger(DB_PATH)
+            except Exception as be:
+                app.logger.error("头条→台账失败：%s", traceback.format_exc())
+                led = {"written": 0, "new": 0, "error": str(be)}
             _perf_status["result"] = {
                 "synced_at": res["synced_at"], "platform_total": res["platform_total"],
                 "cookie_from": (meta or {}).get("cookie_from"),
                 "total_on_page": (meta or {}).get("total_on_page"),
                 "errors": (meta or {}).get("errors") or [],
                 "matched": len(res["matched"]), "unmatched": len(res["unmatched"]),
+                "ledger": led,
                 "top": res["platform_top"][:6],
             }
         except Exception as e:

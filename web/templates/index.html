@@ -426,7 +426,14 @@ textarea{resize:vertical;min-height:84px}
 @media (prefers-color-scheme:dark){.rv-pass{color:#5fd693}.rv-warn{color:#f0b95c}.rv-fail{color:#ff8d86}}
 /* 运营周报：两个数在顶上，每篇明细手填、离开输入框即存 */
 .ops-why{font-size:12px;line-height:1.75;color:var(--text-secondary);background:var(--surface-nested);border:1px solid var(--border);border-left:3px solid var(--module-1);border-radius:8px;padding:10px 12px;margin:0 0 14px}
-#ops-week{flex:0 0 auto;width:186px}
+#ops-week{flex:0 0 auto;width:200px}
+#ops-filter{flex:0 0 auto;width:112px}
+#ops-add-channel{flex:0 0 auto;width:96px}
+/* 右上多了筛选和复选框之后，header 不换行会把两个按钮挤成一列一个字（截图实测） */
+#page-ops .header{flex-wrap:wrap}
+#page-ops .header .btn{white-space:nowrap;flex:0 0 auto}
+.ops-wk{display:inline-flex;align-items:center;gap:4px;font-size:12px;color:var(--text-secondary);white-space:nowrap}
+.ops-wk input{margin:0}
 .ops-two{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:12px}
 .ops-two .wide{grid-column:1 / -1}
 .ops-card{background:var(--surface-card);border:1px solid var(--border);border-radius:var(--radius-card);padding:11px 13px;box-shadow:var(--shadow-card)}
@@ -1555,13 +1562,22 @@ textarea{resize:vertical;min-height:84px}
         <h2>运营周报</h2>
         <div class="spacer"></div>
         <select id="ops-week" onchange="loadOps()"></select>
+        <select id="ops-filter" onchange="renderOpsRows()" title="只看某一个渠道">
+          <option value="">全部渠道</option>
+        </select>
+        <label class="ops-wk" title="下面这张表默认列全部历史"><input type="checkbox" id="ops-week-only" onchange="renderOpsRows()">只看这一周</label>
+        <select id="ops-add-channel" title="加一行的时候选哪个渠道"></select>
+        <button class="btn ghost sm" onclick="opsAddRow()"
+          title="手填一条：公众号后台的数没有接口，先加一行再抄数进去">＋ 加一行</button>
         <button class="btn ghost sm" id="btn-ops-import" onclick="opsImportLedger()"
           title="从 5180 台账导入已登记的公众号发布记录（滤掉 [测试] 那条），再按审核台「已发布」补空行。只补空位，不覆盖你手填过的数。">📥 从台账导入</button>
       </div>
       <p class="ops-why">每周只看两个数：<b>涨了多少粉</b>、<b>哪篇带来钱</b>。篇数、体检 PASS 率都是过程量，不算成绩。<br>
-        数字要你去平台后台抄：个人主体号没有官方数据接口，内置浏览器打开公众号后台是扫码页（2026-10-08 实测），
-        同类看板接口是 wasm 加密不能 replay——所以这里<b>不写没实测过的爬虫</b>，先做一分钟能填完的录入。<br>
-        没填的地方显示「未填」而不是 0：0 会被读成"这周涨粉 0"，那是个结论。改完自动存（离开输入框即写库）。</p>
+        三个渠道的数从哪来不一样：<b>头条</b>每天自动从创作中心抓（点「头条数据」页的同步，抓完顺手灌进这张表）；
+        <b>小红书</b>没有可 replay 的接口，由 AI 开着后台页面读屏抄进来（<code>scripts/agent/xhs_backfill.py</code>，列顺序 浏览·评论·点赞·收藏·分享）；
+        <b>公众号</b>个人主体号既没接口也没登录态（2026-10-08 实测是扫码页），只能他自己抄。<br>
+        平台抄来的数是<b>累计</b>不是当日，来源那一栏的「截至」就是这批数读到的日子。<br>
+        没填的地方显示「未填」或「—」而不是 0：0 会被读成"这周涨粉 0"，那是个结论。改完自动存（离开输入框即写库）。</p>
       <div class="ops-two">
         <div class="ops-card"><span>本周新增关注</span>
           <input id="ops-f-new" type="number" min="0" placeholder="未填" onchange="opsSaveWeek()">
@@ -1577,8 +1593,9 @@ textarea{resize:vertical;min-height:84px}
       </div>
       <div class="ops-sum" id="ops-summary"></div>
       <table class="ops-tbl">
-        <thead><tr><th>标题</th><th>发布日</th><th class="num">阅读</th><th class="num">在看</th>
-          <th class="num">转发</th><th class="num">涨粉</th><th class="num">钱(元)</th><th>来源</th></tr></thead>
+        <thead id="ops-head"><tr><th>标题</th><th>发布日</th><th class="num">阅读/浏览</th>
+          <th class="num">点赞/在看</th><th class="num">分享/转发</th><th class="num">涨粉</th>
+          <th class="num">钱(元)</th><th>来源</th></tr></thead>
         <tbody id="ops-rows"><tr><td colspan="8" class="empty">加载中...</td></tr></tbody>
       </table>
     </section>
@@ -6613,8 +6630,21 @@ async function rvPublish(kind, refEnc) {
 // 数字得你去平台后台抄：个人主体号没有官方数据接口，内置浏览器打开公众号后台是扫码页
 // （2026-10-08 实测），同类看板接口 wasm 加密不能 replay——所以这一层不写没实测过的爬虫。
 // 能自动的只有"条目从哪来"：5180 台账导入 + 审核台「已发布」补空行。
+// 2026-10-14 补一条实测：头条创作中心与小红书创作服务平台在 chrome-devtools 那个 Chrome 里
+// **是有登录态、可以直接读的**（头条另有 toutiao_stats 走真实浏览器抓内容列表），
+// 所以"每天回填"这两条渠道能半自动；公众号那条仍然是手抄。
 // 没填一律显示"未填"，绝不补 0：0 会被读成"这周涨粉 0"，那是个结论不是空值。
-let _ops = {articles: [], weeks: [], report: {}, week: ''};
+let _ops = {articles: [], weeks: [], report: {}, columns: [], channels: [], week: ''};
+// 名单没到之前的兜底（真值由 /api/ops/report 下发，口径只有一份）
+const OPS_COLS_FALLBACK = [
+  {key: 'show', label: '展现/曝光', na: ['wechat']},
+  {key: 'reads', label: '阅读/浏览', na: []},
+  {key: 'looks', label: '点赞/在看', na: []},
+  {key: 'comment', label: '评论', na: ['wechat']},
+  {key: 'saves', label: '收藏', na: ['wechat', 'toutiao']},
+  {key: 'shares', label: '分享/转发', na: []},
+  {key: 'net_follow', label: '涨粉', na: []},
+  {key: 'revenue', label: '钱(元)', na: []}];
 
 function opsNum(v) {
   if (v === null || v === undefined || v === '') return '';
@@ -6646,8 +6676,30 @@ async function loadOps() {
   } catch (e) { d = {error: e.message}; }
   if (d.error) { setStatus('error', '运营周报：' + d.error); return; }
   _ops = {articles: d.articles || [], weeks: d.weeks || [], report: d.report || {},
+          columns: d.columns || [], channels: d.channels || [],
           week: (d.report || {}).week || ''};
   renderOps();
+}
+// 表头由后端下发（口径只有一份）：同一列在公众号叫"在看"、头条叫"点赞"，
+// 写死一份在 HTML 里迟早跟数据对不上（2026-10-14 回填时撞上的就是这）
+function renderOpsHead() {
+  const th = document.getElementById('ops-head');
+  const cs = document.getElementById('ops-add-channel');
+  if (cs && _ops.channels.length) {
+    cs.innerHTML = _ops.channels.map(c => '<option value="' + esc(c.key) + '">'
+      + esc(c.label) + '</option>').join('');
+  }
+  // 筛选框的选项也后端下发，但只补一次并保住当前选择：每次重刷会把用户正在看的筛选清掉
+  const fs = document.getElementById('ops-filter');
+  if (fs && _ops.channels.length && fs.options.length <= 1) {
+    fs.innerHTML = '<option value="">全部渠道</option>' + _ops.channels.map(c => '<option value="'
+      + esc(c.key) + '">只看' + esc(c.label) + '</option>').join('');
+  }
+  if (!th) return;
+  const cols = _ops.columns.length ? _ops.columns : OPS_COLS_FALLBACK;
+  th.innerHTML = '<tr><th>标题</th><th>发布日</th>'
+    + cols.map(c => '<th class="num" title="' + esc(c.key) + '">' + esc(c.label) + '</th>').join('')
+    + '<th>来源</th></tr>';
 }
 
 function renderOps() {
@@ -6663,6 +6715,7 @@ function renderOps() {
   opsSetInput('ops-f-total', opsNum(r.followers_total));
   opsSetInput('ops-f-note', r.week_note || '');
   renderOpsLabels();
+  renderOpsHead();
   renderOpsRows();
 }
 function opsSetInput(id, v) {
@@ -6688,26 +6741,65 @@ function renderOpsLabels() {
 
 function renderOpsRows() {
   const tb = document.getElementById('ops-rows');
-  if (!_ops.articles.length) {
-    tb.innerHTML = '<tr><td colspan="8" class="empty">还没有条目：点右上「从台账导入」，'
+  const cols = (_ops.columns && _ops.columns.length) ? _ops.columns : OPS_COLS_FALLBACK;
+  const span = cols.length + 3;
+  const fEl = document.getElementById('ops-filter');
+  const wEl = document.getElementById('ops-week-only');
+  const f = fEl ? fEl.value : '';
+  const onlyWeek = !!(wEl && wEl.checked);
+  // 顶上选的是哪一周，表里默认把三个渠道全历史都列着（41 行往上长），
+  // 所以给两个收束口子：按渠道筛、只看这一周。不筛也行，只是滚得远。
+  let rows = _ops.articles.filter(a => (!f || a.channel === f)
+    && (!onlyWeek || a.week === _ops.report.week));
+  if (!rows.length && !_ops.articles.length) {
+    tb.innerHTML = '<tr><td colspan="' + span + '" class="empty">还没有条目：点右上「从台账导入」，'
       + '或在「发布审核」里把稿子标记已发布，这里就会补一行等你填数。</td></tr>';
     return;
   }
-  tb.innerHTML = _ops.articles.map(a => {
+  if (!rows.length) {
+    tb.innerHTML = '<tr><td colspan="' + span + '" class="empty">'
+      + (onlyWeek ? '这一周一篇都没有（换一周或取消「只看这一周」）' : '这个渠道还没有条目')
+      + '</td></tr>';
+    return;
+  }
+  tb.innerHTML = rows.map(a => {
     const key = escAttr(a.channel) + "','" + encodeURIComponent(a.ref_id);
-    const cell = k => '<td class="num"><input type="number" min="0"'
-      + (k === 'revenue' ? ' step="0.01"' : '')
-      + ' value="' + opsNum(a[k]) + '" placeholder="—" onchange="opsSaveArt(\'' + key
-      + '\',\'' + k + '\',this)"></td>';
+    const cell = c => {
+      // 那个渠道的后台根本没有这个指标 → 画一个灰的「—」，不给输入框：
+      // 给了框就会有人往里填 0，0 在周报里会被读成结论
+      if ((c.na || []).indexOf(a.channel) >= 0) {
+        return '<td class="num" style="color:var(--text-tertiary)">—</td>';
+      }
+      return '<td class="num"><input type="number" min="0"'
+        + (c.key === 'revenue' ? ' step="0.01"' : '')
+        + ' value="' + opsNum(a[c.key]) + '" placeholder="未填"'
+        + ' title="' + escAttr(c.label) + '" onchange="opsSaveArt(\'' + key + '\',\''
+        + c.key + '\',this)"></td>';
+    };
     return '<tr><td><span class="t" title="' + escAttr(a.title || a.ref_id) + '">'
         + esc(a.title || '（没标题 · ' + a.ref_id + '）') + '</span></td>'
       + '<td><input class="dt" value="' + esc(a.pub_date || '') + '" placeholder="YYYY-MM-DD"'
         + ' onchange="opsSaveArt(\'' + key + '\',\'pub_date\',this)"></td>'
-      + cell('reads') + cell('looks') + cell('shares') + cell('net_follow') + cell('revenue')
+      + cols.map(cell).join('')
       + '<td><span class="rv-pill rv-idle" title="这条数据是谁写进来的">'
-        + esc(a.channel_label || a.channel) + ' · ' + esc(a.source || '手填') + '</span>'
+        + esc(a.channel_label || a.channel) + ' · ' + esc(a.source || '手填')
+        + (a.updated_at ? ' · 截至 ' + String(a.updated_at).slice(0, 10) : '') + '</span>'
         + ' <span class="saved" id="ops-saved-' + encodeURIComponent(a.ref_id) + '"></span></td></tr>';
   }).join('');
+}
+
+// 手加一行：给公众号那一侧（没接口也没登录态）和"AI 今天没读到屏"的兜底。
+// ref_id 用「手填-时间戳」，只要不复用就不会跟平台 gid / 发布时刻撞主键。
+async function opsAddRow() {
+  const sel = document.getElementById('ops-add-channel');
+  const channel = (sel && sel.value) || 'xiaohongshu';
+  const title = (prompt('这条的标题（照平台上的写，周报按它认）') || '').trim();
+  if (!title) return;
+  const day = (prompt('发布日 YYYY-MM-DD（今天直接留空）') || '').trim()
+    || new Date().toISOString().slice(0, 10);
+  const ref = '手填-' + Date.now();
+  await opsPost('/api/ops/article', {channel: channel, ref_id: ref,
+    fields: {title: title, pub_date: day, source: '手填'}}, loadOps);
 }
 
 async function opsPost(url, body, done) {

@@ -28,13 +28,27 @@ from typing import Any, Dict, List, Optional
 
 LEDGER = os.path.expanduser(
     "~/Documents/project/media-workbench/runtime/publications.json")
-CHANNELS = {"wechat": "公众号", "toutiao": "头条"}
+CHANNELS = {"wechat": "公众号", "toutiao": "头条", "xiaohongshu": "小红书"}
+# 同一列在不同渠道的后台叫什么，写在这里一份，界面按这张表出表头——
+# 以前表头写死"阅读/在看/转发"（那是公众号的词），头条的"点赞"、小红书的"收藏"塞进去就是假标签
+# （2026-10-14 要做每日回填时撞上的）。"—" 表示那个后台根本没有这个指标。
+COLUMN_LABELS = {
+    "show":       {"wechat": "—", "toutiao": "展现", "xiaohongshu": "曝光"},
+    "reads":      {"wechat": "阅读", "toutiao": "阅读", "xiaohongshu": "浏览"},
+    "looks":      {"wechat": "在看", "toutiao": "点赞", "xiaohongshu": "点赞"},
+    "comment":    {"wechat": "—", "toutiao": "评论", "xiaohongshu": "评论"},
+    "saves":      {"wechat": "—", "toutiao": "—", "xiaohongshu": "收藏"},
+    "shares":     {"wechat": "分享", "toutiao": "转发", "xiaohongshu": "分享"},
+    "net_follow": {"wechat": "涨粉", "toutiao": "涨粉", "xiaohongshu": "涨粉"},
+    "revenue":    {"wechat": "钱(元)", "toutiao": "钱(元)", "xiaohongshu": "钱(元)"},
+}
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS publish_stats (
   channel TEXT NOT NULL, ref_id TEXT NOT NULL,
   title TEXT, pub_date TEXT,
   reads INTEGER, looks INTEGER, shares INTEGER, net_follow INTEGER, revenue REAL,
+  show_n INTEGER, comment INTEGER, saves INTEGER,
   source TEXT, note TEXT, updated_at TEXT,
   PRIMARY KEY (channel, ref_id)
 );
@@ -45,12 +59,15 @@ CREATE TABLE IF NOT EXISTS week_stats (
 )
 """
 # 允许前端提交的数字字段（白名单，避免把 SQL 列名当参数拼出去）
+# `show` 是 SQL 保留字，库里那一列叫 show_n，对外（接口与界面）仍叫 show，调用方不用知道
 ARTICLE_FIELDS = ("title", "pub_date", "reads", "looks", "shares", "net_follow",
-                  "revenue", "source", "note")
+                  "revenue", "show", "comment", "saves", "source", "note")
+_COL_ALIAS = {"show": "show_n"}
 WEEK_FIELDS = ("followers_total", "followers_new", "revenue", "note")
 # 表单交上来的都是字符串；空串按"没填"存 NULL，不存 0——0 会被读成一个结论
 NUM_FIELDS = {"reads": int, "looks": int, "shares": int, "net_follow": int,
-              "revenue": float, "followers_total": int, "followers_new": int}
+              "revenue": float, "show": int, "comment": int, "saves": int,
+              "followers_total": int, "followers_new": int}
 
 
 def _clean(fields: Dict[str, Any], allowed) -> Dict[str, Any]:
@@ -73,9 +90,26 @@ def ensure(db_path: str) -> None:
     conn = sqlite3.connect(db_path)
     try:
         conn.executescript(_SCHEMA)
+        # 老库补列：CREATE TABLE IF NOT EXISTS 对已存在的表不生效，
+        # 2026-10-14 加了 展现/评论/收藏 三列，不补一次的话所有写入都会 "no such column"
+        have = {r[1] for r in conn.execute("PRAGMA table_info(publish_stats)").fetchall()}
+        for col in ("show_n", "comment", "saves"):
+            if col not in have:
+                conn.execute("ALTER TABLE publish_stats ADD COLUMN %s INTEGER" % col)
         conn.commit()
     finally:
         conn.close()
+
+
+def _col(name: str) -> str:
+    """对外字段名 → 库里的列名（只有 show 这一个例外，show 是 SQL 保留字）。"""
+    return _COL_ALIAS.get(name, name)
+
+
+def _row_out(row: Dict[str, Any]) -> Dict[str, Any]:
+    if "show_n" in row:
+        row["show"] = row.pop("show_n")
+    return row
 
 
 def _now() -> str:
@@ -111,7 +145,7 @@ def list_articles(db_path: str, channel: Optional[str] = None) -> List[Dict[str,
     for r in rows:
         r["channel_label"] = CHANNELS.get(r.get("channel"), r.get("channel"))
         r["week"] = week_of(r.get("pub_date"))
-    return rows
+    return [_row_out(r) for r in rows]
 
 
 def upsert_article(db_path: str, channel: str, ref_id: str,
@@ -125,12 +159,12 @@ def upsert_article(db_path: str, channel: str, ref_id: str,
                       (channel, str(ref_id)))
         if exist:
             if cols:
-                sets = ", ".join("%s=?" % k for k in cols)
+                sets = ", ".join("%s=?" % _col(k) for k in cols)
                 conn.execute("UPDATE publish_stats SET %s, updated_at=? "
                              "WHERE channel=? AND ref_id=?" % sets,
                              tuple(cols.values()) + (_now(), channel, str(ref_id)))
         else:
-            names = ["channel", "ref_id", "updated_at"] + list(cols)
+            names = ["channel", "ref_id", "updated_at"] + [_col(k) for k in cols]
             vals = [channel, str(ref_id), _now()] + list(cols.values())
             conn.execute("INSERT INTO publish_stats (%s) VALUES (%s)"
                          % (", ".join(names), ", ".join("?" * len(names))), tuple(vals))
@@ -139,7 +173,7 @@ def upsert_article(db_path: str, channel: str, ref_id: str,
                     (channel, str(ref_id)))
     finally:
         conn.close()
-    out = row[0] if row else {}
+    out = _row_out(row[0] if row else {})
     out["channel_label"] = CHANNELS.get(channel, channel)
     out["week"] = week_of(out.get("pub_date"))
     return out
@@ -265,7 +299,8 @@ def _existing(db_path: str, channel: str, ref_id: str) -> Dict[str, Any]:
                      (channel, ref_id))
     finally:
         conn.close()
-    return rows[0] if rows else {}
+    # 这里的键要和 fields 的键同名（show 而不是 show_n），不然"只填空位"会把已填的展现当成空覆盖掉
+    return _row_out(rows[0]) if rows else {}
 
 
 def _merge_only_empty(existed: Dict[str, Any], fields: Dict[str, Any]) -> Dict[str, Any]:
