@@ -622,13 +622,21 @@ def api_video_detail(sheet, row):
     detail["row"] = row
     detail["source"] = "douyin"
     wb.close()
-    # 已抽取的关键帧（生成攻略文章时落盘），供自媒体工作台取材配图
+    # 已抽取的关键帧（生成攻略文章时落盘），供自媒体工作台取材配图。
+    # 帧池优先：老的 keyframes/ 依赖已废的抖音解析器，9-29 以后采的那一侧全是空目录
     try:
         aweme_id = material_store.extract_aweme_id(detail.get("link") or detail.get("video_url") or "")
-        frame_paths = [p for p in material_store.local_keyframe_paths(aweme_id) if not p.endswith("sheet.jpg")]
-        detail["keyframes"] = [f"/media/{p}" for p in frame_paths]
+        pool_items, pool_judged, pool_present = _pool_frame_items(aweme_id, 6)
+        if pool_present:
+            detail["keyframes"] = [it["url"] for it in pool_items]
+            detail["keyframes_judged"] = pool_judged
+        else:
+            frame_paths = [p for p in material_store.local_keyframe_paths(aweme_id) if not p.endswith("sheet.jpg")]
+            detail["keyframes"] = [f"/media/{p}" for p in frame_paths]
+            detail["keyframes_judged"] = False
     except Exception:
         detail["keyframes"] = []
+        detail["keyframes_judged"] = False
     # 该视频相关的最新整理稿（wechat_material/game_guide/ai_interview），供工作台取材时优先于原始转写。
     # 含两种挂载：本视频直接挂的稿 + 本视频作为源视频之一的合集稿（source_video_ids）。
     # 整理稿是素材底稿不是成品文章：工作台取材后仍需生成+人工润色才能发布
@@ -1904,14 +1912,65 @@ def _resolve_download_url(video: dict, retries: int = 4, backoff: float = 15.0) 
     return ""
 
 
+def _pool_frame_items(aweme_id: str, limit: int = 5):
+    """从帧池（output/assets/frames/<aid>）取能展示的帧，返回 (items, judged, has_pool)。
+
+    为什么优先读这一层而不是老的 keyframes/：老路要先解析出抖音无水印直链才能 ffmpeg 抽帧，
+    那个 parser 从 9 月底就废了（Argus `Uifid Not Found`），实测 keyframes/ 最后一次有图是
+    9-21 23:14，之后建的目录全是空的——于是「素材库→整理稿」一路看图没了，看着像画面丢了。
+    其实采集层（main.py 的 frame_pool.build）一直在抽帧并落在 frames/raw，零成本、就在盘上，
+    只是以前只有海报弹窗那一个入口读它。
+
+    judged=True 表示取到的是判过且确认没后期字的 clean 帧；False 是还没逐张看图的候选帧
+    （判帧花钱，号主定的口径是「只补真要发的那几条」，所以采集侧不判）。后者只当取材线索，
+    出图那一档不会自动用它们。
+    has_pool 单独返回：帧池存在但一张取不出来 = 这条素材的画面全被判掉了（或原帧已清理），
+    caller 不能再退回老路去重下视频——那会把刚被"宁缺毋滥"扔掉的帧又当图配进稿子。
+    """
+    try:
+        from src import frame_pool
+    except ImportError:
+        import frame_pool
+    items: list = []
+    meta = frame_pool.load(aweme_id)
+    frames = (meta or {}).get("frames") or []
+    if not frames or limit <= 0:
+        return items, False, bool(frames)
+    picked = frame_pool.usable(meta)
+    judged = bool(picked)
+    if not picked:
+        checked_n = len([f for f in frames if f.get("checked")])
+        if checked_n:
+            # 判过几张、一张都没留下：这条素材已经被"宁缺毋滥"否过一次了，
+            # 剩下没判的那几张大概率是同一批（实测 10-12 那条：判 8 弃 8）。
+            # 这时候再从没判的帧里凑图，等于自己推翻自己的判词——和海报弹窗那条口径保持一致
+            return items, False, True
+        cand = [f for f in frames
+                if f.get("file") and os.path.exists(str(f.get("file")))]
+        if not cand:
+            return items, False, True
+        # 均匀取样而不是取前 N 张：一条口播素材的头几帧往往是封面卡或钩子，后期字最密
+        stride = len(cand) // limit + 1
+        picked = cand[::stride][:limit]
+    for f in picked[:limit]:
+        rel = os.path.relpath(str(f.get("file")), str(OUTPUT_DIR)).replace(os.sep, "/")
+        items.append({"url": "/media/" + rel, "ts": f.get("ts") or "",
+                      "subject": (f.get("subject") or "").strip()})
+    return items, judged, True
+
+
 def _video_keyframe_markdown(videos: list, max_frames: int = 5, per_video: int = 2) -> str:
     """对攻略类整理稿的视频抽关键帧（ffmpeg，已有帧则直接复用），返回 Markdown 配图段。
 
     单视频模式取最多 max_frames=5 张；合并模式每视频最多 per_video=2 张、总数截到 max_frames。
     抽帧失败（无视频地址/下载失败）时返回空串，不影响整理稿本身。
+
+    取图顺序（2026-10-15）：帧池优先、老的 keyframes/ 兜底——老路依赖已废的解析器，
+    9-29 以后采的素材那一侧全是空目录，而采集层其实一直把帧抽在 frames/ 里。
     """
     single = len(videos) <= 1
     collected: list[str] = []
+    unjudged = False      # 配图段里有没有"还没逐张看图"的帧：有的话要在末尾说清楚
     for video in videos:
         if len(collected) >= max_frames:
             break
@@ -1922,6 +1981,28 @@ def _video_keyframe_markdown(videos: list, max_frames: int = 5, per_video: int =
         )
         if not aweme_id:
             continue
+        frame_limit = per_video if not single else max_frames
+        # ① 帧池：clean 优先，没判过就均匀取候选帧。这一条一分钱不花、也不用下载视频
+        pool_items, judged, has_pool = _pool_frame_items(aweme_id, frame_limit)
+        if has_pool:
+            # 帧池就是这条素材的画面台账：哪怕一张都没取出来（全被判掉了），也不回退去
+            # 重下视频——那等于把刚"宁缺毋滥"扔掉的帧再配回稿子
+            if pool_items and not judged:
+                unjudged = True
+            for it in pool_items:
+                if frame_limit <= 0 or len(collected) >= max_frames:
+                    break
+                alt = "关键帧%d" % (len(collected) + 1)
+                if it.get("ts"):
+                    alt += "·%s" % it["ts"]
+                if it.get("subject"):
+                    alt += " %s" % it["subject"][:40]
+                collected.append("![%s](%s)" % (alt, it["url"]))
+                frame_limit -= 1
+            if single:
+                break
+            continue
+        # ② 老的 keyframes/：帧池没有（解析器废之前就采完的老素材）才走这条路
         # 已有帧直接复用，跳过解析下载
         if not material_store.local_keyframe_paths(aweme_id):
             video_url = (video.get("video_url") or "").strip()
@@ -1930,21 +2011,25 @@ def _video_keyframe_markdown(videos: list, max_frames: int = 5, per_video: int =
                 material_store.extract_keyframes(aweme_id, nwm_url, max_frames=max_frames)
             elif video_url:
                 material_store.extract_keyframes(aweme_id, video_url, max_frames=max_frames)
-        frame_limit = per_video if not single else max_frames
         for rel in material_store.local_keyframe_paths(aweme_id):
             if rel.endswith("sheet.jpg"):
                 continue
             if len(collected) >= max_frames or frame_limit <= 0:
                 break
-            collected.append(rel)
+            collected.append("![关键帧%d](/media/%s)" % (len(collected) + 1, rel))
             frame_limit -= 1
         if single:
             break
     if not collected:
         return ""
     lines = ["", "## 配图素材（视频关键帧）", ""]
-    for idx, rel in enumerate(collected, 1):
-        lines.append(f"![关键帧{idx}](/media/{rel})")
+    lines.extend(collected)
+    if unjudged:
+        # 界面不说假话这条：这些帧没判过后期字，直接发出去就是"图上有别人的字幕"。
+        # 所以留一句口径，别让它长得像"已经确认能用"
+        lines.append("")
+        lines.append("（这些帧还没逐张看过图，出图那一档不会自动用它们；"
+                     "要进版面先在海报弹窗点「先看图确认」）")
     lines.append("")
     return "\n".join(lines)
 
