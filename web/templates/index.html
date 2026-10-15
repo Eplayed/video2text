@@ -767,6 +767,8 @@ textarea{resize:vertical;min-height:84px}
 .question-option.correct{border-color:var(--module-1);background:color-mix(in srgb,var(--module-1) 10%,var(--surface-card))}
 .keyframe-row{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px}
 .keyframe-row img{width:100%;border-radius:10px;border:1px solid var(--border)}
+/* 抽出来的帧有竖屏也有横屏，不锁比例会把这一格撑成锯齿；统一 16:9 裁一下，点开看原图 */
+#modal-kf img{aspect-ratio:16/9;object-fit:cover;cursor:zoom-in}
 .copy-link{cursor:pointer;color:var(--module-2);font-size:12px;text-decoration:underline}
 </style>
 </head>
@@ -1778,6 +1780,11 @@ textarea{resize:vertical;min-height:84px}
     <div class="section" id="modal-tags-section">
       <h3>标签</h3>
       <div class="tags" id="modal-tags"></div>
+    </div>
+    <div class="section" id="modal-kf-section" style="display:none">
+      <h3 id="modal-kf-title">素材画面</h3>
+      <div id="modal-kf-note" style="font-size:11.5px;line-height:1.6;color:var(--text-tertiary);margin-bottom:7px"></div>
+      <div class="keyframe-row" id="modal-kf"></div>
     </div>
     <div class="section">
       <h3 id="modal-asr-title">口播原文（ASR）</h3>
@@ -5767,6 +5774,8 @@ async function openDetail(sheet, row) {
   document.getElementById('modal-tags').innerHTML =
     (data.tags||'').split(/[,，\s]+/).filter(Boolean).map(t => `<span>${esc(t)}</span>`).join('');
 
+  renderModalKeyframes(data);
+
   if (isWechat) {
     // 微信文章版式：正文替代 ASR，无「AI 优化文案」区（整理稿生成后在整理稿页查看）
     document.getElementById('modal-asr-title').textContent = '文章正文';
@@ -5786,6 +5795,40 @@ async function openDetail(sheet, row) {
     <button class="btn ghost sm" onclick="copyText(\`${escBacktick(data.raw_transcript||data.asr||'')}\`)">📋 复制口播</button>
     <button class="btn ghost sm" style="color:var(--module-5)" onclick="deleteVideoOne('${escAttr(sheet)}', ${row}, '${escAttr((data.title||'').slice(0,40))}')">🗑 删除视频</button>
   `;
+}
+
+// 素材详情里的「素材画面」这一格。后端 keyframes 字段 8 月就有、CSS 类也早就写着，
+// 但前端从来没渲染过——所以号主 10-15 问"素材库怎么没有关键帧图了"时，图其实一直在盘上，
+// 只是这一格从来没摆出来过。判过没有（keyframes_judged）必须分开说：没判过的帧里
+// 可能有作者自己做的卡和字幕条，说成"可以用"就是往会花钱/会违规那一侧撒谎。
+function renderModalKeyframes(data) {
+  const sec = document.getElementById('modal-kf-section');
+  const box = document.getElementById('modal-kf');
+  const note = document.getElementById('modal-kf-note');
+  const title = document.getElementById('modal-kf-title');
+  // 自己判来源，不接调用方那个 isDbOnly/isWechat 变量：那名字这文件里改过两轮，
+  // 少一处耦合就少一次"别人重构把我这行改崩"
+  const src = data.source || '';
+  if (src !== 'douyin') { sec.style.display = 'none'; return; }   // 微信文章 / B站：没有"从视频抽帧"这一说
+  const kf = data.keyframes || [];
+  sec.style.display = '';
+  box.innerHTML = '';
+  if (!kf.length) {
+    title.textContent = '素材画面（这条还没有）';
+    note.innerHTML = '这条素材是 10-12 抽帧流程上线前采的，盘上没有它的画面。'
+      + '要图：去 <b>AI 海报</b> 打开这条素材，点「补画面 · 不花钱」（重下这条视频再抽帧，约 1-2 分钟，不花钱；'
+      + '作者把视频删了就只能换一条）。';
+    return;
+  }
+  title.textContent = '素材画面（' + kf.length + ' 张）';
+  note.innerHTML = data.keyframes_judged
+    ? '这些画面<b>逐张看过图</b>，确认没有作者后期压上去的字，可以直接当攻略页的配图。点开看大图。'
+    : '这些是从这条视频里抽出来的画面，<b>还没逐张看过图</b>（看图那一步才花钱）——里面可能有作者'
+      + '自己做的卡、盖着的字幕条，所以出图那一档不会自动用它们。点开看大图，自己先扫一眼。';
+  box.innerHTML = kf.map(function (u) {
+    return '<img src="' + esc(u) + '" loading="lazy" alt="素材画面" title="点开看大图" '
+      + 'onclick="window.open(this.src)">';
+  }).join('');
 }
 
 // 整理稿正文渲染：先整体转义，再把本地关键帧的 Markdown 图片语法转成 <img>（仅放行 /media/ 路径）
