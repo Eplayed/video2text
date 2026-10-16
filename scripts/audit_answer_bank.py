@@ -14,8 +14,8 @@
   4 计数一致：目录、正文、代码题、页眉「共 N 道」四处必须相等（改库最容易漏同步）。
 
 用法：
-  python3 scripts/audit_answer_bank.py product/AI面试答案库-v0.2.md
-  python3 scripts/audit_answer_bank.py product/AI面试答案库-v0.3.md --json
+  python3 scripts/audit_answer_bank.py                    # 不带参数＝查当前版本（读 build_interview_bank.VERSION）
+  python3 scripts/audit_answer_bank.py product/AI面试答案库-v0.2.md --json   # 回查旧版
 
 退出码：0 干净 / 1 有 WARN / 2 有 FAIL。
 """
@@ -51,13 +51,22 @@ ANSWER_PARTS = [("参考答案", "缺「参考答案」"),
                 ("面试官会追问", "缺「追问」")]
 # 小节 → 允许出现的题材关键词；命中不了任何一条 = 疑似放错小节。
 # 宁可漏判也不误杀：这里只列"整节都不该出现"的硬题材词。
+# 2026-10-09 并入外部题库后回补过一轮：ReAct / MCP / LangGraph / 切块 / 提示词 这些明显属于
+# 本节的问法当时被报成"放错小节"，是词表太窄，不是题放错了——误报多了人就开始忽略这个脚本。
 SECTION_TOPIC_WORDS = {
-    "RAG 与知识库": ["rag", "检索", "向量", "切片", "embedding", "知识库", "召回", "rerank"],
-    "Agent 与工具调用": ["agent", "工具调用", "函数调用", "工作流", "流水线", "代理", "规划"],
-    "大模型原理与长文本": ["长文本", "长篇", "长文", "上下文", "记忆", "窗口", "幻觉", "一致性", "前后矛盾"],
-    "数据与安全": ["安全", "隐私", "加密", "xss", "cors", "权限", "合规", "数据"],
+    "RAG 与知识库": ["rag", "检索", "向量", "切片", "切块", "切分", "embedding", "知识库", "召回", "rerank", "重排"],
+    "Agent 与工具调用": ["agent", "工具调用", "函数调用", "function calling", "工作流", "流水线", "代理", "规划",
+                    "react", "mcp", "langchain", "langgraph", "lcel", "a2a", "多智能体", "工具", "编排",
+                    "checkpoint", "记忆", "终止", "浏览器自动化", "code agent", "deep research", "nl2sql"],
+    "大模型原理与长文本": ["长文本", "长篇", "长文", "上下文", "记忆", "窗口", "幻觉", "一致性", "前后矛盾",
+                     "prompt", "提示词", "微调", "token", "结构化输出"],
+    "数据与安全": ["安全", "隐私", "加密", "xss", "cors", "权限", "合规", "数据", "注入", "护栏", "沙箱", "脱敏"],
     "数据采集与文档处理": ["爬虫", "反爬", "抓取", "解析", "指纹", "文档", "排版", "PDF", "消息队列"],
-    "AI 面试与对话产品": ["面试", "对话", "语音", "回答", "评价", "报告"],
+    "AI 面试与对话产品": ["面试", "对话", "语音", "回答", "评价", "报告", "客服"],
+    "AI 工具选型与工程边界": ["开源", "选型", "框架", "对比", "局限", "替代", "采用", "工具", "平台"],
+    "系统设计与工程落地": ["设计", "架构", "部署", "监控", "成本", "并发", "链路", "上线", "指标", "评测",
+                     "可观测", "路由", "系统", "测试", "工程", "审查"],
+    "产品判断与需求": ["用户", "场景", "需求", "指标", "产品", "业务", "岗位", "项目"],
 }
 # 与"AI 应用开发面试"这个卖点明显不属于同一叙事的题材词（WARN，不 FAIL：
 # 网文/公文本身也是 AI 应用，但混在 95 题里会让买家怀疑"这是不是某个视频的笔记"）
@@ -108,11 +117,15 @@ def audit(path):
                              % (it["no"], sec, q[:52], label)))
         if q.startswith("的") or re.match(r"^.{0,3}的工具", q):
             rows.append(("FAIL", "题干残缺", "%d [%s] 缺主语：%s" % (it["no"], sec, q[:52])))
-        if len(re.sub(r"\s", "", q)) < 12:
+        if len(re.sub(r"\s", "", q)) < 8:
+            # 原来卡 12 字，把「模型路由应该怎么做？」这种正常题报成过短——短不是病，缺主语才是
             rows.append(("WARN", "题干过短", "%d [%s] %s" % (it["no"], sec, q[:52])))
         if ("？" not in q) and ("?" not in q) and not re.search(r"请|如何|怎样|为什么|什么是|是否", q):
             rows.append(("WARN", "题干不像问题", "%d [%s] %s" % (it["no"], sec, q[:52])))
-        for name, miss in ANSWER_PARTS:
+        # 外部题库的题只搬了参考答案（追问是它有的才搬），所以只查参考答案一段；
+        # 自家题四段必须齐。判据是来源徽标，不写死仓库名。
+        ext = "· 来源：" in it["ans"]
+        for name, miss in (ANSWER_PARTS[:1] if ext else ANSWER_PARTS):
             if name not in it["ans"]:
                 rows.append(("FAIL", "答案缺段", "%d [%s] %s" % (it["no"], sec, miss)))
         low = q.lower()
@@ -168,13 +181,24 @@ def audit(path):
     for sec, items in sections:
         per[sec] = len(items)
     rows.append(("INFO", "各小节题数", "、".join("%s %d" % (k, v) for k, v in per.items())))
+    n_ext = len([1 for _, it in all_items if "· 来源：" in it["ans"]])
+    if n_ext:
+        no_ask = len([1 for _, it in all_items
+                      if "· 来源：" in it["ans"] and "面试官会追问" not in it["ans"]])
+        rows.append(("INFO", "外部来源题",
+                     "%d 道带来源徽标，只查参考答案（缺得分点/坑是已知状态；其中 %d 道连追问也没有）"
+                     % (n_ext, no_ask)))
     return rows, scene_n, len(codes)
 
 
 def main():
     ap = argparse.ArgumentParser()
+    # 默认查**当前版本**，别把 v0.2 写死：写死了不带参数一跑就是 8 个 FAIL，
+    # 让人以为库坏了（2026-10-09 实测踩过），或者反过来把旧版当新版放行。
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import build_interview_bank as bib    # noqa: E402  版本号只有一份源
     ap.add_argument("path", nargs="?", default=os.path.join(
-        ROOT, "product", "AI面试答案库-v0.2.md"))
+        ROOT, "product", "AI面试答案库-v%s.md" % bib.VERSION))
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args()
     if not os.path.isfile(args.path):

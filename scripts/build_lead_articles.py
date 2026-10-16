@@ -67,30 +67,29 @@ REPLY = {
 在的。这份是 AI 应用 / 前端+AI 方向的面试题库，共 %(total)s 道：
 %(themes)s
 
-每道题四段：参考答案、答到哪些点算过、常见坑、面试官会追问。
+自家整理那 %(nown)s 道每题四段：参考答案、答到哪些点算过、常见坑、面试官会追问；
+外部题库那 %(nrepo)s 道（GitHub 开源库，MIT 已署名）带参考答案与追问，另标了出现次数和难度；
 其中 %(hc)s 道手撕代码的参考实现都在 node 里跑过断言，不是"看起来对"。
 
-完整目录和样章在这里看：【填你的页面链接】
-完整版 %(price)s 元，购买方式：【填你的收款链接】——不用回复关键词，链接直接给你。
+完整版 %(price)s 元，购买方式：【填你的收款链接】。
+工具包（6 条提示词 + 2 个质检 skill + AI 能力地图索引）免费：关注后回「工具包」立刻发。
 
 ## 说明（为什么这么写）
 - 开头不说"感谢关注"，直接给内容——读者是来找题的，不是来寒暄的；
 - 把主题清单列出来，是为了让他在微信里就能判断"有没有我要的那块"，比一句广告语转化高；
-- 购买方式直接给链接，不要求"回一句 XX 才发"：那是公众号运营规范 3.3.2 的诱导关注形态，铁律 v1.2 废止、v1.9（2026-10-08）结案维持。愿意付钱的人自然会点链接。
+- 2026-10-09 拍板（铁律 v2.0）：**恢复**「关注后回复关键词领取」当默认打法。
+  风险记在这里，别当不知道——《微信公众平台运营规范》3.3.2 与腾讯客服《如何区分诱导关注类信息》
+  把"用资料换关注"算诱导关注典型形态，轻则单篇取消推荐 / 封分享，重则限制关注。
+  两道体检门已改成对这一形态只记录不拦（INFO）；把人引到站外去发东西那类入口仍然直接 FAIL。
+- 免费的东西走关键词，付费的东西给链接：领取门槛只用来换关注，不用来换钱——
+  付钱的人不该被门槛挡住。
 """
 }
 
 
 def load_bank():
-    raw = bib.fetch_questions()
-    keep = [q for q in raw if bib.grade(q) in ("A", "B")]
-    for q in keep:
-        text, unresolved = bib.rewrite(q)
-        q["_text"], q["_unresolved"] = text, unresolved
-    groups = {}
-    for q in keep:
-        groups.setdefault(bib.theme_of(q), []).append(q)
-    return raw, keep, groups
+    d = bib.load_all()               # 取数、分组、编号统一在 build_interview_bank.load_all
+    return d["raw"], d["keep"], d["groups"], d["order"]
 
 
 def pick(groups, handcode, spec):
@@ -140,16 +139,18 @@ def qa_md(q, hc=False):
             lines += ["**追问**：" + q["followup"], ""]
         return lines
     lines = ["### %s" % bib.clean(q["_text"]), ""]
-    ref = bib.clean(q.get("referenceAnswer")).replace("口播", "原分享")
+    # afix() 不能省：答案正文里「视频中的工具…千字公文」这类残留是 v0.3 在 build_interview_bank
+    # 里改掉的，这里少调一次，引流稿就把**付费版已剔除的原话**发出去了（2026-10-09 实测抓到）。
+    ref = bib.afix(bib.clean(q.get("referenceAnswer"))).replace("口播", "原分享")
     if ref:
         lines += ["**参考答案**：" + ref, ""]
     pts = [bib.clean(p, 40) for p in (q.get("answer") or []) if bib.clean(p)][:5]
     if pts:
         lines += ["**答到这几个点就算过**：" + "、".join(pts), ""]
-    ex = bib.clean(q.get("explain")).replace("口播", "原分享")
+    ex = bib.afix(bib.clean(q.get("explain"))).replace("口播", "原分享")
     if ex:
         lines += ["**常见坑**：" + ex, ""]
-    dp = bib.clean(q.get("deeper")).replace("口播", "原分享")
+    dp = bib.afix(bib.clean(q.get("deeper"))).replace("口播", "原分享")
     if dp:
         lines += ["**他会追问**：" + dp, ""]
     return lines
@@ -166,7 +167,8 @@ def article(spec, qs, total, hc_total, date):
     lines += ["", "## 完整版在这里", ""]
     lines += ["上面是 %d 道。整份资料共 %d 道（其中 %d 道手撕代码，代码全部在 node 里跑过断言），"
               "按主题分好了，可以只翻自己要补的那块。" % (len(qs), total, hc_total), ""]
-    lines += ["目录和样章（免费看）：【填你的页面链接】", ""]
+    lines += ["要打包版（工具包免费）：关注后回「工具包」，机器立刻发；"
+              "这份完整答案库 %(price)s 元，回「面试」或直接邮件我。" % {"price": bib.PRICE}, ""]
     lines += ["## 来源与声明", ""]
     lines += ["内容是对公开分享（视频 / 文章）的转述整理，题目化与归纳有 AI 辅助，"
               "已剔除离开原文就读不通的题；数字与技术结论请自行核对，不构成任何平台的官方说法。", ""]
@@ -178,7 +180,7 @@ def main():
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
-    raw, keep, groups = load_bank()
+    raw, keep, groups, order = load_bank()
     handcode = bib.load_handcode()
     total = len(keep) + len(handcode)
     date = datetime.now().strftime("%Y-%m-%d")
@@ -190,10 +192,13 @@ def main():
         (OUT_DIR / spec["file"]).write_text(md, encoding="utf-8")
         made.append((spec["file"], len(qs), len(md)))
         print("  %-34s %d 道完整题，%d 字" % (spec["file"], len(qs), len(md)))
+    # 清单按实际渲染顺序出（含外部题库那 12 节）：只列自家 13 个主题的话，
+    # 回复里报的"共 184 道"和下面列的题数对不上
     themes = "\n".join("- %s：%d 道" % (t, len(groups.get(t) or []))
-                       for t in [x for x, _ in bib.THEMES] + [bib.FALLBACK_THEME] if groups.get(t))
+                       for t in order if groups.get(t))
+    n_repo = len([q for q in keep if q.get("_src") == "repo"])
     reply = REPLY["body"] % {"total": total, "themes": themes, "hc": len(handcode),
-                        "price": bib.PRICE}
+                             "price": bib.PRICE, "nown": len(keep) - n_repo, "nrepo": n_repo}
     (OUT_DIR / REPLY["file"]).write_text(reply, encoding="utf-8")
     print("  %-34s %d 字" % (REPLY["file"], len(reply)))
     print("合计 %d 个文件 → %s" % (len(made) + 1, OUT_DIR))

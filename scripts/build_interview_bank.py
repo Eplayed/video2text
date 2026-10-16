@@ -24,7 +24,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 API = "http://127.0.0.1:15801"
 HANDCODE = ROOT / "product" / "handcode.json"
-VERSION = "0.3"
+REPO_BANK = ROOT / "product" / "repo_bank.json"
+VERSION = "0.4"
+# 外部题库的署名（MIT 要求保留版权声明，2026-10-09 从仓库 LICENSE 原文抄）：
+REPO_NAME = "didilili/ai-agents-from-zero"
+REPO_COPYRIGHT = "Copyright (c) 2026 didilili · MIT License"
 # 定价 2026-10-08 拍板：7.9。依据是当天闲鱼实测——同类聚合货（1400 页 PDF）标 1–12 元、
 # "验证过的真题"类 35–50 元。7.9 是"名片价"不是"收入价"：靠它到 2000 元/月要 253 单，
 # 所以钱的大头押在服务上，这里只求"有人愿意为信息付一次钱"这件事被验证。
@@ -40,6 +44,78 @@ def load_handcode():
     except (ValueError, OSError):
         print("   手撕代码题文件读失败，这一节先不出")
         return []
+
+
+def _flat(s):
+    """外部题库的答案是分小节的 markdown，拼成一段才和我们自家题的「参考答案」同一形态。
+    项目符号换成「；」，段落之间的换行直接接上（中文不需要空格）。
+    接缝要清一遍：原文"…三层展开。"后面紧跟列表，直接拼会出来"。；"这种两个标点连着的样子。"""
+    s = re.sub(r"\n\s*[-*]\s*", "；", s or "")
+    s = re.sub(r"\s*\n\s*", "", s)
+    s = re.sub(r"([。！？；])；", r"\1", s)
+    return re.sub(r"；{2,}", "；", s).strip("； ")
+
+
+def load_repo_bank():
+    """第二数据源：GitHub 仓库整理好的 89 题（`scripts/import_repo_bank.py` 落的 JSON）。
+
+    2026-10-09 拍板搬进付费库（MIT，可商用，须留版权声明）。三条硬规矩写在这里：
+    ① 只搬**题干 + 答案 + 它自己的追问**，不编我们没写的「得分点」「常见坑」——
+       渲染器对空段是不输出的，所以这 89 题看着比自家题短一截，那是事实不是漏了；
+    ② 每题带来源徽标（_src / _freq / _diff / _repo_id），.md 与 PDF 的来源页必须出现署名；
+    ③ 它的「出现次数：N 次」是**原作者统计的**，徽标一律写「据原仓库」，不能冒充我们测的。
+    """
+    if not REPO_BANK.exists():
+        print("   没有 product/repo_bank.json，这一版不并外部题（先跑 scripts/import_repo_bank.py）")
+        return []
+    try:
+        doc = json.loads(REPO_BANK.read_text(encoding="utf-8"))
+    except (ValueError, OSError):
+        print("   repo_bank.json 读失败，这一版不并外部题")
+        return []
+    repo = ((doc.get("source") or {}).get("repo")) or REPO_NAME
+    out = []
+    for it in doc.get("items") or []:
+        q = dict(it)
+        q["text"] = (it.get("question") or "").strip()
+        q["referenceAnswer"] = _flat(it.get("answer"))
+        q["answer"] = []
+        q["explain"] = ""
+        # 它的追问每条自带问号，用空格并列就行；用"；"会拼出"？；"这种连着两个标点
+        q["deeper"] = " ".join(x for x in (it.get("followup") or []) if x)
+        q["knowledgeTag"] = ""          # 别拿它的节名去喂关键词判据，见 theme_order 的注释
+        q["_theme"] = EXT_PREFIX + (it.get("section") or "未分节")
+        m = re.match(r"Q(\d+)-", it.get("id") or "")
+        q["_sec_no"] = int(m.group(1)) if m else 99
+        q["_src"] = "repo"
+        q["_repo"] = repo
+        q["_sid"] = "repo:%s" % it.get("id")
+        out.append(q)
+    return out
+
+
+def prepare(q):
+    """统一入口：自家题要过改写（去掉"该工具/视频中"），外部仓库题题干本来就自足，
+    再进一遍 STRIP/OVERRIDE 只会把干净的题干改坏。"""
+    if q.get("_src") == "repo":
+        q["_text"] = (q.get("text") or "").strip()
+        q["_unresolved"] = False
+        return q
+    q["_text"], q["_unresolved"] = rewrite(q)
+    return q
+
+
+def src_badge(q):
+    """外部题的来源徽标；自家题返回空串（没测过出现次数，不假装有）。"""
+    if q.get("_src") != "repo":
+        return ""
+    bits = []
+    if q.get("freq"):
+        bits.append("%s（出现 %d 次，据原仓库）" % (q["freq"], int(q.get("freq_n") or 0)))
+    if q.get("difficulty"):
+        bits.append("难度 %s" % q["difficulty"])
+    bits.append("来源：%s" % (q.get("_repo") or REPO_NAME))
+    return " · ".join(bits)
 
 
 def render_handcode(items, start_no):
@@ -86,6 +162,22 @@ THEMES = [
     ("产品判断与需求", r"用户|留存|粘性|场景|需求|指标|转化|体验|商业|定价|运营|闭环|学习路径"),
 ]
 FALLBACK_THEME = "AI 应用落地综合"
+EXT_PREFIX = "外部 · "        # 外部题库单独成一块：不混进我们那 13 个主题里
+
+
+def theme_order(groups):
+    """渲染顺序：自家 13 个主题（含兜底）在前，外部题库按它自己的节序在后。
+    为什么不按关键词把外部题打散并进我们的主题：两类题的段数不一样（我们四段、它们两段），
+    混在一节里买家会以为漏写了；而且打散会把自家 76 题的编号挪掉——引流稿、知识地图、
+    工具包里引用的题号会全部失效（2026-10-09 拍板分块）。"""
+    own = [t for t, _ in THEMES] + [FALLBACK_THEME]
+    ext = sorted([t for t in groups if t not in own],
+                 key=lambda t: groups[t][0].get("_sec_no") or 99)
+    return own + ext
+
+
+def is_ext(theme):
+    return (theme or "").startswith(EXT_PREFIX)
 
 # 题干里只写"该工具/该平台"的，要换成能说出口的名字。名字从来源整理稿标题人工核过一遍——
 # 自动从标题里截短语不靠谱（"AI生成的React组件能直接上线吗"会截成"AI生成"），
@@ -158,6 +250,8 @@ def fetch_questions():
 
 
 def theme_of(q):
+    if q.get("_theme"):
+        return q["_theme"]        # 外部题的归属是人映射的（见 REPO_THEME），不交给正则猜
     # 按**改写后**的题干分主题：改写前题干里全是"该工具/公文/网文"这类来源词，
     # 拿原文分类会把公文写作题一路送进 RAG 桶（v0.2 的错位就是这么来的）。
     hay = "%s %s" % (q.get("knowledgeTag") or "", q.get("_text") or q.get("text") or "")
@@ -176,6 +270,8 @@ def grade(q):
     """
     text = (q.get("text") or "").strip()
     ans = (q.get("referenceAnswer") or "").strip()
+    if q.get("_src") == "repo":
+        return "A"        # 外部仓库的题是按"能独立问"编的，别再拿"离不离得开视频"这套判据过
     if not text:
         return "C"
     needs_source = bool(NEEDS_SOURCE.search(text))
@@ -314,33 +410,82 @@ def rewrite(q):
     return text, (has_noun and not named)
 
 
+def load_all():
+    """一条口取数：自家题 + 外部题库 + 手撕代码，分好组、编好号。
+    .md / 卖货页 / PDF 三个出口都调这个——之前各自抄一遍筛选与编号，
+    改一处漏两处（v0.3 免费样章漏 afix、以及"95"散在 13 处对不上，都是这么来的）。"""
+    raw = fetch_questions()
+    counts = Counter(grade(q) for q in raw)
+    repo = load_repo_bank()
+    keep = [q for q in raw if grade(q) in ("A", "B")] + repo
+    for q in keep:
+        prepare(q)
+    groups = {}
+    for q in keep:
+        groups.setdefault(theme_of(q), []).append(q)
+    order = theme_order(groups)
+    n = 0
+    for t in order:                      # 题号按出现顺序编，三个出口的编号才一致
+        for q in groups.get(t) or []:
+            n += 1
+            q["_no"] = n
+    return {"raw": raw, "keep": keep, "groups": groups, "order": order, "counts": counts,
+            "handcode": load_handcode(), "n_repo": len(repo), "n_own": len(keep) - len(repo)}
+
+
+def audit_gate():
+    """出付费产物（.md / PDF / 卖货页）之前先跑一遍上架自检，返回 (能不能发, 一句话结论)。
+
+    为什么让构建脚本自己去跑，而不是在文案里写死「FAIL 0 / WARN 0」：
+    那句话是要卖给买家看的，库一改、加一题，话就变成假的——v0.2 翻在"承诺了没做到"上，
+    不能再让同一个承诺靠记性维持。
+    """
+    import audit_answer_bank as aab       # noqa: E402  audit 反过来要用 VERSION，放函数里避免绕圈
+    path = ROOT / "product" / ("AI面试答案库-v%s.md" % VERSION)
+    if not path.is_file():
+        return False, "没找到 %s（先跑 scripts/build_interview_bank.py）" % path
+    rows, scene, code = aab.audit(str(path))
+    fails = len([r for r in rows if r[0] == "FAIL"])
+    warns = len([r for r in rows if r[0] == "WARN"])
+    return fails == 0, "必须改 %d 条 / 观察项 %d 条（共 %d 题）" % (fails, warns, scene + code)
+
+
 def render(questions, counts, handcode=()):
     """按主题分组拼 markdown；手撕代码题单独一大节，编号接着往下排。"""
     groups = {}
     for q in questions:
-        text, unresolved = rewrite(q)
-        q["_text"], q["_unresolved"] = text, unresolved
+        prepare(q)
         groups.setdefault(theme_of(q), []).append(q)
-    order = [t for t, _ in THEMES] + [FALLBACK_THEME]
+    order = theme_order(groups)
     today = datetime.now().strftime("%Y-%m-%d")
     total = len(questions) + len(handcode)
+    n_repo = len([q for q in questions if q.get("_src") == "repo"])
+    n_own = len(questions) - n_repo
 
     lines = ["# AI 应用方向面试答案库 v%s" % VERSION, ""]
-    lines += ["> 整理日期 %s ｜ 共 %d 道（%d 道场景与原理题 + %d 道手撕代码）｜ "
-              "来源：公开分享内容的转述整理（AI 辅助加工，已逐条复核题干；代码全部执行过）"
-              % (today, total, len(questions), len(handcode)), ""]
-    lines += ["**怎么用**：每道题三段——「参考答案」是能开口说的完整版，先照它复述一遍；"
-              "「常见坑」是面试官一听就知道你没做过的点；「追问」是答完第一句之后一定会被问的，"
-              "提前把答案想好。数字、时间、公司名一律换成你自己项目里的，背模板最容易被问穿。", ""]
-    lines += ["**范围**：只收 AI 应用落地这条线（大模型 / RAG / Agent / 多模态 / 前端与体验 / 数据与安全 / 系统设计），"
+    lines += ["> 整理日期 %s ｜ 共 %d 道（%d 道场景与原理题 + %d 道手撕代码）" % (today, total, len(questions), len(handcode)), ""]
+    lines += ["> 题目来源两处：**%d 道**是对公开分享（视频 / 文章）的转述整理（AI 辅助加工，已逐条复核题干）；"
+              "**%d 道**取自 GitHub 仓库 %s（%s），题干与答案沿用其整理，其「出现次数 / 难度」为原作者统计、我们未复核。"
+              "带来源徽标的那几道一眼能分出来。代码题全部在本机执行过。" % (n_own, n_repo, REPO_NAME, REPO_COPYRIGHT), ""]
+    lines += ["**怎么用**：每道题最多四段——「参考答案」是能开口说的完整版，先照它复述一遍；"
+              "「答到这几个点就算过」是查漏清单；「常见坑」是面试官一听就知道你没做过的点；"
+              "「追问」是答完第一句之后一定会被问的，提前把答案想好。"
+              "外部仓库那部分只给了参考答案与追问，没编得分点和坑——那是下一版的活。"
+              "数字、时间、公司名一律换成你自己项目里的，背模板最容易被问穿。", ""]
+    lines += ["**范围**：只收 AI 应用落地这条线（大模型 / RAG / Agent / MCP / LangGraph / 多模态 / 前端与体验 / 数据与安全 / 系统设计），"
               "不收算法岗推导题。", ""]
 
     lines += ["## 目录", ""]
     n = 0
+    div = False
     for t in order:
         qs = groups.get(t) or []
         if not qs:
             continue
+        if is_ext(t) and not div:
+            # 用粗体行而不是 ### 分块：### 是自检脚本切小节的标记，别拿它当分隔线
+            lines += ["**—— 第二部分：外部题库 %d 题（MIT 署名，段数与第一部分不同，见文末来源页）——**" % n_repo, ""]
+            div = True
         lines += ["**%s（%d 题）**" % (t, len(qs)), ""]
         for q in qs:
             n += 1
@@ -353,16 +498,23 @@ def render(questions, counts, handcode=()):
             lines += ["%d. %s" % (n + i, clean(it.get("title"), 46))]
         lines += [""]
     lines += ["", "## 题目", ""]
+    div = False
     for t in order:
         qs = groups.get(t) or []
         if not qs:
             continue
+        if is_ext(t) and not div:
+            lines += ["", "**—— 第二部分：外部题库（题干与答案沿用该仓库整理，其「出现次数/难度」为原作者统计）——**", ""]
+            div = True
         lines += ["", "### %s" % t, ""]
         for q in qs:
             blob = " ".join([str(q.get(k) or "") for k in ("text", "referenceAnswer", "explain", "deeper")]
                             + [str(x) for x in (q.get("answer") or [])])
             _, bad = sanitize(blob)
             lines += ["**%d. %s**" % (q["_no"], clean(q["_text"])), ""]
+            badge = src_badge(q)
+            if badge:
+                lines += ["> %s" % badge, ""]
             if bad:
                 lines += ["> 这条答案里有模型吐错的乱码词（%s），发布前必须改掉。"
                           % "、".join(sorted(set(bad))), ""]
@@ -387,14 +539,19 @@ def render(questions, counts, handcode=()):
     lines += hc_lines
 
     lines += ["", "## 这份还没做到的（下一版要补的）", ""]
-    lines += ["- 场景题没给「按你自己项目怎么答」的填空模板，现在还是通用答案；",
+    lines += ["- 外部仓库那 %d 道只有参考答案和追问，没有「答到就算过」和「常见坑」——补这两段要逐题重写，"
+              "不是套模板能套出来的；" % n_repo,
+              "- 场景题没给「按你自己项目怎么答」的填空模板，现在还是通用答案；",
               "- 缺一份「我做过什么」的项目追问清单——那才是决定 offer 的部分；",
               "- 手撕代码只覆盖了接口工程与前端高频，图论/动态规划那类算法题不在范围内；",
               "- 数字类事实（模型参数量、延迟、成本）没有逐条核到公开来源，引用前自己确认。", ""]
     lines += ["## 来源与说明", ""]
-    lines += ["内容是对公开分享（视频/文章）的转述整理，用 AI 辅助做题目化与归纳，"
+    lines += ["自家整理的 %d 道：对公开分享（视频/文章）的转述整理，用 AI 辅助做题目化与归纳，"
               "已剔除离开原文就看不懂的题（本次剔除 %d 道、改写主语后保留 %d 道）。"
-              % (counts.get("C", 0), counts.get("B", 0)),
+              % (n_own, counts.get("C", 0), counts.get("B", 0)),
+              "外部题库的 %d 道：取自 GitHub 仓库 %s（%s）。MIT 许可允许商用与再分发，条件是保留版权声明，"
+              "署名在此；其「出现次数」「难度」两个字段是原作者统计的，我们没复核，看的时候当参考不当事实。"
+              % (n_repo, REPO_NAME, REPO_COPYRIGHT),
               "手撕代码题的参考实现由 `scripts/verify_handcode.py` 在 node 里逐条跑断言，跑不通的不进这份资料。",
               "所有数字与技术结论请在使用前自行核对，本资料不构成任何平台的官方说法。", ""]
     return "\n".join(lines)
@@ -407,25 +564,27 @@ def main():
     args = ap.parse_args()
 
     raw = fetch_questions()
+    repo = load_repo_bank()
     handcode = load_handcode()
     counts = Counter(grade(q) for q in raw)
-    print("摊平题目 %d 道 ｜ A 直接能用 %d ｜ B 补主语能用 %d ｜ C 离开原视频看不懂（丢） %d ｜ 手撕代码 %d 道"
-          % (len(raw), counts["A"], counts["B"], counts["C"], len(handcode)))
-    keep = [q for q in raw if grade(q) in ("A", "B")]
-    dist = Counter(theme_of(q) for q in keep)
+    print("摊平题目 %d 道 ｜ A 直接能用 %d ｜ B 补主语能用 %d ｜ C 离开原视频看不懂（丢） %d ｜ 手撕代码 %d 道 ｜ 外部题库 %d 道"
+          % (len(raw), counts["A"], counts["B"], counts["C"], len(handcode), len(repo)))
+    keep = [q for q in raw if grade(q) in ("A", "B")] + repo
+    dist = Counter(theme_of(prepare(q)) for q in keep)
     for t, n in dist.most_common():
         print("   %-14s %d 题" % (t, n))
     garbled = [q for q in keep if sanitize(" ".join(
         [str(q.get(k) or "") for k in ("text", "referenceAnswer", "explain", "deeper")]
         + [str(x) for x in (q.get("answer") or [])]))[1]]
-    unresolved = [q for q in keep if rewrite(q)[1]]
+    unresolved = [q for q in keep if q["_unresolved"]]
     print("发布前要人工过一遍：乱码词 %d 道、指代没名字 %d 道" % (len(garbled), len(unresolved)))
     if args.dry_run:
         return 0
     md = render(keep, counts, handcode)
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     Path(args.out).write_text(md, encoding="utf-8")
-    print("已写出：%s（%d 题 + 手撕 %d 题，%d 字）" % (args.out, len(keep), len(handcode), len(md)))
+    print("已写出：%s（%d 题：自家 %d + 外部 %d + 手撕 %d，%d 字）"
+          % (args.out, len(keep) + len(handcode), len(keep) - len(repo), len(repo), len(handcode), len(md)))
     return 0
 
 

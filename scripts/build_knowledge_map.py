@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""build_knowledge_map.py — 从答案库生成《前端面试 95 题知识地图》竖版长图（HTML → 截图）
+"""build_knowledge_map.py — 从答案库生成《AI 应用面试 N 题知识地图》竖版长图（HTML → 截图）
 
-为什么要脚本而不是手画：图上的 95 这个数字、13 个主题、每题的短标签，全部来自
-`product/AI面试答案库-v0.2.md` 与素材库里的 structured_data.knowledgeTag。手抄一版，
+为什么要脚本而不是手画：图上「多少题、多少个主题、每题的短标签」全部来自
+`product/AI面试答案库-v<当前版本>.md` 与素材库里的 structured_data.knowledgeTag。手抄一版，
 下一版题库更新后图就对不上了，而这张图的作用是让人「存下来照着复习」。
 
 短标签取法（按优先级）：
@@ -30,8 +30,10 @@ import build_interview_bank as bib    # noqa: E402  版本号只有一个地方�
 ROOT = Path(__file__).resolve().parent.parent
 BANK = ROOT / "product" / ("AI面试答案库-v%s.md" % bib.VERSION)   # 跟着 bib 的版本走，别写死
 DB = ROOT / "output" / "video2text.db"
-OUT_HTML = ROOT / "product" / "前端面试95题知识地图.html"
-OUT_PNG = ROOT / "product" / "前端面试95题知识地图.png"
+# 文件名里不写题数：v0.3→v0.4 从 95 变 184，名字带数字的产物每次都要改名，
+# 而旧名字的文件会一直躺在 product/ 里被人发出去（product/ 没有 git，删不到）。
+OUT_HTML = ROOT / "product" / "AI面试答案库-知识地图.html"
+OUT_PNG = ROOT / "product" / "AI面试答案库-知识地图.png"
 
 THEME_RE = re.compile(r"^\*\*(.+?)（(\d+) 题）\*\*$", re.M)
 # 主题在正文里是 `### 主题名`，目录里的 `**主题（N 题）**` 只用来对数
@@ -137,7 +139,7 @@ def build_html(themes, total, n_code):
         .replace("__THEMES__", str(n_themes)) \
         .replace("__CODE__", str(n_code)) \
         .replace("__DATE__", datetime.now().strftime("%Y-%m-%d")) \
-        .replace("__VERSION__", version.group(0) if version else "v0.2")
+        .replace("__VERSION__", version.group(0) if version else "v" + bib.VERSION)
 
 
 def html_escape(s):
@@ -145,7 +147,7 @@ def html_escape(s):
 
 
 TEMPLATE = """<!DOCTYPE html>
-<html lang="zh-CN"><head><meta charset="utf-8"><title>前端面试 95 题知识地图</title>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>AI 应用面试 __TOTAL__ 题知识地图 v__VERSION__</title>
 <style>
 :root{--ink:#2b2621;--sub:#7a6f63;--paper:#f6f1e7;--card:#fffdf8}
 *{box-sizing:border-box;margin:0;padding:0}
@@ -184,7 +186,7 @@ footer .small{font-size:17px;color:#c9bda9;margin-left:auto;text-align:right;lin
 </style></head><body>
 <div class="sheet">
 <header>
-  <h1>前端面试 <em>__TOTAL__</em> 题，无非就这些</h1>
+  <h1>AI 应用面试 <em>__TOTAL__</em> 题，无非就这些</h1>
   <div class="slogan">__THEMES__ 个主题 · 每题一个考点词 · 存下来照着复习</div>
   <div class="stats"><span class="stat">题目 <b>__TOTAL__</b></span><span class="stat">主题 <b>__THEMES__</b></span>
   <span class="stat">手撕代码 <b>__CODE__</b> 道跑过</span><span class="stat">版本 __VERSION__</span></div>
@@ -192,7 +194,7 @@ footer .small{font-size:17px;color:#c9bda9;margin-left:auto;text-align:right;lin
 <div class="grid">__BLOCKS__</div>
 <footer>
   <span class="big">要 PDF 高清原图？</span>
-  <span class="small">链接随文直接给，不用回复关键词<br>整理于 __DATE__ · 题目与答案同库，答不到的点不算过</span>
+  <span class="small">要这张图和工具包：关注后回「地图」/「工具包」<br>整理于 __DATE__ · 题目与答案同库，答不到的点不算过</span>
 </footer>
 </div></body></html>"""
 
@@ -215,10 +217,13 @@ def main():
                 if not n.startswith("手撕代码") and declared.get(n) != c]
     if mismatch:
         print("⚠️ 目录题数与正文对不上（主题, 目录, 正文）：%s" % mismatch)
-    if total != 95:
-        print("⚠️ 这道具现在数出 %d 题，但文件名写的是 95 题——先确认答案库有没有增删" % total)
     code = CODE_RE.search(md)
     n_code = int(code.group(1)) if code else 0
+    # 图上题数（含手撕代码）必须等于库页眉的「共 N 道」——原来这里写死 95，
+    # v0.4 变 184 之后那条告警就成了假警报，反而让人学会忽略它
+    head = re.search(r"共\s*(\d+)\s*道", md)
+    if head and int(head.group(1)) != total:
+        print("⚠️ 图上数到 %d 题，库页眉写「共 %s 道」——先确认答案库有没有增删" % (total, head.group(1)))
     html = build_html(themes, total, n_code)
     OUT_HTML.write_text(html, encoding="utf-8")
     print("主题 %d 个 / 题目 %d 道 / 手撕代码 %d 道 / 用到考点标签 %d 个"

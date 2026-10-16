@@ -28,7 +28,8 @@ import build_interview_bank as bib    # noqa: E402  复用同一套筛选/分组
 COPY = {
     "kicker": "AI 应用 / 前端 + AI 岗位",
     "h1": "把「面过才知道的题」提前摊开",
-    "lede": "95 道 AI 应用落地方向的面试题，其中 19 道手撕代码。每题不只给答案，还给你「答到哪几个点算过」、"
+    "lede": "%(nq)s 道 AI 应用落地方向的面试题，其中 %(hc)s 道手撕代码；题分两部分——第一部分 %(nown)s 道是我们从公开分享里转述整理的，"
+            "第二部分 %(nrepo)s 道取自 GitHub 上的开源题库（MIT 许可，已署名）。每题不只给答案，还给你「答到哪几个点算过」、"
             "「面试官一听就知道你没做过的坑」，以及「你答完第一句之后一定会被追问的那一句」。",
     "适合谁": [
         "投 AI 应用 / 大模型产品 / 前端 + AI 这类岗位，但没系统准备过面试问答的人",
@@ -47,16 +48,25 @@ COPY = {
         "最后把答案里的数字、工具名、时间全部换成你自己项目里的。",
     ],
     "faq": [
-        ("内容哪来的？", "对公开分享（视频 / 文章）做转述整理，题目化和归纳有 AI 辅助，"
-                    "再逐条剔除「离开原视频就看不懂」的题、改写题干里的指代。"
-                    "这一条不是嘴上说的：`scripts/audit_answer_bank.py` 逐条复检题干指代、"
-                    "题干残缺、答案缺段、题材与小节是否对得上，v0.3 跑出来是 FAIL 0 / WARN 0。"),
+        ("内容哪来的？", "两部分，分得很清。第一部分 %(nown)s 道：对公开分享（视频 / 文章）做转述整理，"
+                    "题目化和归纳有 AI 辅助，再逐条剔除「离开原视频就看不懂」的题、改写题干里的指代。"
+                    "第二部分 %(nrepo)s 道：取自 GitHub 仓库 didilili/ai-agents-from-zero"
+                    "（MIT License，Copyright (c) 2026 didilili），按许可署名后使用，每题带来源徽标；"
+                    "它的「出现次数 / 难度」是原作者统计的，我们没复核。"
+                    "第一句不是嘴上说的：`scripts/audit_answer_bank.py` 逐条复检题干指代、"
+                    "题干残缺、答案缺段、题材与小节是否对得上，v%(version)s 这一版跑出来是——%(audit)s。"),
         ("数字和结论能直接引用吗？", "不能。参数量、延迟、成本这类事实请自己再核一遍公开来源，"
                               "这份资料不构成任何官方说法。"),
-        ("为什么手撕代码那部分可以信？", "19 道每条的参考实现都在 node 里跑过断言（脚本会逐条执行，跑不通的不进这份资料）。"
+        ("为什么手撕代码那部分可以信？", "%(hc)s 道每条的参考实现都在 node 里跑过断言（脚本会逐条执行，跑不通的不进这份资料）。"
                                   "别的面经给你的是「看起来对」的代码，这里给的是执行过的代码。"),
         ("这一版还缺什么？", "场景题还没有「换成你自己项目怎么答」的填空模板，也没有项目追问清单；"
-                        "算法岗的推导题、论文题不在范围内。这些补上之后不另收费，已买的按下面的联系方式补发新版。"),
+                        "外部题库那 %(nrepo)s 道只有参考答案和追问，没编「答到就算过」和「常见坑」——"
+                        "那是下一版的活；算法岗的推导题、论文题不在范围内。"
+                        "这些补上之后不另收费，已买的按下面的联系方式补发新版。"),
+        ("为什么这个价？", "同一批题在 GitHub 上有一份免费开源的（就是第二部分那 %(nrepo)s 道的出处），"
+                      "所以这里不卖「题」，卖的是：整理成能开口说的四段结构、跑过断言的代码、"
+                      "按主题排好的目录，和替你筛过一遍「哪些离开原文就读不通」。"
+                      "只想要题的话，那份开源库够用。"),
         ("多少钱、怎么买？", "见下面的价格与购买方式。【填完再对外发】"),
     ],
 }
@@ -110,6 +120,8 @@ ol.q li{margin:0 0 6px}
 .qa h3{margin:0 0 10px;font-size:16.5px;line-height:1.5}
 .tag{display:inline-block;font-size:11.5px;font-weight:700;color:var(--accent);
 border:1px solid currentColor;border-radius:999px;padding:1px 8px;margin:0 0 8px}
+.badge{font-size:12.5px;color:var(--ink2);background:var(--bg);border-left:2px solid var(--accent);
+padding:3px 9px;margin:0 0 10px}
 .dl{margin:0;font-size:15px}
 .dl dt{font-weight:700;margin-top:12px}
 .dl dd{margin:2px 0 0;color:var(--ink2)}
@@ -193,6 +205,8 @@ TPL = """<!doctype html>
   <p class="price"><b>￥%(price)s</b><s>后续加题不另收费</s></p>
   <p>付款方式：<span class="todo">【待填：小报童 / 知识星球链接，或微信号】</span></p>
   <p>买完怎么发货：<span class="todo">【待填：付款后加微信发文件，还是平台自动发货】</span></p>
+  <p>拿到的是什么：<b>一份 PDF</b>（%(nq)s 题，目录可点跳转、侧边带书签，A4 打印版和手机竖版各一份）。
+  每页带买家水印，所以是"一人一份"，不是群发的链接；后续加题不另收费，说一声就发新文件。</p>
   <p class="lede">为什么只卖 %(price)s 元：这份是我自己产线跑出来的东西，多卖一份不多花一分钱，
   定价只为筛掉"完全不想为信息付费"的人，不为赚钱；真需要有人帮你把这条线搭起来，那是另一件事，
   联系方式就在上面那两行里。</p>
@@ -243,10 +257,15 @@ def qa_html(q):
             % (esc(bib.theme_of(q)), q["_no"], esc(bib.clean(q["_text"])))]
     if q.get("_unresolved"):
         rows.append("<dt>说明</dt><dd>题干里的指代还没换成具体名字，发布前人工补一句。</dd>")
-    ref = bib.clean(q.get("referenceAnswer")).replace("口播", "原分享")
+    badge = bib.src_badge(q)          # 外部题库的题带来源与重要度；自家题返回空串
+    if badge:
+        rows.insert(1, "<p class=\"badge\">%s</p>" % esc(badge))
+    # afix() 必须和 build_interview_bank.render 用同一套：v0.3 把答案里的「视频中的工具…千字公文」
+    # 改掉了，而这里少调一次 afix，结果**免费样章比付费正文更像没整理过**（2026-10-08 实测抓到）。
+    ref = bib.afix(bib.clean(q.get("referenceAnswer"))).replace("口播", "原分享")
     pts = [bib.clean(p, 40) for p in (q.get("answer") or []) if bib.clean(p)][:5]
-    ex = bib.clean(q.get("explain")).replace("口播", "原分享")
-    dp = bib.clean(q.get("deeper")).replace("口播", "原分享")
+    ex = bib.afix(bib.clean(q.get("explain"))).replace("口播", "原分享")
+    dp = bib.afix(bib.clean(q.get("deeper"))).replace("口播", "原分享")
     if ref:
         rows.append("<dt>参考答案</dt><dd>%s</dd>" % esc(ref))
     if pts:
@@ -277,30 +296,33 @@ def hc_html(item):
     return "".join(rows)
 
 
-def build(groups, keep, samples, handcode):
+def build(groups, keep, samples, handcode, order, audit=""):
+    n_repo = len([q for q in keep if q.get("_src") == "repo"])
+    total = len(keep) + len(handcode)
+    # 页面上所有"多少题、哪来的、自检跑成什么样"都从这一处填，别在文案里各写一个数
+    fmt = {"nq": total, "hc": len(handcode), "nown": len(keep) - n_repo, "nrepo": n_repo,
+           "version": bib.VERSION, "audit": audit or "没跑（先出 .md 再出页面）"}
     toc = []
-    for t in [x for x, _ in bib.THEMES] + [bib.FALLBACK_THEME]:
+    for t in order:
         qs = groups.get(t) or []
         if not qs:
             continue
         items = "".join("<li>%s</li>" % esc(bib.clean(q["_text"], 60)) for q in qs)
         toc.append("<details><summary>%s<span class=\"n\">%d 题</span></summary><ol class=\"q\">%s</ol></details>"
                    % (esc(t), len(qs), items))
-    faq = "".join("<dt>%s</dt><dd>%s</dd>" % (esc(a), esc(b)) for a, b in COPY["faq"])
+    faq = "".join("<dt>%s</dt><dd>%s</dd>" % (esc(a), esc(b % fmt)) for a, b in COPY["faq"])
     price = bib.PRICE           # 定价统一读 build_interview_bank.PRICE，别在页面里各写一个数
     todo_marks = 2                      # 付款方式、发货方式
-    themes = len([1 for x, _ in bib.THEMES if groups.get(x)] +
-                 [1 for x in [bib.FALLBACK_THEME] if groups.get(x)]) + (1 if handcode else 0)
+    themes = len([t for t in order if groups.get(t)]) + (1 if handcode else 0)
     demo = next((x for x in handcode if x.get("id") == "plimit"), handcode[0] if handcode else None)
     hc_list = "".join("<li>%s</li>" % esc(x.get("title")) for x in handcode if x is not demo)
     warn = ("<div class=\"warn\">本页还有 <b>%d</b> 处占位没填（付款方式、发货方式），"
             "填完再对外发。</div>" % todo_marks)
-    total = len(keep) + len(handcode)
     return TPL % {
         "title": "AI 应用方向面试答案库 v%s（%d 题）" % (bib.VERSION, total),
         "desc": "%d 道 AI 应用落地面试题（含 %d 道代码跑过的手撕题），每题给参考答案、得分点、常见坑和面试官追问。"
                 % (total, len(handcode)),
-        "css": CSS, "kicker": esc(COPY["kicker"]), "h1": esc(COPY["h1"]), "lede": esc(COPY["lede"]),
+        "css": CSS, "kicker": esc(COPY["kicker"]), "h1": esc(COPY["h1"]), "lede": esc(COPY["lede"] % fmt),
         "nq": total, "nt": themes, "ncode": len(handcode),
         "fits": "".join("<li>%s</li>" % esc(x) for x in COPY["适合谁"]),
         "nofits": "".join("<li>%s</li>" % esc(x) for x in COPY["不适合谁"]),
@@ -318,25 +340,18 @@ def main():
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
-    raw = bib.fetch_questions()
-    keep = [q for q in raw if bib.grade(q) in ("A", "B")]
-    for q in keep:
-        text, unresolved = bib.rewrite(q)
-        q["_text"], q["_unresolved"] = text, unresolved
-    order = [t for t, _ in bib.THEMES] + [bib.FALLBACK_THEME]
-    groups = {}
-    for q in keep:
-        groups.setdefault(bib.theme_of(q), []).append(q)
-    n = 0
-    for t in order:                      # 题号按页面出现顺序编，样章里的编号才对得上目录
-        for q in groups.get(t) or []:
-            n += 1
-            q["_no"] = n
+    d = bib.load_all()               # 取数、分组、编号全在 build_interview_bank.load_all 一处
+    keep, groups, order, handcode = d["keep"], d["groups"], d["order"], d["handcode"]
+    ok, verdict = bib.audit_gate()   # 卖货页上的"已逐条自检"这句话，必须是当场跑出来的
+    if not ok:
+        print("自检没过，不出页面：%s" % verdict)
+        print("   （改完库先跑 python3 scripts/build_interview_bank.py 重出 .md，再回来出页面）")
+        return 1
     samples = pick_samples(groups, keep)
-    handcode = bib.load_handcode()
-    htmltext, todos = build(groups, keep, samples, handcode)
-    print("渲染 %d 题（含手撕 %d 道）/ %d 个主题 / 样章 %d 题（%s）/ 待填占位 %d 处"
-          % (len(keep) + len(handcode), len(handcode), len([t for t in order if groups.get(t)]) + 1,
+    htmltext, todos = build(groups, keep, samples, handcode, order, verdict)
+    print("渲染 %d 题（自家 %d + 外部 %d + 手撕 %d）/ %d 个主题 / 样章 %d 题（%s）/ 待填占位 %d 处"
+          % (len(keep) + len(handcode), d["n_own"], d["n_repo"], len(handcode),
+             len([t for t in order if groups.get(t)]),
              len(samples), "、".join(bib.theme_of(q) for q in samples), todos))
     if args.dry_run:
         return 0
