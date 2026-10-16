@@ -11,6 +11,11 @@ playwright==1.40.0          # 图文渲染出图 + 抖音风控兜底开页
 opencc-python-reimplemented==0.1.7   # src/asr_fix.py 转写繁转简（没装则跳过这一道，不影响采集）
 numpy==1.26.4                # src/frame_pool.py 的 light_share 逐行统计（没装则跳过免费预筛）
 pillow==11.3.0              # 素材图片尺寸/比例判定
+# B 站投稿清单的唯一可用来源：直连 x/space/wbi/arc/search 带 cookie 也必回 -403 风控，
+# yt-dlp 内部处理了 GenWebTicket/gaia 握手。CLI 工具，pip 装完在 PATH 里。
+# 注意：yt-dlp 自 2025 起已宣布不再支持 Python 3.9（目前仅告警，实测 2025.10.14 可用），
+# 升级前先跑一遍 src/bilibili_fetcher.py 的 __main__ 自检。
+yt-dlp==2025.10.14          # src/bilibili_fetcher.py 取 B 站 UP 主投稿清单
 
 # 未使用但常被认为需要（确认过仓库内无 import，别误装）：python-docx、pandas
 # vendor/douyin_parse/qt_app.py 需 PySide6，仅解析器自带 GUI 用到，采集主链路不依赖
