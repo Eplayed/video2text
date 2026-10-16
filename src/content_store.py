@@ -31,11 +31,35 @@ BASE_COLUMNS = {
 }
 
 
+# 连接等锁上限（sqlite3 原默认就是 5.0 秒，写出来免得以为没设）
+DB_TIMEOUT_SEC = 5.0
+
+
 def connect(db_path: str | Path) -> sqlite3.Connection:
-    conn = sqlite3.connect(str(db_path))
+    conn = sqlite3.connect(str(db_path), timeout=DB_TIMEOUT_SEC)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     init_db(conn)
+    return conn
+
+
+def open_readonly(db_path: str | Path) -> sqlite3.Connection:
+    """只读连接：跑 SELECT 用，不建表、不加列、不可能抢到写锁。
+
+    为什么要有这一档（2026-10-14 事故）：`connect()` 每次打开都跑一遍 init_db
+    （CREATE TABLE / ALTER TABLE 都是**写操作**），于是"读一条列表"也算写库。
+    自动同步那一轮把 `_db_lock` 按住十几分钟，界面侧的读接口又都排在同一把锁后面，
+    浏览器等到超时就把「我的订阅」渲染成 0 个——号主看到的"数据全没了"是这么来的。
+    读一律走这个口：`mode=ro` 打不开就报错，绝不会顺手改库结构。
+    文件还不存在时退回 `connect()`（建一张空表再读，行为和从前一致，
+    免得 `_alive_subs` 这类没做存在性判断的调用点在新机器上抛异常）。
+    """
+    path = Path(db_path)
+    if not path.exists():
+        return connect(path)
+    uri = "file:%s?mode=ro" % str(path).replace("?", "%3f")
+    conn = sqlite3.connect(uri, uri=True, timeout=DB_TIMEOUT_SEC)
+    conn.row_factory = sqlite3.Row
     return conn
 
 
@@ -97,6 +121,12 @@ def init_db(conn: sqlite3.Connection) -> None:
     # source 区分 single_link/subscription 入口。Excel 重同步同样不覆盖这两列）
     _ensure_column(conn, "videos", "author_sec_uid", "TEXT DEFAULT ''")
     _ensure_column(conn, "videos", "source", "TEXT DEFAULT ''")
+    # B 站素材专用三列：抖音/微信用不到（值为空），但选题排序与素材库卡片要显示
+    # 时长与播放量，字幕状态还得区分「字幕 / AI字幕 / 无字幕 / 无字幕（仅简介）」，
+    # 让写手知道这条素材的正文是从哪来的。
+    _ensure_column(conn, "videos", "view_count", "INTEGER DEFAULT 0")
+    _ensure_column(conn, "videos", "duration_sec", "INTEGER DEFAULT 0")
+    _ensure_column(conn, "videos", "subs_status", "TEXT DEFAULT ''")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS subscriptions (
@@ -219,7 +249,7 @@ def backfill_author_sec_uid_from_subscriptions(db_path: str | Path) -> int:
                 source = 'subscription'
             WHERE COALESCE(author_sec_uid, '') = ''
               AND COALESCE(source, '') = ''
-              AND COALESCE(source_sheet, '') != '微信文章'
+              AND COALESCE(source_sheet, '') NOT IN ('微信文章', 'B站视频')
               AND EXISTS (SELECT 1 FROM subscriptions s
                     WHERE s.author = videos.author
                       AND COALESCE(s.platform, 'douyin') = 'douyin')
@@ -271,7 +301,7 @@ def get_author_sec_uid(db_path: str | Path, author: str) -> str:
     """从 videos 表直查作者 sec_uid（回填后替代 URL 反查），查不到返回空串。"""
     if not author:
         return ""
-    conn = connect(db_path)
+    conn = open_readonly(db_path)
     try:
         row = conn.execute(
             "SELECT author_sec_uid FROM videos "
@@ -372,7 +402,7 @@ def material_source_text(db_path: str | Path, summary: dict[str, Any]) -> str:
 
 
 def get_summary(db_path: str | Path, summary_id: int) -> dict[str, Any] | None:
-    conn = connect(db_path)
+    conn = open_readonly(db_path)
     try:
         row = conn.execute(
             """
@@ -396,7 +426,7 @@ def get_video_by_source(
     row: int | None = None,
     video_id: int | None = None,
 ) -> dict[str, Any] | None:
-    conn = connect(db_path)
+    conn = open_readonly(db_path)
     try:
         if video_id is not None:
             result = conn.execute("SELECT * FROM videos WHERE id = ?", (video_id,)).fetchone()
@@ -451,7 +481,7 @@ def search_videos(
         args.append(category)
     sql += " ORDER BY published_at DESC LIMIT ?"
     args.append(int(limit))
-    conn = connect(db_path)
+    conn = open_readonly(db_path)
     try:
         return [_dict(row) for row in conn.execute(sql, args).fetchall()]
     finally:
@@ -460,7 +490,7 @@ def search_videos(
 
 def used_video_ids(db_path: str | Path) -> set[int]:
     """进过整理稿的素材 id 集合——选题包用它标「★ 没用过」。"""
-    conn = connect(db_path)
+    conn = open_readonly(db_path)
     try:
         rows = conn.execute("SELECT source_video_ids FROM ai_summaries").fetchall()
     finally:
@@ -699,10 +729,59 @@ def set_subscription_tags(db_path: str | Path, sub_ids: list[int], tags: str) ->
 
 
 def list_subscriptions(db_path: str | Path) -> list[dict[str, Any]]:
-    conn = connect(db_path)
+    conn = open_readonly(db_path)
     try:
         rows = conn.execute("SELECT * FROM subscriptions ORDER BY id").fetchall()
         return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def subscription_cleanup_targets(db_path: str | Path, sec_uid: str, author: str = "") -> dict:
+    """列出一个订阅名下的素材与整理稿（取消订阅时连带清理用）。
+
+    返回 {"videos":[{id,sheet,row,aweme_id}], "summary_ids":[...]}
+
+    两条口径要记着：
+    1. author 只在非空时参与匹配。订阅刚加、还没同步出昵称时 author=''，
+       这时若按 `author = videos.author` 匹配会空对空命中所有无作者的历史空行，
+       把一堆垃圾行认领成这个号的素材（2026-10-16 实测 15 行）。
+    2. 合集稿按号主拍板「引用到就整篇删」——不剔除单个 id，只要 source_video_ids
+       里出现任何一个被删素材，整篇进删除清单。
+    """
+    conn = connect(db_path)
+    try:
+        conds = ["COALESCE(author_sec_uid, '') = ?"]
+        params: list[Any] = [sec_uid]
+        if (author or "").strip():
+            conds.append("COALESCE(author, '') = ?")
+            params.append(author.strip())
+        where = " OR ".join(conds)
+        videos = [
+            {"id": r["id"], "sheet": r["source_sheet"], "row": r["source_row"],
+             "aweme_id": r["aweme_id"] or ""}
+            for r in conn.execute(
+                f"SELECT id, source_sheet, source_row, aweme_id FROM videos WHERE {where} "
+                "ORDER BY id", params).fetchall()
+        ]
+        vid_set = {v["id"] for v in videos}
+        sids: set[int] = set()
+        if vid_set:
+            marks = ",".join("?" for _ in vid_set)
+            for r in conn.execute(
+                f"SELECT id FROM ai_summaries WHERE video_id IN ({marks})",
+                list(vid_set)).fetchall():
+                sids.add(r["id"])
+            for r in conn.execute(
+                "SELECT id, source_video_ids FROM ai_summaries "
+                "WHERE COALESCE(source_video_ids, '') <> ''").fetchall():
+                try:
+                    refs = json.loads(r["source_video_ids"] or "[]")
+                except ValueError:
+                    continue
+                if any(str(i).strip().isdigit() and int(i) in vid_set for i in refs):
+                    sids.add(r["id"])
+        return {"videos": videos, "summary_ids": sorted(sids)}
     finally:
         conn.close()
 
@@ -803,6 +882,115 @@ def get_wechat_article_links(db_path: str | Path) -> set[str]:
             "SELECT source_url FROM videos WHERE source_sheet = '微信文章' AND source_url IS NOT NULL"
         ).fetchall()
         return {r["source_url"] for r in rows}
+    finally:
+        conn.close()
+
+
+# ── B 站投稿入库（与微信文章同一套落点：DB 直写、不进 Excel、行号自增） ──
+
+BILI_SHEET = "B站视频"
+
+
+def insert_bilibili_videos(
+    db_path: str | Path,
+    items: list[dict[str, Any]],
+    author: str = "",
+    sec_uid: str = "",
+    category: str = "",
+    game: str = "",
+) -> list[dict[str, Any]]:
+    """将 B 站投稿写入 videos 表，返回实际插入的记录。
+
+    去重键是 aweme_id（存真实 bvid，不像微信那样用 URL hash）。
+    transcript 存字幕正文；没字幕时按 subs_status 标「无字幕」，
+    正文空的那条 status 记「未开始」（沿用库里已有取值，不新造状态）。
+    """
+    if not items:
+        return []
+    conn = connect(db_path)
+    inserted: list[dict[str, Any]] = []
+    try:
+        existing = {
+            r["aweme_id"]
+            for r in conn.execute(
+                "SELECT aweme_id FROM videos WHERE source_sheet = ? AND aweme_id IS NOT NULL",
+                (BILI_SHEET,),
+            ).fetchall()
+        }
+        max_row = conn.execute(
+            "SELECT COALESCE(MAX(source_row), 0) FROM videos WHERE source_sheet = ?",
+            (BILI_SHEET,),
+        ).fetchone()[0]
+        for idx, art in enumerate(items):
+            bvid = art.get("aweme_id") or ""
+            if not bvid or bvid in existing:
+                continue
+            row_num = max_row + idx + 1
+            body = art.get("transcript") or ""
+            g = game if category == "游戏攻略" else ""
+            conn.execute(
+                """
+                INSERT INTO videos (
+                    aweme_id, source_sheet, source_row, source_url, cover_url,
+                    author, title, status, published_at, transcript,
+                    category, game, source, author_sec_uid,
+                    view_count, duration_sec, subs_status, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'subscription', ?, ?, ?, ?, ?)
+                """,
+                (
+                    bvid, BILI_SHEET, row_num, art.get("url") or "",
+                    art.get("cover_url") or "",
+                    author or (art.get("author") or ""), art.get("title") or "",
+                    "已完成" if body else "未开始",
+                    art.get("published_at") or "", body,
+                    category, g, sec_uid or "",
+                    int(art.get("view_count") or 0), int(art.get("duration_sec") or 0),
+                    art.get("subs_status") or "", _now(),
+                ),
+            )
+            inserted.append({**art, "source_sheet": BILI_SHEET, "source_row": row_num})
+        conn.commit()
+    finally:
+        conn.close()
+    return inserted
+
+
+def video_ids_by_rows(db_path: str | Path, pairs: list) -> list[int]:
+    """按 (source_sheet, source_row) 精确取 video id。
+
+    同步收尾只给本轮新增的那批打标用——classify_videos 不带范围时会把全库缺口
+    一起过一遍 LLM，花多少没人盯着。
+    """
+    if not pairs:
+        return []
+    conn = connect(db_path)
+    try:
+        # 不用 (source_sheet, source_row) IN ((?,?),…)：SQLite 会报
+        # 「row value misused」（行值语法不支持带占位符的元组列表），只能展开成 OR
+        conds = " OR ".join("(source_sheet = ? AND source_row = ?)" for _ in pairs)
+        params: list[Any] = []
+        for sheet, row in pairs:
+            params.extend([sheet, int(row)])
+        rows = conn.execute(
+            f"SELECT id FROM videos WHERE {conds} ORDER BY id", params
+        ).fetchall()
+        return [r["id"] for r in rows]
+    finally:
+        conn.close()
+
+
+def get_bilibili_bvids(db_path: str | Path) -> set[str]:
+    """返回已入库的 bvid 集合（增量同步的比对基线）。"""
+    conn = open_readonly(db_path)
+    try:
+        return {
+            r["aweme_id"]
+            for r in conn.execute(
+                "SELECT aweme_id FROM videos WHERE source_sheet = ? AND aweme_id IS NOT NULL",
+                (BILI_SHEET,),
+            ).fetchall()
+            if r["aweme_id"]
+        }
     finally:
         conn.close()
 
@@ -1778,7 +1966,7 @@ CATEGORIES = [
 
 def get_category_stats(db_path: str | Path) -> list[dict[str, Any]]:
     """分类 -> 数量统计（含未分类），供前端筛选 pills 渲染。"""
-    conn = connect(db_path)
+    conn = open_readonly(db_path)
     try:
         rows = conn.execute(
             "SELECT COALESCE(NULLIF(category, ''), '未分类') AS cat, COUNT(*) AS n "
@@ -1911,7 +2099,7 @@ def get_topic_radar(
       channel_info: 当前渠道策略说明（channel 非空时）
     """
     strategy = RADAR_CHANNEL_STRATEGY.get(channel) or None
-    conn = connect(db_path)
+    conn = open_readonly(db_path)
     try:
         where = ["COALESCE(ai_tags, '') != ''"]
         params: list[Any] = []
@@ -2198,7 +2386,7 @@ def update_video_category(
 
 def get_game_stats(db_path: str | Path) -> list[dict[str, Any]]:
     """按游戏名统计视频数（仅游戏攻略分类）。"""
-    conn = connect(db_path)
+    conn = open_readonly(db_path)
     try:
         rows = conn.execute(
             "SELECT COALESCE(NULLIF(TRIM(game), ''), '未识别游戏') AS g, COUNT(*) AS n "
@@ -2254,18 +2442,30 @@ def classify_videos(
     ai_config: dict[str, str],
     force: bool = False,
     progress_cb=None,
+    only_ids=None,
 ) -> dict[str, int]:
-    """批量分类：优先 LLM，失败批次降级规则分类。progress_cb(done, total, note)。"""
+    """批量分类：优先 LLM，失败批次降级规则分类。progress_cb(done, total, note)。
+
+    only_ids：只处理这批 video id（同步收尾用）。不传就是全库扫缺口——那在没有上限的
+    情况下会把历史存量一起过一遍 LLM，一次同步花掉的钱没人盯着。
+    """
+    ids = [int(i) for i in (only_ids or [])]
     conn = connect(db_path)
     try:
+        parts = []
+        params: list[Any] = []
         # 订阅同步入库的视频自带 category（继承订阅分类），但仍缺 ai_tags（选题雷达依赖）。
         # 因此只要 category 或 ai_tags 任一为空就补分类，而不是仅看 category。
-        where = "" if force else (
-            "WHERE COALESCE(category, '') = '' OR COALESCE(ai_tags, '') = ''"
-        )
+        # 加 only_ids 时必须整体加括号，否则 OR 会把 id 条件短路掉。
+        if not force:
+            parts.append("(COALESCE(category, '') = '' OR COALESCE(ai_tags, '') = '')")
+        if ids:
+            parts.append("id IN (" + ",".join("?" for _ in ids) + ")")
+            params = ids
+        where = ("WHERE " + " AND ".join(parts)) if parts else ""
         rows = conn.execute(
             f"SELECT id, source_sheet, source_row, author, title, tags, transcript "
-            f"FROM videos {where} ORDER BY id"
+            f"FROM videos {where} ORDER BY id", params
         ).fetchall()
         videos = []
         for r in rows:
@@ -2340,16 +2540,27 @@ def classify_videos(
             progress_cb(done, total, f"已分类 {done}/{total}")
 
     # 写回 DB
+    # 增量模式（force=False）下已有 category 是权威值：订阅预设优先于 AI 分类，
+    # 只补空 category 与缺失的 ai_tags，绝不改写既有分类；强制模式才整体重判。
     conn = connect(db_path)
     try:
         for r in results:
             cat = r["category"] if r["category"] in CATEGORIES else "其他"
             game = r.get("game") or ""
-            conn.execute(
-                "UPDATE videos SET category = ?, ai_tags = ?, "
-                "game = CASE WHEN ? = '' THEN game ELSE ? END, updated_at = ? WHERE id = ?",
-                (cat, r["ai_tags"], game, game, _now(), r["id"]),
-            )
+            if force:
+                conn.execute(
+                    "UPDATE videos SET category = ?, ai_tags = ?, "
+                    "game = CASE WHEN ? = '' THEN game ELSE ? END, updated_at = ? WHERE id = ?",
+                    (cat, r["ai_tags"], game, game, _now(), r["id"]),
+                )
+            else:
+                conn.execute(
+                    "UPDATE videos SET ai_tags = ?, "
+                    "category = CASE WHEN COALESCE(category, '') = '' THEN ? ELSE category END, "
+                    "game = CASE WHEN COALESCE(category, '') = '' AND ? <> '' THEN ? ELSE game END, "
+                    "updated_at = ? WHERE id = ?",
+                    (r["ai_tags"], cat, game, game, _now(), r["id"]),
+                )
         conn.commit()
     finally:
         conn.close()

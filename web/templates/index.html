@@ -268,6 +268,8 @@ textarea{resize:vertical;min-height:84px}
 .video-cover .cover-src{position:absolute;bottom:8px;left:8px;border-radius:6px;padding:2px 8px;font-size:10.5px;font-weight:700;letter-spacing:.03em;color:#fff;background:rgba(20,19,17,.6);backdrop-filter:blur(4px);z-index:1}
 .video-cover .cover-src.src-wechat{background:#07c160}
 .video-cover .cover-src.src-douyin{background:var(--module-2)}
+.video-cover .cover-src.src-bilibili{background:#fb7299}
+.video-cover.cover-bili .cover-ph{color:#fb7299;background:linear-gradient(135deg,color-mix(in srgb,#fb7299 7%,var(--surface-nested)),var(--surface-nested))}
 .video-cover.cover-wx .cover-ph{color:#07c160;background:linear-gradient(135deg,color-mix(in srgb,#07c160 7%,var(--surface-nested)),var(--surface-nested))}
 .video-card .checkbox{position:absolute;top:10px;right:10px;width:22px;height:22px;border:1.6px solid rgba(255,255,255,.85);border-radius:7px;background:rgba(20,19,17,.35);backdrop-filter:blur(4px);cursor:pointer;transition:all .15s;display:grid;place-items:center;color:#fff;z-index:2}
 .video-card .v-del{position:absolute;top:10px;left:10px;width:22px;height:22px;border:none;border-radius:7px;background:rgba(20,19,17,.35);backdrop-filter:blur(4px);cursor:pointer;transition:all .15s;display:grid;place-items:center;color:#fff;opacity:.75;z-index:2}
@@ -434,6 +436,21 @@ textarea{resize:vertical;min-height:84px}
 #page-ops .header .btn{white-space:nowrap;flex:0 0 auto}
 .ops-wk{display:inline-flex;align-items:center;gap:4px;font-size:12px;color:var(--text-secondary);white-space:nowrap}
 .ops-wk input{margin:0}
+/* 免费额度：设置页那张小表 + 海报弹窗里的一行预警 */
+.ai-quota{margin:8px 0 4px;font-size:12px;line-height:1.7;color:var(--text-secondary)}
+/* 用 grid 对齐而不是 flex：模型名长短不一，flex 会把数字列挤得每行错位（截图实测过） */
+.ai-quota .q-row{display:grid;grid-template-columns:84px 150px 128px 58px 1fr;gap:8px;align-items:center;white-space:nowrap}
+.ai-quota .q-m{font-weight:700;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ai-quota .q-bar{display:block;width:84px;height:6px;border-radius:3px;background:var(--border);overflow:hidden}
+.ai-quota .q-bar i{display:block;height:100%;background:var(--module-1)}
+.ai-quota .q-warn .q-bar i{background:var(--warning,#e8a33d)}
+.ai-quota .q-danger .q-bar i,.ai-quota .q-out .q-bar i{background:var(--danger)}
+.ai-quota .q-out .q-m,.ai-quota .q-danger .q-m,.ai-quota .q-out b{color:var(--danger)}
+.ai-quota .q-warn b{color:var(--warning,#e8a33d)}
+.ai-quota .q-note{font-size:11px;color:var(--text-tertiary);margin-top:4px}
+.pk-quota{font-size:11.5px;line-height:1.6;margin:0 0 8px;padding:6px 9px;border-radius:7px;
+  background:var(--surface-nested);border:1px solid var(--border);border-left:3px solid var(--warning,#e8a33d)}
+.pk-quota.bad{border-left-color:var(--danger);color:var(--danger)}
 .ops-two{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:12px}
 .ops-two .wide{grid-column:1 / -1}
 .ops-card{background:var(--surface-card);border:1px solid var(--border);border-radius:var(--radius-card);padding:11px 13px;box-shadow:var(--shadow-card)}
@@ -448,6 +465,40 @@ textarea{resize:vertical;min-height:84px}
 .ops-tbl td{font-size:12.5px;padding:7px 10px;border-bottom:1px solid var(--border)}
 .ops-tbl td .t{display:block;max-width:360px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ops-tbl input{width:76px;font-size:12.5px;text-align:right;border:1px solid var(--border-input);border-radius:6px;background:var(--surface-nested);color:var(--text-primary);padding:4px 6px}
+/* ── 答案库与交付看板 ── */
+.bk-cards{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:14px 0}
+.bk-card{background:var(--surface-card);border:1px solid var(--border);border-radius:var(--radius-card);padding:12px 14px;box-shadow:var(--shadow-card)}
+.bk-card b{display:block;font-size:24px;line-height:1.15;font-weight:800;color:var(--text-primary)}
+.bk-card span{display:block;font-size:11.5px;color:var(--text-tertiary);margin-top:3px}
+.bk-card em{display:block;font-style:normal;font-size:11.5px;color:var(--text-tertiary);margin-top:5px}
+.bk-gate{display:flex;align-items:center;gap:10px;padding:11px 14px;border-radius:11px;font-size:13px;margin:0 0 14px;border:1px solid var(--border)}
+.bk-gate.ok{background:color-mix(in srgb,var(--ok,#2e9e5b) 10%,transparent);border-color:color-mix(in srgb,var(--ok,#2e9e5b) 40%,transparent)}
+.bk-gate.bad{background:color-mix(in srgb,var(--danger,#d64545) 10%,transparent);border-color:color-mix(in srgb,var(--danger,#d64545) 40%,transparent)}
+.bk-gate b{font-weight:800}
+.bk-sec{background:var(--surface-card);border:1px solid var(--border);border-radius:var(--radius-card);padding:16px 18px;margin:0 0 14px;box-shadow:var(--shadow-card)}
+.bk-sec h3{font-size:14px;font-weight:800;margin:0 0 10px;display:flex;align-items:center;gap:8px}
+.bk-sec h3 i{font-style:normal;font-size:11.5px;font-weight:600;color:var(--text-tertiary)}
+.bk-bar{display:flex;align-items:center;gap:9px;font-size:12.5px;margin:0 0 6px}
+.bk-bar .nm{width:190px;flex:0 0 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bk-bar .tr{flex:1 1 auto;height:7px;border-radius:4px;background:var(--surface-nested);overflow:hidden}
+.bk-bar .tr i{display:block;height:100%;background:var(--accent,#4b3bd1);border-radius:4px}
+.bk-bar .tr.ext i{background:#8a63d2}
+.bk-bar .n{width:44px;text-align:right;color:var(--text-tertiary);flex:0 0 auto}
+.bk-tag{display:inline-block;font-size:10.5px;font-weight:700;border-radius:999px;padding:1px 7px;border:1px solid currentColor}
+.bk-tag.own{color:#2e9e5b}.bk-tag.repo{color:#8a63d2}.bk-tag.code{color:#c98a1a}
+.bk-tag.no{color:var(--danger,#d64545)}.bk-tag.ok{color:#2e9e5b}.bk-tag.paid{color:var(--accent,#4b3bd1)}
+.bk-tbl{width:100%;border-collapse:collapse;font-size:12.5px}
+.bk-tbl th{text-align:left;font-size:11.5px;font-weight:700;color:var(--text-tertiary);padding:6px 8px;border-bottom:1px solid var(--border)}
+.bk-tbl td{padding:7px 8px;border-bottom:1px solid var(--border);vertical-align:top}
+.bk-tbl td.num{text-align:right;font-variant-numeric:tabular-nums}
+.bk-tbl a{color:var(--accent,#4b3bd1);text-decoration:none;font-weight:700}
+.bk-miss{font-size:12.5px;color:var(--danger,#d64545);background:color-mix(in srgb,var(--danger,#d64545) 8%,transparent);border:1px dashed color-mix(in srgb,var(--danger,#d64545) 45%,transparent);border-radius:10px;padding:10px 12px;margin:0 0 12px}
+.bk-q{border:1px solid var(--border);border-radius:11px;padding:12px 14px;margin:0 0 9px;background:var(--surface-nested)}
+.bk-q h4{font-size:13px;margin:0 0 7px;line-height:1.5}
+.bk-q p{font-size:12px;color:var(--text-secondary);margin:0 0 5px;line-height:1.65}
+.bk-q p b{color:var(--text-tertiary);font-weight:700}
+.bk-q .src{font-size:11px;color:var(--text-tertiary)}
+.bk-note{font-size:11.5px;color:var(--text-tertiary);line-height:1.7}
 .ops-tbl input.dt{width:120px;text-align:left}
 .ops-tbl .saved{color:#1a8a4f;font-size:11px}
 @media (max-width:1100px){.ops-two{grid-template-columns:repeat(2,1fr)}}
@@ -799,6 +850,8 @@ textarea{resize:vertical;min-height:84px}
       <div class="navi" id="nav-review" onclick="switchPage('review')"><span class="nav-ic" data-icon="target"></span>发布审核<span class="cnt" id="nav-review-cnt" style="display:none">0</span></div>
       <div class="navi" id="nav-ops" onclick="switchPage('ops')"><span class="nav-ic" data-icon="chart"></span>运营周报</div>
       <div class="navi" id="nav-questions" onclick="switchPage('questions')"><span class="nav-ic" data-icon="target"></span>面试题库</div>
+      <div class="nav-sep">产品</div>
+      <div class="navi" id="nav-bank" onclick="switchPage('bank')"><span class="nav-ic" data-icon="book"></span>答案库与交付</div>
       <div class="nav-sep">设置</div>
       <div class="navi" id="nav-settings" onclick="switchPage('settings')"><span class="nav-ic" data-icon="settings"></span>AI 设置</div>
     </nav>
@@ -919,6 +972,28 @@ textarea{resize:vertical;min-height:84px}
         </div>
       </div>
 
+      <!-- B 站 UP 主订阅：采集中心的第三个采集入口。投稿清单走 yt-dlp + cookie，
+           直连接口带 cookie 也必被 -403 风控（详见 src/bilibili_fetcher.py 文件头实测记录）。
+           订阅建好之后的改名/设分类/同步/取消，与抖音、微信一起在
+           「数据与同步 → 我的订阅」那张面板里管，这里只负责"添加"。 -->
+      <div class="panel" style="margin-top:14px">
+        <h3><span class="cic" style="background:color-mix(in srgb,#fb7299 14%,transparent);color:#fb7299" data-icon="camera"></span>B 站 UP 主订阅</h3>
+        <div class="p-sub">填 UP 主空间地址或数字空间号，订阅后每轮最多拉 20 条新投稿进素材库；正文取字幕轨（人工 CC 优先、其次 AI 字幕），没字幕的按状态标出「无字幕」。<b>需先配 cookie</b>：浏览器登录 bilibili.com → F12 → 任一 <code>api.bilibili.com</code> 请求 → 整段 cookie 粘到 <code>config/config.env.local</code> 的 <code>BILIBILI_COOKIE=</code>（含 SESSDATA），填完不用重启工作台。</div>
+        <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+          <input id="bili-sub-url" class="page-search" style="flex:1;min-width:200px" placeholder="粘贴 B 站 UP 主空间地址，形如 https://space.bilibili.com/&lt;数字&gt;/video（也可直接填数字空间号）">
+          <!-- 分类选项由 /api/categories 下发（loadCategoryOptions），不写死名单 -->
+          <select id="bili-sub-cat" style="width:auto">
+            <option value="">自动分类</option>
+          </select>
+          <button class="btn sm" onclick="addBilibiliSubscription()"><span data-icon="plus" class="ic14"></span>添加B站订阅</button>
+          <button class="btn ghost sm" id="btn-bili-check" onclick="checkBilibili()" title="真发一次投稿清单请求，验证 cookie 能不能过风控">测试连通</button>
+        </div>
+        <div id="bili-cookie-hint" style="font-size:11.5px;color:var(--text-tertiary);margin-top:8px"></div>
+        <div style="font-size:11.5px;margin-top:6px">
+          <a href="#materials" onclick="setTimeout(function(){switchPage('materials')},0);return false;" style="color:var(--module-2)">已订阅的 UP 主 → 去「数据与同步 · 我的订阅」改名 / 设分类 / 同步 / 取消</a>
+        </div>
+      </div>
+
       <div class="status-card card" id="status-box">
         <div class="s-ic" data-icon="activity"></div>
         <div style="flex:1;min-width:0">
@@ -940,11 +1015,11 @@ textarea{resize:vertical;min-height:84px}
       <div class="panel">
         <h3 style="display:flex;align-items:center;gap:9px">
           <span class="cic" style="background:color-mix(in srgb,var(--module-3) 14%,transparent);color:var(--module-3)" data-icon="activity"></span>我的订阅
-          <span class="count" id="count-subs" style="margin-left:auto">0 个</span>
+          <span class="count" id="count-subs" style="margin-left:auto">读取中…</span>
           <button class="btn ghost sm" onclick="openAuthorImport()"><span data-icon="plus" class="ic14"></span>导入素材库作者</button>
           <button class="btn sm" id="btn-sync-all-subs" onclick="syncSubscriptions()"><span data-icon="bolt" class="ic14"></span>同步全部</button>
         </h3>
-        <div class="p-sub">订阅的抖音主页/微信公众号，点「同步」自动拉取新内容（抖音 20 条视频+ASR 转写，微信 RSS 文章直接入库）。点作者名可改名，点分类徽章设置分类（新内容自动归类）。<b>分类</b>是固定 11 类、喂选题雷达与渠道策略的权威口径；<b>标签</b>是你的自定义分组，勾选多个订阅后可批量设分类/设标签，筛完直接点「同步当前筛选」。微信订阅需先部署 <a href="https://github.com/cooderl/wewe-rss" target="_blank" style="color:var(--module-2)">WeWe RSS</a> 服务。</div>
+        <div class="p-sub">订阅的抖音主页/微信公众号/B站UP主，点「同步」自动拉取新内容（抖音 20 条视频+ASR 转写，微信 RSS 文章直接入库，B站 20 条投稿+字幕正文，没字幕的按状态标出）。点作者名可改名，点分类徽章设置分类（新内容自动归类）。<b>分类</b>是固定 11 类、喂选题雷达与渠道策略的权威口径；<b>标签</b>是你的自定义分组，勾选多个订阅后可批量设分类/设标签，筛完直接点「同步当前筛选」。微信订阅需先部署 <a href="https://github.com/cooderl/wewe-rss" target="_blank" style="color:var(--module-2)">WeWe RSS</a> 服务；B站订阅需在 <code>config/config.env.local</code> 配 <code>BILIBILI_COOKIE=</code>（投稿列表接口匿名访问必被风控拦下，没有绕过办法，配好后点「测试连通」）。<b style="color:var(--module-5)">「取消订阅」不是只停更新：会连带删掉这个号已采的素材、整理稿、图文包和图片目录，删了不可恢复。</b></div>
         <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
           <input id="wechat-rss-url" class="page-search" style="flex:1;min-width:200px" placeholder="粘贴 WeWe RSS 订阅地址，形如 http://&lt;你的 WeWe RSS 地址&gt;/feed/xxx.xml">
           <!-- 分类选项由 /api/categories 的 all_categories 下发（loadCategoryOptions），不在这里写死名单 -->
@@ -953,6 +1028,8 @@ textarea{resize:vertical;min-height:84px}
           </select>
           <button class="btn sm" onclick="addWechatSubscription()"><span data-icon="plus" class="ic14"></span>添加微信订阅</button>
         </div>
+        <!-- B 站订阅的添加表单在「采集中心」页（page-collect 的 B站UP主订阅面板），
+             这里只负责列出来：三个源的订阅管理（改名/分类/同步/取消）都在这一张面板。 -->
         <div id="sub-status" style="display:none;margin:10px 0 0;font-size:12.5px;color:var(--module-2);font-weight:600"></div>
         <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;align-items:center">
           <div id="sub-source-tabs" style="display:flex;gap:6px;flex-wrap:wrap"></div>
@@ -982,7 +1059,7 @@ textarea{resize:vertical;min-height:84px}
       <div class="panel" id="as-panel" style="margin-top:16px">
         <h3 style="display:flex;align-items:center;gap:9px;flex-wrap:wrap">
           <span class="cic" style="background:color-mix(in srgb,var(--module-2) 14%,transparent);color:var(--module-2)" data-icon="calendar"></span>自动同步任务
-          <span class="count" id="as-count" style="margin-left:auto">未开启</span>
+          <span class="count" id="as-count" style="margin-left:auto">读取中…</span>
           <label class="as-sw"><input type="checkbox" id="as-enabled" onchange="asSetEnabled(this.checked)">开总开关</label>
           <!-- 「全部跑一遍」这颗全局按钮删掉了（2026-10-11 号主拍：同步入口收成 2 个）：
                它和每行那颗「立刻跑」是同一件事，跑全部可以在每一行挨个按，误点代价反而更大。
@@ -1057,7 +1134,7 @@ textarea{resize:vertical;min-height:84px}
       <div class="header">
         <h2>素材库</h2>
         <div class="spacer"></div>
-        <span class="count" id="count-videos">0 条</span>
+        <span class="count" id="count-videos">读取中…</span>
       </div>
       <div class="toolbar">
         <div class="cat-pills" id="source-pills" style="margin:0"></div>
@@ -1287,13 +1364,13 @@ textarea{resize:vertical;min-height:84px}
       <div class="modal-box" onclick="event.stopPropagation()">
         <button class="close-btn" onclick="closeToutiaoGenDialog()"><span data-icon="close" class="ic14"></span></button>
         <div class="tt-gen-title">🔥 生成头条图文</div>
-        <div class="tt-gen-sub">整合稿 #<span id="tt-gen-id"></span> · 生成前先定标题、模板、题材和皮</div>
+        <div class="tt-gen-sub">整合稿 #<span id="tt-gen-id"></span></div>
         <div class="tt-gen-field">
-          <label>图文标题 <small>（已代入整理稿标题，可自行修改；决定封面主标题）</small></label>
-          <input id="tt-gen-title" placeholder="图文标题（留空则按整合稿标题自动生成）">
+          <label title="已代入整理稿标题，可自行修改；这行字就是封面上的主标题">图文标题</label>
+          <input id="tt-gen-title" placeholder="留空则按整合稿标题自动生成">
         </div>
         <div class="tt-gen-field">
-          <label>图文模板 <small>（整体版式：背景、布局、文字大小样式；「攻略图解」可直接上传攻略图）</small></label>
+          <label title="整体版式：背景、布局、文字大小样式。「攻略图解」这一档可以直接上传攻略图">图文模板</label>
           <select id="tt-gen-tpl">
             <option value="classic" selected>经典卡片 · 鎏金插画风（默认）</option>
             <option value="magazine">杂志大片 · 暗色编辑排版</option>
@@ -1303,7 +1380,7 @@ textarea{resize:vertical;min-height:84px}
             <option value="tier">梯度榜 · 梯队排行对比</option>
             <option value="quest">任务面板 · 魔兽任务UI风（步骤流程）</option>
           </select>
-          <div class="tt-tpl-preview" id="tt-tpl-preview" onclick="openTplPages()" title="点击查看 4 页示例">
+          <div class="tt-tpl-preview" id="tt-tpl-preview" onclick="openTplPages()">
             <div class="tt-tpl-preview-thumb">
               <img id="tt-tpl-preview-img" alt="模板封面预览">
               <span class="tt-tpl-preview-zoom">🔍 4 页示例</span>
@@ -1356,8 +1433,8 @@ textarea{resize:vertical;min-height:84px}
           <input id="tt-gen-theme-custom" placeholder="自定义题材（填了优先于上面的选项）">
         </div>
         <div class="tt-gen-field">
-          <label>图的皮 <small>（决定配色/背景图/插画素材，无对应图时回退通用皮）</small></label>
-          <select id="tt-gen-skin">
+          <label title="决定配色/背景图/插画素材，无对应图时回退通用皮">图的皮</label>
+          <select id="tt-gen-skin" title="决定配色/背景图/插画素材">
             <option value="wow">魔兽世界-正式服</option>
             <option value="wow">魔兽世界-无限</option>
             <option value="d4">暗黑4</option>
@@ -1390,9 +1467,18 @@ textarea{resize:vertical;min-height:84px}
         <div class="tt-gen-title">🎨 AI 海报</div>
         <div class="tt-gen-sub">整合稿 #<span id="pk-id"></span> · <span id="pk-mode">字由程序排，不会错字</span></div>
         <div class="pk-bar">
+          <label>发到哪<select id="pk-channel" onchange="pkSetChannel(this.value)" title="决定发布文案与检查清单：小红书档不输出尾注与关键词回复（防「AI 托管」判定）；公众号档默认 3:4，可选拍图片消息或文章配图两种形态">
+            <option value="toutiao" selected>头条</option>
+            <option value="xhs">小红书</option>
+            <option value="wechat">公众号</option>
+          </select></label>
+          <label id="pk-form-wrap" style="display:none">形态<select id="pk-form" onchange="pkSetForm(this.value)" title="仅公众号可选：图片消息＝整组直接发图片消息；文章配图＝这组图当文章头图与文内配图，正文用整理稿">
+            <option value="newspic" selected>图片消息</option>
+            <option value="article">文章配图</option>
+          </select></label>
           <label>比例<select id="pk-ratio">
-            <option value="9:16" selected>9:16 小红书</option>
-            <option value="3:4">3:4 公众号</option>
+            <option value="9:16" selected>9:16 竖版（头条/小红书）</option>
+            <option value="3:4">3:4 竖版（公众号）</option>
             <option value="1:1">1:1 方形</option>
           </select></label>
           <label>出法<select id="pk-text-mode" title="排版：AI 只画图，中文由工作台用真字体排上去，字不会错（上限 200 字）。直出：AI 把字画进图里，看到的就是成品，但实测做不到每张都对，字要你自己逐字核（上限 64 字）" onchange="pkModeChanged()">
@@ -1418,6 +1504,8 @@ textarea{resize:vertical;min-height:84px}
         <div id="pk-layout-hint" style="font-size:11.5px;color:var(--text-secondary);margin:2px 0 8px;min-height:16px"></div>
         <!-- 这条素材有没有"能当证据的干净画面"：不说的话，0 元那条攻略页路线在界面上是隐形的 -->
         <div id="pk-frames-hint" style="display:none;font-size:11.5px;line-height:1.6;margin:0 0 8px"></div>
+        <!-- 额度预警：拆解/出图都按模型算额度，快没了在这里先说，别等点了才吐一堆堆栈 -->
+        <div id="pk-quota" class="pk-quota" style="display:none"></div>
         <div class="pk-tpls" id="pk-tpls" style="display:none"></div>
         <div class="pk-break" id="pk-break" style="display:none"></div>
         <div class="pk-one" id="pk-one" style="display:none"></div>
@@ -1480,7 +1568,7 @@ textarea{resize:vertical;min-height:84px}
             <option value="lilac_list">浅紫清单 · 编辑清单风（榜单/合集）</option>
             <option value="cream_gold">奶油金插画 · 教程步骤风</option>
           </select>
-          <div class="tt-tpl-preview" onclick="openWxTplPages()" title="点击查看 4 页示例">
+          <div class="tt-tpl-preview" onclick="openWxTplPages()">
             <div class="tt-tpl-preview-thumb">
               <img id="wx-tpl-preview-img" alt="模板封面预览">
               <span class="tt-tpl-preview-zoom">🔍 4 页示例</span>
@@ -1519,8 +1607,8 @@ textarea{resize:vertical;min-height:84px}
           </div>
         </div>
         <div class="tt-gen-field">
-          <label>题材<small>（自由填写，进 LLM prompt，决定卡片标题点明什么主题）</small></label>
-          <input id="wx-gen-theme" placeholder="例：AI工具实测 / 前端性能优化 / 副业复盘（留空由模型自判）">
+          <label title="自由填写，进 LLM prompt，决定卡片标题点明什么主题">题材</label>
+          <input id="wx-gen-theme" placeholder="例：AI工具实测 / 前端性能优化（留空由模型自判）">
         </div>
         <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:18px">
           <button class="btn ghost sm" onclick="closeWechatGenDialog()">取消</button>
@@ -1616,6 +1704,20 @@ textarea{resize:vertical;min-height:84px}
       </div>
     </section>
 
+    <!-- ── 答案库与交付（product/ 的看板：题数、来源、自检、交付物、许可判定）── -->
+    <section id="page-bank">
+      <div class="header">
+        <h2>答案库与交付</h2>
+        <div class="spacer"></div>
+        <span class="count" id="bk-stamp">-</span>
+        <button class="btn" onclick="bkLoad()">重新读一遍</button>
+      </div>
+      <p class="bk-note" style="margin:6px 0 0">这一页只读 <code>product/</code> 里当前真实存在的文件，数字全部现算：
+        题数读 JSON、页数读 PDF 字节、自检当场跑 <code>audit_answer_bank.py</code>。
+        <b>缺文件会直接标红</b>——这页的主要用处就是发现"改了库忘了重跑"。</p>
+      <div id="bk-body"><div class="empty">加载中...</div></div>
+    </section>
+
     <!-- ── AI 设置 ── -->
     <section id="page-settings">
       <div class="header">
@@ -1659,11 +1761,13 @@ textarea{resize:vertical;min-height:84px}
           <div class="form-row two">
             <div class="form-group">
               <label>快速模型（省钱省时用）</label>
-              <input id="ai-model-fast" type="text" placeholder="例：deepseek-v4.1-flash">
-              <div class="hint">海报拆解、图文卡片化走这一档（照抄压缩的活不需要主模型深思，实测快 5 倍）；留空＝跟主模型一样。必须是同一个接口下调得到的模型名</div>
+              <input id="ai-model-fast" type="text" placeholder="例：deepseek-v4-pro-0813">
+              <div class="hint">海报拆解、图文卡片化走这一档（照抄压缩的活不需要主模型深思，实测快 5 倍）；留空＝跟主模型一样。必须是同一个接口下调得到的模型名。<b>额度是按模型算的</b>——这一档用完了主模型还有也不会自动退回，只会 403</div>
             </div>
             <div class="form-group"></div>
           </div>
+          <!-- 免费额度：本地记账，种子取自控制台，之后只加本仓库自己发出的请求 -->
+          <div class="ai-quota" id="ai-quota"></div>
           <div style="display:flex;gap:10px;align-items:center">
             <button class="btn" id="btn-ai-save" onclick="saveAiConfig()"><span data-icon="check" class="ic14"></span>保存配置</button>
             <button class="btn ghost" id="btn-ai-test" onclick="testAiConfig()"><span data-icon="bolt" class="ic14"></span>测试连接</button>
@@ -1839,9 +1943,74 @@ document.getElementById('brand-ava').innerHTML = iconSvg('film', 22);
 // ── 全局状态 ──
 let POLLING = false;
 let currentView = 'dashboard';
-const PAGES = ['dashboard','collect','materials','radar','videos','summaries','toutiao','wechat','poster','review','ops','questions','settings'];
+const PAGES = ['dashboard','collect','materials','radar','videos','summaries','toutiao','wechat','poster','review','ops','questions','bank','settings'];
 let selectedVideos = new Set();
 let window_lastSelected = null;
+
+// ── 读接口的三态：加载中 / 接口没返回（后台在忙）/ 真的没有 ──
+// 2026-10-14 那次"数据全不见了"的界面侧兜底：自动同步那一轮把写锁按住十几分钟，
+// 读接口在外面排队，而浏览器的 fetch 不设超时——请求一直挂着，页面就停在初始的
+// 「0 个」「未开启」上，看着就像库里真的一条都没有。后端已经改成读不排队，
+// 这里是第二道闸：**取不到就明说取不到，绝不替用户编一个 0**。
+const API_MS = 9000;           // 本地服务，一次读正常是几十毫秒；9 秒不回来就判它在忙
+const BUSY_RETRY_MS = 20000;   // 判成"没返回"之后，隔多久自己再问一次
+function apiGet(url, ms) {
+  const limit = ms || API_MS;
+  const ctl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+  const timer = setTimeout(() => { if (ctl) ctl.abort(); }, limit);
+  return fetch(url, ctl ? {signal: ctl.signal} : {})
+    .then(r => {
+      if (!r.ok) {
+        // 500 也要拿到后端那句原因（"database is locked" 这种，比"加载失败"有用得多）
+        return r.json().catch(() => ({})).then(d => {
+          const bad = new Error((d && d.error) || ('HTTP ' + r.status));
+          bad.busy = true;
+          throw bad;
+        });
+      }
+      return r.json();
+    })
+    .then(d => { clearTimeout(timer); return d; })
+    .catch(e => {
+      clearTimeout(timer);
+      const aborted = e && e.name === 'AbortError';
+      const err = new Error(aborted ? (Math.round(limit / 1000) + ' 秒没返回')
+                                    : ((e && e.message) || String(e)));
+      err.busy = true;   // 网络/超时/服务没起/后端报错，一律算"这一格还没取到"，不算"没有数据"
+      throw err;
+    });
+}
+// 忙态那一格长什么样：说清不是没数据、为什么、什么时候再试
+function busyBox(where, e) {
+  return '<div style="font-size:12.5px;color:var(--module-3);padding:10px 12px;'
+    + 'border:1px dashed var(--module-3);border-radius:10px;line-height:1.75">'
+    + '<b>' + esc(where) + '：这一格没取到数</b><br>'
+    + '不是数据没了——接口 ' + esc((e && e.message) || '没返回')
+    + '，后台多半正在跑同步或自动打标。'
+    + '这一格的条数、开关状态都还没取到，先别动开关；'
+    + '页面每 ' + (BUSY_RETRY_MS / 1000) + ' 秒自己再问一次，不用一直按刷新。'
+    + '</div>';
+}
+function slotBusy(id, e) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = '没取到数';
+  el.style.color = 'var(--module-3)';
+  el.title = '接口' + ((e && e.message) || '没返回') + '：后台同步/打标期间会这样，'
+    + (BUSY_RETRY_MS / 1000) + ' 秒后自动重试';
+}
+const _busyRetry = {};
+function retryBusy(key, fn) {
+  if (_busyRetry[key]) return;      // 已经在等着重试了，别叠一层
+  _busyRetry[key] = setTimeout(() => { _busyRetry[key] = null; fn(); }, BUSY_RETRY_MS);
+}
+function slotOk(id, text) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = text;
+  el.style.color = '';
+  el.title = '';
+}
 
 // ── 初始化 ──
 async function init() {
@@ -1854,6 +2023,7 @@ async function init() {
   const savedCookie = localStorage.getItem('v2t_cookie');
   if (savedCookie) document.getElementById('cookie').value = savedCookie;
   fetchDouyinCookie();            // 那行"缺哪几个键"要在打开页面时就看得见，别等点了同步才报错
+  loadAiQuota();                  // 额度同理：快没了要在打开时就看见，不是点了拆解才吐一堆堆栈
 
   loadCategoryOptions();          // 分类名单下发到各下拉（不等它，先让首页渲染）
   await loadTopics();
@@ -1900,7 +2070,7 @@ function getSearchValue() {
 
 async function loadCurrentView() {
   if (currentView === 'dashboard') return loadDashboard();
-  if (currentView === 'collect') return;
+  if (currentView === 'collect') { fetchBilibiliStatus(); return; }
   if (currentView === 'materials') { loadSubscriptions(); return loadAutoSync(); }
   if (currentView === 'radar') return loadRadar();
   if (currentView === 'questions') return loadInterviewQuestions();
@@ -1910,6 +2080,7 @@ async function loadCurrentView() {
   if (currentView === 'poster') return showPosterList();
   if (currentView === 'review') return loadReviewList();
   if (currentView === 'ops') return loadOps();
+  if (currentView === 'bank') return bkLoad();
   if (currentView === 'settings') return loadAiConfig();
   return loadVideos();
 }
@@ -1927,14 +2098,14 @@ const TODO_ICON = {draft:'book', need_summary:'list', pkg_review:'image', asr_fa
 async function loadDashboard() {
   let data = {}, td = {};
   try {
-    const rs = await Promise.all([
-      fetch('/api/dashboard').then(r=>r.json()),
-      fetch('/api/todo').then(r=>r.json()),
-    ]);
+    const rs = await Promise.all([apiGet('/api/dashboard'), apiGet('/api/todo')]);
     data = rs[0] || {}; td = rs[1] || {};
   } catch (e) {
     console.warn('[首页] 概况与待办加载失败：', e);
-    document.getElementById('dash-oneline').textContent = '概况加载失败（网络或工作台没起来）';
+    document.getElementById('dash-oneline').innerHTML =
+      '<span style="color:var(--module-3)">概况没取到：接口 ' + esc((e && e.message) || '没返回')
+      + '（后台同步/打标会让路），' + (BUSY_RETRY_MS / 1000) + ' 秒后自动重试</span>';
+    retryBusy('dash', loadDashboard);
     return;
   }
   if (data.error) {
@@ -2066,12 +2237,13 @@ function fillCategorySelect(id, firstLabel) {
 
 async function loadCategoryOptions() {
   let d;
-  try { d = await fetch('/api/categories').then(r => r.json()); }
-  catch (e) { warn('分类名单拉取失败（下拉沿用页面内置的默认名单）', e); return; }
+  try { d = await apiGet('/api/categories'); }
+  catch (e) { warn('分类名单拉取失败（下拉沿用页面内置的默认名单）', e); retryBusy('cats', loadCategoryOptions); return; }
   const list = (d.all_categories || []).filter(Boolean);
   if (!list.length) return;
   CATEGORY_ORDER = list;
   fillCategorySelect('wechat-sub-cat', '自动分类');
+  fillCategorySelect('bili-sub-cat', '自动分类');
   fillCategorySelect('radar-cat', '全部分类');
 }
 
@@ -2104,15 +2276,20 @@ async function fetchVideos(page, append) {
   try {
     // 分类/游戏药丸的计数直接取这份列表自己的口径（/api/videos 在筛选前算好一起回），
     // 不再另问 /api/categories——那个数按整张表统计，含还没做转写的行，点进去永远对不上
-    const data = await fetch('/api/videos?' + params).then(r=>r.json());
+    const data = await apiGet('/api/videos?' + params);
     renderSourcePills(data.sources || null);
     renderCategoryPills(data.categories || []);
     renderGamePills(data.games || []);
     packGames = (data.games || []).filter(g => g && g.game);
     renderVideos(data.videos || [], append);
     _vidPage = page;
-    document.getElementById('count-videos').textContent = (data.total||0) + ' 条';
+    slotOk('count-videos', (data.total || 0) + ' 条');
     renderVideoPager(data);
+  } catch (e) {
+    slotBusy('count-videos', e);
+    const grid = document.getElementById('grid-videos');
+    if (grid && !append) grid.innerHTML = busyBox('素材库', e);
+    retryBusy('videos', loadVideos);
   } finally {
     _vidBusy = false;
   }
@@ -2153,18 +2330,14 @@ function setCategoryFilter(cat) {
   loadVideos();
 }
 
-// ── 来源筛选（抖音 / 微信文章），复用 cat-pill 样式 ──
+// ── 来源筛选（抖音 / 微信 / B站），复用 cat-pill 样式 ──
 function renderSourcePills(sources) {
   const box = document.getElementById('source-pills');
   if (!box) return;
-  const nDouyin = sources ? (sources.douyin || 0) : '';
-  const nWechat = sources ? (sources.wechat || 0) : '';
-  const nAll = sources ? (nDouyin + nWechat) : '';
-  const items = [
-    {key: '', label: '全部', n: nAll},
-    {key: 'douyin', label: '抖音', n: nDouyin},
-    {key: 'wechat', label: '微信', n: nWechat},
-  ];
+  const get = k => sources ? (sources[k] || 0) : '';
+  const nAll = sources ? Object.keys(PLATFORM_META).reduce((a, k) => a + (sources[k] || 0), 0) : '';
+  const items = [{key: '', label: '全部', n: nAll}].concat(
+    Object.keys(PLATFORM_META).map(k => ({key: k, label: PLATFORM_META[k].label, n: get(k)})));
   box.innerHTML = items.map(it =>
     `<span class="cat-pill ${_activeSource===it.key?'active':''}" onclick="setSourceFilter('${it.key}')"><span>${it.label}</span>${it.n !== '' ? `<span class="n">${it.n}</span>` : ''}</span>`
   ).join('');
@@ -2356,9 +2529,20 @@ async function asPost(url, body, method) {
 
 async function loadAutoSync() {
   let d;
-  try { d = await fetch('/api/sync/tasks').then(r => r.json()); }
-  catch (e) { console.warn('[自动同步] 配置加载失败：', e); return; }
+  try { d = await apiGet('/api/sync/tasks'); }
+  catch (e) {
+    // 「未开启」是初始占位，读不到的时候不能停在那儿——和「真的没开」是两件事
+    slotBusy('as-count', e);
+    const list = document.getElementById('as-list');
+    if (list) list.innerHTML = busyBox('自动同步任务', e);
+    const sw = document.getElementById('as-enabled');
+    if (sw) sw.disabled = true;        // 拿不准状态时别让他在瞎了的开关上点
+    retryBusy('autosync', loadAutoSync);
+    return;
+  }
   if (!d || d.error) { console.warn('[自动同步] 接口报错：', d && d.error); return; }
+  const sw0 = document.getElementById('as-enabled');
+  if (sw0) sw0.disabled = false;
   _asData = d;
   renderAutoSync(d);
 }
@@ -2465,14 +2649,13 @@ function asCandLabel() {
 function asPickVisible() {
   const qEl = document.getElementById('as-pick-q');
   const q = ((qEl && qEl.value) || '').trim().toLowerCase();
-  return _asCands.filter(s => (_asPickPlat === 'all'
-      || (s.platform === 'wechat' ? 'wechat' : 'douyin') === _asPickPlat)
+  return _asCands.filter(s => (_asPickPlat === 'all' || subPlat(s) === _asPickPlat)
     && (!q || ((s.author || '') + ' ' + (s.category || '')).toLowerCase().indexOf(q) >= 0));
 }
 
 function asPickRow(s) {
   const on = _asPicked.has(s.id);
-  const meta = (s.platform === 'wechat' ? '微信' : '抖音') + (s.category ? ' · ' + s.category : '');
+  const meta = platMeta(subPlat(s)).label + (s.category ? ' · ' + s.category : '');
   return `<label class="as-pick-row${on ? ' on' : ''}" title="${escAttr(s.author + '（' + meta + '）')}">`
     + `<input type="checkbox" value="${s.id}"${on ? ' checked' : ''} onchange="asPickToggle(${s.id}, this.checked)">`
     + `<span class="nm">${esc(s.author)}</span><span class="cat">${esc(meta)}</span></label>`;
@@ -2482,17 +2665,19 @@ function asPickRender() {
   const body = document.getElementById('as-pick-body');
   if (!body) return;
   const tabs = document.getElementById('as-pick-tabs');
+  const platKeys = platKeysPresent(_asCands);
   if (tabs) {
-    tabs.innerHTML = [['all', '全部'], ['wechat', '只看微信'], ['douyin', '只看抖音']].map(t =>
+    tabs.innerHTML = [['all', '全部']].concat(platKeys.map(k => [k, '只看' + platMeta(k).label]))
+      .map(t =>
       `<span class="${_asPickPlat === t[0] ? 'on' : ''}" onclick="asPickPlat('${t[0]}')">${t[1]}</span>`).join('');
   }
   const vis = asPickVisible();
   let html = '';
-  [['wechat', '微信'], ['douyin', '抖音']].forEach(g => {
-    const items = vis.filter(s => (s.platform === 'wechat' ? 'wechat' : 'douyin') === g[0]);
+  platKeys.forEach(k => {
+    const items = vis.filter(s => subPlat(s) === k);
     if (!items.length) return;
     // 按来源分组、组内多列：35 条订阅摊成几列一眼扫得完，挤在一列里就得滚半天
-    html += `<div class="as-pick-grp">${g[1]} · ${items.length} 条</div>`
+    html += `<div class="as-pick-grp">${platMeta(k).label} · ${items.length} 条</div>`
           + '<div class="as-pick-grid">' + items.map(asPickRow).join('') + '</div>';
   });
   body.innerHTML = html || '<div class="as-pick-empty">没有匹配的订阅</div>';
@@ -3059,6 +3244,8 @@ function openPosterDialog(id) {
   pkFramesProbe(id);
   _pkPages = []; _pkCur = 0; // 分页同样属于这条素材，不清会把上一条的页带过来
   _pkRec = null; _pkWhy = ''; _pkPreviewClicks = 0;
+  _pkChannel = 'toutiao'; _pkForm = 'newspic';   // 渠道/形态默认头条档＝旧行为；pkHydrate 会按上次状态恢复
+  pkSyncChannelChrome();
   document.getElementById('pk-id').textContent = id;
   document.getElementById('pk-plan').innerHTML = '';
   document.getElementById('pk-result').innerHTML = '';
@@ -3087,6 +3274,10 @@ async function pkHydrate(id) {
     _pkManualRaw = st.plan.manual_prompts || [];   // 每页一份"拿去豆包手动出图"的材料
     _pkGuideOnly = !!st.plan.guide_only;           // 攻略页那份是空的：这一档不出底图
     _pkManual = pkTakeManual(_pkManualRaw);
+    // 渠道/形态跟着上次的状态走：重开弹窗不该悄悄回到头条档（界面说一套、发出去是另一套）
+    _pkChannel = st.plan.publish_channel || 'toutiao';
+    _pkForm = _pkChannel === 'wechat' ? (st.plan.form || 'newspic') : 'newspic';
+    pkSyncChannelChrome();
     pkApplyModeChrome();                           // ③b 那颗按钮的显隐跟着这个标记走
     pkRenderManual();
     pkRenderPlan(st.plan.plan, st.plan.publish);
@@ -3114,9 +3305,8 @@ function pkGuideInit() {
     });
   }
   try {
-    const saved = localStorage.getItem(PK_GUIDE_KEY);
-    if (saved === '0') d.open = false;
-    else if (saved === '1') d.open = true;
+    // 只有他亲手展开过才记住展开；没存过 = 收起（第一次用会看到 summary 那一行，点开就是三步）
+    d.open = localStorage.getItem(PK_GUIDE_KEY) === '1';
   } catch (e) { warn('读取三步卡展开状态失败', e); }
 }
 function closePosterDialog(e) {
@@ -3219,8 +3409,8 @@ function pkRenderFramesHint() {
   if (!f) { box.style.display = 'none'; box.innerHTML = ''; return; }
   if (f.building) {
     box.style.display = '';
-    box.innerHTML = '⏳ 正在补画面：' + esc(f.progress || '排队中...')
-      + '<span style="color:var(--text-tertiary)">（重下这条视频 → 抽帧 → 逐帧挑掉后期压的字/整帧卡 → 看图确认，约 1-2 分钟）</span>';
+    box.innerHTML = '⏳ ' + esc(f.progress || '排队中...')
+      + '<span style="color:var(--text-tertiary)">（进度会写在这一行；抽帧不花钱，逐张看图才花钱）</span>';
     pkFramesPoll();
     return;
   }
@@ -3421,7 +3611,7 @@ function pkModeChanged() {
   pkCount();   // 只刷字数条与校验；不能 pkRenderPlan——那会把表单打回上次存的值，吃掉他没存的修改
 }
 // 风格预设名单由后端下发（配方原文只有一份，前端抄一遍必然漂移）
-let _pkStyles = [];
+let _pkStyles = [], _pkDefaultStyle = '';
 function pkStyle(key) {
   for (let i = 0; i < _pkStyles.length; i++) if (_pkStyles[i].key === key) return _pkStyles[i];
   return null;
@@ -3436,6 +3626,75 @@ let _pkPages = [], _pkCur = 0;
 // 但**只印在末页**：以前每页继承同一句，三页就印三次一模一样的话，
 // 在小红书看着就是批量搬运号的记号（2026-10-13 被判"AI 托管发文"之后的复盘）。
 let _pkFoot = '';
+// ── 发布渠道（2026-10-13 渠道分叉）──
+// 渠道只管装配与展示：拆解照旧、keyword_reply 数据保留，换渠道不用重花拆解钱。
+// 小红书档不输出尾注与关键词回复（那次「AI 托管」判决的自证项）；形态仅公众号有。
+let _pkChannel = 'toutiao', _pkForm = 'newspic';
+
+function pkSyncChannelChrome() {
+  const el = document.getElementById('pk-channel');
+  if (el) el.value = _pkChannel;
+  const fw = document.getElementById('pk-form-wrap');
+  if (fw) fw.style.display = _pkChannel === 'wechat' ? '' : 'none';
+  const fe = document.getElementById('pk-form');
+  if (fe) fe.value = _pkChannel === 'wechat' ? _pkForm : 'newspic';
+}
+function pkSetChannel(ch) {
+  if (['toutiao', 'xhs', 'wechat'].indexOf(ch) < 0) ch = 'toutiao';
+  const prev = _pkChannel;
+  _pkChannel = ch;
+  const ratioEl = document.getElementById('pk-ratio');
+  // 渠道带默认比例：公众号 3:4、其余 9:16。只在上一个值还是"上一个渠道的默认"时才动，
+  // 人显式选过的比例（含 1:1）不覆盖。
+  if (ratioEl) {
+    if (ch === 'wechat' && prev !== 'wechat' && ratioEl.value === '9:16') ratioEl.value = '3:4';
+    if (ch !== 'wechat' && prev === 'wechat' && ratioEl.value === '3:4') ratioEl.value = '9:16';
+  }
+  if (ch !== 'wechat') _pkForm = 'newspic';
+  pkSyncChannelChrome();
+  if (document.getElementById('pk-title')) {     // 表单在：先把已填的发布字段收回再重画
+    pkFlushForm();
+    pkRenderPublish();
+  }
+}
+function pkSetForm(v) {
+  _pkForm = (v === 'article') ? 'article' : 'newspic';
+  if (document.getElementById('pk-title')) {
+    pkFlushForm();
+    pkRenderPublish();
+  }
+}
+// 发布页文案区按渠道渲染：头条/公众号·图片消息＝四段全（尾注与关键词回复保留）；
+// 小红书＝无关键词回复 + 防托管提示；公众号·文章配图＝无配文、改讲文章怎么用这组图。
+// 只重画这一块，标题/卡片那些表单不动，人已填的字段先收回来再画（切渠道不丢 edits）。
+function pkRenderPublish() {
+  const area = document.getElementById('pk-pub-area');
+  if (!area) return;
+  const pub = _pkLastPublish || {};
+  let html = '<div class="pk-sub">发布页文案（不进图，随包一起给你复制走）</div>';
+  if (_pkChannel === 'xhs') {
+    html += '<div class="pk-hint">小红书档：不输出尾注与关键词回复——正文里的 AI 自证句和「回复 XX 获取」'
+          + '就是那次「AI 托管」判决的旁证。发布时在发布页【笔记内容声明】勾选「笔记含AI合成内容」。</div>'
+      + `<div class="pk-row"><span class="pk-tag">配文</span><textarea id="pk-copy" class="pk-ta" placeholder="120-260 字：钩子开头 + 要点 3-5 条 + 收尾引导（结尾别写尾注句）">${esc(pub.copy_text || '')}</textarea></div>`
+      + `<div class="pk-row"><span class="pk-tag">摘要</span><textarea id="pk-digest" class="pk-ta" style="min-height:44px" placeholder="≤120 字">${esc(pub.digest || '')}</textarea></div>`
+      + `<div class="pk-row"><span class="pk-tag">来源说明</span><input id="pk-src" value="${esc(pub.source_note || '')}" maxlength="50" placeholder="≤50 字，含数据口径日期"></div>`;
+  } else if (_pkChannel === 'wechat' && _pkForm === 'article') {
+    html += '<div class="pk-hint">公众号 · 文章配图档：头图用第 1 页、攻略页组按页顺插文内；'
+          + '正文用整理稿原文（别照抄图上的字），合规尾注放正文文末，发布前勾「内容由 AI 生成」。</div>'
+      + `<div class="pk-row"><span class="pk-tag">摘要</span><textarea id="pk-digest" class="pk-ta" style="min-height:44px" placeholder="≤120 字，公众号文章摘要位">${esc(pub.digest || '')}</textarea></div>`
+      + `<div class="pk-row"><span class="pk-tag">关键词回复</span><input id="pk-kw" value="${esc(pub.keyword_reply || '')}" maxlength="30" placeholder="≤30 字，文末钩子用的那个关键词"></div>`
+      + `<div class="pk-row"><span class="pk-tag">来源说明</span><input id="pk-src" value="${esc(pub.source_note || '')}" maxlength="50" placeholder="≤50 字，含数据口径日期"></div>`;
+  } else {
+    if (_pkChannel === 'wechat') {
+      html += '<div class="pk-hint">公众号 · 图片消息档：图传微信素材库→发图片消息（无原创按钮），配文保留文末尾注，发布前勾「内容由 AI 生成」。</div>';
+    }
+    html += `<div class="pk-row"><span class="pk-tag">配文</span><textarea id="pk-copy" class="pk-ta" placeholder="120-260 字：钩子开头 + 要点 3-5 条 + 收尾引导">${esc(pub.copy_text || '')}</textarea></div>`
+      + `<div class="pk-row"><span class="pk-tag">摘要</span><textarea id="pk-digest" class="pk-ta" style="min-height:44px" placeholder="≤120 字，公众号发布页用">${esc(pub.digest || '')}</textarea></div>`
+      + `<div class="pk-row"><span class="pk-tag">关键词回复</span><input id="pk-kw" value="${esc(pub.keyword_reply || '')}" maxlength="30" placeholder="≤30 字，留空则不配"></div>`
+      + `<div class="pk-row"><span class="pk-tag">来源说明</span><input id="pk-src" value="${esc(pub.source_note || '')}" maxlength="50" placeholder="≤50 字，含数据口径日期"></div>`;
+  }
+  area.innerHTML = html;
+}
 function pkNormalizeFooters() {
   if (!_pkPages.length) return;
   for (let i = 0; i < _pkPages.length; i++) {
@@ -3463,8 +3722,11 @@ async function loadPosterStyles(force) {
   _pkStyles = [];
   const keep = pkStyleKey();
   try {
-    const d = await fetch('/api/poster/styles').then(r => r.json());
+    // 带着 summary_id 问：默认该落在哪张攻略页皮肤由后端那一份轮换算法定，前端不抄算法
+    // （以前这里 fetch 不带参数，guideStyle 算的是 summary_id=0 那一张脸，下拉和实际出图能对不上）
+    const d = await fetch('/api/poster/styles?summary_id=' + encodeURIComponent(_pkId || 0)).then(r => r.json());
     _pkStyles = d.items || [];
+    _pkDefaultStyle = d.defaultStyle || d.guideStyle || '';
     _pkLayouts = d.layouts || [];
     pkRenderLayoutOptions();
     _pkLimitsByMode = d.limitsByMode || null;
@@ -3474,8 +3736,14 @@ async function loadPosterStyles(force) {
   const sel = document.getElementById('pk-style-key-top');
   if (sel && _pkStyles.length) {
     sel.innerHTML = _pkStyles.map(s => `<option value="${s.key}" title="${esc(s.when)}">${esc(s.label)}</option>`).join('');
-    // 存完模板要刷新名单，这时得保住用户当前选中的那套，不能跳回默认
-    sel.value = (_pkStyles.some(s => s.key === keep) ? keep : 'tool_review');
+    // 存完模板要刷新名单，这时得保住用户当前选中的那套，不能跳回默认；
+    // 没有当前选择时落到后端下发的默认那一档（攻略页三套里按素材轮换的那张脸），不再写死 tool_review
+    sel.value = (_pkStyles.some(s => s.key === keep) ? keep
+                 : (_pkStyles.some(s => s.key === _pkDefaultStyle) ? _pkDefaultStyle : _pkStyles[0].key));
+    // 名单是异步到的：默认档既然是攻略页，③ 按钮上那句钱必须跟着改口（0 元），
+    // 否则打开弹窗那一眼看到的是"AI 画底图 0.5 元"，点之前还得自己猜
+    pkApplyModeChrome();
+    pkRenderFramesHint();
   } else if (sel) { sel.innerHTML = '<option value="">名单载入失败，出图仍可用默认风格</option>'; }
   // 名单是异步到的，比 pkHydrate 端回来的文案晚一步：这里补一次对齐，
   // 否则接回上次结果时下拉还停在默认那套（见 pkSyncSelectors），页签上那行
@@ -3507,10 +3775,14 @@ function pkRenderLayoutOptions() {
   const sel = document.getElementById('pk-layout-key-top');
   if (!sel || !_pkLayouts.length) return;
   const keep = sel.value;
-  sel.innerHTML = '<option value="">跟着风格</option>'
+  // 名单只剩「攻略页」一种时不再摆"跟着风格"那一行：那一档本来就等于攻略页，
+  // 留着只会让人以为还有别的构图可选（号主 10-16：看版面也是看攻略页）。
+  // 全名单还在排版层里，是后端下发时收窄的（ai_poster.layout_choices(guide_only)）。
+  const one = _pkLayouts.length === 1;
+  sel.innerHTML = (one ? '' : '<option value="">跟着风格</option>')
     + _pkLayouts.map(l => `<option value="${l.key}" title="${esc(l.when)}${l.needs_photo ? ' · 要有图' : ''}">`
         + `${esc(l.label)}${l.needs_photo ? '（要有图）' : ''}</option>`).join('');
-  sel.value = _pkLayouts.some(l => l.key === keep) ? keep : '';
+  sel.value = _pkLayouts.some(l => l.key === keep) ? keep : (one ? _pkLayouts[0].key : '');
 }
 function pkSyncLayout(v) {
   const l = pkLayout(v);
@@ -3656,13 +3928,12 @@ function pkRenderPlan(plan, publish, cur) {
     + '<div class="pk-count" id="pk-count"></div>'
     + '<details class="pk-guide" id="pk-srcpanel" style="margin:8px 0 10px">'
     + '<summary>对照整理稿原文 · 看哪句被改写了</summary><div id="pk-srcbox"></div></details>';
-  // 发布页文案：不进图，所以不占 80 字预算，但同样是 AI 起草、人可改
-  html += '<div class="pk-sub">发布页文案（不进图，随包一起给你复制走）</div>'
-    + `<div class="pk-row"><span class="pk-tag">配文</span><textarea id="pk-copy" class="pk-ta" placeholder="120-260 字：钩子开头 + 要点 3-5 条 + 收尾引导">${esc(publish.copy_text || '')}</textarea></div>`
-    + `<div class="pk-row"><span class="pk-tag">摘要</span><textarea id="pk-digest" class="pk-ta" style="min-height:44px" placeholder="≤120 字，公众号发布页用">${esc(publish.digest || '')}</textarea></div>`
-    + `<div class="pk-row"><span class="pk-tag">关键词回复</span><input id="pk-kw" value="${esc(publish.keyword_reply || '')}" maxlength="30" placeholder="≤30 字，留空则不配"></div>`
-    + `<div class="pk-row"><span class="pk-tag">来源说明</span><input id="pk-src" value="${esc(publish.source_note || '')}" maxlength="50" placeholder="≤50 字，含数据口径日期"></div>`;
+  // 发布页文案：不进图，所以不占 80 字预算，但同样是 AI 起草、人可改。
+  // 按渠道分支渲染（小红书无关键词回复/公众号分两种形态），单独一个渲染函数，
+  // 切渠道时只重画这一块、别的表单不动。
+  html += '<div id="pk-pub-area"></div>';
   document.getElementById('pk-plan').innerHTML = html;
+  pkRenderPublish();
   // 展开即取原文（details 原生开合，这里只挂一次加载）
   const sd = document.getElementById('pk-srcpanel');
   if (sd) sd.addEventListener('toggle', function () { if (sd.open) pkLoadSource(); });
@@ -3681,9 +3952,15 @@ function pkReadPlan() {
           scene: g('pk-scene'), style_key: pkStyleKey(), layout_key: pkLayoutKey()};
 }
 function pkReadPublish() {
-  const g = id => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
-  return {copy_text: g('pk-copy'), digest: g('pk-digest'),
-          keyword_reply: g('pk-kw'), source_note: g('pk-src')};
+  // 字段没渲染（当前渠道变体把它藏了）才回落到上次保存的值——显式清空的仍按空算。
+  // 这样小红书档隐藏关键词回复、文章档隐藏配文，数据层照旧完整，换回别的渠道不丢内容。
+  const base = _pkLastPublish || {};
+  const pick = (id, key) => {
+    const el = document.getElementById(id);
+    return el ? el.value.trim() : (base[key] || '');
+  };
+  return {copy_text: pick('pk-copy', 'copy_text'), digest: pick('pk-digest', 'digest'),
+          keyword_reply: pick('pk-kw', 'keyword_reply'), source_note: pick('pk-src', 'source_note')};
 }
 // ── 多页：一页装不下就翻页，页数与每页布局都能手改 ──
 function pkRecHtml() {
@@ -3818,9 +4095,11 @@ async function pkPostPageRework(idx) {
     setStatus('error', r.error);
     const box = document.getElementById('pk-result');
     if (box) box.innerHTML = '<div class="pk-verify fail">✗ ' + esc(r.error) + '</div>';
-    return;
+    pkGuideAbortNote();
+    return false;
   }
   pollPoster('page', r.task_id);
+  return true;
 }
 
 function pkApplyPage(page, idx, notes) {
@@ -3948,6 +4227,7 @@ async function posterPlan() {
   const body = {summary_id: _pkId,
                 theme: document.getElementById('pk-theme').value.trim(),
                 ratio: document.getElementById('pk-ratio').value,
+                publish_channel: _pkChannel, form: _pkForm,
                 style_key: pkStyleKey(), text_mode: pkTextMode(), page_hint: n};
   if (_pkPhoto) body.photo = _pkPhoto.ref;
   pkPlanBusy(true);
@@ -4003,10 +4283,12 @@ let _pkGuideOnly = false;   // 整组都是攻略页：画面=素材真帧，不
 // 这时候不认，界面会一边写着"用素材真帧"一边挂着 0.5 元/张和「③b 回传底图」，说的假话。
 function pkGuideChrome() {
   // 「整组都是攻略页」= 这一组不叫 AI 底图。后端算的是 all(_is_guide(page))，
-  // 前端必须跟着同一个判据：他在界面上手动把每一页都改成攻略页之后，
-  // 拆解那次给的 _pkGuideOnly 还是 false，③ 按钮会继续写「3 页共 1.5 元」——那是说假话。
+  // 前端必须跟着同一个判据。以前这里 OR 上了拆解那次回传的 _pkGuideOnly，
+  // 结果两种情况都会说假话：① 人手动把整组改成攻略页之后仍写「1.5 元」（少报了 0 元）；
+  // ② 拆回来是攻略档、人又把某页改回插画档，界面还写「0 元」而后端照样叫底图、照样扣钱
+  // ——②是往"会花钱那一侧"撒谎，走查时抓到（2026-10-13）。_pkGuideOnly 只在还没拆出页时当提示用。
   if (_pkPages.length) {
-    return _pkGuideOnly || _pkPages.every(p => p.layout_key === 'guide');
+    return _pkPages.every(p => p.layout_key === 'guide' || (p.photos || []).length > 0);
   }
   return !!_pkGuideOnly || pkLayoutKey() === 'guide';
 }
@@ -4336,6 +4618,10 @@ async function posterGenerate(force) {
   let tip;
   if (force) {
     tip = '这条整合稿被判定为规则版骨架。\n确认你已人工复核过拆解出的文案、仍要出图？';
+  } else if (pkGuideChrome()) {
+    // 攻略档单独一条：这一档不叫底图、不花钱，混在"0.5 元/张"那几条里会让人以为还在花钱
+    tip = `出 ${npages} 页：画面全用素材里挑出来的真帧，不叫 AI 底图，整组 0 元、几秒钟。`
+        + '\n版面跟「② 看版面」看到的一致（图注不上图，只留档）。已有海报会被覆盖。';
   } else if (nBase) {
     tip = direct
         ? `出 ${npages} 页：成品全用你从豆包回传的这几张，不再出图，整组 0 元、几秒钟。\n`
@@ -4362,6 +4648,7 @@ async function posterGenerate(force) {
   if (!confirm(tip + artHint)) return;
   const body = {summary_id: _pkId, ratio: document.getElementById('pk-ratio').value,
                 theme: document.getElementById('pk-theme').value.trim(),
+                publish_channel: _pkChannel, form: _pkForm,
                 plan: plan, publish: plan ? pkReadPublish() : null,
                 force: !!force, copies: copies, review: review, text_mode: pkTextMode(),
                 preview_clicks: _pkPreviewClicks};
@@ -4389,6 +4676,7 @@ function pollPoster(stage, task) {
     if (task && st.task_id && st.task_id !== task) {
       pkPlanBusy(false);
       pkPageBusy(false);
+      pkGuideAbortNote();          // 链子被人插进来的新任务打断，说清还剩几页没配
       box.innerHTML = '<div class="pk-verify mild">这次任务的状态已经被后来的海报任务覆盖了（后台同时只跑一个任务）。'
         + (stage === 'poster' ? '图已经落盘，去成品页看结果。' : '') + '</div>'
         + (stage === 'poster' ? '<div class="pk-actions"><button class="btn ghost sm" onclick="gotoPosterPage('
@@ -4404,6 +4692,7 @@ function pollPoster(stage, task) {
     pkPlanBusy(false);            // 跑完（成功或失败）都要把「换一套」按钮放回来
     pkPageBusy(false);
     if (st.error) {
+      pkGuideAbortNote();         // 整组那条链断在这一页，别让人以为全配好了
       const msg = String(st.error).split('\n')[0];
       // 骨架稿被拦：给一次显式放行的出口，而不是让人去改数据
       const override = msg.indexOf('整合稿不合格') >= 0
@@ -4564,14 +4853,21 @@ async function loadPosterTemplates() {
   if (!el) return;
   let d;
   try { d = await fetch('/api/poster/templates').then(r => r.json()); } catch (e) { return; }
-  const items = d.items || [];
+  // 只摆"风格下拉里真选得到"的那几个 chip。号主 10-16 把老的模板从这一档撤了，
+  // 下拉里没有的模板再摆出来，点它就会「界面显示攻略页、计划里用的是老模板」——说假话。
+  // 名单是异步到的，这里先 await 一次（loadPosterStyles 有缓存，不会重复请求）
+  await loadPosterStyles();
+  const items = (d.items || []).filter(t => _pkStyles.some(s => s.key === t.key));
   el.style.display = 'flex';
-  el.innerHTML = '<span class="pk-tpls-t">我的模板</span>' + items.map(t =>
+  el.innerHTML = (items.length ? '<span class="pk-tpls-t">我的模板</span>' + items.map(t =>
     '<span class="pk-tpl"><b onclick="pkUseTemplate(\'' + t.key + '\')" title="选它并立刻看版面">' + esc(t.name) + '</b>'
     + (t.has_base ? '<i title="含底图：换文案出图不再花钱">底图</i>' : '')
     + '<u title="改名" onclick="pkRenameTemplate(\'' + t.key + '\')">✎</u>'
-    + '<u title="删除" onclick="pkDeleteTemplate(\'' + t.key + '\')">✕</u></span>').join('')
-    + '<span class="pk-tpl pk-tpl-add"><b onclick="pkBreakOpen()">＋ 拆参考图做模板</b></span>';
+    + '<u title="删除" onclick="pkDeleteTemplate(\'' + t.key + '\')">✕</u></span>').join('') : '')
+    + '<span class="pk-tpl pk-tpl-add"><b onclick="pkBreakOpen()">＋ 拆参考图做模板</b></span>'
+    + (items.length || !d.items || !d.items.length ? ''
+       : '<span class="pk-tpls-t" style="font-weight:400;color:var(--text-tertiary)" title="'
+         + '收编自插画风格的模板还在「模板管理」里，只是不进这个下拉">（老模板不进这一档）</span>');
 }
 function pkUseTemplate(key) {
   const s = document.getElementById('pk-style-key-top');
@@ -4740,14 +5036,25 @@ async function posterPick(index) {
   renderPosterResult(_pkId);
 }
 function pkPublishText(m) {
-  return ['标题：' + (m.title || ''),
-          '摘要（≤120 字）：' + (m.digest || '（待补）'),
-          '',
-          '【配文】',
-          m.copy_text || '（待手写）',
-          '',
-          '【关键词自动回复】' + (m.keyword_reply || '（未配置）'),
-          '【来源说明】' + (m.source_note || '（未填）')].join('\n');
+  // 按渠道拼发布文案：小红书档没有关键词回复行（配文本身也不带尾注，出图时后端就跳过了）；
+  // 公众号·文章配图档给的是"这组图怎么进文章"的口径，不是图片消息那四段。旧包无键按头条算。
+  const ch = m.publish_channel || 'toutiao';
+  if (ch === 'wechat' && (m.form || 'newspic') === 'article') {
+    return ['标题：' + (m.title || ''),
+            '【文章配图】共 ' + (m.page_count || 1) + ' 页：头图用第 1 页，其余按页顺插文内',
+            '【正文】用整理稿原文，别照抄图上的字；合规尾注放正文文末，勿删',
+            '【摘要】' + (m.digest || '（待补）'),
+            '【关键词自动回复】' + (m.keyword_reply || '（未配置）'),
+            '【来源说明】' + (m.source_note || '（未填）')].join('\n');
+  }
+  const lines = ['标题：' + (m.title || ''),
+                 '摘要（≤120 字）：' + (m.digest || '（待补）'),
+                 '',
+                 '【配文】',
+                 m.copy_text || '（待手写）'];
+  if (ch !== 'xhs') lines.push('', '【关键词自动回复】' + (m.keyword_reply || '（未配置）'));
+  lines.push('', '【来源说明】' + (m.source_note || '（未填）'));
+  return lines.join('\n');
 }
 function copyPosterPublish() {
   if (_pkLast) copyText(pkPublishText(_pkLast));
@@ -4814,6 +5121,8 @@ async function loadPosterList() {
         <div class="pk-ct">${esc(p.title || '（无标题）')}</div>
         <div class="pk-cs">#${p.summary_id} · ${esc(p.source_title || '')}</div>
         <div class="pk-cm">
+          ${(p.publish_channel === 'xhs') ? '<span class="ok">小红书档</span>' : ''}
+          ${(p.publish_channel === 'wechat') ? '<span class="ok">公众号' + ((p.form || 'newspic') === 'article' ? ' · 文章' : ' · 图片消息') + '</span>' : ''}
           <span class="${(p.photo || (ts && p.verify_ok !== false)) ? 'ok' : (p.verify_ok === false ? 'no' : '')}">${word}</span>
           ${p.page_count > 1 ? '<span class="ok">' + p.page_count + ' 页一组</span>' : ''}
           <span>${(p.chars || 0)} 字</span>
@@ -5452,15 +5761,25 @@ function renderVideos(videos, append) {
       : '';
     const len = v.transcript_length || 0;
     const cover = v.cover_url || '';
-    const isWechat = v.source === 'wechat' || v.sheet === '微信文章';
-    const lenText = len ? `${len} 字` : (isWechat ? '无正文' : '无转写');
-    const srcBadge = isWechat
-      ? '<span class="cover-src src-wechat">微信</span>'
-      : '<span class="cover-src src-douyin">抖音</span>';
+    const vpm = platMeta(v.source || (v.sheet === '微信文章' ? 'wechat'
+                 : v.sheet === 'B站视频' ? 'bilibili' : 'douyin'));
+    const noVideo = vpm.coverClass !== '';           // DB 直写的源都没有可播视频
+    const lenText = len ? `${len} 字` : vpm.noBody;
+    const srcBadge = `<span class="cover-src ${vpm.pill}">${vpm.label}</span>`;
+    // B站素材带时长与播放量（抖音/微信没有这两列），素材库卡片直接显示出来，
+    // 选素材时"这条 20 分钟、3 万播放"和"这条 58 秒、200 播放"是要分开对待的
+    const biliMeta = vpm === PLATFORM_META.bilibili
+      ? `<span class="m">${fmtDur(v.duration_sec)} · ▶${v.view_count ? (v.view_count >= 10000
+          ? (v.view_count / 10000).toFixed(1) + '万' : v.view_count) : '0'}</span>`
+      : '';
+    const subsBadge = (vpm === PLATFORM_META.bilibili && v.subs_status
+        && v.subs_status !== '字幕' && v.subs_status !== 'AI字幕')
+      ? `<span class="pill" title="这条素材的正文来源，写稿前先确认够不够用" style="background:color-mix(in srgb,var(--module-5) 12%,transparent);color:var(--module-5)">${esc(v.subs_status)}</span>`
+      : '';
     return `<div class="video-card ${isSelected?'selected':''} ${isFail?'failed':''}" data-key="${videoKey}" onclick='toggleSelect(event,"${v.sheet}","${v.row}")' ondblclick='openDetail("${v.sheet}","${v.row}")'>
-      <div class="video-cover ${isWechat && !cover ? 'cover-wx' : ''}">
+      <div class="video-cover ${noVideo && !cover ? vpm.coverClass : ''}">
         <img src="${esc(cover)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.classList.add('error')">
-        <div class="cover-ph">${iconSvg(isWechat ? 'book' : 'film', 30)}</div>
+        <div class="cover-ph">${iconSvg(vpm.icon, 30)}</div>
         <span class="cover-len">${lenText}</span>
         ${srcBadge}
         <div class="v-del" title="删除视频" onclick='event.stopPropagation();deleteVideoOne("${escAttr(v.sheet)}", "${v.row}", "${escAttr((v.title||'').slice(0,40))}")'>${iconSvg('trash', 12)}</div>
@@ -5477,6 +5796,8 @@ function renderVideos(videos, append) {
         <div class="v-meta">
           ${statusBadge}
           ${scoreBadge}
+          ${subsBadge}
+          ${biliMeta}
           <span class="m">${esc((v.create_time || '').slice(0, 10))}</span>
         </div>
       </div>
@@ -5762,10 +6083,17 @@ async function openDetail(sheet, row) {
   const data = await fetch(`/api/videos/${sheet}/${row}`).then(r=>r.json());
   if (data.error) { document.getElementById('modal-title').textContent = '❌ '+data.error; return; }
 
-  const isWechat = data.source === 'wechat' || sheet === '微信文章';
+  const srcKey = data.source || (sheet === '微信文章' ? 'wechat'
+    : sheet === 'B站视频' ? 'bilibili' : 'douyin');
+  const dpm = platMeta(srcKey);
+  // DB 直写的源（微信文章 / B站投稿）没有 ASR 原始行与「AI 优化文案」这两区
+  const isDbOnly = dpm.coverClass !== '';
+  const biliExtra = srcKey === 'bilibili'
+    ? `　⏱ ${fmtDur(data.duration_sec)}　▶ ${data.view_count || 0}　📝 ${esc(data.subs_status || '未标')}`
+    : '';
   document.getElementById('modal-title').textContent = data.title||'';
-  document.getElementById('modal-info').innerHTML = isWechat
-    ? `💬 微信文章　👤 ${esc(data.author)}　🕐 ${esc((data.pub_time||'-').slice(0,16))}　📄 ${sheet} R${row}`
+  document.getElementById('modal-info').innerHTML = isDbOnly
+    ? `💬 ${dpm.label}素材　👤 ${esc(data.author)}　🕐 ${esc((data.pub_time||'-').slice(0,16))}　📄 ${sheet} R${row}${biliExtra}`
     : `👤 ${esc(data.author)}　🕐 ${data.pub_time||'-'}　🆔 ${data.id||'-'}　📄 ${sheet} R${row}`;
   document.getElementById('modal-basic').innerHTML =
     `<b>状态：</b>${esc(data.status)}<br><b>链接：</b><a href="${esc(data.video_url)}" target="_blank" style="color:var(--module-2)">${esc(data.link||'')}</a>` +
@@ -5776,19 +6104,25 @@ async function openDetail(sheet, row) {
 
   renderModalKeyframes(data);
 
-  if (isWechat) {
-    // 微信文章版式：正文替代 ASR，无「AI 优化文案」区（整理稿生成后在整理稿页查看）
-    document.getElementById('modal-asr-title').textContent = '文章正文';
-    document.getElementById('modal-asr').textContent = data.asr || '（无正文）';
+  if (isDbOnly) {
+    // DB 直写版式：正文替代 ASR，无「AI 优化文案」区（整理稿生成后在整理稿页查看）
+    document.getElementById('modal-asr-title').textContent =
+      srcKey === 'bilibili' ? '字幕正文' : '文章正文';
+    document.getElementById('modal-asr').textContent = data.asr
+      || (srcKey === 'bilibili' ? '（该视频没有字幕轨，正文为空）' : '（无正文）');
     document.getElementById('modal-ai-title').parentElement.style.display = 'none';
   } else {
     document.getElementById('modal-asr').textContent = data.raw_transcript || data.asr || '（无 ASR 数据）';
     document.getElementById('modal-ai-copy').textContent = data.ai_copy || '（未优化）';
   }
 
-  document.getElementById('modal-actions').innerHTML = isWechat ? `
-    <a href="${esc(data.link||'#')}" target="_blank"><button class="btn sm" style="background:#07c160;border-color:#07c160;color:#fff">💬 打开原文</button></a>
-    <button class="btn ghost sm" onclick="copyText(\`${escBacktick(data.asr||'')}\`)">📋 复制正文</button>
+  // 操作区按来源给词：B站那条是"打开视频/复制字幕"，微信是"打开原文/复制正文"，
+  // 抖音保持原来的"观看原视频/复制口播"
+  const openLabel = srcKey === 'bilibili' ? '▶ 打开视频' : '💬 打开原文';
+  const copyLabel = srcKey === 'bilibili' ? '📋 复制字幕' : '📋 复制正文';
+  document.getElementById('modal-actions').innerHTML = isDbOnly ? `
+    <a href="${esc(data.link||'#')}" target="_blank"><button class="btn sm" style="background:${dpm.color};border-color:${dpm.color};color:#fff">${openLabel}</button></a>
+    <button class="btn ghost sm" onclick="copyText(\`${escBacktick(data.asr||'')}\`)">${copyLabel}</button>
     <button class="btn ghost sm" style="color:var(--module-5)" onclick="deleteVideoOne('${escAttr(sheet)}', ${row}, '${escAttr((data.title||'').slice(0,40))}')">🗑 删除</button>
   ` : `
     <a href="${esc(data.video_url||'#')}" target="_blank"><button class="btn sm">▶ 观看原视频</button></a>
@@ -6855,8 +7189,7 @@ async function opsPost(url, body, done) {
   if (done) done();
 }
 
-function opsSaveArt(channel, refEnc, key, el) {
-  opsPost('/api/ops/article', {channel: channel, ref_id: decodeURIComponent(refEnc),
+function opsSaveArt(channel, refEnc, key, el) {  opsPost('/api/ops/article', {channel: channel, ref_id: decodeURIComponent(refEnc),
     fields: {[key]: el.value}}, () => {
     const tick = document.getElementById('ops-saved-' + refEnc);
     if (tick) { tick.textContent = '已存'; setTimeout(() => { tick.textContent = ''; }, 2500); }
@@ -6962,6 +7295,89 @@ async function loadAiConfig() {
     st.style.color = 'var(--danger)';
   }
   updateAiPlaceholders();
+  loadAiQuota();
+}
+
+// ── 免费额度（本地记账，口径见 src/ai_quota.py）──
+let _quota = null;
+
+function quotaRows() { return (_quota && _quota.rows) || []; }
+
+// 弹窗里那一行：只说"现在在用的这两档"里最紧的那个，别把四个模型都念一遍
+function quotaWarnLine() {
+  if (!_quota) return null;
+  const use = _quota.in_use || {};
+  const active = [use['主模型（出图/回读/整理稿）'], use['快速模型（拆解·卡片化）']].filter(Boolean);
+  const rank = {exhausted: 3, danger: 2, warn: 1, ok: 0};
+  let worst = null;
+  quotaRows().forEach(r => {
+    if (active.indexOf(r.model) < 0) return;
+    if (!worst || rank[r.level] > rank[worst.level]) worst = r;
+  });
+  if (!worst || worst.level === 'ok') return null;
+  const which = worst.model === use['快速模型（拆解·卡片化）'] ? '快速模型' : '主模型';
+  if (worst.level === 'exhausted') {
+    return {bad: true, text: which + ' ' + worst.model + ' 的免费额度已用尽——点拆解会直接 403。'
+      + '换一档模型或清空「快速模型」退回主模型（设置页最下面那排）。'};
+  }
+  return {bad: worst.level === 'danger',
+    text: which + ' ' + worst.model + ' 免费额度只剩 '
+      + Math.round((1 - worst.pct) * 100) + '%（约 ' + worst.left.toLocaleString() + ' tokens）。'
+      + '一次拆解约两三万，用完会开始报 403。'};
+}
+
+function renderQuota() {
+  const box = document.getElementById('ai-quota');
+  const hook = _quota && _quota.hook || {};
+  if (box) {
+    if (!_quota) { box.innerHTML = '<span class="q-note">额度没读到（接口没返回）</span>'; }
+    else if (!quotaRows().length) {
+      box.innerHTML = '<span class="q-note">还没有额度记录：跑一次拆解或出图就开始记。'
+        + '这是<b>本地账</b>，种子取自控制台，别的机器花掉的不算。</span>';
+    } else {
+      const use = _quota.in_use || {};
+      const usedBy = {};
+      Object.keys(use).forEach(k => { if (use[k]) usedBy[use[k]] = k; });
+      box.innerHTML = quotaRows().map(r => {
+        const cls = r.level === 'exhausted' ? 'q-out' : (r.level === 'danger' ? 'q-danger'
+          : (r.level === 'warn' ? 'q-warn' : ''));
+        const pct = r.pct == null ? 0 : Math.min(1, r.pct);
+        const tag = r.level === 'exhausted' ? '已用尽' : (r.level === 'danger' ? '快没了'
+          : (r.level === 'warn' ? '该留意' : ''));
+        return '<div class="q-row ' + cls + '">'
+          + '<span class="q-bar"><i style="width:' + Math.round(pct * 100) + '%"></i></span>'
+          + '<span class="q-m" title="' + escAttr(r.model) + '">' + esc(r.model) + '</span>'
+          + '<span>' + (r.used || 0).toLocaleString() + ' / '
+          + (r.limit ? r.limit.toLocaleString() : '未知') + '</span>'
+          + '<span>' + (r.pct == null ? '—' : Math.round((1 - pct) * 100) + '% 剩') + '</span>'
+          + '<span>' + (tag ? '<b>' + tag + '</b> ' : '')
+          + (usedBy[r.model] ? '← ' + esc(String(usedBy[r.model]).split('（')[0]) : '')
+          + '</span></div>';
+      }).join('')
+        + '<div class="q-note">用到 75% 开始提示、92% 标红。数字对不上控制台是正常的——'
+        + '这里只记这台机器发出去的请求；「已用」那一列单位是 tokens。<span style="color:'
+        + (hook.done ? 'var(--text-tertiary)' : 'var(--danger)') + '">'
+        + (hook.done ? '' : '注意：记账钩子没挂上，下面的数不可信（' + esc(hook.error || '未知原因') + '）')
+        + '</span></div>';
+    }
+  }
+  const pk = document.getElementById('pk-quota');
+  if (pk) {
+    const line = quotaWarnLine();
+    if (!line) { pk.style.display = 'none'; pk.innerHTML = ''; }
+    else {
+      pk.style.display = '';
+      pk.className = 'pk-quota' + (line.bad ? ' bad' : '');
+      pk.textContent = '⚠ ' + line.text;
+    }
+  }
+}
+
+async function loadAiQuota() {
+  try {
+    _quota = await fetch('/api/ai/quota').then(r => r.json());
+  } catch (e) { _quota = null; }
+  renderQuota();
 }
 
 function updateAiPlaceholders() {
@@ -6976,7 +7392,7 @@ function updateAiPlaceholders() {
     return;
   }
   const conf = method === 'deepseek'
-    ? {base:'https://api.deepseek.com', model:'deepseek-chat'}
+    ? {base:'https://api.deepseek.com', model:'deepseek-v4.1-flash'}
     : {base:'https://api.openai.com/v1', model:'gpt-4o-mini'};
   baseInput.placeholder = conf.base;
   modelInput.placeholder = conf.model;
@@ -7076,15 +7492,28 @@ async function deleteSummary(id) {
 let _subPollTimer = null;
 
 async function loadSubscriptions() {
+  let data;
   try {
-    const data = await fetch('/api/subscriptions').then(r=>r.json());
-    const items = data.items || [];
-    renderSubscriptions(items);
-    rssHintFromSubs(items);
-    // 同步进行中则持续轮询
-    const st = await fetch('/api/subscriptions/sync/status').then(r=>r.json());
-    if (st.running) startSubPolling(); else showSubStatus(st);
-  } catch(e) { warn('订阅列表加载失败（列表会停在旧内容）', e); }
+    data = await apiGet('/api/subscriptions');
+  } catch (e) {
+    // 读不到 ≠ 没有订阅：这一格明说"没取到数"，绝不画成 0 个
+    slotBusy('count-subs', e);
+    const box = document.getElementById('sub-list');
+    if (box) box.innerHTML = busyBox('我的订阅', e);
+    retryBusy('subs', loadSubscriptions);
+    return;
+  }
+  const items = data.items || [];
+  slotOk('count-subs', items.length + ' 个');
+  renderSubscriptions(items);
+  rssHintFromSubs(items);
+  // cookie 状态只读本地配置文件，每次进采集中心顺手刷一次，
+  // 免得用户订阅完、点了同步失败才知道 cookie 没配
+  fetchBilibiliStatus();
+  // 同步进行中则持续轮询
+  const st = await apiGet('/api/subscriptions/sync/status').catch(() => null);
+  if (!st) return;
+  if (st.running) startSubPolling(); else showSubStatus(st);
 }
 
 // 微信订阅地址的示例提示跟着"你实际在用的那个地址"走。
@@ -7131,12 +7560,11 @@ function updateSubSourceTabs(items) {
   const box = document.getElementById('sub-source-tabs');
   if (!box) return;
   const counts = {};
-  items.forEach(s => { const p = s.platform || 'douyin'; counts[p] = (counts[p] || 0) + 1; });
-  const tabs = [
-    {key: '', label: '全部来源', n: items.length},
-    {key: 'douyin', label: '抖音视频', n: counts.douyin || 0},
-    {key: 'wechat', label: '微信公众号', n: counts.wechat || 0},
-  ];
+  items.forEach(s => { const p = subPlat(s); counts[p] = (counts[p] || 0) + 1; });
+  // tabs 由 PLATFORM_META 生成，顺序固定；某源一条没有也照样显示 0，
+  // 免得"加了 B 站订阅但来源栏里没有 B 站"被误当成没生效
+  const tabs = [{key: '', label: '全部来源', n: items.length}].concat(
+    Object.keys(PLATFORM_META).map(k => ({key: k, label: PLATFORM_META[k].tab, n: counts[k] || 0})));
   const off = 'background:color-mix(in srgb,var(--text-tertiary) 16%,transparent);color:var(--text-secondary)';
   const on = 'background:var(--module-3);color:#fff';
   box.innerHTML = tabs.map(t => {
@@ -7241,11 +7669,42 @@ function syncFilteredSubscriptions() {
   syncIdsAndPoll(ids, '已开始同步当前筛选的');
 }
 
+// ── 采集源的平台口径 ──
+// subscriptions.platform 与 /api/videos 返回的 v.source 用的是同一套值（douyin/wechat/bilibili），
+// 所以徽章、来源药丸、来源筛选、自动同步任务的分组共用这一张表。
+// 以前各处都写成 `isWechat ? '微信' : '抖音'` 的二元判断，第三个源进来必然被显示成抖音——
+// 加新采集源只改这里，别在下游再补三元表达式。
+const PLATFORM_META = {
+  douyin:   {label:'抖音',   tab:'抖音视频',  color:'var(--module-2)', link:'主页 ↗', icon:'film',
+             pill:'src-douyin', coverClass:'',        noBody:'无转写'},
+  wechat:   {label:'微信',   tab:'微信公众号', color:'#07c160', link:'RSS ↗',   icon:'book',
+             pill:'src-wechat', coverClass:'cover-wx', noBody:'无正文'},
+  bilibili: {label:'B站',    tab:'B站UP主',   color:'#fb7299', link:'空间 ↗',   icon:'camera',
+             pill:'src-bilibili', coverClass:'cover-bili', noBody:'无字幕'},
+};
+function platMeta(key) { return PLATFORM_META[key] || PLATFORM_META.douyin; }
+// 订阅记录里的平台字段（认不出的值一律当 douyin，和后端 COALESCE(platform,'douyin') 同口径）
+function subPlat(s) { const p = (s && s.platform) || 'douyin'; return PLATFORM_META[p] ? p : 'douyin'; }
+// 出现过的平台顺序：先按表里的固定顺序，再把存量数据里冒出来的未知平台补在后面
+function platKeysPresent(list) {
+  const seen = {};
+  (list || []).forEach(s => { seen[subPlat(s)] = 1; });
+  return Object.keys(PLATFORM_META).filter(k => seen[k])
+    .concat(Object.keys(seen).filter(k => Object.keys(PLATFORM_META).indexOf(k) < 0));
+}
+function fmtDur(sec) {
+  const n = Number(sec) || 0;
+  if (!n) return '—';
+  const h = Math.floor(n / 3600), m = Math.floor((n % 3600) / 60), s = n % 60;
+  const pad = x => (x < 10 ? '0' + x : '' + x);
+  return h ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
+}
+
 function renderSubscriptions(items) {
   const box = document.getElementById('sub-list');
   if (!box) return;
   window._subItems = items;
-  document.getElementById('count-subs').textContent = items.length + ' 个';
+  slotOk('count-subs', items.length + ' 个');
   updateSubSourceTabs(items);
   updateSubCatFilterOptions(items);
   updateSubTagFilterOptions(items);
@@ -7263,11 +7722,9 @@ function renderSubscriptions(items) {
     return;
   }
   box.innerHTML = shown.map(s => {
-    const isWechat = s.platform === 'wechat';
-    const platformBadge = isWechat
-      ? '<span class="pill" style="background:color-mix(in srgb,#07c160 12%,transparent);color:#07c160;font-size:10px">微信</span>'
-      : '<span class="pill" style="background:color-mix(in srgb,var(--module-2) 12%,transparent);color:var(--module-2);font-size:10px">抖音</span>';
-    const linkText = isWechat ? 'RSS ↗' : '主页 ↗';
+    const pm = platMeta(subPlat(s));
+    const platformBadge = `<span class="pill" style="background:color-mix(in srgb,${pm.color} 12%,transparent);color:${pm.color};font-size:10px">${pm.label}</span>`;
+    const linkText = pm.link;
     const tags = subTagList(s);
     const tagPills = tags.length
       ? tags.map(t => `<span class="pill tag" title="点击管理标签" onclick='event.stopPropagation();editSubTags([${s.id}])'>${esc(t)}</span>`).join('')
@@ -7284,7 +7741,7 @@ function renderSubscriptions(items) {
           ${tagPills}
           <a href="${esc(s.user_url)}" target="_blank" style="color:var(--module-2);font-weight:600;font-size:11.5px;text-decoration:none">${linkText}</a>
         </div>
-        <div style="font-size:11.5px;color:var(--text-tertiary);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+        <div style="font-size:11.5px;color:var(--text-tertiary);margin-top:2px;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;line-height:1.45" title="${esc((s.last_synced_at ? '上次同步 ' + s.last_synced_at.slice(0,16) + ' · ' : '') + (s.last_sync_note || ''))}">
           ${s.last_synced_at ? `上次同步 ${esc(s.last_synced_at.slice(0,16))} · ${esc(s.last_sync_note||'')}` : '尚未同步过（点「同步」后会自动带出作者名）'}
         </div>
       </div>
@@ -7647,6 +8104,83 @@ async function addWechatSubscription() {
   }
 }
 
+// ── B 站订阅 ──
+// 与微信那条一样的流程：填地址 → POST /api/subscriptions 带 platform → 重画列表 →
+// 没选分类就把分类菜单弹在新行的分类徽章上。区别是投稿列表接口匿名必被风控，
+// 所以加订阅前先看 cookie 状态，别让人订阅完了才发现同步一直失败。
+async function addBilibiliSubscription() {
+  const url = document.getElementById('bili-sub-url').value.trim();
+  const cat = document.getElementById('bili-sub-cat').value;
+  if (!url) { alert('请输入 B 站 UP 主空间地址或数字空间号'); return; }
+  let game = '';
+  if (cat === '游戏攻略') {
+    game = prompt('该 UP 主主要讲哪款游戏？（可留空）', '') || '';
+  }
+  try {
+    const resp = await fetch('/api/subscriptions', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({url, platform: 'bilibili', category: cat, game}),
+    }).then(r=>r.json());
+    if (resp.error) { alert(resp.error); return; }
+    document.getElementById('bili-sub-url').value = '';
+    // 表单在采集中心、订阅列表在数据与同步：加完直接跳过去，
+    // 否则用户点完按钮看不到任何反馈，只会以为没加上再点一次
+    switchPage('materials');
+    await loadSubscriptions();
+    const sub = resp.subscription;
+    if (sub && !cat) {
+      const pill = document.querySelector(`#sub-list [data-sub-cat="${sub.id}"]`);
+      if (pill) openSubCatMenu(pill, [sub.id], sub.category || '', sub.game || '');
+    }
+    const st = await fetchBilibiliStatus();
+    if (!st.ok) setStatus('error', '订阅已加上，但 B 站 cookie 还没配：' + (st.error || ''));
+  } catch(e) {
+    alert('订阅失败: ' + e.message);
+  }
+}
+
+// cookie 状态只读本地配置文件，不打 B 站接口，所以每次进采集中心都可以顺手刷一次
+async function fetchBilibiliStatus() {
+  const hint = document.getElementById('bili-cookie-hint');
+  let st;
+  try {
+    st = await fetch('/api/bilibili/status').then(r=>r.json());
+  } catch(e) {
+    if (hint) hint.textContent = 'B 站 cookie 状态查询失败: ' + e.message;
+    return {ok:false, error:String(e)};
+  }
+  if (hint) {
+    hint.innerHTML = st.ok
+      ? `B 站 cookie 已配置（${esc(st.source || '')}）。同步时若返回风控拦截，去浏览器重新登录后再复制一次。`
+      : `<span style="color:var(--module-5)">B 站 cookie 未配置：</span>${esc(st.error || '')}`;
+  }
+  return st;
+}
+
+async function checkBilibili() {
+  const raw = document.getElementById('bili-sub-url').value.trim();
+  const hint = document.getElementById('bili-cookie-hint');
+  if (!raw) { alert('先在输入框里填一个 UP 主空间地址或数字空间号，再测连通'); return; }
+  const btn = document.getElementById('btn-bili-check');
+  if (btn) btn.disabled = true;
+  if (hint) hint.textContent = '正在向 B 站发一次列表请求验证登录态…';
+  try {
+    const resp = await fetch('/api/bilibili/probe', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({mid: raw}),
+    }).then(r=>r.json());
+    if (hint) {
+      hint.innerHTML = resp.ok
+        ? `✓ 连通正常，最新一条：${esc(resp.sample || '（该空间没有可见投稿）')}`
+        : `<span style="color:var(--module-5)">✗ ${esc(resp.error || '测试失败')}</span>`;
+    }
+  } catch(e) {
+    if (hint) hint.textContent = '测试失败: ' + e.message;
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
 let _subSyncRunning = false;
 
 async function syncSubscriptions(id) {
@@ -7726,10 +8260,14 @@ function showSubStatus(st) {
 }
 
 async function deleteSubscriptionItem(id) {
-  if (!confirm('确定取消订阅吗？（只取消订阅，不删除已采集的视频）')) return;
+  if (!confirm('确定取消订阅吗？\n\n会连带删除这个号已采进素材库的全部视频、整理稿、图文包和图片目录（关键帧/封面/原始数据），Excel 行清空、索引一并摘掉。\n\n删了不可恢复——output/ 不在 git 里，没有版本兜底。')) return;
   try {
     const resp = await fetch(`/api/subscriptions/${id}`, {method:'DELETE'}).then(r=>r.json());
     if (resp.error) { alert('删除失败: ' + resp.error); return; }
+    const p = resp.purged || {};
+    if (p.videos) {
+      setStatus('done', `已取消订阅，并清掉 ${p.videos} 条素材 / ${p.summaries} 篇整理稿 / ${p.packages} 个图文包 / ${p.frames} 组关键帧`);
+    }
     loadSubscriptions();
   } catch(e) {
     alert('删除失败: ' + e.message);
@@ -7819,6 +8357,171 @@ function copyQuestionBankJSON() {
     payload = JSON.stringify(parsed.questions || parsed, null, 2);
   } catch(e) { warn('题库 JSON 整理失败，原样复制', e); }
   copyText(payload);
+}
+
+/* ── 答案库与交付看板：只读 /api/bank/overview，页面不存任何手抄数字 ── */
+var BK = null;
+function bkEsc(s) {
+  return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+function bkCut(s, n) { s = String(s || ''); return s.length > n ? s.slice(0, n) + '…' : s; }
+function bkNum(n) { return (n == null ? '-' : Number(n).toLocaleString()); }
+
+async function bkLoad() {
+  const box = document.getElementById('bk-body');
+  if (!box) return;
+  box.innerHTML = '<div class="empty">读取 product/ 当前文件…</div>';
+  try {
+    const r = await fetch('/api/bank/overview');
+    const d = await r.json();
+    if (!r.ok || d.error) {
+      box.innerHTML = '<div class="bk-miss">读不出来：' + bkEsc(d.error || ('HTTP ' + r.status)) + '</div>';
+      return;
+    }
+    BK = d;
+    bkRender();
+  } catch (e) {
+    box.innerHTML = '<div class="bk-miss">接口没响应：' + bkEsc(e) + '</div>';
+  }
+}
+
+function bkCards() {
+  const d = BK, paid = d.paid || {}, meta = paid.meta || {};
+  const c = meta.counts || {};
+  const freeN = d.free ? ((d.free.meta || {}).count || 0) : 0;
+  const extN = d.external ? (d.external.count || 0) : 0;
+  const one = function (b, s, e) {
+    return '<div class="bk-card"><b>' + b + '</b><span>' + s + '</span><em>' + (e || '') + '</em></div>';
+  };
+  return '<div class="bk-cards">'
+    + one(bkNum(c.total), '付费库总题数 v' + bkEsc(paid.version),
+          '￥' + bkEsc(paid.price) + ' ｜ 场景 ' + bkNum(c.scene) + ' + 手撕 ' + bkNum(c.code))
+    + one(bkNum(freeN), '免费题库池条数', d.free ? '给小程序，不进付费 PDF' : '未生成 free_bank.json')
+    + one(bkNum((d.artifacts || []).length), '当前交付物文件数', d.missing && d.missing.length ? ('缺 ' + d.missing.length + ' 个，见下') : '该有的都在')
+    + one(bkNum(extN), '外部源已搬题数', d.external ? bkEsc(d.external.meta.repo || '') : '未解析外部源')
+    + '</div>';
+}
+
+function bkGate() {
+  const paid = BK.paid || {};
+  const ok = !!paid.audit_ok;
+  return '<div class="bk-gate ' + (ok ? 'ok' : 'bad') + '"><b>' + (ok ? '自检通过' : '自检没过，先别发')
+    + '</b><span>' + bkEsc(paid.audit || '') + '</span><span style="margin-left:auto" class="bk-note">'
+    + '结论由 <code>audit_answer_bank.py</code> 当场跑，不是上次留下的数 ｜ 数据读取 '
+    + bkEsc(BK.generated) + '</span></div>';
+}
+
+function bkSources() {
+  const meta = (BK.paid || {}).meta || {};
+  const rows = (meta.sources || []).map(function (s) {
+    const extra = s.repo ? ('<div class="bk-note">仓库 <b>' + bkEsc(s.repo) + '</b> ｜ ' + bkEsc(s.license || '')
+      + ' ｜ ' + bkEsc(s.copyright || '') + '</div>') : '';
+    return '<div class="bk-bar" style="align-items:flex-start"><span class="nm"><span class="bk-tag '
+      + (s.key === 'repo' ? 'repo' : 'own') + '">' + bkEsc(s.key) + '</span> ' + bkEsc(s.label) + '</span>'
+      + '<div style="flex:1 1 auto"><b style="font-size:13px">' + bkNum(s.count) + ' 题</b>'
+      + '<div class="bk-note">' + bkEsc(s.note || '') + '</div>' + extra + '</div></div>';
+  }).join('');
+  const ext = BK.external && BK.external.meta;
+  const extLine = ext ? ('<div class="bk-note" style="margin-top:8px">解析溯源：文件 <b>' + bkEsc(ext.file)
+    + '</b> ｜ blob <code>' + bkEsc((ext.blob_sha || '').slice(0, 10)) + '</code> ｜ commit <code>'
+    + bkEsc(ext.commit) + '</code> ｜ 抓取日 ' + bkEsc(ext.fetched) + '</div>') : '';
+  return '<div class="bk-sec"><h3>付费库来源构成 <i>署名与免责随内容一起走</i></h3>'
+    + (rows || '<div class="bk-note">没读到 sources 字段</div>') + extLine + '</div>';
+}
+
+function bkThemes() {
+  const th = (BK.paid || {}).themes || [];
+  if (!th.length) return '';
+  let max = 1;
+  th.forEach(function (t) { if ((t.count || 0) > max) max = t.count || 0; });
+  const rows = th.map(function (t) {
+    const ext = t.source === 'repo';
+    const w = Math.max(3, Math.round((t.count || 0) / max * 100));
+    return '<div class="bk-bar"><span class="nm" title="' + bkEsc(t.name) + '">'
+      + (ext ? '<span class="bk-tag repo">外部</span> ' : '') + bkEsc(t.name) + '</span>'
+      + '<span class="tr' + (ext ? ' ext' : '') + '"><i style="width:' + w + '%"></i></span>'
+      + '<span class="n">' + bkNum(t.count) + '</span></div>';
+  }).join('');
+  return '<div class="bk-sec"><h3>主题分布 <i>' + th.length
+    + ' 节；「外部」是第二部分，段数与自家不同（自家四段、外部只有参考答案与追问）</i></h3>' + rows + '</div>';
+}
+
+function bkArtifacts() {
+  const list = BK.artifacts || [];
+  const rows = list.map(function (a) {
+    return '<tr><td><a href="' + bkEsc(a.url) + '" target="_blank" title="在新标签打开">'
+      + bkEsc(a.name) + '</a></td><td>' + bkEsc(a.kind) + '</td>'
+      + '<td class="num">' + (a.pages ? a.pages + ' 页' : '-') + '</td>'
+      + '<td class="num">' + bkNum(a.kb) + ' KB</td><td>' + bkEsc(a.mtime) + '</td></tr>';
+  }).join('');
+  const miss = (BK.missing || []).length
+    ? '<div class="bk-miss">该有的文件不在：' + BK.missing.map(bkEsc).join('、')
+      + '　→　改完库要按顺序重跑：build_interview_bank → build_bank_json → build_bank_page → build_bank_pdf → build_knowledge_map</div>'
+    : '';
+  return '<div class="bk-sec"><h3>交付物清单 <i>只列当前版本该有的，点名字直接打开</i></h3>' + miss
+    + '<table class="bk-tbl"><thead><tr><th>文件</th><th>用途</th><th class="num">页数</th>'
+    + '<th class="num">体积</th><th>生成时间</th></tr></thead><tbody>' + rows
+    + '</tbody></table><div class="bk-note" style="margin-top:8px">目录：<code>'
+    + bkEsc(BK.product_dir) + '</code>（整目录被 gitignore，仓库搜索看不到，也没有 git 兜底）</div></div>';
+}
+
+function bkLedger() {
+  const rows = (BK.ledger || []).map(function (x) {
+    const cls = x.verdict === 'no' ? 'no' : (x.verdict === 'paid' || x.verdict === 'free' ? 'paid' : 'ok');
+    return '<tr><td><b>' + bkEsc(x.repo) + '</b></td><td class="num">' + bkNum(x.stars)
+      + '</td><td>' + bkEsc(x.license) + '</td><td><span class="bk-tag ' + cls + '">' + bkEsc(x.label)
+      + '</span></td><td class="bk-note">' + bkEsc(x.note) + '</td></tr>';
+  }).join('');
+  return '<div class="bk-sec"><h3>外部源能不能搬 <i>判过才记；没记 = 没判过 = 不许搬</i></h3>'
+    + '<table class="bk-tbl"><thead><tr><th>仓库</th><th class="num">star</th><th>license</th>'
+    + '<th>结论</th><th>理由</th></tr></thead><tbody>' + rows + '</tbody></table>'
+    + '<div class="bk-note" style="margin-top:8px">最容易踩的是 <b>CC-BY-SA</b>：允许商用但衍生作品必须同样开源，'
+    + '和"锁进付费 PDF"直接冲突。没有 LICENSE 的仓库按"保留所有权利"处理。</div></div>';
+}
+
+function bkHook() {
+  const h = BK.hook || {};
+  return '<div class="bk-sec"><h3>领取口径与门禁 <i>两处门必须同口径</i></h3>'
+    + '<div class="bk-note">免费交付物：' + bkEsc(h.free || '') + '<br>付费品：' + bkEsc(h.paid || '')
+    + '<br>机器门：站外导流（微信号 / 二维码 / 私信）命中 <b>' + bkNum(h.onsite_fail)
+    + '</b> 条规则 → FAIL；关注回复钩子 <b>' + bkNum(h.hook_info) + '</b> 条 → 只记 INFO 不拦'
+    + '<br>权威源：<code>' + bkEsc(h.rules_file || '') + '</code></div></div>';
+}
+
+function bkSamples() {
+  const s = (BK.samples || {});
+  const one = function (q, i) {
+    const fu = q.followup;
+    let fuTxt = '';
+    if (Array.isArray(fu)) {
+      fuTxt = fu.length ? ('<p><b>追问：</b>' + bkEsc(bkCut((fu[0].ask || '') + ' → ' + (fu[0].answer || ''), 110)) + '</p>') : '';
+    } else if (fu) {
+      fuTxt = '<p><b>追问：</b>' + bkEsc(bkCut(fu, 110)) + '</p>';
+    }
+    const pts = Array.isArray(q.points) ? q.points.length : 0;
+    const seg = q.type === 'code' ? '代码题' : (pts || q.traps ? '四段齐全' : '只有答案+追问');
+    // 免费池的 source 是个对象（repo/license/copyright），付费库的是字符串 'own'/'repo'
+    const src = (q.source && q.source.repo) ? q.source.repo : (q.source || '');
+    return '<div class="bk-q"><h4>' + (i + 1) + '. ' + bkEsc(bkCut(q.question, 74)) + '</h4>'
+      + '<p><b>参考答案：</b>' + bkEsc(bkCut(q.answer || (q.code && q.code.length ? '（代码题，看代码）' : ''), 150)) + '</p>'
+      + fuTxt + '<div class="src">' + bkEsc(q.module || q.theme || '') + ' ｜ ' + bkEsc(src)
+      + ' ｜ ' + seg + '</div></div>';
+  };
+  const paid = (s.paid || []).map(one).join('');
+  const free = (s.free || []).map(one).join('');
+  return '<div class="bk-sec"><h3>题目抽样 <i>每个来源各一道，看格式对不对</i></h3>'
+    + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">'
+    + '<div><div class="bk-note" style="margin-bottom:6px">付费库</div>' + (paid || '-') + '</div>'
+    + '<div><div class="bk-note" style="margin-bottom:6px">免费池（小程序用）</div>' + (free || '-') + '</div>'
+    + '</div></div>';
+}
+
+function bkRender() {
+  const box = document.getElementById('bk-body');
+  document.getElementById('bk-stamp').textContent = '读取于 ' + (BK.generated || '');
+  box.innerHTML = bkGate() + bkCards() + bkSources() + bkThemes() + bkArtifacts() + bkSamples()
+    + bkLedger() + bkHook();
 }
 </script>
 </body>

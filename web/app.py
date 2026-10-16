@@ -12,6 +12,8 @@ sys.path.insert(0, str(ROOT))
 import main as collector  # main.py
 from src import content_store, material_store, toutiao_graphics, ai_poster, sync_tasks, topic_pack
 from src import draft_audit, review_store, toutiao_stats, humanize_routes, ops_store
+from src import ai_quota
+from src import bank_board
 from src.graphics.channels import wechat as wechat_graphics
 from src.graphics.channels import toutiao as toutiao_channel
 from src.graphics import variants as graphics_variants
@@ -25,11 +27,30 @@ INDEX_PATH    = ROOT / "video_index.json"
 DB_PATH       = OUTPUT_DIR / "video2text.db"
 PARSER_DIR    = Path(find_parser_dir())
 
+# DB 直写、不进 Excel 的素材源：{videos.source_sheet: 前端来源标识}。
+# 加一个新采集源就动这一处——素材库追加、来源派生、来源计数、详情与删除的"绕开 Excel"
+# 全从这里取，别再在下游写 `== '微信文章'` 的二元判断（历史上就是这么把新源判成抖音的）。
+DB_ONLY_SHEETS = {"微信文章": "wechat", "B站视频": "bilibili"}
+# B 站每轮最多翻多少条：首次订阅即"只入最近 20 条"，之后每轮也只拉新增（列表从新往老翻，
+# 整页都是已入库的就停）。存量大 UP 主不要一次全量回填——几百条字幕连打会撞风控。
+BILI_SYNC_LIMIT = 20
+
 app = Flask(__name__, static_folder="static", static_url_path="/static")
+
+# 免费额度记账挂在 openai SDK 的边界上（一次包住全部 12 个调用点，理由见 src/ai_quota.py）。
+# 挂不上不拦启动，但 /api/ai/quota 会带着 last_error，界面会明说"额度没在记账"。
+_quota_hook = ai_quota.install()
 
 # ── 处理状态（内存） ──
 _task_status = {"running": False, "progress": "", "done": False, "error": ""}
 _classify_status = {"running": False, "progress": "", "done": True, "error": "", "result": None}
+# 这把锁只管**写**：同步、打标、增删订阅都在它后面串行，避免两条写流程互相踩。
+# 读接口一律不拿这把锁（2026-10-14 改）。原来读也排队等锁，而出图前那一轮自动同步
+# 会在锁里跑 `classify_videos`（几百条素材、每条一次 LLM，实测十几分钟），
+# 于是界面侧的 /api/subscriptions、/api/categories 全在外面干等，浏览器超时后
+# 把"还没返回"画成"0 个"——号主看到的"数据全没了"就是这么来的（temp/lock_probe.py 实测：
+# 写事务开着时，只读 SELECT 0.00s 就能返回，SQLite 自己不怕读写并发，怕的是这把 Python 锁）。
+# 读要拿连接就走 content_store.open_readonly()：mode=ro，不可能顺手改库结构。
 _db_lock = threading.RLock()
 
 # ── 工具：cookie 写入与 parser 初始化 ──
@@ -198,7 +219,7 @@ def _ai_config():
     if method == "deepseek":
         api_key = collector.config_get(config, "DEEPSEEK_API_KEY") or collector.config_get(config, "AI_API_KEY")
         api_base = collector.config_get(config, "DEEPSEEK_API_BASE", "https://api.deepseek.com")
-        model = collector.config_get(config, "DEEPSEEK_MODEL", "deepseek-chat")
+        model = collector.config_get(config, "DEEPSEEK_MODEL", "deepseek-v4.1-flash")
     else:
         api_key = collector.config_get(config, "OPENAI_API_KEY") or collector.config_get(config, "AI_API_KEY")
         api_base = collector.config_get(config, "AI_API_BASE", "https://api.openai.com/v1")
@@ -216,7 +237,8 @@ def _ai_config():
 def _fast_config():
     """拆解与卡片化走「快速模型」：这类活是照抄压缩，不需要主模型深思。
 
-    实测同一条素材：主模型 qwen3.8-max 拆解约 180 秒，deepseek-v4-flash 33 秒且上图
+    实测同一条素材（当时跑的是 deepseek-v4-flash，现已换 v4.1-flash，数字未重测）：
+    主模型 qwen3.8-max 拆解约 180 秒，deepseek-v4-flash 33 秒且上图
     字数更守规矩（71 字 vs 超线）；qwen-plus 只要 9.7 秒、便宜五倍，但会把上图文字
     写到 98 字（超 80 线，会被自动压缩砍掉一张卡）。
     没配 AI_MODEL_FAST 时原样返回主配置，行为零变化。
@@ -246,7 +268,7 @@ def api_videos():
     q     = request.args.get("q", "").lower()
     category = request.args.get("category", "")
     game = request.args.get("game", "")
-    source = request.args.get("source", "")  # ''=全部 / douyin / wechat
+    source = request.args.get("source", "")  # ''=全部 / douyin / wechat / bilibili
     videos = []
     if INDEX_PATH.exists():
         with open(INDEX_PATH, encoding="utf-8") as f:
@@ -268,49 +290,64 @@ def api_videos():
                 v.setdefault("game", "")
                 v.setdefault("summary_type", "")
 
-    # 追加 SQLite 中的微信文章（DB 是微信文章权威源，不经过 video_index.json，索引重建不会丢）
+    # 追加 SQLite 直写的素材（微信文章 / B站视频）。这两类不落 Excel、不进 video_index.json，
+    # DB 就是权威源，索引重建不会丢。
+    # 原先这里只写死 '微信文章' 一个 sheet：B站入库后素材库看不到，表现就是"同步说新增了 5 条，
+    # 页面上却没有"——所以 DB-only 的源一律走这张映射表加，不再新写一块重复代码。
     if DB_PATH.exists():
-        try:
-            with _db_lock:
-                conn = content_store.connect(DB_PATH)
+        for sheet_name, src_key in DB_ONLY_SHEETS.items():
+            try:
+                conn = content_store.open_readonly(DB_PATH)  # 只读：不建表、不抢写锁
                 try:
-                    wx_rows = conn.execute(
-                        "SELECT id, source_sheet, source_row, source_url, author, title, "
+                    extra_cols = (", COALESCE(view_count,0) as view_count, "
+                                  "COALESCE(duration_sec,0) as duration_sec, "
+                                  "COALESCE(subs_status,'') as subs_status")
+                    rows = conn.execute(
+                        "SELECT id, source_sheet, source_row, source_url, aweme_id, author, title, "
                         "status, published_at, category, ai_tags, game, "
-                        "COALESCE(cover_url,'') as cover, COALESCE(transcript,'') as transcript "
-                        "FROM videos WHERE source_sheet = '微信文章' ORDER BY id DESC LIMIT 200"
+                        "COALESCE(cover_url,'') as cover, COALESCE(transcript,'') as transcript"
+                        + extra_cols +
+                        " FROM videos WHERE source_sheet = ? ORDER BY id DESC LIMIT 200",
+                        (sheet_name,)
                     ).fetchall()
                 finally:
                     conn.close()
-            for r in wx_rows:
-                body = r["transcript"] or ""
-                cover = r["cover"] or _first_markdown_image(body)
-                videos.append({
-                    "id": r["id"], "db_id": r["id"],
-                    "sheet": r["source_sheet"], "row": r["source_row"],
-                    "url": r["source_url"] or "",
-                    "aweme_id": "", "author": r["author"] or "",
-                    "title": r["title"] or "", "status": r["status"] or "",
-                    "published_at": r["published_at"] or "",
-                    "create_time": (r["published_at"] or "")[:10],
-                    "cover": cover, "cover_url": cover,
-                    "transcript_length": len(body),
-                    "category": r["category"] or "",
-                    "ai_tags": r["ai_tags"] or "",
-                    "game": r["game"] or "",
-                    "summary_type": "",
-                })
-        except Exception as e:
-            # 原先是裸 pass：这里一旦抛错（列缺失/DB 锁），素材库的微信文章整块消失且无痕迹，
-            # 表现就是「公众号有更新但工作台看不到」。保留降级不阻断抖音列表，但必须留日志。
-            print(f"[videos] 微信文章追加失败（素材库将看不到微信内容）: {e}", flush=True)
-    # 来源标识统一：微信文章 vs 抖音，前端卡片徽章/筛选用
+                for r in rows:
+                    body = r["transcript"] or ""
+                    cover = r["cover"] or _first_markdown_image(body)
+                    item = {
+                        "id": r["id"], "db_id": r["id"],
+                        "sheet": r["source_sheet"], "row": r["source_row"],
+                        "url": r["source_url"] or "",
+                        "aweme_id": "", "author": r["author"] or "",
+                        "title": r["title"] or "", "status": r["status"] or "",
+                        "published_at": r["published_at"] or "",
+                        "create_time": (r["published_at"] or "")[:10],
+                        "cover": cover, "cover_url": cover,
+                        "transcript_length": len(body),
+                        "category": r["category"] or "",
+                        "ai_tags": r["ai_tags"] or "",
+                        "game": r["game"] or "",
+                        "summary_type": "",
+                    }
+                    if src_key == "bilibili":
+                        # B站专属：卡片要显示时长与播放量，写手要知道正文是字幕还是简介
+                        item["aweme_id"] = r["aweme_id"] or ""
+                        item["view_count"] = r["view_count"] or 0
+                        item["duration_sec"] = r["duration_sec"] or 0
+                        item["subs_status"] = r["subs_status"] or ""
+                    videos.append(item)
+            except Exception as e:
+                # 原先是裸 pass：这里一旦抛错（列缺失/DB 锁），素材库的这类内容整块消失且无痕迹，
+                # 表现就是「公众号有更新但工作台看不到」。保留降级不阻断抖音列表，但必须留日志。
+                print(f"[videos] {sheet_name} 追加失败（素材库将看不到这类内容）: {e}", flush=True)
+    # 来源标识统一：抖音（Excel 来的）/ 微信文章 / B站视频，前端卡片徽章与筛选用
     for v in videos:
-        v["source"] = "wechat" if v.get("sheet") == "微信文章" else "douyin"
+        v["source"] = DB_ONLY_SHEETS.get(v.get("sheet") or "", "douyin")
     # 药丸计数一律取"筛选前的合并列表"，跟下面真正要显示的那份数据同一个口径。
     # 之前分类药丸走 /api/categories（按 SQLite 整张 videos 表统计，含 174 条还没做转写的行），
     # 列表走索引（只收有 ASR 的行），于是"其他 240"点进去只有 128 条，每个分类都对不上。
-    source_counts = {"douyin": 0, "wechat": 0}
+    source_counts = {"douyin": 0, "wechat": 0, "bilibili": 0}
     category_counts = {}
     game_counts = {}
     for v in videos:
@@ -320,7 +357,7 @@ def api_videos():
         if cat == "游戏攻略":            # 游戏药丸只在游戏攻略下有意义（与 get_game_stats 同口径）
             g = (v.get("game") or "").strip() or "未识别游戏"
             game_counts[g] = game_counts.get(g, 0) + 1
-    if source in ("douyin", "wechat"):
+    if source == "douyin" or source in DB_ONLY_SHEETS.values():
         videos = [v for v in videos if v["source"] == source]
     if topic:
         videos = [v for v in videos if v.get("author", "") == topic]
@@ -389,38 +426,37 @@ def _load_video_extras() -> dict:
     if not DB_PATH.exists():
         return {}
     try:
-        with _db_lock:
-            conn = content_store.connect(DB_PATH)
-            try:
-                rows = conn.execute(
-                    "SELECT id, source_sheet, source_row, category, ai_tags, game FROM videos"
+        conn = content_store.open_readonly(DB_PATH)  # 只读：不建表、不抢写锁
+        try:
+            rows = conn.execute(
+                "SELECT id, source_sheet, source_row, category, ai_tags, game FROM videos"
+            ).fetchall()
+            # 每条整理稿的类型（含合集稿的全部源视频）：id 倒序第一个出现的即最新，供列表标注「已整理」
+            summary_rows = conn.execute(
+                "SELECT video_id, source_video_ids, summary_type FROM ai_summaries "
+                "WHERE summary_type IN ('wechat_material', 'game_guide', 'ai_interview', 'guide_article', 'toutiao_mix') "
+                "ORDER BY id DESC"
+            ).fetchall()
+            involved_ids = set()
+            parsed = []
+            for r in summary_rows:
+                ids = {int(r["video_id"])}
+                try:
+                    ids.update(int(x) for x in json.loads(r["source_video_ids"] or "[]"))
+                except (ValueError, TypeError):
+                    pass
+                parsed.append((ids, r["summary_type"]))
+                involved_ids.update(ids)
+            id_key_map = {}
+            if involved_ids:
+                placeholders = ",".join("?" * len(involved_ids))
+                id_rows = conn.execute(
+                    f"SELECT id, source_sheet, source_row FROM videos WHERE id IN ({placeholders})",
+                    tuple(involved_ids),
                 ).fetchall()
-                # 每条整理稿的类型（含合集稿的全部源视频）：id 倒序第一个出现的即最新，供列表标注「已整理」
-                summary_rows = conn.execute(
-                    "SELECT video_id, source_video_ids, summary_type FROM ai_summaries "
-                    "WHERE summary_type IN ('wechat_material', 'game_guide', 'ai_interview', 'guide_article', 'toutiao_mix') "
-                    "ORDER BY id DESC"
-                ).fetchall()
-                involved_ids = set()
-                parsed = []
-                for r in summary_rows:
-                    ids = {int(r["video_id"])}
-                    try:
-                        ids.update(int(x) for x in json.loads(r["source_video_ids"] or "[]"))
-                    except (ValueError, TypeError):
-                        pass
-                    parsed.append((ids, r["summary_type"]))
-                    involved_ids.update(ids)
-                id_key_map = {}
-                if involved_ids:
-                    placeholders = ",".join("?" * len(involved_ids))
-                    id_rows = conn.execute(
-                        f"SELECT id, source_sheet, source_row FROM videos WHERE id IN ({placeholders})",
-                        tuple(involved_ids),
-                    ).fetchall()
-                    id_key_map = {r["id"]: (r["source_sheet"], r["source_row"]) for r in id_rows}
-            finally:
-                conn.close()
+                id_key_map = {r["id"]: (r["source_sheet"], r["source_row"]) for r in id_rows}
+        finally:
+            conn.close()
         latest_summary = {}
         for ids, summary_type in parsed:
             for vid in ids:  # 合集稿的每个源视频都标注（否则第二篇视频显示无整理稿，取材时踩空）
@@ -453,9 +489,8 @@ def api_categories():
     if not DB_PATH.exists():
         return jsonify({"categories": [], "games": [], "all_categories": list(content_store.CATEGORIES)})
     try:
-        with _db_lock:
-            stats = content_store.get_category_stats(DB_PATH)
-            games = content_store.get_game_stats(DB_PATH)
+        stats = content_store.get_category_stats(DB_PATH)
+        games = content_store.get_game_stats(DB_PATH)
     except Exception as e:
         return jsonify({"categories": [], "games": [], "error": str(e)}), 500
     return jsonify({"categories": stats, "games": games,
@@ -475,10 +510,9 @@ def api_topic_radar():
     if not DB_PATH.exists():
         return jsonify({"topics": [], "total_videos": 0, "window_days": 90})
     try:
-        with _db_lock:
-            data = content_store.get_topic_radar(
-                DB_PATH, category, game, author, channel=channel
-            )
+        data = content_store.get_topic_radar(
+            DB_PATH, category, game, author, channel=channel
+        )
         return jsonify(data)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -492,20 +526,26 @@ def api_strategy_channels():
 
 
 # ── API: AI 批量分类 ──
-def _auto_classify_after_sync() -> dict:
+def _auto_classify_after_sync(only_ids=None) -> dict:
     """同步入库后的增量自动打标：只补 category/ai_tags 任一为空的视频。
 
     - AI 未配置（method=skip 或无 key）时静默返回空结果，不阻塞采集主流程；
     - 沿用 classify_videos 的 LLM 优先、失败降级规则分类；
     - 调用方在采集线程里，此函数同步执行（单条链接量小可接受）。
       持锁口径与 /api/videos/classify 一致。
+    - **only_ids**：只标这一批。订阅同步收尾必须传，因为不带范围的那句 WHERE 没有上限，
+      会把全库 category/ai_tags 为空的存量一起过一遍真实 LLM（缺口有多少条取决于
+      上一次打标到现在的间隔，点同步前看不出来）。传空列表表示这轮没新增，直接跳过。
     """
+    ids = [int(i) for i in (only_ids or [])]
+    if only_ids is not None and not ids:
+        return {"total": 0, "classified": 0, "llm_batches": 0, "skipped": "nothing_new"}
     try:
         cfg = _ai_config()
         if cfg.get("method") == "skip" or not cfg.get("api_key"):
             return {"total": 0, "classified": 0, "llm_batches": 0, "skipped": "ai_not_configured"}
         with _db_lock:
-            return content_store.classify_videos(DB_PATH, cfg, force=False)
+            return content_store.classify_videos(DB_PATH, cfg, force=False, only_ids=ids or None)
     except Exception as e:
         # 打标失败不算采集失败：记日志，返回空结果让主流程继续
         print(f"[auto-classify] 增量打标失败（不影响采集）: {e}", flush=True)
@@ -571,13 +611,14 @@ def api_update_video_category():
 # ── API: 视频详情 ──
 @app.route("/api/videos/<sheet>/<int:row>")
 def api_video_detail(sheet, row):
-    # 微信文章分支：不落 Excel，DB 是权威源；响应结构与抖音视频同构，前端弹窗零特判
-    if sheet == "微信文章":
+    # DB 直写的源（微信文章 / B站视频）：不落 Excel，DB 是权威源；
+    # 响应结构与抖音视频同构，前端弹窗零特判
+    if sheet in DB_ONLY_SHEETS:
         if not DB_PATH.exists():
             return jsonify({"error": "内容库不存在"}), 404
         video = content_store.get_video_by_source(DB_PATH, sheet, row)
         if not video:
-            return jsonify({"error": f"微信文章 R{row} 不存在"}), 404
+            return jsonify({"error": f"{sheet} R{row} 不存在"}), 404
         body = video.get("transcript") or ""
         cover = video.get("cover_url") or _first_markdown_image(body)
         detail = {
@@ -599,8 +640,14 @@ def api_video_detail(sheet, row):
             "sheet": sheet,
             "row": row,
             "keyframes": [],
-            "source": "wechat",
+            "source": DB_ONLY_SHEETS[sheet],
         }
+        if DB_ONLY_SHEETS[sheet] == "bilibili":
+            detail["id"] = video.get("aweme_id") or ""
+            detail["bvid"] = video.get("aweme_id") or ""
+            detail["view_count"] = video.get("view_count") or 0
+            detail["duration_sec"] = video.get("duration_sec") or 0
+            detail["subs_status"] = video.get("subs_status") or ""
         _attach_related_summaries(detail, sheet, row)
         return jsonify(detail)
 
@@ -650,15 +697,14 @@ def _attach_related_summaries(detail: dict, sheet: str, row: int) -> None:
         if DB_PATH.exists():
             video = content_store.get_video_by_source(DB_PATH, sheet, row)
             if video:
-                with _db_lock:
-                    conn = content_store.connect(DB_PATH)
-                    summary_rows = conn.execute(
-                        "SELECT video_id, source_video_ids, summary_type, title, content "
-                        "FROM ai_summaries "
-                        "WHERE summary_type IN ('wechat_material', 'game_guide', 'ai_interview', 'guide_article', 'toutiao_mix') "
-                        "ORDER BY id DESC"
-                    ).fetchall()
-                    conn.close()
+                conn = content_store.open_readonly(DB_PATH)  # 只读：不建表、不抢写锁
+                summary_rows = conn.execute(
+                    "SELECT video_id, source_video_ids, summary_type, title, content "
+                    "FROM ai_summaries "
+                    "WHERE summary_type IN ('wechat_material', 'game_guide', 'ai_interview', 'guide_article', 'toutiao_mix') "
+                    "ORDER BY id DESC"
+                ).fetchall()
+                conn.close()
                 vid = video["id"]
                 related = []
                 for summary_row in summary_rows:
@@ -704,8 +750,7 @@ def api_workbench():
         q = request.args.get("q", "")
         author = request.args.get("author", "")
         status = request.args.get("status", "")
-        with _db_lock:
-            items = material_store.list_workbench(DB_PATH, query=q, author=author, status=status)
+        items = material_store.list_workbench(DB_PATH, query=q, author=author, status=status)
         return jsonify({"items": items, "total": len(items)})
     except Exception as e:
         return jsonify({"items": [], "total": 0, "error": str(e)}), 500
@@ -812,38 +857,36 @@ def api_todo():
     if not DB_PATH.exists():
         return jsonify({"items": [], "stats": {}, "error": "数据库还没生成，先去采集中心跑一条"})
     now = datetime.now()
-    with _db_lock:
-        conn = sqlite3.connect(str(DB_PATH))
-        conn.row_factory = sqlite3.Row
-        try:
-            vids = conn.execute(
-                "SELECT id, status, LENGTH(COALESCE(transcript,'')) AS tlen FROM videos"
-            ).fetchall()
-            covered = set()
-            for r in conn.execute("SELECT video_id, source_video_ids FROM ai_summaries"):
-                if r["video_id"]:
-                    covered.add(r["video_id"])
-                try:
-                    for v in json.loads(r["source_video_ids"] or "[]"):
-                        covered.add(int(v))
-                except (ValueError, TypeError):
-                    continue
-            drafts = conn.execute(
-                "SELECT COUNT(*) AS c FROM ai_summaries WHERE status='draft' "
-                "OR content LIKE '%[AI生成失败%' OR content LIKE '%规则版草稿%'").fetchone()["c"]
-            n_sum = conn.execute("SELECT COUNT(*) AS c FROM ai_summaries").fetchone()["c"]
-            last_out = conn.execute(
-                "SELECT MAX(updated_at) AS t FROM ai_summaries").fetchone()["t"] or ""
-            n_subs = conn.execute("SELECT COUNT(*) AS c FROM subscriptions").fetchone()["c"]
-        finally:
-            conn.close()
+    conn = sqlite3.connect(str(DB_PATH))
+    conn.row_factory = sqlite3.Row
+    try:
+        vids = conn.execute(
+            "SELECT id, status, LENGTH(COALESCE(transcript,'')) AS tlen FROM videos"
+        ).fetchall()
+        covered = set()
+        for r in conn.execute("SELECT video_id, source_video_ids FROM ai_summaries"):
+            if r["video_id"]:
+                covered.add(r["video_id"])
+            try:
+                for v in json.loads(r["source_video_ids"] or "[]"):
+                    covered.add(int(v))
+            except (ValueError, TypeError):
+                continue
+        drafts = conn.execute(
+            "SELECT COUNT(*) AS c FROM ai_summaries WHERE status='draft' "
+            "OR content LIKE '%[AI生成失败%' OR content LIKE '%规则版草稿%'").fetchone()["c"]
+        n_sum = conn.execute("SELECT COUNT(*) AS c FROM ai_summaries").fetchone()["c"]
+        last_out = conn.execute(
+            "SELECT MAX(updated_at) AS t FROM ai_summaries").fetchone()["t"] or ""
+        n_subs = conn.execute("SELECT COUNT(*) AS c FROM subscriptions").fetchone()["c"]
+    finally:
+        conn.close()
 
     need = [v for v in vids if (v["tlen"] or 0) >= 300 and v["id"] not in covered]
     failed = [v for v in vids if (v["status"] or "") == "失败"]
     pending_pkgs, pkg_counts = _packages_pending()
     cfg = sync_tasks.load()
-    with _db_lock:
-        subs = content_store.list_subscriptions(DB_PATH) if DB_PATH.exists() else []
+    subs = content_store.list_subscriptions(DB_PATH) if DB_PATH.exists() else []
     alive = {s["id"] for s in subs}
     due_now = sync_tasks.due_tasks(cfg, now, alive)   # 到点的任务（一组订阅一个任务）
     nxt = None
@@ -913,40 +956,39 @@ def api_dashboard():
     try:
         if not DB_PATH.exists():
             _sync_content_db()
-        with _db_lock:
-            conn = sqlite3.connect(str(DB_PATH))
-            conn.row_factory = sqlite3.Row
-            try:
-                total = conn.execute("SELECT COUNT(*) AS c FROM videos").fetchone()["c"]
-                with_asr = conn.execute(
-                    "SELECT COUNT(*) AS c FROM videos WHERE transcript IS NOT NULL AND transcript != ''"
-                ).fetchone()["c"]
-                authors = conn.execute(
-                    "SELECT author AS name, COUNT(*) AS c FROM videos "
-                    "GROUP BY author ORDER BY c DESC LIMIT 8"
-                ).fetchall()
-                summary_rows = conn.execute(
-                    "SELECT summary_type, COUNT(*) AS c FROM ai_summaries GROUP BY summary_type"
-                ).fetchall()
-                recent_videos = conn.execute(
-                    "SELECT title, author, status, updated_at FROM videos "
-                    "ORDER BY updated_at DESC, id DESC LIMIT 6"
-                ).fetchall()
-                recent_summaries = conn.execute(
-                    "SELECT id, title, summary_type, status, updated_at FROM ai_summaries "
-                    "ORDER BY updated_at DESC, id DESC LIMIT 6"
-                ).fetchall()
-                question_count = 0
-                for row in conn.execute(
-                    "SELECT structured_data FROM ai_summaries WHERE summary_type = 'ai_interview'"
-                ).fetchall():
-                    try:
-                        payload = json.loads(row["structured_data"] or "{}")
-                        question_count += len(payload.get("questions") or [])
-                    except Exception:
-                        pass
-            finally:
-                conn.close()
+        conn = sqlite3.connect(str(DB_PATH))
+        conn.row_factory = sqlite3.Row
+        try:
+            total = conn.execute("SELECT COUNT(*) AS c FROM videos").fetchone()["c"]
+            with_asr = conn.execute(
+                "SELECT COUNT(*) AS c FROM videos WHERE transcript IS NOT NULL AND transcript != ''"
+            ).fetchone()["c"]
+            authors = conn.execute(
+                "SELECT author AS name, COUNT(*) AS c FROM videos "
+                "GROUP BY author ORDER BY c DESC LIMIT 8"
+            ).fetchall()
+            summary_rows = conn.execute(
+                "SELECT summary_type, COUNT(*) AS c FROM ai_summaries GROUP BY summary_type"
+            ).fetchall()
+            recent_videos = conn.execute(
+                "SELECT title, author, status, updated_at FROM videos "
+                "ORDER BY updated_at DESC, id DESC LIMIT 6"
+            ).fetchall()
+            recent_summaries = conn.execute(
+                "SELECT id, title, summary_type, status, updated_at FROM ai_summaries "
+                "ORDER BY updated_at DESC, id DESC LIMIT 6"
+            ).fetchall()
+            question_count = 0
+            for row in conn.execute(
+                "SELECT structured_data FROM ai_summaries WHERE summary_type = 'ai_interview'"
+            ).fetchall():
+                try:
+                    payload = json.loads(row["structured_data"] or "{}")
+                    question_count += len(payload.get("questions") or [])
+                except Exception:
+                    pass
+        finally:
+            conn.close()
 
         summaries = {row["summary_type"]: row["c"] for row in summary_rows}
         return jsonify({
@@ -1159,6 +1201,11 @@ def api_preview_user_videos():
             else:
                 result['warning'] = "视频数为0，请检查Cookie是否有效或已过期"
                 return jsonify(result)
+        # 收尾必须返回：原来只有 total==0 的几条分支写了 return，翻到视频的正常路径
+        # 一路落到函数结尾返回 None，Flask 直接 500
+        # 「The view function for 'api_preview_user_videos' did not return a valid response」——
+        # 表现就是「预览视频列表」按钮一点就报错，而且只在有结果时报错。
+        return jsonify(result)
     except Exception as e:
         import traceback
         traceback.print_exc()
@@ -1353,11 +1400,10 @@ def api_content_material_check(summary_id):
     禁用句式与字数区间对它没意义；它真正的风险是 LLM 那条路把数字和金句编出来。
     """
     try:
-        with _db_lock:
-            item = content_store.get_summary(DB_PATH, summary_id)
-            if not item:
-                return jsonify({"error": "整理稿不存在"}), 404
-            sources = content_store.material_source_text(DB_PATH, item)
+        item = content_store.get_summary(DB_PATH, summary_id)
+        if not item:
+            return jsonify({"error": "整理稿不存在"}), 404
+        sources = content_store.material_source_text(DB_PATH, item)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     result = draft_audit.audit_material(item.get("content") or "", sources)
@@ -1378,7 +1424,8 @@ def api_content_regenerate(summary_id):
 
         summary_type = request.args.get("type") or summary.get("summary_type", "game_guide")
         # 整理稿走快速档：这一步是"把口播压缩组织成结构化稿子"，不需要思考型模型。
-        # 实测 51 篇成功整理稿全是 deepseek-v4-flash 跑的；切到 qwen3.8-max 后生成的
+        # 实测 51 篇成功整理稿全是 deepseek-v4-flash 跑的（现为 v4.1-flash，该数字未重测）；
+        # 切到 qwen3.8-max 后生成的
         # 2 篇 100% 撞 _generate_with_llm 的超时、静默降级成规则版（＝照抄转写原文），
         # 下游海报拆文案拿到的就是没整理过的生料。
         config = _fast_config()
@@ -1443,27 +1490,24 @@ def api_topic_pack():
 
     videos = []
     if keys:
-        with _db_lock:
-            for key in keys:
-                try:
-                    sheet, row_text = str(key).split(":", 1)
-                    video = content_store.get_video_by_source(DB_PATH, sheet, int(row_text))
-                except (ValueError, TypeError):
-                    video = None
-                if video:
-                    videos.append(video)
+        for key in keys:
+            try:
+                sheet, row_text = str(key).split(":", 1)
+                video = content_store.get_video_by_source(DB_PATH, sheet, int(row_text))
+            except (ValueError, TypeError):
+                video = None
+            if video:
+                videos.append(video)
     elif keyword:
-        with _db_lock:
-            videos = content_store.search_videos(DB_PATH, keyword, game=game,
-                                                 limit=int(data.get("limit") or 80))
+        videos = content_store.search_videos(DB_PATH, keyword, game=game,
+                                             limit=int(data.get("limit") or 80))
     else:
         return jsonify({"error": "要么勾选素材，要么给一个用来捞素材的关键词"}), 400
 
     if len(videos) < 2:
         return jsonify({"error": "选题包至少需要 2 条素材（现在 %d 条），交叉核对才有意义" % len(videos)}), 400
 
-    with _db_lock:
-        used = content_store.used_video_ids(DB_PATH)
+    used = content_store.used_video_ids(DB_PATH)
     markdown, stats = topic_pack.build_pack(videos, theme or keyword, used, channel)
     ch = topic_pack.PACK_CHANNELS[channel]
 
@@ -1524,8 +1568,7 @@ def _review_target(kind: str, ref_id: str):
         sources = ""
         sid = data.get("summary_id") or ref_id
         try:
-            with _db_lock:
-                summary = content_store.get_summary(DB_PATH, int(sid))
+            summary = content_store.get_summary(DB_PATH, int(sid))
             sources = (summary or {}).get("content") or ""
         except (TypeError, ValueError):
             sources = ""
@@ -1724,6 +1767,24 @@ def api_ops_import_ledger():
     return jsonify(out)
 
 
+@app.route("/api/bank/overview")
+def api_bank_overview():
+    """答案库与交付看板：题数、来源、自检结论、交付物清单、许可判定，全部现读现算。"""
+    try:
+        return jsonify(bank_board.overview())
+    except Exception as e:
+        return jsonify({"error": str(e), "trace": traceback.format_exc().splitlines()[-3:]}), 500
+
+
+@app.route("/api/bank/file")
+def api_bank_file():
+    """只开放看板列出来的那几个文件，不把整个 product/ 暴露成可猜的下载口。"""
+    name = os.path.basename(request.args.get("name") or "")
+    if name not in bank_board.artifact_names():
+        return jsonify({"error": "这个文件不在看板清单里，不给打开"}), 404
+    return send_from_directory(bank_board.PRODUCT, name)
+
+
 @app.route("/api/content/generate", methods=["POST"])
 def api_content_generate():
     """把选中的视频整理成游戏攻略或 AI 面试题，并保存到 SQLite。"""
@@ -1764,8 +1825,7 @@ def api_content_generate():
                     sheet, row_text = key.split(":", 1)
                     row = int(row_text)
                     _task_status["progress"] = f"读取 [{i+1}/{len(videos)}] {sheet} 第{row}行..."
-                    with _db_lock:
-                        video = content_store.get_video_by_source(DB_PATH, sheet, row)
+                    video = content_store.get_video_by_source(DB_PATH, sheet, row)
                     if not video:
                         _task_status["error"] += f"{key}: 内容库中找不到视频\n"
                         continue
@@ -1974,8 +2034,9 @@ def _video_keyframe_markdown(videos: list, max_frames: int = 5, per_video: int =
     for video in videos:
         if len(collected) >= max_frames:
             break
-        if (video.get("source_sheet") or "") == "微信文章":
-            continue  # 微信文章无视频可抽帧；其 aweme_id 是 URL hash，不跳过会误走下载解析
+        if (video.get("source_sheet") or "") in DB_ONLY_SHEETS:
+            continue  # DB 直写的源无视频可抽帧（微信 aweme_id 是 URL hash、B站是 bvid），
+                      # 不跳过会误走抖音的下载解析路径
         aweme_id = (video.get("aweme_id") or "").strip() or material_store.extract_aweme_id(
             video.get("source_url") or video.get("video_url") or ""
         )
@@ -2084,8 +2145,7 @@ def api_toutiao_generate():
     if _tt_task_status.get("running"):
         return jsonify({"error": "已有头条图文生成任务正在运行"}), 400
 
-    with _db_lock:
-        summary = content_store.get_summary(DB_PATH, int(summary_id))
+    summary = content_store.get_summary(DB_PATH, int(summary_id))
     if not summary:
         return jsonify({"error": "整理稿不存在"}), 404
     if summary.get("summary_type") != "toutiao_mix":
@@ -2387,8 +2447,7 @@ def api_wechat_generate():
     if _wx_task_status.get("running"):
         return jsonify({"error": "已有公众号图文生成任务正在运行"}), 400
 
-    with _db_lock:
-        summary = content_store.get_summary(DB_PATH, int(summary_id))
+    summary = content_store.get_summary(DB_PATH, int(summary_id))
     if not summary:
         return jsonify({"error": "整合稿不存在"}), 404
     if summary.get("summary_type") != "wechat_material":
@@ -2488,6 +2547,38 @@ _poster_status = {"running": False, "done": True, "progress": "", "error": "",
 _poster_task_seq = 0
 
 
+def _humanize_llm_error(full_tb: str) -> str:
+    """把 LLM 端抛回来的堆栈翻成一句人话（完整堆栈已经进日志，不丢）。
+
+    为什么必须翻：2026-10-14 号主点「拆文案」失败，界面上糊了一整屏 Python 堆栈，
+    他只能来问"这是什么问题"。真正的原因就一句——**这一档模型的免费额度用完了**。
+    认不出来的异常仍然带上堆栈最后两行，别把真 bug 藏成"未知错误"。
+    """
+    m = re.search(r"model='([^']+)'", full_tb)
+    model = m.group(1) if m else ""
+    who = model or "这次用的模型"
+    if "insufficient_quota" in full_tb or "Free quota exhausted" in full_tb:
+        return ("%s 的免费额度用完了（平台按模型算额度，不是按账号）。"
+                "三条出路：① 设置页把这一档模型换成还有额度的；② 清空「快速模型」让它退回主模型；"
+                "③ 去控制台关掉「免费额度用尽即停」转按量付费（要花钱）。"
+                % who)
+    if "AuthenticationError" in full_tb or "Error code: 401" in full_tb:
+        return "%s 鉴权失败：key 不对或已失效，去设置页重填" % who
+    if "PermissionDenied" in full_tb or "Error code: 403" in full_tb:
+        return "%s 被端点拒绝（403）：多半是这个模型没给你这个账号开放" % who
+    if "RateLimit" in full_tb or "Error code: 429" in full_tb:
+        return "%s 被限流（429）：等一会儿再点，别连着重试" % who
+    if ("SSLError" in full_tb or "EOF occurred" in full_tb or "ConnectionError" in full_tb
+            or "Max retries exceeded" in full_tb):
+        # 2026-10-15 22:51 实测：图已经生成好（0.5 元已扣），下载那一跳 TLS 被掐
+        return ("这一跳网络断了（对面没报错，是连接被掐断）。等一会儿再点；"
+                "如果是出图那一步断的，图可能已经生成并扣过费，先去百炼控制台看一眼用量再重按")
+    if "Timeout" in full_tb or "timed out" in full_tb:
+        return "%s 这次没响应（超时）：端点慢或断了，可以再点一次" % who
+    tail = [l for l in full_tb.strip().splitlines() if l.strip()][-2:]
+    return "任务失败：%s" % " ⏎ ".join(tail)
+
+
 def _poster_start(stage, fn, summary_id=0):
     """海报任务统一壳。拆解与出图都是几十秒到几分钟的活，必须后台跑 + 前端轮询。"""
     global _poster_task_seq
@@ -2507,7 +2598,9 @@ def _poster_start(stage, fn, summary_id=0):
             _poster_status["error"] = str(e)        # 可预期失败只给一句话，不刷 traceback
             _poster_status["progress"] = "生成失败"
         except Exception:
-            _poster_status["error"] = traceback.format_exc()
+            full = traceback.format_exc()
+            app.logger.error("海报任务失败：\n%s", full)
+            _poster_status["error"] = _humanize_llm_error(full)
             _poster_status["progress"] = "生成失败"
         finally:
             _poster_status["done"] = True
@@ -2520,8 +2613,7 @@ def _poster_start(stage, fn, summary_id=0):
 def _poster_get_summary(summary_id):
     if not summary_id:
         return None
-    with _db_lock:
-        return content_store.get_summary(DB_PATH, int(summary_id))
+    return content_store.get_summary(DB_PATH, int(summary_id))
 
 
 def _guide_frames_for(summary, cfg, progress=None):
@@ -2563,6 +2655,12 @@ def api_poster_plan():
     # 用户在下拉里点过风格就别让模型再改回去：显式选择优先于自由发挥
     style_key = str(data.get("style_key") or "").strip()[:20]
     ratio = str(data.get("ratio") or "9:16").strip()[:5]   # 只影响预览 prompt 的版式描述
+    # 发布渠道（2026-10-13 渠道分叉）：只管装配与展示，拆解本身渠道无关；
+    # 回存进 status 让重开弹窗时 pkHydrate 能恢复到上次的渠道
+    publish_channel = str(data.get("publish_channel") or "toutiao").strip()[:10]
+    if publish_channel not in ai_poster.PUBLISH_CHANNELS:
+        publish_channel = "toutiao"
+    pk_form = str(data.get("form") or "newspic").strip()[:10]
     text_mode = str(data.get("text_mode") or ai_poster.DEFAULT_TEXT_MODE).strip()[:10]
     # 有没有真图决定能不能推"满版大图 / 左右分栏"这类没图站不住的布局
     has_photo = bool(str(data.get("photo") or "").strip())
@@ -2585,6 +2683,7 @@ def api_poster_plan():
         warning = "；".join(ai_poster.draft_gate.draft_blockers(summary))
         _poster_status["plan"] = {"plan": plan, "publish": publish, "violations": bad,
                                   "notes": notes, "chars": ai_poster.plan_chars(plan),
+                                  "publish_channel": publish_channel, "form": pk_form,
                                   # 整组都是攻略页时界面不该再摆"去豆包画无字底图"那一块：
                                   # 这一档的画面是素材真帧，传一张底图回来反而把真帧盖掉
                                   "guide_only": ai_poster.guide_only_plan(plan),
@@ -2675,6 +2774,9 @@ def api_poster_plan_page():
                                   # 整组那份就地换掉这一页一起留着：只重拆一页不该把"上次拆好的
                                   # 文案"冲成只剩一页，否则关掉弹窗再打开什么都没了（只能重拆花钱）
                                   "plan": merged, "publish": prev.get("publish"),
+                                  # 渠道同理：单页重拆不冲掉上次选的发布渠道（重开弹窗要恢复）
+                                  "publish_channel": prev.get("publish_channel") or "toutiao",
+                                  "form": prev.get("form") or "",
                                   "guide_only": ai_poster.guide_only_plan(merged) if merged else False,
                                   "manual_prompts": prev.get("manual_prompts")}
         _poster_status["progress"] = ("✅ 第 %d 页已重拆（%d 字 · 模型 %s）"
@@ -2698,6 +2800,11 @@ def api_poster_generate():
     theme = str(data.get("theme") or "").strip()[:30]
     title = str(data.get("title") or "").strip()[:60]
     ratio = str(data.get("ratio") or "9:16").strip()[:5]
+    # 发布渠道与公众号形态：渠道决定配文尾注/图上脚注/清单，形态仅公众号有意义
+    publish_channel = str(data.get("publish_channel") or "toutiao").strip()[:10]
+    if publish_channel not in ai_poster.PUBLISH_CHANNELS:
+        publish_channel = "toutiao"
+    pk_form = str(data.get("form") or "newspic").strip()[:10]
     plan = data.get("plan") if isinstance(data.get("plan"), dict) else None
     publish = data.get("publish") if isinstance(data.get("publish"), dict) else None
     force = bool(data.get("force"))      # 骨架稿人工复核后的显式放行
@@ -2729,7 +2836,8 @@ def api_poster_generate():
                                              publish=publish, force=force, copies=copies,
                                              do_review=do_review, text_mode=text_mode,
                                              photo=photo, preview_clicks=clicks,
-                                             bases=bases or None)
+                                             bases=bases or None,
+                                             publish_channel=publish_channel, form=pk_form)
         v = manifest.get("verify") or {}
         rv = manifest.get("review") or {}
         ts_chk = manifest.get("typeset") or {}
@@ -2746,7 +2854,9 @@ def api_poster_generate():
                                      "lint": manifest.get("lint") or []}
         _poster_status["plan"] = {"plan": manifest["plan"], "publish": manifest["publish"],
                                   "violations": errs, "chars": manifest["text_chars"],
-                                  "prompt_text": manifest["prompt_text"]}
+                                  "prompt_text": manifest["prompt_text"],
+                                  "publish_channel": manifest.get("publish_channel") or "toutiao",
+                                  "form": manifest.get("form") or ""}
         score = ("，视觉评审 %s/%s 分" % (rv.get("score"), rv.get("full"))) if rv.get("score") else ""
         if manifest.get("text_mode") == "typeset":
             warn = ("，⚠️ 版面提示：" + "；".join(ts_chk.get("problems") or [])) if ts_chk.get("problems") else ""
@@ -3168,8 +3278,11 @@ def _judge_thread(sid, aweme_id):
 @app.route("/api/poster/styles")
 def api_poster_styles():
     """风格预设名单由后端下发：配方原文只有一份，前端不抄一遍才不会漂移。"""
+    sid = request.args.get("summary_id") or 0
+    guide = ai_poster.guide_style_for(sid)
     return jsonify({"items": ai_poster.style_choices(),
-                    # 布局名单同样后端下发：十种构图、能不能没图、卡片数区间，前端不抄
+                    # 布局名单同样后端下发：十种构图、能不能没图、卡片数区间，前端不抄。
+                    # 界面这一档只给「攻略页」（号主 10-16：看版面也是看攻略页）
                     "layouts": ai_poster.layout_choices(),
                     "modes": [{"key": "typeset", "label": "程序排字（推荐，字不会错）"},
                               {"key": "model", "label": "模型画字（整张交给模型，风格更统一但会错字）"}],
@@ -3183,8 +3296,13 @@ def api_poster_styles():
                     # 攻略页三套皮肤按素材轮换，轮换公式只有 Python 这一份：
                     # 前端点「改成攻略页」时带着 summary_id 来问该用哪张脸，别自己抄一遍算法，
                     # 否则下拉显示深墨绿、拆解实际出米白，界面就在说假话。
+                    # defaultStyle 也用它：打开弹窗默认就该落在这一档这一张脸上。
                     "guideStyles": list(ai_poster.GUIDE_STYLES),
-                    "guideStyle": ai_poster.guide_style_for(request.args.get("summary_id") or 0)})
+                    "guideStyle": guide, "defaultStyle": guide,
+                    # 名单收窄了要说清是收窄不是丢了：全名单还在 STYLE_PRESETS 里，
+                    # 只是不进这个下拉（模板管理页看得到）
+                    "hiddenStyles": [k for k in ai_poster.STYLE_ORDER
+                                     if k not in ai_poster.GUIDE_STYLES]})
 
 
 @app.route("/api/poster/adoption")
@@ -3227,6 +3345,9 @@ def api_poster_list():
             items.append({"id": i.get("id"), "summary_id": i.get("summary_id") or i.get("id"),
                           "title": i.get("title"), "url": i.get("url"),
                           "chars": i.get("text_chars"), "ratio": i.get("ratio"),
+                          # 旧包没有这两个键，前端按缺省不显示渠道标签
+                          "publish_channel": i.get("publish_channel") or "toutiao",
+                          "form": i.get("form") or "",
                           "source_title": i.get("source_title") or "",
                           "style_label": i.get("style_label") or "",
                           "text_mode": i.get("text_mode") or "model",
@@ -3440,6 +3561,19 @@ def api_ai_config_get():
     })
 
 
+@app.route("/api/ai/quota")
+def api_ai_quota():
+    """免费额度还剩多少（本地账）。产线现在用哪两个模型也一并回，界面才知道该盯谁。"""
+    cfg = _ai_config()
+    return jsonify({"rows": ai_quota.status(),
+                    "hook": ai_quota.installed(),
+                    "in_use": {"主模型（出图/回读/整理稿）": cfg.get("model") or "",
+                               "快速模型（拆解·卡片化）": _fast_config().get("model") or "",
+                               "看图（拆参考图）": cfg.get("vision_model") or "",
+                               "出图（画底图）": cfg.get("image_model") or ""},
+                    "warn_at": ai_quota.WARN_AT, "danger_at": ai_quota.DANGER_AT})
+
+
 @app.route("/api/ai/config", methods=["POST"])
 def api_ai_config_save():
     data = request.get_json(force=True)
@@ -3478,7 +3612,7 @@ def _ai_config_from_payload(data: dict) -> dict:
     method = collector.normalize_ai_method((data.get("method") or "").strip() or saved["method"])
     api_key = (data.get("api_key") or "").strip() or saved.get("api_key") or ""
     if method == "deepseek":
-        default_base, default_model = "https://api.deepseek.com", "deepseek-chat"
+        default_base, default_model = "https://api.deepseek.com", "deepseek-v4.1-flash"
     else:
         default_base, default_model = "https://api.openai.com/v1", "gpt-4o-mini"
     same_method = saved.get("method") == method
@@ -3504,7 +3638,10 @@ def api_ai_test():
         resp = client.chat.completions.create(
             model=cfg["model"],
             messages=[{"role": "user", "content": "连接测试，请只回复两个字母：OK"}],
-            max_tokens=8,
+            # 不能给 8：这里的模型（主档 qwen3.8-max / 快速档 deepseek-v4.1-flash）都默认开思考，
+            # 8 个 token 全被 reasoning 吃掉，content 返回空串——「测试连接」看着像没通但其实通了。
+            # 实测该提示词 reasoning 只用 12–71，给 512 是留余量，单次仍在一秒级。
+            max_tokens=512,
         )
         reply = (resp.choices[0].message.content or "").strip()
         return jsonify({"success": True, "reply": reply, "model": cfg["model"]})
@@ -3551,11 +3688,34 @@ def api_subscriptions_list():
     if not DB_PATH.exists():
         return jsonify({"items": []})
     try:
-        with _db_lock:
-            items = content_store.list_subscriptions(DB_PATH)
+        items = content_store.list_subscriptions(DB_PATH)
     except Exception as e:
         return jsonify({"items": [], "error": str(e)}), 500
     return jsonify({"items": items})
+
+
+@app.route("/api/bilibili/status")
+def api_bilibili_status():
+    """B 站采集自检第一步：cookie 配没配。只读本地文件，不打外部接口。"""
+    from src.bilibili_fetcher import cookie_status
+    try:
+        return jsonify(cookie_status())
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/bilibili/probe", methods=["POST"])
+def api_bilibili_probe():
+    """真发一次投稿列表请求，验证登录态能不能过风控。只在用户点「测试连通」时走。"""
+    from src.bilibili_fetcher import probe, parse_mid
+    data = request.get_json(force=True, silent=True) or {}
+    mid = parse_mid(data.get("mid") or data.get("url") or "")
+    if not mid:
+        return jsonify({"ok": False, "error": "请填写 UP 主空间链接或数字空间号"}), 400
+    try:
+        return jsonify(probe(mid))
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 
 @app.route("/api/subscriptions", methods=["POST"])
@@ -3582,6 +3742,30 @@ def api_subscriptions_add():
             return jsonify({"error": str(e)}), 500
         return jsonify({"success": True, "subscription": sub})
 
+    if platform == "bilibili":
+        # B 站：url 是 UP 主空间链接或直接填数字空间号；sec_uid 用可读的 bili:<mid>
+        # （微信那份是 md5 合成串，这里不必——mid 本身就是稳定主键）
+        from src.bilibili_fetcher import parse_mid, resolve_author
+        mid = parse_mid(url)
+        if not mid:
+            return jsonify({"error": "B 站要填 UP 主空间链接（https://space.bilibili.com/<数字>/video）"
+                                     "或直接填数字空间号；视频稿链接认不出作者"}), 400
+        sec_uid = "bili:%s" % mid
+        user_url = "https://space.bilibili.com/%s/video" % mid
+        if not author:
+            # card 接口现在会被风控，resolve_author 内部会退到稿件 owner.name
+            try:
+                author = resolve_author(mid)
+            except Exception as e:
+                print(f"[subscriptions] B站昵称取回失败（仍可订阅，同步时会再试）: {e}", flush=True)
+        try:
+            with _db_lock:
+                sub = content_store.add_subscription(
+                    DB_PATH, sec_uid, user_url, author, category, game, "bilibili")
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+        return jsonify({"success": True, "subscription": sub, "mid": mid})
+
     # 抖音：url 是用户主页链接
     from src.fetch_user_videos import extract_sec_uid_from_url, resolve_short_url
     if "v.douyin.com" in url or "/share/" in url:
@@ -3605,16 +3789,15 @@ def api_authors():
     if not DB_PATH.exists():
         return jsonify({"authors": []})
     try:
-        with _db_lock:
-            conn = content_store.connect(DB_PATH)
-            try:
-                rows = conn.execute(
-                    "SELECT COALESCE(NULLIF(TRIM(author),''),'未知作者') AS a, COUNT(*) AS n "
-                    "FROM videos GROUP BY a ORDER BY n DESC"
-                ).fetchall()
-                subs = {s["author"] for s in content_store.list_subscriptions(DB_PATH)}
-            finally:
-                conn.close()
+        conn = content_store.open_readonly(DB_PATH)  # 只读：不建表、不抢写锁
+        try:
+            rows = conn.execute(
+                "SELECT COALESCE(NULLIF(TRIM(author),''),'未知作者') AS a, COUNT(*) AS n "
+                "FROM videos GROUP BY a ORDER BY n DESC"
+            ).fetchall()
+            subs = {s["author"] for s in content_store.list_subscriptions(DB_PATH)}
+        finally:
+            conn.close()
         authors = [
             {"author": r["a"], "count": r["n"], "subscribed": r["a"] in subs}
             for r in rows
@@ -3741,14 +3924,81 @@ def api_subscriptions_tags():
 
 @app.route("/api/subscriptions/<int:sub_id>", methods=["DELETE"])
 def api_subscriptions_delete(sub_id):
+    """取消订阅：**连带删掉这个号采进来的一切**，删了不可恢复。
+
+    2026-10-16 号主拍板的三条口径，别再自作主张改回保守版：
+      ① 删到图文包与图片目录这一层（output/{toutiao,wechat,poster}/<稿id>、
+         关键帧目录、封面 jpg、raw json）；
+      ② 跨号合集稿只要引用到被删素材就整篇删（不剔除单个 id）；
+      ③ 不加防误删——不统计条数、不留备份（output/ 不在 git 里，本来也没版本兜底）。
+    顺序：整理稿 → 素材行 → 磁盘产物 → Excel 行与索引 → 订阅本身。
+    """
     try:
         with _db_lock:
-            ok = content_store.delete_subscription(DB_PATH, sub_id)
+            subs = content_store.list_subscriptions(DB_PATH)
+        sub = next((s for s in subs if s["id"] == sub_id), None)
+        if not sub:
+            return jsonify({"error": "订阅不存在"}), 404
+        sec_uid = (sub.get("sec_uid") or "").strip()
+        if not sec_uid:
+            # 没有 sec_uid 就不敢猜该删哪些行，宁可只删订阅
+            with _db_lock:
+                content_store.delete_subscription(DB_PATH, sub_id)
+            return jsonify({"success": True, "purged": 0,
+                            "note": "订阅记录缺 sec_uid，只取消了订阅，没动素材"})
+
+        import shutil
+        with _db_lock:
+            targets = content_store.subscription_cleanup_targets(
+                DB_PATH, sec_uid, sub.get("author") or "")
+        videos = targets["videos"]
+        sids = targets["summary_ids"]
+        purged = {"videos": 0, "summaries": 0, "packages": 0, "frames": 0}
+
+        with _db_lock:
+            # 1. 整理稿（含被判定整篇删掉的合集稿）+ 它们的图文包/海报目录
+            for sid in sids:
+                for deleter in (toutiao_graphics.delete_package,
+                                wechat_graphics.delete_package,
+                                ai_poster.delete_package):
+                    try:
+                        if deleter(sid):
+                            purged["packages"] += 1
+                    except Exception as e:
+                        print(f"[unsubscribe] 删图文包 {sid} 失败（继续）: {e}", flush=True)
+                content_store.delete_summary(DB_PATH, sid)
+                purged["summaries"] += 1
+            # 2. 素材行 + 按 aweme_id 归位的磁盘产物
+            for v in videos:
+                content_store.delete_video(DB_PATH, v["sheet"], v["row"])
+                purged["videos"] += 1
+                aweme_id = v.get("aweme_id") or ""
+                if not aweme_id:
+                    continue
+                safe = material_store.safe_id(aweme_id)
+                kdir = material_store.KEYFRAMES_DIR / safe
+                if kdir.exists():
+                    shutil.rmtree(kdir, ignore_errors=True)
+                    purged["frames"] += 1
+                for jpg in material_store.COVERS_DIR.glob(safe + ".*"):
+                    try:
+                        jpg.unlink()
+                    except OSError:
+                        pass
+                raw = material_store.RAW_DIR / (safe + ".json")
+                if raw.exists():
+                    try:
+                        raw.unlink()
+                    except OSError:
+                        pass
+            # 3. Excel 行清空 + 索引摘除 + 重同步（与「删除视频」同一套动作）
+            _purge_library_rows([(v["sheet"], v["row"]) for v in videos])
+            _sync_content_db()
+            content_store.delete_subscription(DB_PATH, sub_id)
+        print(f"[unsubscribe] 订阅 {sub_id}（{sub.get('author') or sec_uid}）连带清理：{purged}", flush=True)
+        return jsonify({"success": True, "purged": purged})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-    if not ok:
-        return jsonify({"error": "订阅不存在"}), 404
-    return jsonify({"success": True})
 
 
 def _do_subscription_sync(sub_id=None, sub_ids=None, cookie=None):
@@ -3773,9 +4023,10 @@ def _do_subscription_sync(sub_id=None, sub_ids=None, cookie=None):
             _sub_status["error"] = "没有可同步的订阅"
             return
 
-        # 分流：抖音需要 cookie + parser；微信不需要
+        # 分流：抖音需要 cookie + parser；微信不需要；B站需要自己的 B 站 cookie
         douyin_subs = [s for s in subs if s.get("platform", "douyin") == "douyin"]
         wechat_subs = [s for s in subs if s.get("platform") == "wechat"]
+        bilibili_subs = [s for s in subs if s.get("platform") == "bilibili"]
 
         if douyin_subs and not cookie:
             _sub_status["error"] = "抖音订阅需要 Cookie，请先在采集中心完成一次采集"
@@ -3783,6 +4034,8 @@ def _do_subscription_sync(sub_id=None, sub_ids=None, cookie=None):
 
         summary = []
         pending_marks = []  # 有新视频的抖音作者：终局统一标记（见下方终局块）
+        # 本轮真正入库的 (source_sheet, source_row)：收尾只给这批打标，不扫全库
+        new_rows = []
 
         # ── 微信订阅同步 ──
         if wechat_subs:
@@ -3820,6 +4073,7 @@ def _do_subscription_sync(sub_id=None, sub_ids=None, cookie=None):
                             category=sub.get("category") or "",
                             game=sub.get("game") or "",
                         )
+                    new_rows += [(i.get("source_sheet"), i.get("source_row")) for i in inserted]
                     cat_note = f"，已按订阅标记分类「{sub['category']}」{len(inserted)} 条" if sub.get("category") and inserted else ""
                     with _db_lock:
                         content_store.update_subscription_sync(
@@ -3837,6 +4091,80 @@ def _do_subscription_sync(sub_id=None, sub_ids=None, cookie=None):
                         content_store.update_subscription_sync(
                             DB_PATH, sub["id"], 0, f"同步失败: {e}")
                     summary.append(f"{name}: 失败 ({e})")
+
+        # ── B 站订阅同步 ──
+        # 和微信一样是「DB 直写、不进 Excel、不跑 ASR」：正文来自 B 站字幕轨
+        # （人工 CC 优先，其次 AI 轨）。放在抖音分支之前、不并进任一分支，
+        # 否则只勾 B 站订阅时又会重演"新素材永远缺 ai_tags"那个坑。
+        if bilibili_subs:
+            from src.bilibili_fetcher import (
+                sync_bilibili_user, load_cookie as _bili_load_cookie)
+            bili_ck = ""
+            try:
+                bili_ck, _bili_src = _bili_load_cookie()
+            except RuntimeError as e:
+                # cookie 没配只让 B 站这几条失败，不能挡住抖音/微信那两档
+                note = str(e).splitlines()[0][:80]
+                for sub in bilibili_subs:
+                    with _db_lock:
+                        content_store.update_subscription_sync(DB_PATH, sub["id"], 0, note)
+                    summary.append(f"{sub['author'] or sub['sec_uid']}: {note}")
+            if bili_ck:
+                for si, sub in enumerate(bilibili_subs, 1):
+                    mid = (sub.get("sec_uid") or "").split(":", 1)[-1]
+                    name = sub["author"] or ("UP " + mid)
+                    _sub_status["progress"] = f"[B站 {si}/{len(bilibili_subs)}] {name}: 拉投稿列表..."
+                    try:
+                        with _db_lock:
+                            known = content_store.get_bilibili_bvids(DB_PATH)
+                        res = sync_bilibili_user(mid, known_bvids=known,
+                                                 limit=BILI_SYNC_LIMIT, cookie=bili_ck)
+                        if res["error"]:
+                            with _db_lock:
+                                content_store.update_subscription_sync(
+                                    DB_PATH, sub["id"], 0, res["error"])
+                            summary.append(f"{name}: {res['error']}")
+                            continue
+                        new = res["videos"]
+                        extra = ("；" + res["note"]) if res.get("note") else ""
+                        if not new:
+                            with _db_lock:
+                                content_store.update_subscription_sync(
+                                    DB_PATH, sub["id"], 0, "无新投稿" + extra)
+                            summary.append(f"{name}: 无新投稿{extra}")
+                            continue
+                        with _db_lock:
+                            inserted = content_store.insert_bilibili_videos(
+                                DB_PATH, new, author=name, sec_uid=sub["sec_uid"],
+                                category=sub.get("category") or "",
+                                game=sub.get("game") or "")
+                        new_rows += [(i.get("source_sheet"), i.get("source_row")) for i in inserted]
+                        # 字幕情况直接写进同步备注：用户看一行就知道这批素材能不能直接用
+                        n_sub = sum(1 for v in inserted if v.get("subs_status") in ("字幕", "AI字幕"))
+                        n_none = len(inserted) - n_sub
+                        cat_note = (f"，已按订阅标记分类「{sub['category']}」"
+                                    if sub.get("category") and inserted else "")
+                        note = (f"新增 {len(inserted)} 条（有字幕 {n_sub} / 无正文 {n_none}）"
+                                f"{cat_note}{extra}")
+                        shown_author = name
+                        if not sub.get("author"):
+                            # 添加订阅时昵称没取到（card 接口会被风控），这轮从稿件 owner 补上，
+                            # 免得列表长期显示"UP 123456"、按作者筛选也永远命不中
+                            shown_author = res.get("author") or name
+                        with _db_lock:
+                            content_store.update_subscription_sync(
+                                DB_PATH, sub["id"], len(inserted), note, author=shown_author)
+                        summary.append(f"{shown_author}: {note}")
+                        _sub_status["new_items"] += [
+                            {"kind": "bilibili", "author": shown_author,
+                             "title": (v.get("title") or "").strip(),
+                             "published_at": (v.get("published_at") or "")[:10]}
+                            for v in inserted]
+                    except Exception as e:
+                        with _db_lock:
+                            content_store.update_subscription_sync(
+                                DB_PATH, sub["id"], 0, f"B站同步失败: {e}")
+                        summary.append(f"{name}: 失败 ({e})")
 
         # ── 抖音订阅同步 ──
         if douyin_subs:
@@ -3866,6 +4194,7 @@ def _do_subscription_sync(sub_id=None, sub_ids=None, cookie=None):
                     # ── 浏览器批量结果查表（2026-09-21 起浏览器优先绕 Argus 风控，
                     #    2026-09-27 起批量一次拉完，不再逐作者冷启动）──
                     videos = []
+                    fetch_empty = False   # 旧 API 原始拉到 0 条＝这次根本没看到主页，别记成"无新视频"
                     ids = browser_ids.get(str(sub["id"])) or []
                     if ids:
                         # 浏览器成功拿到列表：去重后无新就是无新，
@@ -3882,12 +4211,18 @@ def _do_subscription_sync(sub_id=None, sub_ids=None, cookie=None):
                             exclude_excel=str(EXCEL_PATH),
                         )
                         videos = result.get("videos") or []
+                        # total 是去重后剩的、filtered 是去重掉的：相加为 0 ＝ 原始就没拉到
+                        # 任何一条，多半是 Argus 风控拦了旧 API——这要如实报，不能说"无新"
+                        fetch_empty = ((result.get("total") or 0)
+                                       + (result.get("filtered") or 0)) == 0
                     new_author = ""
                     if not videos:
+                        note = ("取链为空（浏览器没覆盖到、旧 API 疑似被风控拦），别当无新处理"
+                                if fetch_empty else "无新视频")
                         with _db_lock:
                             content_store.update_subscription_sync(
-                                DB_PATH, sub["id"], 0, "无新视频")
-                        summary.append(f"{name}: 无新视频")
+                                DB_PATH, sub["id"], 0, note)
+                        summary.append(f"{name}: {note}")
                         continue
 
                     # 写入 Excel
@@ -3949,6 +4284,7 @@ def _do_subscription_sync(sub_id=None, sub_ids=None, cookie=None):
                 sub = pm["sub"]
                 name = sub["author"] or sub["sec_uid"][:12]
                 rows = [pm["next_row"] + i for i in range(pm["count"])]
+                new_rows += [("抖音视频数据", r) for r in rows]
                 # 标记来源 + 回填作者 sec_uid（订阅入口，按行号精确标记）
                 with _db_lock:
                     content_store.mark_video_source(
@@ -3994,13 +4330,20 @@ def _do_subscription_sync(sub_id=None, sub_ids=None, cookie=None):
                      "published_at": ""} for tt in new_titles if tt]
 
         # 同步入库后补 AI 增量打标：只补缺口（订阅链路新行自带 category 但缺 ai_tags，
-        # 选题雷达依赖 ai_tags）。必须放在两条分支之外——原先挂在抖音分支里，
+        # 选题雷达依赖 ai_tags）。必须放在三条分支之外——原先挂在抖音分支里，
         # 只勾微信订阅同步时新文章一条标都不打，雷达/渠道策略侧就等于「没有更新」。
+        # 范围锁在本轮新增的 id 上：不带范围的那句 WHERE 会把全库缺口一起过 LLM。
         # AI 未配置时静默跳过，打标失败不算同步失败
         _sub_status["progress"] = "AI 自动打标..."
-        _cls = _auto_classify_after_sync()
+        new_ids = []
+        if new_rows:
+            with _db_lock:
+                new_ids = content_store.video_ids_by_rows(DB_PATH, new_rows)
+        _cls = _auto_classify_after_sync(only_ids=new_ids)
         if _cls.get("classified"):
-            summary.append(f"AI 打标 {_cls['classified']}/{_cls['total']} 条")
+            summary.append(f"AI 打标 {_cls['classified']}/{_cls['total']} 条（仅本轮新增）")
+        elif new_rows and _cls.get("skipped") == "ai_not_configured":
+            summary.append(f"本轮新增 {len(new_rows)} 条未打标（AI 未配置）")
 
         _sub_status["result"] = summary
         _sub_status["progress"] = "✅ 订阅同步完成：" + "；".join(summary)
@@ -4081,8 +4424,7 @@ def _autosync_tick(now=None):
     cfg = sync_tasks.load()
     if not cfg.get("enabled") or not cfg.get("tasks"):
         return
-    with _db_lock:
-        subs = content_store.list_subscriptions(DB_PATH)
+    subs = content_store.list_subscriptions(DB_PATH)
     alive = {s["id"] for s in subs}
     due = sync_tasks.due_tasks(cfg, now, alive)
     if not due:
@@ -4120,8 +4462,7 @@ def _start_autosync():
 
 
 def _alive_subs():
-    with _db_lock:
-        return content_store.list_subscriptions(DB_PATH)
+    return content_store.list_subscriptions(DB_PATH)
 
 
 def _task_view(cfg, subs, now):
@@ -4364,6 +4705,43 @@ def api_sync_tasks_run():
 # 删除：视频 / 面试题
 # ════════════════════════════════════════════════════════════════
 
+def _purge_library_rows(pairs):
+    """清 Excel 行（只清内容不删行，行号保持稳定）+ 重建索引并摘掉这些条目。
+
+    抽出来给两处用：素材库的「删除视频」和取消订阅的连带清理。
+    原来这段逻辑只写在删除路由里，取消订阅要复用就得抄一遍——抄一份就会漂移。
+    pairs: [(source_sheet, source_row), ...]；DB 直写的源（微信/B站）不在 Excel 里，自动跳过。
+    """
+    import openpyxl
+
+    keyset = {(s, int(r)) for s, r in pairs if s and r}
+    if not keyset:
+        return
+    excel_pairs = [(s, r) for (s, r) in keyset if s not in DB_ONLY_SHEETS]
+    if excel_pairs:
+        wb = openpyxl.load_workbook(str(EXCEL_PATH))
+        target_sheets = {s for s, _ in excel_pairs}
+        for ws in wb.worksheets:
+            if ws.title not in target_sheets:
+                continue
+            for (s, r) in excel_pairs:
+                if s == ws.title and 2 <= r <= ws.max_row:
+                    for col in range(1, 16):
+                        ws.cell(r, col).value = None
+        wb.save(str(EXCEL_PATH))
+        wb.close()
+        collector.update_video_index(str(EXCEL_PATH))
+    if INDEX_PATH.exists():
+        with open(INDEX_PATH, encoding="utf-8") as f:
+            idx = json.load(f)
+        idx["videos"] = [
+            v for v in idx.get("videos", [])
+            if (v.get("sheet"), int(v.get("row") or 0)) not in keyset
+        ]
+        with open(INDEX_PATH, "w", encoding="utf-8") as f:
+            json.dump(idx, f, ensure_ascii=False, indent=2)
+
+
 @app.route("/api/videos/delete", methods=["POST"])
 def api_videos_delete():
     """删除视频：清 Excel 行（保持行号稳定）→ 删 SQLite 记录 → 重建索引。"""
@@ -4372,42 +4750,20 @@ def api_videos_delete():
     if not items:
         return jsonify({"error": "请选择要删除的视频"}), 400
     try:
-        import openpyxl
-
         deleted = 0
         with _db_lock:
             # 1. 删 SQLite
+            pairs = []
             for it in items:
                 sheet, row = it.get("sheet"), int(it.get("row") or 0)
                 if sheet and row:
                     content_store.delete_video(DB_PATH, sheet, row)
-                    if sheet == "微信文章":
-                        deleted += 1  # 微信文章不落 Excel，DB 删除即计数
-            # 2. 清 Excel 行（所有 sheet 中匹配行清空 1-15 列，行号保持不变）
-            wb = openpyxl.load_workbook(str(EXCEL_PATH))
-            target_sheets = {it.get("sheet") for it in items if it.get("sheet")}
-            keyset = {(it.get("sheet"), int(it.get("row") or 0)) for it in items}
-            for ws in wb.worksheets:
-                if ws.title not in target_sheets:
-                    continue
-                for (s, r) in keyset:
-                    if s == ws.title and 2 <= r <= ws.max_row:
-                        for col in range(1, 16):
-                            ws.cell(r, col).value = None
-                        deleted += 1
-            wb.save(str(EXCEL_PATH))
-            wb.close()
-            # 3. 重建索引（追加分）+ 显式移除已删条目（索引是合并模式，不会自动删）
-            collector.update_video_index(str(EXCEL_PATH))
-            if INDEX_PATH.exists():
-                with open(INDEX_PATH, encoding="utf-8") as f:
-                    idx = json.load(f)
-                idx["videos"] = [
-                    v for v in idx.get("videos", [])
-                    if (v.get("sheet"), int(v.get("row") or 0)) not in keyset
-                ]
-                with open(INDEX_PATH, "w", encoding="utf-8") as f:
-                    json.dump(idx, f, ensure_ascii=False, indent=2)
+                    pairs.append((sheet, row))
+                    if sheet in DB_ONLY_SHEETS:
+                        deleted += 1  # DB 直写的源不落 Excel，删 SQLite 即计数
+            # 2-3. 清 Excel 行 + 重建/摘除索引（与取消订阅共用一套动作）
+            _purge_library_rows(pairs)
+            deleted += sum(1 for s, _ in pairs if s not in DB_ONLY_SHEETS)
             # 4. 重同步内容库
             _sync_content_db()
         return jsonify({"success": True, "deleted": deleted})
@@ -4463,7 +4819,10 @@ if __name__ == "__main__":
     print(f"🎬 video2text Web 面板")
     print(f"   Excel: {EXCEL_PATH}")
     print(f"   启动: http://127.0.0.1:15801")
-    # 启动时幂等回填 author_sec_uid（按订阅作者名匹配存量视频；已填的不动）
+    # 启动时幂等回填 author_sec_uid（按订阅作者名匹配存量视频；已填的不动）。
+    # 顺带一件必须留着的事：这一句会开一次读写连接、把库结构（建表 + 补列）迁到位。
+    # 读接口现在走 content_store.open_readonly()，只读连接不会自己补列，
+    # 结构没新就报错——所以别把这句当可有可无的兼容代码删掉。
     try:
         if DB_PATH.exists():
             _n = content_store.backfill_author_sec_uid_from_subscriptions(DB_PATH)
