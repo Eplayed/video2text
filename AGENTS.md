@@ -42,7 +42,7 @@ As this project's AI coding tool, you must follow the additional conventions bel
 3. 运行数据不进 git：`config/config.env`（Cookie/API Key）、`video_index.json` 等索引文件、`*.json` 索引——换机时手动迁移。
 4. AI 加工未配置时静默跳过、不阻断采集主流程。
 5. 改 `src/graphics/`（配色/字体/版式三轴、模板、渠道适配）前必读 `.agents/memories/40-graphics-variants.md`——三轮「选了不生效」静默失效复盘全在其中；改完必须跑 `/graphics-verify` 三条线全绿。
-6. 界面类改动收尾前**自己把流程走一遍**：`python3 scripts/agent/ui_walk.py <整合稿id> "主题" --plan`（headless 走弹窗、把每处用户会读到的文案原样打印＋截图），再跑门禁。号主只有「截图 + 一句话」这一种反馈方式，等他指出来就已经花掉他一轮。判据要跟后端同源、别拿上次回传的标记当现状——那次抓到的是「界面写 0 元、后端照样扣钱」。
+6. 界面类改动收尾前**自己把流程走一遍**：`python3 scripts/agent/ui_walk.py <整合稿id> "主题" --plan`（headless 走弹窗、把每处用户会读到的文案原样打印＋截图），再跑门禁。号主只有「截图 + 一句话」这一种反馈方式，等他指出来就已经花掉他一轮。判据要跟后端同源，别拿上次回传的标记当现状——那次抓到的是「界面写 0 元、后端照样扣钱」。
 
 ## Qoder 项目技能（`.qoder/skills/`）
 
@@ -51,9 +51,9 @@ As this project's AI coding tool, you must follow the additional conventions bel
 
 ## 角色路由（自媒体内容产线）
 
-内容线的活按角色走（全局 skill `~/.qoder-cn/skills/media-*`），**进会话先定渠道**（头条 / 公众号）：两渠道的素材池、规则权威源、产物目录、门禁 kind 全部分家，一条线的结论不许直接搬到另一条线。
+内容线的活按角色走（项目内 skill `.qoder/skills/media-*`，9 个角色；该目录已写进 `.gitignore`，公开仓库里不出现），**进会话先定渠道**（头条 / 公众号）：两渠道的素材池、规则权威源、产物目录、门禁 kind 全部分家，一条线的结论不许直接搬到另一条线。
 
-`/media-pm`（需求与验收标准）→ `/media-planner`（选题与角度；**角度门三问没答完禁止写稿**）→ `/media-ui`（版式与样张；必须有截图才算完成）→ `/media-dev`（产线代码；回归 + 按关注点提交）→ `/media-ops`（分发、台账；每周只看涨粉与钱两个数）。
+`/media-pm`（需求与验收标准）→ `/media-planner`（选题与角度；**角度门三问没答完禁止写稿**）→ 成稿二选一：`/media-writer`（一个选题包 → 一篇整合稿，交稿即过机器门）或 `/media-material`（单条素材 → 素材档案改到能发）→ `/media-ui`（版式与样张；必须有截图才算完成）→ `/media-publish`（发布清单、人工发、登记回填；**永不自动发布**）→ `/media-ops`（台账；每周只看涨粉与钱两个数）→ `/media-retro`（数据回灌成旋钮建议，不写库不改代码）。产线代码任何时候走 `/media-dev`。体检与改写用项目内 `/article-audit`、`/article-humanize`。
 
 角色之间**用文件交接，不靠会话记忆**：落点 `output/角色交接/<日期>-<渠道>-<环节>.md`（命名与每份最低要求见该目录 README）。被打回时回对应那份文件改结论，不许口头改。
 

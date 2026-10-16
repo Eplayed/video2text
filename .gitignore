@@ -9,6 +9,8 @@ build/
 # 本地配置（包含 Cookie/API Key）
 config/config.env
 config/config.env.local
+# 换 key/换 cookie 时手动留的备份，内容和上面那份一样是凭据，别让它顺着 git add 溜进库
+config/config.env.local.bak*
 # 用户自己收编的海报模板：是运行数据，换机时手动迁移，不入库
 config/poster_templates.json
 config/poster_templates/
@@ -64,3 +66,6 @@ vendor/
 
 # 要卖的资料成品与原料不进公开仓库（GitHub 上是 PUBLIC，推上去等于免费公开）
 product/
+
+# 角色 skill 里有账号名、粉丝/收益实测数字、合规口径，仓库是 PUBLIC，只留本机
+.qoder/skills/media-*
