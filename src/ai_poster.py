@@ -86,7 +86,14 @@ MD_LIMITS = {"total": MAX_TOTAL_CHARS, "title": TITLE_MAX, "subtitle": SUBTITLE_
 
 
 def limits_for(text_mode):
-    return dict(TS_LIMITS if text_mode == "typeset" else MD_LIMITS)
+    """按"出法"给字数预算。
+
+    ⚠ 这里以前写的是 `TS_LIMITS if text_mode == "typeset" else MD_LIMITS`——
+    任何拼错的值（2026-10-14 实测：传了个 'guide' 进去）都会**悄悄落到"直出成品"那一档**，
+    卡片标题从 8 字变 6 字、说明从 40 字变 10 字，拆出来的东西薄一半，
+    而调用方完全看不出来。改成反过来：只有明确 'model' 才用 MD，其余一律按默认的排版档走。
+    """
+    return dict(MD_LIMITS if text_mode == "model" else TS_LIMITS)
 
 
 # ── 上图文字的"过程词"闸 ────────────────────────────────────────────────
@@ -168,30 +175,56 @@ REVIEW_PASS = 18            # 五项满分 25，低于这个分不建议直接�
 # 合规尾注：图是 AI 画的、文字是 AI 写的，转述声明必须随配文一起发
 COMPLIANCE_NOTE = "本文由 AI 辅助整理归纳，内容源自公开分享，观点与结论归原作者，如有侵权请联系删除。"
 
-# 海报版发布检查清单：平台侧动作 AI 替不了，逐条人工过
-CHECKLIST = [
-    "图内文字已核对：程序排字模式由代码落字、不会错，只需看版面提示有没有截断；"
-    "模型画字模式必须 manifest.verify.ok = true，未通过别发",
-    "视觉评审已过（manifest.review）：低于 %d 分或画面占比低于 40%% 时先换候选/换风格重出，别硬发" % REVIEW_PASS,
-    "数字/版本/价格类信息人工核对一手来源（ASR 与模型都可能出错）",
-    "「文章设置」勾选「内容由 AI 生成」（2025-09-01 起强制，平台不自动标注）",
-    "图片消息无「声明原创」入口（平台未开放图片原创），勿找该按钮、勿群发后补标",
-    "配文保留文末合规尾注，勿删；正文禁外链",
-    "尺寸与平台匹配：9:16 小红书/抖音图文、3:4 公众号图片消息、1:1 通用封面",
+# 海报版发布检查清单：平台侧动作 AI 替不了，逐条人工过。
+# 每条带适用渠道标签（"all"＝三渠道都要；"wechat:article"＝公众号·文章配图形态独有），
+# 由 checklist_for() 过滤——一次发布只该看到那条线要过的门（2026-10-13 渠道分叉落地）。
+_CHECKLIST_ITEMS = [
+    ("all", "图内文字已核对：程序排字模式由代码落字、不会错，只需看版面提示有没有截断；"
+            "模型画字模式必须 manifest.verify.ok = true，未通过别发"),
+    ("all", "视觉评审已过（manifest.review）：低于 %d 分或画面占比低于 40%% 时先换候选/换风格重出，别硬发" % REVIEW_PASS),
+    ("all", "数字/版本/价格类信息人工核对一手来源（ASR 与模型都可能出错）"),
+    ("all", "尺寸与平台匹配：9:16 小红书/抖音图文、3:4 公众号图片消息、1:1 通用封面"),
+    ("all", "发布后 72 小时回填数据，便于回看哪种风格预设、哪种画面占比有效"),
+    (("toutiao", "wechat"), "「文章设置」勾选「内容由 AI 生成」（2025-09-01 起强制，平台不自动标注）"),
+    (("wechat:newspic",), "图片消息无「声明原创」入口（平台未开放图片原创），勿找该按钮、勿群发后补标"),
+    (("toutiao", "wechat:newspic"), "配文保留文末合规尾注，勿删；正文禁外链"),
     # ── 小红书单独四查（2026-10-13 复盘：10-10 那条《魔兽无限服国服金团随便开》
     #    10-11 23:20 被判「笔记存在利用AI托管进行发文/互动的内容」，处置=不可被他人查看）。
     #    平台 2026-03-10《打击AI托管运营账号治理公告》+ 04-27《AI内容治理规则》：
     #    禁"模拟真人发文/互动"、禁"套模板批量生产同质化内容"，AI 参与要走**发布时的官方声明勾选**。
     #    我们那篇正好同时踩了两句自己写的字：正文末尾「本文由 AI 辅助整理归纳」＝自证，
     #    「回复 金团 获取政策要点」＝引导关键词自动回复（就是"托管互动"的字面形态）。
-    "【发小红书】正文**不要**写「本文由 AI 辅助整理归纳」那句尾注——那是自证托管；"
-    "改用发布页【笔记内容声明】→勾选「笔记含AI合成内容」（公众号那条才保留尾注，两家口径相反）",
-    "【发小红书】删掉「回复 XX 获取…」这类引导自动回复；评论/私信也别挂机器人",
-    "【发小红书】至少一张自己游戏内的真截图 + 一句你本人真发生过的事"
-    "（不许编：伪造经历与截图是「AI 造假」那一档，处置比限流重）",
-    "【发小红书】别拿同一套模板批量发——「套用模板批量生产同质化内容」是平台明写的红线",
-    "发布后 72 小时回填数据，便于回看哪种风格预设、哪种画面占比有效",
+    #    渠道分叉落地后这四条只在 xhs 档出现，原文的【发小红书】前缀随之去掉。
+    ("xhs", "正文**不要**写「本文由 AI 辅助整理归纳」那句尾注——那是自证托管（这档配文本来就不带尾注）；"
+            "改用发布页【笔记内容声明】→勾选「笔记含AI合成内容」（公众号那条才保留尾注，两家口径相反）"),
+    ("xhs", "删掉「回复 XX 获取…」这类引导自动回复；评论/私信也别挂机器人（这档发布载荷已不带关键词回复）"),
+    ("xhs", "至少一张自己游戏内的真截图 + 一句你本人真发生过的事"
+            "（不许编：伪造经历与截图是「AI 造假」那一档，处置比限流重）"),
+    ("xhs", "别拿同一套模板批量发——「套用模板批量生产同质化内容」是平台明写的红线"),
+    # ── 公众号「文章配图」形态独有（2026-10-13 拍板：形态 B 仅公众号可用）
+    (("wechat:article",), "头图用第 1 页，攻略页组按页顺插文内；正文用整理稿，别照抄图上的字"),
+    (("wechat:article",), "合规尾注不放配文、放正文文末，勿删；正文禁外链"),
+    (("wechat:article",), "文末钩子与关键词自动回复已配置（回复关键词见发布载荷）"),
 ]
+
+PUBLISH_CHANNELS = {"toutiao": "头条", "xhs": "小红书", "wechat": "公众号"}
+WECHAT_FORMS = {"newspic": "图片消息", "article": "文章配图"}
+
+
+def checklist_for(publish_channel, form=""):
+    """按渠道（与公众号形态）过滤发布检查清单，返回该次发布要逐条人工过的文本列表。
+
+    条目标签三种写法："all"＝三渠道都要；渠道名字面（"toutiao"/"xhs"/"wechat"）＝该渠道
+    两种形态都要；"wechat:newspic"/"wechat:article"＝仅公众号那一个形态。"""
+    ch = publish_channel if publish_channel in PUBLISH_CHANNELS else "toutiao"
+    if ch == "wechat" and form not in WECHAT_FORMS:
+        form = "newspic"
+    formtag = ("wechat:%s" % form) if ch == "wechat" else ""
+    items = []
+    for chans, text in _CHECKLIST_ITEMS:
+        if "all" in chans or ch in chans or (formtag and formtag in chans):
+            items.append(text)
+    return items
 
 
 # ── 风格预设库 ──
@@ -318,19 +351,46 @@ TYPE_RULE = ("图上的中文一律用清晰规整的中文黑体或无衬线字
              "禁用手写体、草书、艺术字变形与笔画粘连")
 
 
-def style_choices():
-    """给前端下拉用：内置四套 + 用户自己收编的模板，走同一份名单。"""
+def style_choices(guide_only=True):
+    """给前端下拉用：默认**只出攻略页那三套皮肤**。
+
+    为什么收窄（号主 2026-10-16 原话）：「这里的选项只需要攻略页的几个，之前老的模板都不要了，
+    而且默认进来就是选择攻略页」。攻略页这一档用素材真帧、出图 0 元，四套插画风格那一路
+    每张要 0.5 元，摆在同一个下拉里就是给他一个会花钱的错选项。
+    **没有删任何东西**：`STYLE_PRESETS` 里四套原样留着、他自己收编的 ★ 模板还在
+    `config/poster_templates.json` 里，只是不再进这个下拉；要全名单传 `guide_only=False`
+    （模板管理页/回归脚本走那条）。
+    """
     out = []
-    for k in STYLE_ORDER:
-        p = STYLE_PRESETS[k]
+    keys = list(GUIDE_STYLES) if guide_only else list(STYLE_ORDER)
+    for k in keys:
+        p = STYLE_PRESETS.get(k)
+        if not p:
+            continue
         out.append({"key": k, "label": p["label"], "when": p["when"],
                     "preset": (p["style"] or "（沿用手写的风格描述）"),
                     "scene": p["scene"] or "", "builtin": True, "has_base": False})
+    parents = _user_preset_parents()
     for k, p in _user_presets().items():
+        if guide_only and parents.get(k) not in GUIDE_STYLES:
+            # 收编自插画风格的 ★ 模板不进这个下拉（号主 10-16：老的模板都不要了）。
+            # 判据是它的父风格，不是它自己长什么样——不然前端那个 chip 点了以后
+            # 下拉里根本没有这一项，界面显示"攻略页"、计划里却是老模板，就是说假话。
+            continue
         out.append({"key": k, "label": "★ " + p["label"], "when": p["when"],
                     "preset": p["mood"] or "（沿用父风格的画风口）",
                     "scene": p["scene"], "builtin": False, "has_base": _has_base(k)})
     return out
+
+
+def _user_preset_parents():
+    """{模板键: 父风格键}。读一次 poster_templates，读不到就空（不影响内置那几套）。"""
+    try:
+        from . import poster_templates
+        return {it["key"]: (it.get("parent") or "") for it in poster_templates.all_templates()
+                if it.get("key")}
+    except Exception:
+        return {}
 
 
 def _has_base(key):
@@ -479,6 +539,12 @@ def _page_layout(layout_key, style_key, has_photo, idx):
         note = ("第 %d 页：模型给的布局「%s」不认识，已按这套风格默认「%s」"
                 % (idx, raw, ts.LAYOUTS[dft]["label"])) if raw else ""
         return dft, note
+    if style_key in GUIDE_STYLES and key != "guide":
+        # 号主 2026-10-16：AI 海报这一档只留攻略页。皮肤既然是攻略页三套之一，版面就必须是
+        # 攻略页那一套结构——模型回了别的键（或旧计划里带回来的）一律收回。
+        # 不这么做就是"界面选着攻略页、后端按插画档叫 AI 画底图"，0 元变 0.5 元/张。
+        return "guide", ("第 %d 页：这套皮肤是攻略页，版面已收回到「攻略页」"
+                         "（原来给的是「%s」）" % (idx, ts.LAYOUTS[key]["label"]))
     if ts.LAYOUTS[key].get("needs_photo") and not has_photo:
         return ts.DEFAULT_LAYOUT, ("第 %d 页：「%s」要有图才站得住，这篇没图，已改用「%s」"
                                    % (idx, ts.LAYOUTS[key]["label"],
@@ -1805,10 +1871,17 @@ def template_base(style_key):
         return None
 
 
-def layout_choices():
-    """布局名单下发给界面：唯一权威源在排版层，前端抄一份迟早对不上。"""
+def layout_choices(guide_only=True):
+    """布局名单下发给界面：唯一权威源在排版层，前端抄一份迟早对不上。
+
+    `guide_only=True`（界面那一档默认）：只给「攻略页」这一种构图，理由同 `style_choices`——
+    号主说"看版面也是看攻略页"。十种构图本身一套都没删，排版层与拆解提示词还在用全名单。
+    """
     from . import poster_typeset as ts
-    return ts.layout_choices()
+    items = ts.layout_choices()
+    if guide_only:
+        items = [x for x in items if x["key"] == "guide"]
+    return items
 
 
 def typeset_poster(png_bytes, plan, ratio="9:16", photo=None, page=None):
@@ -1889,6 +1962,31 @@ def _rate_limited(status_code, text):
     return status_code == 429 or "rate limit" in text.lower() or "throttl" in text.lower()
 
 
+def _get_image_bytes(img_url, tries=3, timeout=180):
+    """把对面那张已生成的 PNG 取回来。**这一跳不花钱，所以断了必须重试。**
+
+    实测 2026-10-15 22:51 号主点出图：生成那一步成了（返回了 OSS 链接、0.5 元已经扣），
+    下载这一跳 TLS 直接 EOF（`EOF occurred in violation of protocol`），整单被判失败。
+    链接上带 `Expires`，24 小时内还有效——也就是说图在对面躺着，我们只是没拿回来。
+    以前这里是一发裸 `requests.get`：网络抖一下就把已经花掉的钱和另外几页一起废掉。
+    """
+    last = ""
+    for n in range(1, tries + 1):
+        try:
+            r = requests.get(img_url, timeout=timeout)
+            r.raise_for_status()
+            if len(r.content) > 4096:
+                return r.content
+            last = "只拿回 %d 字节，不像一张图" % len(r.content)
+        except Exception as e:
+            last = str(e)[:160]
+        if n < tries:
+            time.sleep(2 * n)          # 退避着再拿，别对着一个刚抖完的链路连打
+    raise PosterError("图已经生成了，但下载不下来（重试 %d 次）：%s。"
+                      "这个链接 24 小时内还有效，再点一次出图会重新生成、再扣一次钱；"
+                      "先别急，隔一会儿网络稳了再点。" % (tries, last))
+
+
 def generate_image(prompt_text, size, ai_config, timeout=300):
     """调百炼原生 multimodal-generation 出图，返回 (png 字节, usage)。
 
@@ -1906,7 +2004,18 @@ def generate_image(prompt_text, size, ai_config, timeout=300):
     last = ""
     for attempt in range(1, MAX_ATTEMPTS + 1):
         _throttle()
-        r = requests.post(url, json=payload, headers=headers, timeout=timeout)
+        try:
+            r = requests.post(url, json=payload, headers=headers, timeout=timeout)
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+            # 连接级失败和"限流"不是一回事：对面很可能已经画完并扣了钱，只是回包没到本机
+            # （实测 2026-10-15 22:49 那次是 300 秒读超时）。仍然重试，但最后一次必须把
+            # "可能已经扣过钱"这句说出来，别让号主以为白等了一场、可以放心连点三次。
+            last = "连不上/等不到回包：%s" % str(e)[:140]
+            if attempt < MAX_ATTEMPTS:
+                continue
+            raise PosterError("出图这一跳没通（试了 %d 次）：%s。"
+                              "超时那几次对面可能已经出图并扣费，先去百炼控制台看用量再决定要不要再点。"
+                              % (MAX_ATTEMPTS, last))
         try:
             data = r.json()
         except ValueError:
@@ -1921,9 +2030,8 @@ def generate_image(prompt_text, size, ai_config, timeout=300):
                     break
             if not img_url:
                 raise PosterError("出图接口没返回图片地址：%s" % str(data)[:200])
-            png = requests.get(img_url, timeout=180)   # OSS 链接会过期，当场下载
-            png.raise_for_status()
-            return png.content, (data.get("usage") or {})
+            # OSS 链接会过期，当场下载；断了要重试（这一跳不花钱，见 _get_image_bytes）
+            return _get_image_bytes(img_url), (data.get("usage") or {})
         last = str(data.get("message") or data.get("code") or
                    ("HTTP %s %s" % (r.status_code, str(data)[:200])))
         if _rate_limited(r.status_code, last) and attempt < MAX_ATTEMPTS:
@@ -2136,7 +2244,7 @@ def choose_candidate(summary_id, index):
 def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
                     progress_cb=None, do_verify=True, plan=None, publish=None, force=False,
                     copies=1, do_review=True, text_mode=DEFAULT_TEXT_MODE, photo=None,
-                    preview_clicks=0, bases=None):
+                    preview_clicks=0, bases=None, publish_channel="toutiao", form="newspic"):
     """整理稿 → 海报一张。返回 manifest dict（已落盘 output/poster/<summary_id>/）。
 
     plan / publish 非空时跳过 LLM 拆解（前端审改过文案再出图走这条）：plan 是要画进图的
@@ -2189,6 +2297,23 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
         raise PosterError("文案不合格：" + "；".join(bad))
     pub = _clip_publish(publish or llm_publish or {})
     chars = plan_chars(plan)
+
+    # 渠道分叉（2026-10-13 拍板）：小红书档不输出尾注与关键词回复。尾注有两处——
+    # 图上末页印的免责脚注（plan 顶层与各页的 footer）和出图后追加到配文的合规尾注句
+    # （见下方 copy_text 组装），这里把前者清空、后者按渠道跳过。keyword_reply 数据保留
+    # 在 publish 里，只在发布载荷展示层过滤——渠道只管装配与展示，换渠道不用重花拆解钱。
+    if publish_channel not in PUBLISH_CHANNELS:
+        publish_channel = "toutiao"
+    if publish_channel == "wechat":
+        if form not in WECHAT_FORMS:
+            form = "newspic"
+    else:
+        form = ""
+    if publish_channel == "xhs":
+        plan["footer"] = ""
+        for _ch_page in (plan.get("pages") or []):
+            if isinstance(_ch_page, dict):
+                _ch_page["footer"] = ""
 
     pages = plan_pages(plan)
     multi = len(pages) > 1
@@ -2269,6 +2394,7 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
         (out_dir / photo_name).write_bytes(photo)
     w, h = _canvas_px(ratio)
     paid = 0
+    saved = []        # 已经落盘的页名：某一页断了要能说出"前面几页还在"，否则他只会整单重按一次
     for pi, page_plan in enumerate(pages, 1):
         # 真图只当第一页的主视觉：同一张图在第 2 页再出现一次很难看。
         # 真图模式下整组都不出 AI 底图（其余页就是这套皮肤的纯色渐变），所以仍然 0 元。
@@ -2292,7 +2418,14 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
                 _pg(("出第 %d/%d 页的底图（%s）..." % (pi, len(pages),
                                                      COPIES_NOTE if n > 1 else "约 20-60 秒"))
                     if multi else "出图 %d/%d（%s）..." % (i, n, COPIES_NOTE if n > 1 else "约 20-60 秒"))
-                raw, usage = generate_image(prompts[pi - 1], SIZES[ratio], ai_config)
+                try:
+                    raw, usage = generate_image(prompts[pi - 1], SIZES[ratio], ai_config)
+                except PosterError as e:
+                    # 哪一页死的要说得出来：多页时"出图失败"四个字等于让人整单重按，
+                    # 而前面那几页其实已经在盘上（钱已经花在那儿了）
+                    where = ("第 %d/%d 页" % (pi, len(pages))) if multi else ("第 %d/%d 张" % (i, n))
+                    raise PosterError("%s 出图失败：%s%s" % (
+                        where, e, ("；已经落盘的页：" + "、".join(saved)) if saved else ""))
                 paid += 1
             suffix = ("_p%d" % pi) if multi else ""
             fname = ("poster%s.png" % suffix) if (n == 1 or multi) else ("poster_%d.png" % i)
@@ -2318,6 +2451,7 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
                         v = {"skipped": True, "ok": None, "error": str(e)[:200],
                              "missing": [], "extra": "", "transcript": ""}
             (out_dir / fname).write_bytes(png)
+            saved.append(fname)
             r = {"skipped": True, "ok": None}
             if do_review and not photo:
                 _pg("视觉评审第 %d 张好不好看..." % (pi if multi else i))
@@ -2355,7 +2489,8 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
     ts_chk = best.get("typeset")
 
     copy_text = pub.get("copy_text") or ""
-    if copy_text and COMPLIANCE_NOTE[:10] not in copy_text:
+    # 小红书档不追加：正文里的 AI 自证尾注正是那次「AI 托管」判决的旁证之一（见四查清单）
+    if copy_text and publish_channel != "xhs" and COMPLIANCE_NOTE[:10] not in copy_text:
         copy_text = copy_text.rstrip() + "\n\n" + COMPLIANCE_NOTE
 
     issues = build_lint(pub, check, overrode, review, ts_chk)
@@ -2386,6 +2521,10 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
         "id": summary_id,
         "summary_id": summary_id,
         "channel": "poster",
+        # 发布渠道与公众号形态（2026-10-13 渠道分叉）。channel:"poster" 是产物管线标识，别动；
+        # 旧 manifest 没有这两个键，读取端一律按 toutiao/newspic 缺省。
+        "publish_channel": publish_channel,
+        "form": form,
         "title": plan.get("title") or "",
         "plan": plan,
         "publish": pub,
@@ -2437,7 +2576,7 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
         "review": review,
         "source_title": summary.get("title") or "",
         "theme": (theme or "").strip(),
-        "checklist": list(CHECKLIST),
+        "checklist": checklist_for(publish_channel, form),
         "created_at": _now(),
         "elapsed_sec": int((datetime.now() - started).total_seconds()),
     }

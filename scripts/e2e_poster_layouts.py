@@ -851,6 +851,84 @@ def main():
             if p.exists():
                 os.remove(str(p))
 
+    print("== O3 渠道分叉（2026-10-13 拍板：小红书档不输出尾注与关键词回复） ==")
+    # 清单过滤是纯函数，任何环境都跑
+    t_l = ai_poster.checklist_for("toutiao")
+    x_l = ai_poster.checklist_for("xhs")
+    n_l = ai_poster.checklist_for("wechat", "newspic")
+    a_l = ai_poster.checklist_for("wechat", "article")
+    ck("toutiao 清单没有小红书四查、也没有公众号图片消息那条",
+       not any(("笔记含AI合成内容" in s) or ("声明原创」入口" in s) for s in t_l))
+    ck("toutiao 清单保留 AI 声明与配文尾注两条",
+       any("内容由 AI 生成」" in s for s in t_l) and any("配文保留文末合规尾注" in s for s in t_l))
+    ck("xhs 清单带四查、不带微信条目与配文尾注条",
+       sum(1 for s in x_l if ("AI合成内容" in s) or ("回复 XX 获取" in s)
+           or ("真截图" in s) or ("同质化内容」是平台" in s)) == 4
+       and not any(("文章设置" in s) or ("配文保留文末合规尾注" in s) for s in x_l))
+    ck("wechat 图片消息清单有原创提醒与尾注条、无小红书条目",
+       any("声明原创」入口" in s for s in n_l) and any("配文保留文末合规尾注" in s for s in n_l)
+       and not any("笔记含AI合成内容" in s for s in n_l))
+    ck("wechat 文章配图清单换成文章口径（头图/尾注进正文/钩子），不带图片消息那条",
+       any("头图用第 1 页" in s for s in a_l) and any("尾注不放配文" in s for s in a_l)
+       and any("文末钩子" in s for s in a_l) and not any("声明原创」入口" in s for s in a_l))
+    ck("非法渠道/形态值回落缺省（toutiao / newspic）",
+       ai_poster.checklist_for("不存在的渠道") == t_l
+       and ai_poster.checklist_for("wechat", "怪形态") == n_l)
+
+    # 出图装配分叉：跟 H 段同一套测试夹具（真图模式 0 元、不调 LLM），夹具不在就跳过
+    if not PHOTO.exists():
+        print("  [SKIP] 没有测试用真图，跳过渠道出图分叉")
+    else:
+        conn = sqlite3.connect(str(DB))
+        conn.row_factory = sqlite3.Row
+        row = conn.execute("SELECT * FROM ai_summaries WHERE id=63").fetchone()
+        conn.close()
+        if not row:
+            print("  [SKIP] 库里没有整合稿 63")
+        else:
+            summary = dict(row)
+            summary["id"] = TEST_ID
+            pages1 = {"style_key": "game_epic", "footer": "内容整理自公开分享",
+                      "title": "测试渠道分叉", "subtitle": "",
+                      "cards": [{"t": "幽灵军马骸骨", "d": "卡牌坐骑之前绝版"},
+                                {"t": "怒缚乌祖尔", "d": "换色版这次再上架"},
+                                {"t": "无头骑士军马", "d": "万圣节的错过能补票"}]}
+            pub = {"copy_text": "测试配文，钩子开头加要点收尾。", "digest": "测试摘要",
+                   "keyword_reply": "回复 测试", "source_note": "来源测试"}
+            out = ROOT / "output" / "poster" / str(TEST_ID)
+            cfg = {"method": "openai", "api_key": "x", "api_base": "http://127.0.0.1:1"}
+            if out.exists():
+                shutil.rmtree(out)
+            mx = ai_poster.generate_poster(summary, cfg, plan=pages1, publish=pub, ratio=RATIO,
+                                           do_review=False, text_mode="typeset",
+                                           photo=PHOTO.read_bytes(), publish_channel="xhs")
+            ck("xhs 档 manifest 记了渠道（form 留空）",
+               mx.get("publish_channel") == "xhs" and mx.get("form") == "")
+            ck("xhs 档配文不带合规尾注句", "本文由 AI 辅助整理归纳" not in mx["copy_text"],
+               mx["copy_text"][:50])
+            ck("xhs 档图上末页脚注被清空（plan 顶层与各页都没有）",
+               not (mx["plan"].get("footer") or "")
+               and not any((p.get("footer") or "") for p in (mx["plan"].get("pages") or [])))
+            ck("xhs 档清单是四查那套、没有微信/尾注条",
+               any("笔记含AI合成内容" in s for s in mx["checklist"])
+               and not any(("配文保留文末合规尾注" in s) or ("声明原创」入口" in s)
+                           for s in mx["checklist"]))
+            shutil.rmtree(out)
+            pages2 = json.loads(json.dumps(pages1))   # xhs 那趟把 footer 清了，这趟要干净的
+            pages2["footer"] = "内容整理自公开分享"
+            mw = ai_poster.generate_poster(summary, cfg, plan=pages2, publish=pub, ratio=RATIO,
+                                           do_review=False, text_mode="typeset",
+                                           photo=PHOTO.read_bytes(),
+                                           publish_channel="wechat", form="article")
+            ck("wechat 文章档 manifest 记了渠道与形态",
+               mw.get("publish_channel") == "wechat" and mw.get("form") == "article")
+            ck("wechat 文章档配文尾注照常追加", "本文由 AI 辅助整理归纳" in mw["copy_text"])
+            ck("wechat 文章档清单是文章口径（头图/正文尾注），不带图片消息那条",
+               any("头图用第 1 页" in s for s in mw["checklist"])
+               and any("尾注不放配文" in s for s in mw["checklist"])
+               and not any("声明原创」入口" in s for s in mw["checklist"]))
+            shutil.rmtree(out)
+
     print()
     if FAILS:
         print("FAIL %d 项：%s" % (len(FAILS), "、".join(FAILS)))

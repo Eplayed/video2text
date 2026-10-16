@@ -58,6 +58,7 @@ def grab(pg):
                   "+((o.options[o.selectedIndex]||{}).text||'');})()"),
         "每页版式": json.loads(ev("JSON.stringify(_pkPages.map(function(p){return p.layout_key;}))")),
         "画面那行": (ev("(document.getElementById('pk-frames-hint')||{}).innerText") or "").replace("\n", " ⏎ "),
+        "额度预警": (ev("(document.getElementById('pk-quota')||{}).innerText") or "（没显示）").replace("\n", " ⏎ "),
         "页签": (ev("(document.getElementById('pk-tabs')||{}).innerText") or "").replace("\n", " / "),
     }
 
