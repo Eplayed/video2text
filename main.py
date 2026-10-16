@@ -555,7 +555,7 @@ def main():
     if ai_method == "deepseek":
         default_api_key = config_get(config, "DEEPSEEK_API_KEY") or config_get(config, "AI_API_KEY")
         default_api_base = config_get(config, "DEEPSEEK_API_BASE", "https://api.deepseek.com/v1")
-        default_model = config_get(config, "DEEPSEEK_MODEL", "deepseek-chat")
+        default_model = config_get(config, "DEEPSEEK_MODEL", "deepseek-v4.1-flash")
     else:
         default_api_key = config_get(config, "OPENAI_API_KEY") or config_get(config, "AI_API_KEY")
         default_api_base = config_get(config, "AI_API_BASE", "https://api.openai.com/v1")

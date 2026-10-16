@@ -31,7 +31,7 @@ def load_ai_config():
     if method == "deepseek":
         return {"method": method, "api_key": (kv.get("DEEPSEEK_API_KEY") or "").strip(),
                 "api_base": (kv.get("DEEPSEEK_API_BASE") or "https://api.deepseek.com").strip(),
-                "model": (kv.get("DEEPSEEK_MODEL") or "deepseek-chat").strip(), "fast_model": fast}
+                "model": (kv.get("DEEPSEEK_MODEL") or "deepseek-v4.1-flash").strip(), "fast_model": fast}
     return {"method": method, "api_key": (kv.get("OPENAI_API_KEY") or kv.get("AI_API_KEY") or "").strip(),
             "api_base": (kv.get("AI_API_BASE") or "https://api.openai.com/v1").strip(),
             "model": (kv.get("AI_MODEL") or "gpt-4o-mini").strip(), "fast_model": fast}
