@@ -97,8 +97,9 @@ bash .qoder/skills/workbench-restart/scripts/restart_workbench.sh src/xxx.py web
 
 **每天 09:30 有一个回填定时任务**（Qoder 本地自动化，不在工作台的 `config/sync_tasks.json` 里）：
 头条走 `/api/toutiao/perf/sync`（抓完自动灌台账）。
-**小红书这一侧 2026-10-15 起不再自动读屏**——号主反馈"自动回填被平台检测到了"，定时任务里已写明
-绝不打开/刷新/轮询 creator.xiaohongshu.com；改成品主发截图、另开会话跑 `xhs_backfill.py`（先 `--dry-run`）。
+**小红书这一侧整条回填暂停**（2026-10-15 号主：先是被平台检测到自动读屏，随后明确"先暂停"）。
+定时任务里已写明：绝不打开/刷新/轮询 creator.xiaohongshu.com，**也不催他发截图、不跑
+`scripts/agent/xhs_backfill.py`**，除非他本人说"这次要录"。台账里小红书那几列就空着，不许用 0 或估数顶。
 平台两头都只读、只写本地 sqlite。涨粉和钱这两个数**只有号主后台看得到**，任务只能提醒、不许代填。
 
 ## 6. 多人并发改这个仓库：提交怎么隔离
