@@ -17,18 +17,37 @@ ensure_parser_on_path()
 from douyin_video_parser import DouyinVideoParser
 
 
+_URL_IN_TEXT_RE = re.compile(r"https?://[^\s\"'<>()（）。，、；;！？]+")
+
+
+def first_url(text: str) -> str:
+    """从一段分享文案里抠出链接。
+
+    抖音 App 点「分享→复制链接」拿到的原文一定带前后缀（「长按复制此条消息，打开抖音
+    搜索，查看TA的更多作品。 https://v.douyin.com/xxx/」），整段粘进输入框是常态不是意外。
+    以前直接把整段丢给 requests.head，解析失败后原样返回，sec_uid 提不出来，界面报
+    「无法从链接提取 sec_uid」——看着像订阅功能坏了，其实是没剥壳。
+    """
+    s = (text or "").strip()
+    if not s:
+        return ""
+    m = _URL_IN_TEXT_RE.search(s)
+    return m.group(0).rstrip("。，、；;）)】]") if m else s
+
+
 def resolve_short_url(short_url: str) -> str:
     """解析抖音短链接，返回真实 URL"""
     headers = {
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     }
+    url = first_url(short_url)
     try:
-        resp = requests.head(short_url, headers=headers, allow_redirects=True, timeout=10)
+        resp = requests.head(url, headers=headers, allow_redirects=True, timeout=10)
         return resp.url
     except Exception as e:
         print(f"解析短链接失败: {e}")
-        return short_url
+        return url
 
 
 def extract_sec_uid_from_url(url: str) -> str:
@@ -40,7 +59,11 @@ def extract_sec_uid_from_url(url: str) -> str:
     for pattern in patterns:
         m = re.search(pattern, url)
         if m:
-            return m.group(1)
+            # 只认 URL 合法字符：中文分享文案里链接后面紧跟「。查看TA…」这类标点时，
+            # 原来的 [^/?\s]+ 会把中文一起吞进 sec_uid，得到一个查不到的假 uid
+            value = re.split(r"[^\w\-\.~%]", m.group(1))[0]
+            if value:
+                return value
     return ""
 
 
