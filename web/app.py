@@ -30,7 +30,7 @@ PARSER_DIR    = Path(find_parser_dir())
 # DB 直写、不进 Excel 的素材源：{videos.source_sheet: 前端来源标识}。
 # 加一个新采集源就动这一处——素材库追加、来源派生、来源计数、详情与删除的"绕开 Excel"
 # 全从这里取，别再在下游写 `== '微信文章'` 的二元判断（历史上就是这么把新源判成抖音的）。
-DB_ONLY_SHEETS = {"微信文章": "wechat", "B站视频": "bilibili"}
+DB_ONLY_SHEETS = {"微信文章": "wechat", "B站视频": "bilibili", "暴雪官方": "blizzard"}
 # B 站每轮最多翻多少条：首次订阅即"只入最近 20 条"，之后每轮也只拉新增（列表从新往老翻，
 # 整页都是已入库的就停）。存量大 UP 主不要一次全量回填——几百条字幕连打会撞风控。
 BILI_SYNC_LIMIT = 20
@@ -347,7 +347,7 @@ def api_videos():
     # 药丸计数一律取"筛选前的合并列表"，跟下面真正要显示的那份数据同一个口径。
     # 之前分类药丸走 /api/categories（按 SQLite 整张 videos 表统计，含 174 条还没做转写的行），
     # 列表走索引（只收有 ASR 的行），于是"其他 240"点进去只有 128 条，每个分类都对不上。
-    source_counts = {"douyin": 0, "wechat": 0, "bilibili": 0}
+    source_counts = {"douyin": 0, "wechat": 0, "bilibili": 0, "blizzard": 0}
     category_counts = {}
     game_counts = {}
     for v in videos:

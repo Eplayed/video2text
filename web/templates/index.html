@@ -269,6 +269,9 @@ textarea{resize:vertical;min-height:84px}
 .video-cover .cover-src.src-wechat{background:#07c160}
 .video-cover .cover-src.src-douyin{background:var(--module-2)}
 .video-cover .cover-src.src-bilibili{background:#fb7299}
+/* 暴雪官方公告：第三个 DB 直写源，卡片没有封面图时给一块蓝底占位（不跟微信/B站撞色） */
+.video-cover .cover-src.src-blizzard{background:#4aa3ff}
+.video-cover.cover-news .cover-ph{color:#4aa3ff;background:linear-gradient(135deg,color-mix(in srgb,#4aa3ff 7%,var(--surface-nested)),var(--surface-nested))}
 .video-cover.cover-bili .cover-ph{color:#fb7299;background:linear-gradient(135deg,color-mix(in srgb,#fb7299 7%,var(--surface-nested)),var(--surface-nested))}
 .video-cover.cover-wx .cover-ph{color:#07c160;background:linear-gradient(135deg,color-mix(in srgb,#07c160 7%,var(--surface-nested)),var(--surface-nested))}
 .video-card .checkbox{position:absolute;top:10px;right:10px;width:22px;height:22px;border:1.6px solid rgba(255,255,255,.85);border-radius:7px;background:rgba(20,19,17,.35);backdrop-filter:blur(4px);cursor:pointer;transition:all .15s;display:grid;place-items:center;color:#fff;z-index:2}
@@ -7681,6 +7684,10 @@ const PLATFORM_META = {
              pill:'src-wechat', coverClass:'cover-wx', noBody:'无正文'},
   bilibili: {label:'B站',    tab:'B站UP主',   color:'#fb7299', link:'空间 ↗',   icon:'camera',
              pill:'src-bilibili', coverClass:'cover-bili', noBody:'无字幕'},
+  // 暴雪国服官网公告：不是订阅来的号，是 `src/blizzard_news.py` 直接抓官网列表入库的
+  // 第一手源（号主 10-17：库里五个微信订阅全是第三方转述号，没有官方）。
+  blizzard: {label:'暴雪官方', tab:'暴雪官方公告', color:'#4aa3ff', link:'官网 ↗', icon:'book',
+             pill:'src-blizzard', coverClass:'cover-news', noBody:'无正文'},
 };
 function platMeta(key) { return PLATFORM_META[key] || PLATFORM_META.douyin; }
 // 订阅记录里的平台字段（认不出的值一律当 douyin，和后端 COALESCE(platform,'douyin') 同口径）

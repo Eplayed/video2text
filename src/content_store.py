@@ -955,6 +955,74 @@ def insert_bilibili_videos(
     return inserted
 
 
+# ── 暴雪国服官方公告入库（第三个"DB 直写、不进 Excel"的源，落点与微信/B站同一套） ──
+
+OFFICIAL_NEWS_SHEET = "暴雪官方"
+
+
+def insert_official_news(db_path, items, category="", game=""):
+    """把官网公告写进 videos 表，返回实际插入的记录。
+
+    去重键是 aweme_id（`bn` + URL 的 md5 前 16 位，官方公告没有原生 id）。
+    正文空的条目 status 记「未开始」，不拿导航文案凑数——沿用库里已有取值。
+    """
+    if not items:
+        return []
+    conn = connect(db_path)
+    inserted = []
+    try:
+        existing = {
+            r["aweme_id"]
+            for r in conn.execute(
+                "SELECT aweme_id FROM videos WHERE source_sheet = ? AND aweme_id IS NOT NULL",
+                (OFFICIAL_NEWS_SHEET,),
+            ).fetchall()
+        }
+        max_row = conn.execute(
+            "SELECT COALESCE(MAX(source_row), 0) FROM videos WHERE source_sheet = ?",
+            (OFFICIAL_NEWS_SHEET,),
+        ).fetchone()[0]
+        stamp = _now()
+        row_num = max_row
+        for art in items:
+            aid = art.get("aweme_id") or ""
+            if not aid or aid in existing:
+                continue
+            row_num += 1
+            body = art.get("transcript") or ""
+            conn.execute(
+                """
+                INSERT INTO videos (
+                    aweme_id, source_sheet, source_row, source_url, cover_url,
+                    author, title, status, published_at, transcript,
+                    category, game, source, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'official', ?)
+                """,
+                (aid, OFFICIAL_NEWS_SHEET, row_num, art.get("url") or "",
+                 art.get("cover_url") or "", art.get("author") or "魔兽世界运营团队",
+                 art.get("title") or "", "已完成" if body else "未开始",
+                 art.get("published_at") or "", body, category, game, stamp),
+            )
+            existing.add(aid)
+            inserted.append({**art, "source_sheet": OFFICIAL_NEWS_SHEET, "source_row": row_num})
+        conn.commit()
+    finally:
+        conn.close()
+    return inserted
+
+
+def official_news_urls(db_path):
+    """已入库的官方公告 URL 集合（同步去重用）。"""
+    conn = connect(db_path)
+    try:
+        return {r["source_url"] for r in conn.execute(
+            "SELECT source_url FROM videos WHERE source_sheet = ? AND source_url IS NOT NULL",
+            (OFFICIAL_NEWS_SHEET,)
+        ).fetchall()}
+    finally:
+        conn.close()
+
+
 def video_ids_by_rows(db_path: str | Path, pairs: list) -> list[int]:
     """按 (source_sheet, source_row) 精确取 video id。
 
