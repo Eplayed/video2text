@@ -61,6 +61,28 @@ def _abs(href: str) -> str:
     return href
 
 
+def _pick_date(html: str, url: str) -> str:
+    """发布日期：官网两种模板放在不同地方，一处一处试，全落空就退到 URL 里的日期段。
+
+    网易 CMS 那批（/news/YYYYMMDD/xxx.html）在 `class="Content"` 里、用 `-`；
+    暴雪样式那批（/news/NNNNNNNN/index.html）只有 `<time>2026/10/16</time>`、**用 `/`**。
+    只认 `-` 会让一半公告没日期（实测 12 条里 8 条没日期），而排产表是按日期挑"最新一条"的，
+    没日期就等于看不见。统一归一成 YYYY-MM-DD 再入库。
+    """
+    pats = (r"<time[^>]*>\s*(20\d\d([-/])\d{1,2}\2\d{1,2})",
+            r'"(?:datePublished|publishDate|published_at|date)"\s*:\s*"?(20\d\d([-/])\d{1,2}\2\d{1,2})',
+            r"(20\d\d([-/])\d{1,2}\2\d{1,2})")
+    for pat in pats:
+        m = re.search(pat, html)
+        if m:
+            y, mo, dd = re.split(r"[-/]", m.group(1))
+            return "%s-%02d-%02d" % (y, int(mo), int(dd))
+    m = re.search(r"/news/(20\d{6})/", url)
+    if m:
+        return "%s-%s-%s" % (m.group(1)[:4], m.group(1)[4:6], m.group(1)[6:8])
+    return ""
+
+
 def fetch_list(limit: int = MAX_DETAIL_PER_RUN) -> List[Dict[str, str]]:
     """列表页 → [{url, title}]，按页面顺序（官网是从新往老排）。"""
     html = _get(LIST_URL)
@@ -91,8 +113,15 @@ def fetch_detail(url: str) -> Dict[str, Any]:
 
     正文取不到时**宁可留空并标状态**，不拿导航文案凑数——这条链子上"看着有内容其实是菜单"
     已经坑过一次（整理稿配图那回）。
+    官网同一个 URL 会返回两种模板（网易 CMS 那批带 `class="Content"` 日期、暴雪样式那批只有
+    `<time>`），实测还会随机发一个 26KB 的**无日期精简版**，所以日期取不到就重取一次再判。
     """
     html = _get(url)
+    if not _pick_date(html, url):
+        time.sleep(REQUEST_GAP_SEC)
+        html2 = _get(url)
+        if _pick_date(html2, url):
+            html = html2
     if BeautifulSoup is not None:
         soup = BeautifulSoup(html, "lxml")
         title = (soup.title.get_text(strip=True) if soup.title else "") or url
@@ -123,13 +152,47 @@ def fetch_detail(url: str) -> Dict[str, Any]:
         author = "魔兽世界运营团队" if "运营团队" in html else ""
         im = re.search(r'class="detail"[^>]*>.*?<img[^>]+src="([^"]+)"', html, re.S)
         img = _abs(im.group(1)) if im else ""
-    if not date:                      # 详情页没写日期就退到 URL 里的 /news/YYYYMMDD/
-        m = re.search(r"/news/(20\d{6})/", url)
-        if m:
-            date = "%s-%s-%s" % (m.group(1)[:4], m.group(1)[4:6], m.group(1)[6:8])
+    if not date:
+        date = _pick_date(html, url)
     return {"url": url, "aweme_id": news_id(url), "title": title,
             "published_at": date, "author": author or "魔兽世界运营团队",
             "transcript": body, "cover_url": img}
+
+
+def refresh_dates(db_path, progress_cb=None):
+    """给已入库但没日期的公告补一次日期（改了取法之后回捞历史行用）。
+
+    不重抓正文，只读详情页找日期；找不到就留着空，不拿"今天"凑数。
+    """
+    try:
+        from . import content_store
+    except ImportError:
+        import content_store
+    conn = content_store.connect(db_path)
+    fixed = 0
+    try:
+        rows = conn.execute(
+            "SELECT id, source_url FROM videos WHERE source_sheet = ? "
+            "AND COALESCE(published_at,'') = ''", (content_store.OFFICIAL_NEWS_SHEET,)).fetchall()
+        for r in rows:
+            url = r["source_url"] or ""
+            try:
+                d = fetch_detail(url)
+            except Exception as e:
+                if progress_cb:
+                    progress_cb("补日期失败（%s）：%s" % (url[-40:], str(e)[:60]))
+                continue
+            if d["published_at"]:
+                conn.execute("UPDATE videos SET published_at = ?, updated_at = ? WHERE id = ?",
+                             (d["published_at"], content_store._now(), r["id"]))
+                fixed += 1
+            time.sleep(REQUEST_GAP_SEC)
+        conn.commit()
+    finally:
+        conn.close()
+    if progress_cb:
+        progress_cb("补日期：缺 %d 条，补上 %d 条" % (len(rows), fixed))
+    return {"missing": len(rows), "fixed": fixed}
 
 
 def known_urls(db_path) -> set:
@@ -188,7 +251,13 @@ def main(argv=None) -> int:
     ap.add_argument("--db", default=str(Path(__file__).resolve().parent.parent / "output" / "video2text.db"))
     ap.add_argument("--limit", type=int, default=12, help="本轮最多抓几条（默认 12）")
     ap.add_argument("--dry-run", action="store_true", help="只抓不写库")
+    ap.add_argument("--fix-dates", action="store_true",
+                    help="只给库里没日期的公告补发布日期（改了取法之后回捞历史行）")
     a = ap.parse_args(argv)
+    if a.fix_dates:
+        r = refresh_dates(a.db, progress_cb=lambda m: print("[暴雪官方] %s" % m, flush=True))
+        print("结果：%s" % r)
+        return 0
     r = sync(a.db, limit=a.limit, dry_run=a.dry_run)
     print("\n结果：%s" % {k: v for k, v in r.items() if k != "sample"})
     return 1 if r.get("error") else 0
