@@ -463,7 +463,7 @@ textarea{resize:vertical;min-height:84px}
 .ops-sum{font-size:12.5px;color:var(--text-secondary);margin-bottom:10px;line-height:1.7}
 /* 发布登记那一行（2026-10-18 从 5180 搬过来）：一行填完就记上"这篇发出去了" */
 .ops-reg{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:0 0 12px;padding:9px 11px;background:var(--surface-card);border:1px solid var(--border);border-left:3px solid var(--module-1);border-radius:var(--radius-card);box-shadow:var(--shadow-card)}
-.ops-reg label{font-size:11.5px;color:var(--text-tertiary);display:flex;align-items:center;gap:5px}
+.ops-reg label{font-size:11.5px;color:var(--text-tertiary);display:flex;align-items:center;gap:5px;white-space:nowrap}
 .ops-reg input,.ops-reg select{border:1px solid var(--border-input);border-radius:7px;background:var(--surface-nested);color:var(--text-primary);font-size:12.5px;padding:5px 8px}
 .ops-reg input#ops-reg-title{flex:1 1 240px;min-width:180px}
 .ops-reg input#ops-reg-url{flex:1 1 200px;min-width:150px}
@@ -7082,7 +7082,9 @@ function renderOpsHead() {
     const keep = cs.value;
     cs.innerHTML = _ops.channels.map(c => '<option value="' + esc(c.key) + '">'
       + esc(c.label) + '</option>').join('');
+    // 没动过就默认头条（CHANNELS 第一位是公众号，那是三条线里最少的，让他每次多点一下不该是我们的默认）
     if (keep) cs.value = keep;
+    else if (_ops.channels.some(c => c.key === 'toutiao')) cs.value = 'toutiao';
   }
   // 登记那一行的日期默认今天（他登记的就是"今天发了"），但只在没填过时给，别覆盖正在填的
   const dd = document.getElementById('ops-reg-date');
