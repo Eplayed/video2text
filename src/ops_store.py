@@ -12,8 +12,14 @@ runtime/publications.json）只登记发布动作，feedback 字段是 09-17 手
     公众号后台大概率同一类坑。所以这里**不写没实测过的爬虫**，先做一分钟能填完的录入，
     取数那一步等真找到可用登录态再补（表里留了 source 字段区分来源）。
 
-能自动的部分照做：从 5180 台账导入已登记的公众号发布记录（滤掉 [测试] 那条），
-从审核台把标记「已发布」的图文包补成空行——他只需要填数，不用自己想起发过什么。
+能自动的部分照做：从旧台账（media-workbench/runtime/publications.json）导入已登记的
+发布记录（滤掉 [测试] 那条），从审核台把标记「已发布」的图文包补成空行——他只需要填数，
+不用自己想起发过什么。
+
+2026-10-18：5180 那个服务已经死了（无监听、数据冻在 09-24），**发布登记这一格搬到本表**。
+所以这里同时是"历史台账的接收方"和"以后唯一的人工登记口"（`register_publish`）。
+旧台账里 96 条头条记录带着 2026-04-14→09-17 的展现/阅读/点赞/评论，是半年账本的唯一副本，
+`import_ledger` 从"只导微信 4 条"改成全渠道导，撞键或撞标题的合并进现有行、只填空不覆盖。
 
 口径提醒：台账字段名叫 reads24h，实际存的是**累计阅读**（2026-10-06 取证），
 导入时按累计读，别再当 24 小时数用。
@@ -22,6 +28,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
@@ -49,7 +56,7 @@ CREATE TABLE IF NOT EXISTS publish_stats (
   title TEXT, pub_date TEXT,
   reads INTEGER, looks INTEGER, shares INTEGER, net_follow INTEGER, revenue REAL,
   show_n INTEGER, comment INTEGER, saves INTEGER,
-  source TEXT, note TEXT, updated_at TEXT,
+  source TEXT, note TEXT, url TEXT, updated_at TEXT,
   PRIMARY KEY (channel, ref_id)
 );
 CREATE TABLE IF NOT EXISTS week_stats (
@@ -60,8 +67,9 @@ CREATE TABLE IF NOT EXISTS week_stats (
 """
 # 允许前端提交的数字字段（白名单，避免把 SQL 列名当参数拼出去）
 # `show` 是 SQL 保留字，库里那一列叫 show_n，对外（接口与界面）仍叫 show，调用方不用知道
+# url 是 2026-10-18 加的：发布登记要能带回平台原文链接，不然"发了哪篇"还是只能靠标题猜
 ARTICLE_FIELDS = ("title", "pub_date", "reads", "looks", "shares", "net_follow",
-                  "revenue", "show", "comment", "saves", "source", "note")
+                  "revenue", "show", "comment", "saves", "source", "note", "url")
 _COL_ALIAS = {"show": "show_n"}
 WEEK_FIELDS = ("followers_total", "followers_new", "revenue", "note")
 # 表单交上来的都是字符串；空串按"没填"存 NULL，不存 0——0 会被读成一个结论
@@ -93,9 +101,10 @@ def ensure(db_path: str) -> None:
         # 老库补列：CREATE TABLE IF NOT EXISTS 对已存在的表不生效，
         # 2026-10-14 加了 展现/评论/收藏 三列，不补一次的话所有写入都会 "no such column"
         have = {r[1] for r in conn.execute("PRAGMA table_info(publish_stats)").fetchall()}
-        for col in ("show_n", "comment", "saves"):
+        for col, typ in (("show_n", "INTEGER"), ("comment", "INTEGER"), ("saves", "INTEGER"),
+                         ("url", "TEXT")):
             if col not in have:
-                conn.execute("ALTER TABLE publish_stats ADD COLUMN %s INTEGER" % col)
+                conn.execute("ALTER TABLE publish_stats ADD COLUMN %s %s" % (col, typ))
         conn.commit()
     finally:
         conn.close()
@@ -179,6 +188,46 @@ def upsert_article(db_path: str, channel: str, ref_id: str,
     return out
 
 
+def register_publish(db_path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    """人工登记一条"这篇发出去了"。5180 死了以后这是唯一的登记口（发布动作本身永远是人工那一下）。
+
+    为什么判据写在这里而不是界面里：前端抄一份校验迟早和后端对不上（本项目反复踩过的静默失效）。
+    几条口径：
+      · 标题必填 —— 没有标题的行事后没法复盘；
+      · 日期没填按今天算（登记的就是"今天发了"），填了必须是 YYYY-MM-DD，不猜也别静默改；
+      · 没给 ref_id 时先生成 `reg:<时间戳>`，但**同渠道同标题同一天已有行就复用那一把键**，
+        免得连点两次在台账里长出两条重复；
+      · 数字列一概不写 0：登记时通常还没有数据，留 NULL 等回填来补（0 会被读成"阅读 0"这个结论）。
+    """
+    channel = str(payload.get("channel") or "").strip()
+    # 界面可能交来键（toutiao）也可能交来中文名（头条），两个都收，但库里只存键
+    if channel not in CHANNELS:
+        channel = next((k for k, v in CHANNELS.items() if v == channel), "")
+    if not channel:
+        raise ValueError("渠道要选 %s 之一" % " / ".join(CHANNELS.values()))
+    title = str(payload.get("title") or "").strip()
+    if not title:
+        raise ValueError("标题不能空——台账里没有标题的行没法复盘")
+    pub_date = str(payload.get("pub_date") or "").strip()[:10]
+    if not pub_date:
+        pub_date = datetime.now().strftime("%Y-%m-%d")
+    elif not re.match(r"^\d{4}-\d{2}-\d{2}$", pub_date):
+        raise ValueError("发布日期要写成 2026-10-18 这样，现在填的是「%s」" % pub_date)
+    ref_id = str(payload.get("ref_id") or "").strip()
+    if not ref_id:
+        same = [a for a in list_articles(db_path, channel)
+                if (a.get("title") or "").strip() == title and (a.get("pub_date") or "") == pub_date]
+        ref_id = same[0]["ref_id"] if same else "reg:%s" % datetime.now().strftime("%Y%m%d%H%M%S")
+    fields = {"title": title, "pub_date": pub_date, "source": "人工登记"}
+    for key in ("url", "note"):
+        val = str(payload.get(key) or "").strip()
+        if val:
+            fields[key] = val
+    existed = bool(_existing(db_path, channel, ref_id))
+    row = upsert_article(db_path, channel, ref_id, fields)
+    return {"row": row, "created": not existed, "ref_id": ref_id}
+
+
 def list_weeks(db_path: str, limit: int = 12) -> List[Dict[str, Any]]:
     ensure(db_path)
     conn = sqlite3.connect(db_path)
@@ -242,13 +291,36 @@ def report(db_path: str, week: Optional[str] = None) -> Dict[str, Any]:
     }
 
 
-def import_ledger(db_path: str, ledger_path: Optional[str] = None) -> Dict[str, Any]:
-    """从 5180 台账导入公众号发布记录（滤掉 [测试]），再按审核台「已发布」补空行。
+def _ledger_ref_id(entries_title: str, channel: str, item_id: str, entry_id: str,
+                   existing: List[Dict[str, Any]]) -> str:
+    """旧台账一条记录该落在哪把键上。
 
-    只补空不覆盖：人工后录的数比台账旧快照准；已有人工行时只填 title/pub_date 这种描述字段。
+    直接按 link 里的头条 id 建 `tt:<id>` 是最省事的，但实测新回填那 31 行用的键是
+    `tt:<gid>`（gid 与 item id 只有 6 条撞上），照 link 建键会让同一篇稿子在台账里长成两行
+    ——他看台账第一眼看的就是篇数，重复行等于把数读错。所以判两遍：
+    ① 库里已有同标题同渠道的行 → 用它那把键（合并）；② 否则用 link 里的 id；③ 再否则 `ledger:<旧 id>`。
+    """
+    t = (entries_title or "").strip()
+    for row in existing:
+        if (row.get("title") or "").strip() == t and t:
+            return row["ref_id"]
+    if channel == "toutiao" and item_id:
+        return "tt:%s" % item_id
+    return "ledger:%s" % (item_id or entry_id or t[:16])
+
+
+def import_ledger(db_path: str, ledger_path: Optional[str] = None) -> Dict[str, Any]:
+    """把旧台账（5180 那份 publications.json）整本接进本表，再按审核台「已发布」补空行。
+
+    2026-10-18 从"只导微信 4 条"改成**全渠道**：那边 96 条头条记录是 2026-04-14→09-17
+    唯一的半年账本（展现/阅读/点赞/评论/点击率都在 feedback 里），号主打算删掉那个仓库，
+    不搬就等于把半年数据一起删了。
+    只补空不覆盖：人工后录的数比台账旧快照准；已有人工行时只填 title/pub_date/url 这种描述字段。
+    数字一律"非零才写"：旧台账 shares24h 96 条全 0，写进去就成了"他转发都是 0"这个结论。
     """
     path = ledger_path or LEDGER
-    out = {"ledger_file": path, "imported": 0, "skipped": [], "seeded": 0, "error": ""}
+    out = {"ledger_file": path, "created": 0, "merged": 0, "skipped": [], "seeded": 0,
+           "error": "", "channels": {}}
     if not os.path.isfile(path):
         out["error"] = "找不到台账：%s" % path
         return out
@@ -262,31 +334,59 @@ def import_ledger(db_path: str, ledger_path: Optional[str] = None) -> Dict[str, 
         out["error"] = "台账格式不是列表，没敢动"
         return out
     for p in entries:
-        if (p.get("channel") or "") != "wechat":
-            continue
+        channel = (p.get("channel") or "").strip()
         title = (p.get("title") or "").strip()
-        if title.startswith("[测试]") or title.startswith("【测试】"):
+        if channel not in CHANNELS:
+            out["skipped"].append("未知渠道：%s（%s）" % (channel or "空", title[:20]))
+            continue
+        if title.startswith("[测试]") or title.startswith("【测试】") or "端到端验证" in title:
             out["skipped"].append("测试条目：%s" % title[:24])
             continue
-        rid = "ledger:" + (p.get("id") or title[:16])
+        if not title:
+            out["skipped"].append("没标题的条目：%s" % (p.get("id") or "?"))
+            continue
+        link = (p.get("link") or p.get("url") or "").strip()
+        m = re.search(r"/(?:item|w|article)/(\d{10,20})", link)
+        item_id = m.group(1) if m else ""
+        rid = _ledger_ref_id(title, channel, item_id, p.get("id") or "",
+                             list_articles(db_path, channel))
         fb = p.get("feedback") or {}
         pub = (p.get("publishedAt") or p.get("articleDate") or "")[:10]
-        fields = {"title": title, "pub_date": pub, "source": "台账"}
+        fields = {"title": title, "pub_date": pub, "source": "旧台账"}
+        if link:
+            fields["url"] = link
         # reads24h 实为累计阅读（2026-10-06 取证），按累计读
         if fb.get("reads24h"):
             fields["reads"] = int(fb["reads24h"])
-        if fb.get("looking24h"):
+        if fb.get("impressions"):
+            fields["show"] = int(fb["impressions"])
+        if fb.get("looking24h"):          # 公众号的"在看"
             fields["looks"] = int(fb["looking24h"])
+        if fb.get("likes24h"):            # 头条的"点赞"落在同一列
+            fields["looks"] = int(fb["likes24h"])
+        if fb.get("comments24h"):
+            fields["comment"] = int(fb["comments24h"])
         if fb.get("shares24h"):
             fields["shares"] = int(fb["shares24h"])
+        if fb.get("saves24h"):
+            fields["saves"] = int(fb["saves24h"])
         if fb.get("followers"):
             fields["net_follow"] = int(fb["followers"])
         if fb:
-            fields["note"] = "台账 recordedAt %s" % str(fb.get("recordedAt") or "")[:10]
-        existed = _existing(db_path, "wechat", rid)
-        upsert_article(db_path, "wechat", rid, _merge_only_empty(existed, fields))
-        if not existed:
-            out["imported"] += 1
+            bits = ["旧台账 recordedAt %s" % str(fb.get("recordedAt") or "")[:10]]
+            if fb.get("ctr24h"):
+                bits.append("点击率 %.2f%%" % (float(fb["ctr24h"]) * 100))
+            note = "·".join(bits)
+            if (p.get("note") or "").strip():
+                note = "%s（%s）" % (note, str(p.get("note")).strip()[:60])
+            fields["note"] = note
+        existed = _existing(db_path, channel, rid)
+        upsert_article(db_path, channel, rid, _merge_only_empty(existed, fields))
+        out["channels"][CHANNELS[channel]] = out["channels"].get(CHANNELS[channel], 0) + 1
+        if existed:
+            out["merged"] += 1
+        else:
+            out["created"] += 1
     out["seeded"] = seed_from_reviews(db_path)
     return out
 

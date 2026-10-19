@@ -1738,6 +1738,27 @@ def api_ops_article():
     return jsonify({"row": row})
 
 
+@app.route("/api/ops/register", methods=["POST"])
+def api_ops_register():
+    """发布登记：记一条"这篇已经在平台发出去了"。
+
+    2026-10-18 从 5180 搬过来（那边服务已停、数据冻在 09-24）。口径没变过一条：
+    **这里只记账，不发车**——发布那一下永远是他在平台后台点的那一下。
+    校验都交给 ops_store.register_publish，界面不抄一份判据（抄了迟早跟后端对不上）。
+    """
+    data = request.get_json(silent=True) or {}
+    if not data:
+        return jsonify({"error": "请求体不是合法 JSON，没敢写库"}), 400
+    try:
+        with _db_lock:
+            out = ops_store.register_publish(DB_PATH, data)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    return jsonify(out)
+
+
 @app.route("/api/ops/week", methods=["POST"])
 def api_ops_week():
     data = request.get_json(silent=True) or {}
@@ -1758,7 +1779,8 @@ def api_ops_week():
 
 @app.route("/api/ops/import-ledger", methods=["POST"])
 def api_ops_import_ledger():
-    """从 5180 台账导入公众号发布记录 + 按审核台「已发布」补空行。只补空，不覆盖手填的数。"""
+    """把旧台账（media-workbench/runtime/publications.json）整本接进来 + 按审核台「已发布」补空行。
+    2026-10-18 起是全渠道（原来只导微信 4 条，那边 96 条头条记录没人接）。只补空，不覆盖手填的数。"""
     try:
         with _db_lock:
             out = ops_store.import_ledger(DB_PATH)

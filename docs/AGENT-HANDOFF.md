@@ -2,13 +2,21 @@
 
 > 读者：**任何一个** coding agent（Qoder / Trae / WorkBuddy / Cursor / Claude Code / Codex CLI）。
 > 这份文件是"工具与流程"的单一入口；**内容口径的来龙去脉在 `CHANGELOG_FOR_AI.md`，角色间的结论在 `output/角色交接/`**。
-> 最后更新：2026-10-13。写这份的起因是号主问"换别的 agent 软件，怎么快速接手"。
+> 最后更新：2026-10-19。写这份的起因是号主问"换别的 agent 软件，怎么快速接手"。
 
 ## 0. 一句话定位
 
 抖音/公众号/B站 素材采集 → ASR 转写 → AI 加工 → SQLite → Flask 工作台（127.0.0.1:15801）→
 出图（头条图文卡 / 公众号 / 海报与图文攻略）。**这里只是素材层与产线**；
 三仓库架构、权威源地图、换机流程见 media-workbench 仓库 `docs/DEV-SYNC.md`。
+
+**2026-10-19 变了的一件事**：运营层那个仓库（`~/Documents/project/media-workbench`，5180 的
+`node server.js`）**号主决定删掉**，5180 从 10-08 起就没在监听、它的数据冻在 9 月下旬。
+搬过来的只有台账与发布登记：登记口现在是 **15801 `POST /api/ops/register`**（运营页顶部那一行），
+旧台账 100 条已整本导入 `publish_stats`（来源标「旧台账」），原始 `runtime/` 归档在 `output/legacy-5180/`。
+`docs/DEV-SYNC.md` 与 `AGENTS.md` 第七节那两份文档在删仓库前要先把能用的部分搬进这里或 `~/Documents/自媒体`，
+**搬之前别删**——句式黑名单（`server.js` 的 `BANNED_PATTERNS`）目前仍是生产层 `verify_*.js` 的读取目标，
+而且它切片失败是**静默**的（打印 `[INFO] … 切片失败`，`src/draft_audit.py` 只认 PASS/WARN/FAIL 会把这行丢掉）。
 
 ## 1. 规则有几份、改哪一份
 

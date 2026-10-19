@@ -433,7 +433,6 @@ textarea{resize:vertical;min-height:84px}
 .ops-why{font-size:12px;line-height:1.75;color:var(--text-secondary);background:var(--surface-nested);border:1px solid var(--border);border-left:3px solid var(--module-1);border-radius:8px;padding:10px 12px;margin:0 0 14px}
 #ops-week{flex:0 0 auto;width:200px}
 #ops-filter{flex:0 0 auto;width:112px}
-#ops-add-channel{flex:0 0 auto;width:96px}
 /* 右上多了筛选和复选框之后，header 不换行会把两个按钮挤成一列一个字（截图实测） */
 #page-ops .header{flex-wrap:wrap}
 #page-ops .header .btn{white-space:nowrap;flex:0 0 auto}
@@ -462,6 +461,14 @@ textarea{resize:vertical;min-height:84px}
 .ops-card input#ops-f-note{font-size:13px;font-weight:600}
 .ops-card em{display:block;font-style:normal;font-size:11.5px;color:var(--text-tertiary);margin-top:5px;min-height:15px}
 .ops-sum{font-size:12.5px;color:var(--text-secondary);margin-bottom:10px;line-height:1.7}
+/* 发布登记那一行（2026-10-18 从 5180 搬过来）：一行填完就记上"这篇发出去了" */
+.ops-reg{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:0 0 12px;padding:9px 11px;background:var(--surface-card);border:1px solid var(--border);border-left:3px solid var(--module-1);border-radius:var(--radius-card);box-shadow:var(--shadow-card)}
+.ops-reg label{font-size:11.5px;color:var(--text-tertiary);display:flex;align-items:center;gap:5px}
+.ops-reg input,.ops-reg select{border:1px solid var(--border-input);border-radius:7px;background:var(--surface-nested);color:var(--text-primary);font-size:12.5px;padding:5px 8px}
+.ops-reg input#ops-reg-title{flex:1 1 240px;min-width:180px}
+.ops-reg input#ops-reg-url{flex:1 1 200px;min-width:150px}
+.ops-reg .hint{font-size:11.5px;color:var(--text-tertiary)}
+.ops-tbl td a.src{font-size:11px;margin-left:6px;color:var(--module-1)}
 .ops-tbl{width:100%;border-collapse:collapse;background:var(--surface-card);border:1px solid var(--border);border-radius:var(--radius-card)}
 .ops-tbl th{font-size:11.5px;font-weight:700;color:var(--text-tertiary);text-align:left;padding:8px 10px;border-bottom:1px solid var(--border);background:var(--surface-nested)}
 .ops-tbl th.num,.ops-tbl td.num{text-align:right}
@@ -1659,18 +1666,24 @@ textarea{resize:vertical;min-height:84px}
           <option value="">全部渠道</option>
         </select>
         <label class="ops-wk" title="下面这张表默认列全部历史"><input type="checkbox" id="ops-week-only" onchange="renderOpsRows()">只看这一周</label>
-        <select id="ops-add-channel" title="加一行的时候选哪个渠道"></select>
-        <button class="btn ghost sm" onclick="opsAddRow()"
-          title="手填一条：公众号后台的数没有接口，先加一行再抄数进去">＋ 加一行</button>
         <button class="btn ghost sm" id="btn-ops-import" onclick="opsImportLedger()"
-          title="从 5180 台账导入已登记的公众号发布记录（滤掉 [测试] 那条），再按审核台「已发布」补空行。只补空位，不覆盖你手填过的数。">📥 从台账导入</button>
+          title="把旧台账（media-workbench 那份 publications.json）整本接进来：三个渠道都导；撞标题的合并进现有行、只补空位，你手填过的数一律不动。">📥 导入旧台账</button>
+      </div>
+      <div class="ops-reg" id="ops-reg">
+        <label>渠道<select id="ops-reg-channel"></select></label>
+        <input id="ops-reg-title" placeholder="标题（照平台上显示的写）">
+        <label>发布日<input id="ops-reg-date" type="date" style="width:140px"></label>
+        <input id="ops-reg-url" placeholder="平台链接（可留空，回填时自动补）">
+        <button class="btn sm" onclick="opsRegister()">＋ 登记这条已发</button>
+        <span class="hint" id="ops-reg-hint">发出去之后在这里记一行；这里只记账，不代发。</span>
       </div>
       <p class="ops-why">每周只看两个数：<b>涨了多少粉</b>、<b>哪篇带来钱</b>。篇数、体检 PASS 率都是过程量，不算成绩。<br>
         三个渠道的数从哪来不一样：<b>头条</b>每天自动从创作中心抓（点「头条数据」页的同步，抓完顺手灌进这张表）；
         <b>小红书</b>没有可 replay 的接口，由 AI 开着后台页面读屏抄进来（<code>scripts/agent/xhs_backfill.py</code>，列顺序 浏览·评论·点赞·收藏·分享）；
         <b>公众号</b>个人主体号既没接口也没登录态（2026-10-08 实测是扫码页），只能他自己抄。<br>
         平台抄来的数是<b>累计</b>不是当日，来源那一栏的「截至」就是这批数读到的日子。<br>
-        没填的地方显示「未填」或「—」而不是 0：0 会被读成"这周涨粉 0"，那是个结论。改完自动存（离开输入框即写库）。</p>
+        没填的地方显示「未填」或「—」而不是 0：0 会被读成"这周涨粉 0"，那是个结论。改完自动存（离开输入框即写库）。<br>
+        2026-10-18：<b>5180 那个运营层已经停了</b>，发布登记改在上面那一行做；旧台账里 2026-04→09 的头条记录整本导入，来源标「旧台账」，点标题后面的「原文」能回平台那篇。</p>
       <div class="ops-two">
         <div class="ops-card"><span>本周新增关注</span>
           <input id="ops-f-new" type="number" min="0" placeholder="未填" onchange="opsSaveWeek()">
@@ -7064,11 +7077,16 @@ async function loadOps() {
 // 写死一份在 HTML 里迟早跟数据对不上（2026-10-14 回填时撞上的就是这）
 function renderOpsHead() {
   const th = document.getElementById('ops-head');
-  const cs = document.getElementById('ops-add-channel');
+  const cs = document.getElementById('ops-reg-channel');
   if (cs && _ops.channels.length) {
+    const keep = cs.value;
     cs.innerHTML = _ops.channels.map(c => '<option value="' + esc(c.key) + '">'
       + esc(c.label) + '</option>').join('');
+    if (keep) cs.value = keep;
   }
+  // 登记那一行的日期默认今天（他登记的就是"今天发了"），但只在没填过时给，别覆盖正在填的
+  const dd = document.getElementById('ops-reg-date');
+  if (dd && !dd.value) dd.value = opsToday();
   // 筛选框的选项也后端下发，但只补一次并保住当前选择：每次重刷会把用户正在看的筛选清掉
   const fs = document.getElementById('ops-filter');
   if (fs && _ops.channels.length && fs.options.length <= 1) {
@@ -7112,11 +7130,15 @@ function renderOpsLabels() {
   document.getElementById('ops-f-updated').textContent = r.week_updated_at
     ? '存于 ' + r.week_updated_at : '这周还没填';
   const weekArts = _ops.articles.filter(a => a.week === r.week);
+  const legacy = _ops.articles.filter(a => a.source === '旧台账').length;
   document.getElementById('ops-summary').innerHTML =
     '这一周有数据 <b>' + (r.article_count || 0) + '</b> 篇 · 阅读合计 <b>'
     + opsTxt(r.reads_sum) + '</b>' + (r.best_read ? ' · 最高：<b>' + esc(r.best_read) + '</b>' : '')
     + ' · 按篇加的涨粉 <b>' + weekArts.reduce((s, a) => s + (a.net_follow || 0), 0) + '</b>'
-    + '（顶上那个数是从后台抄的总量，两者对不上说明有非文章带来的关注，那部分才是推荐流/搜一搜的功劳）';
+    + '（顶上那个数是从后台抄的总量，两者对不上说明有非文章带来的关注，那部分才是推荐流/搜一搜的功劳）'
+    + '<br>台账里一共 <b>' + _ops.articles.length + '</b> 篇'
+    + (legacy ? '，其中 <b>' + legacy + '</b> 篇是 2026-10-18 从旧台账（5180）整本导入的，'
+              + '按渠道筛或勾「只看这一周」能收回去' : '');
 }
 
 function renderOpsRows() {
@@ -7156,8 +7178,12 @@ function renderOpsRows() {
         + ' title="' + escAttr(c.label) + '" onchange="opsSaveArt(\'' + key + '\',\''
         + c.key + '\',this)"></td>';
     };
+    const u = (a.url || '').trim();
+    // 「原文」挂在标题同一格，不加新列：走查脚本按列数取格子（slice(2,-1)），多一列就把断言打歪
+    const src = /^https?:\/\//.test(u)
+      ? ' <a class="src" href="' + escAttr(u) + '" target="_blank" rel="noreferrer">原文 ↗</a>' : '';
     return '<tr><td><span class="t" title="' + escAttr(a.title || a.ref_id) + '">'
-        + esc(a.title || '（没标题 · ' + a.ref_id + '）') + '</span></td>'
+        + esc(a.title || '（没标题 · ' + a.ref_id + '）') + '</span>' + src + '</td>'
       + '<td><input class="dt" value="' + esc(a.pub_date || '') + '" placeholder="YYYY-MM-DD"'
         + ' onchange="opsSaveArt(\'' + key + '\',\'pub_date\',this)"></td>'
       + cols.map(cell).join('')
@@ -7168,18 +7194,43 @@ function renderOpsRows() {
   }).join('');
 }
 
-// 手加一行：给公众号那一侧（没接口也没登录态）和"AI 今天没读到屏"的兜底。
-// ref_id 用「手填-时间戳」，只要不复用就不会跟平台 gid / 发布时刻撞主键。
-async function opsAddRow() {
-  const sel = document.getElementById('ops-add-channel');
-  const channel = (sel && sel.value) || 'xiaohongshu';
-  const title = (prompt('这条的标题（照平台上的写，周报按它认）') || '').trim();
-  if (!title) return;
-  const day = (prompt('发布日 YYYY-MM-DD（今天直接留空）') || '').trim()
-    || new Date().toISOString().slice(0, 10);
-  const ref = '手填-' + Date.now();
-  await opsPost('/api/ops/article', {channel: channel, ref_id: ref,
-    fields: {title: title, pub_date: day, source: '手填'}}, loadOps);
+// 发布登记（2026-10-18 从 5180 搬过来，取代原来那个 prompt 式的「＋ 加一行」）：
+// 标题必填、日期默认今天、链接可留空；判据全在后端 ops_store.register_publish，这里不抄一份。
+function opsToday() {
+  // 不能用 toISOString().slice(0,10)：那是 UTC，凌晨登记会把日期写成昨天
+  const n = new Date();
+  return n.getFullYear() + '-' + ('0' + (n.getMonth() + 1)).slice(-2)
+    + '-' + ('0' + n.getDate()).slice(-2);
+}
+
+async function opsRegister() {
+  const hint = document.getElementById('ops-reg-hint');
+  const body = {
+    channel: (document.getElementById('ops-reg-channel') || {}).value || 'toutiao',
+    title: ((document.getElementById('ops-reg-title') || {}).value || '').trim(),
+    pub_date: (document.getElementById('ops-reg-date') || {}).value || '',
+    url: ((document.getElementById('ops-reg-url') || {}).value || '').trim()
+  };
+  let d;
+  try {
+    d = await fetch('/api/ops/register', {method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body)}).then(r => r.json());
+  } catch (e) { d = {error: e.message}; }
+  if (d.error) {
+    if (hint) { hint.textContent = '没登记上：' + d.error; hint.style.color = '#c0392b'; }
+    return;
+  }
+  if (hint) {
+    hint.textContent = (d.created ? '已记上这条发布：' : '这条本来就有，已补链接：')
+      + String(d.row.title || '').slice(0, 18) + '（' + (d.row.pub_date || '') + '）';
+    hint.style.color = '#1a8a4f';
+  }
+  const t = document.getElementById('ops-reg-title');
+  const u = document.getElementById('ops-reg-url');
+  if (t) t.value = '';
+  if (u) u.value = '';
+  await loadOps();
 }
 
 async function opsPost(url, body, done) {
@@ -7232,11 +7283,15 @@ async function opsImportLedger() {
   btn.disabled = true; btn.textContent = '导入中…';
   const d = await fetch('/api/ops/import-ledger', {method: 'POST'}).then(r => r.json())
     .catch(e => ({error: e.message}));
-  btn.disabled = false; btn.textContent = '📥 从台账导入';
-  if (d.error) { alert('导入失败：' + d.error); return; }
+  btn.disabled = false; btn.textContent = '📥 导入旧台账';
+  if (d.error) { alert('导入失败：' + d.error + '\n（旧台账文件在 media-workbench/runtime/publications.json，'
+    + '那个仓库删掉之后就再也导不了了）'); return; }
   await loadOps();
-  alert('台账新增 ' + d.imported + ' 条、审核台已发布补 ' + d.seeded + ' 条'
-    + (d.skipped && d.skipped.length ? '；跳过：' + d.skipped.join(' / ') : '')
+  alert('旧台账：新增 ' + d.created + ' 行、并进已有行 ' + d.merged + ' 行、审核台已发布补 '
+    + d.seeded + ' 行'
+    + (d.channels && Object.keys(d.channels).length ? '（' + Object.keys(d.channels)
+        .map(k => k + ' ' + d.channels[k] + ' 条').join('、') + '）' : '')
+    + (d.skipped && d.skipped.length ? '；跳过 ' + d.skipped.length + ' 条：' + d.skipped.join(' / ') : '')
     + '。已有的行只补空位，你手填过的数没动。');
 }
 

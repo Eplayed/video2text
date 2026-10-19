@@ -101,12 +101,18 @@ def main():
             g = by_title.get(a.get("title") or "")
             print("样例 %s｜%s → %s" % (a["channel"], (a.get("title") or "")[:18],
                                         " ".join(str(x) for x in (g or {}).get("cells", []))))
-        # 勾上「只看这一周」应当只剩本周的行
+        # 勾上「只看这一周」应当只剩本周的行。
         pg.click("#ops-week-only")
         pg.wait_for_timeout(300)
-        wk = pg.eval_on_selector_all("#ops-rows tr", "es=>es.length")
+        # 只数有输入框的行：本周还没发过东西时表格里是那一格占位提示（也是一个 tr），
+        # 拿 tr 总数比后端行数会在"新的一周刚开始"这天误报（2026-10-19 就是这么红了一次）
+        wk = pg.eval_on_selector_all("#ops-rows tr", "es=>es.filter(t=>t.querySelector('input')).length")
         want = len([a for a in arts if a.get("week") == d["report"]["week"]])
-        print("勾「只看这一周」→ %d 行（后端算 %d 行，周 %s）" % (wk, want, d["report"]["week"]))
+        placeholder = pg.eval_on_selector_all(
+            "#ops-rows tr", "es=>es.filter(t=>!t.querySelector('input'))"
+                            ".map(t=>t.innerText.trim())")
+        print("勾「只看这一周」→ %d 行（后端算 %d 行，周 %s）占位：%s"
+              % (wk, want, d["report"]["week"], " / ".join(placeholder)[:40]))
         if wk != want:
             fails.append("「只看这一周」筛出 %d 行，后端是 %d 行" % (wk, want))
         browser.close()
