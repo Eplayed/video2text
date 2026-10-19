@@ -70,9 +70,14 @@
    `article-humanize` 里"唯一权威源"那一行，全部从 `media-workbench/server.js` 改指这份。
    **`server.js` 里那份从此是待删的旧副本**——再往那边改就是第五份漂移。
 
-仍未做：② media-workbench 有 **3 个未 push 提交**（含 10-05 那次黑名单改动），远端是公开仓库
-`github.com:Eplayed/media-workbench`——号主点头"fetch 核对后推上去"；注意本机 `origin/main` 可能只是
-缓存旧了，"未 push"这个判断**要先 fetch 证伪**（这条我提交这份说明时还没做，做完全写在下面那条提交里）；
+仍未做：② media-workbench 那 3 个未 push 提交**已处理**（10-19 号主点头后先 `git ls-remote` +
+`git fetch` 实测：远端 main 停在 `1f4d361`，本地 `431fff6`，确实差 3 个——不是缓存假象；
+推送前扫过 diff：只碰 `server.js` / `public/app.js` / `public/index.html` 三份代码、6 行增，
+敏感串命中 0，`runtime/` 本来就被 .gitignore 挡着；`git push origin main` 后远端 SHA 与本地一致、
+落后 0 个）。**推上去之后本地这份 clone 才真的可以删**：代码与文档在远端可再 clone，
+运行数据在 `output/legacy-5180/`。但记一句风险：那是**公开仓库**，`server.js` 里有变现口径与
+参考账号名单（`:391 DIFY_CHANNEL_PROFILES`），这些早就随历史公开了；要收口的话得转私有或清历史，
+那是另一件事，我没动。
 ③ 台账里**导入前就存在**的 4 组同篇两行（`tt:<gid>` 与 `tt:<item id>` 各一行、数字还打架，
 例如《魔兽无限练级：四条经验加成》93 vs 123 阅读）没合并——这是 10-16 那次对账留下的，
 合哪一行的数要号主定，我没擅自动；④ 小红书那条整条暂停（10-15 口径）没变；
