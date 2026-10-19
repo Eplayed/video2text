@@ -11,8 +11,9 @@
    has_more 永远 true、offset 不生效、status=8 时直接返回 0 条。
    页面自己发的请求带齐了签名与上下文，只有拦它才可靠。取证脚本见 temp/probe_tt_page*.py。
 
-cookie 来源两级：config/config.env.local 的 TOUTIAO_COOKIE（本仓库自己的），
-没有就退回 media-workbench/runtime/toutiao-cookies.json（5180 那份，实测 09-22 存的仍可用）。
+cookie 来源两级：config/config.env.local 的 TOUTIAO_COOKIE（本仓库自己的，**现在走的就是这一级**，
+2026-10-19 从 5180 那份搬过来），没有再退回两份兜底：`output/legacy-5180/toutiao-cookies.json`
+（删仓库前归档的那份）与 `media-workbench/runtime/toutiao-cookies.json`（原仓库还在时）。
 
 只读：只打开内容管理页、点分页、读响应；不点发布、不发任何写请求。
 """
@@ -26,7 +27,11 @@ from typing import Optional
 
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_LOCAL = ROOT / "config" / "config.env.local"
-MW_COOKIES = Path.home() / "Documents" / "project" / "media-workbench" / "runtime" / "toutiao-cookies.json"
+# 兜底顺序：归档那份（删了 5180 也还在）→ 原仓库那份（还在时）
+COOKIE_FALLBACKS = [ROOT / "output" / "legacy-5180" / "toutiao-cookies.json",
+                    Path.home() / "Documents" / "project" / "media-workbench"
+                    / "runtime" / "toutiao-cookies.json"]
+MW_COOKIES = COOKIE_FALLBACKS[1]      # 老名字留着，别处引用不炸
 TT_DIR = ROOT / "output" / "toutiao"
 SNAPSHOT = TT_DIR / "_platform_items.json"
 
@@ -48,18 +53,19 @@ def load_cookie():
                 val = line.split("=", 1)[1].strip().strip('"').strip("'")
                 if len(val) > 100:
                     return val, "config/config.env.local:TOUTIAO_COOKIE"
-    if MW_COOKIES.is_file():
+    for path in COOKIE_FALLBACKS:
+        if not path.is_file():
+            continue
         try:
-            data = json.loads(MW_COOKIES.read_text(encoding="utf-8"))
-            val = (data.get("cookie") or "").strip()
-            if len(val) > 100:
-                return val, "media-workbench/runtime/toutiao-cookies.json（存于 %s）" % (
-                    str(data.get("savedAt") or "")[:10])
+            data = json.loads(path.read_text(encoding="utf-8"))
         except ValueError:
-            pass
+            continue
+        val = (data.get("cookie") or "").strip()
+        if len(val) > 100:
+            return val, "%s（存于 %s）" % (path, str(data.get("savedAt") or "")[:10])
     raise RuntimeError("没找到头条 cookie：在 config/config.env.local 加一行 TOUTIAO_COOKIE="
                        "（浏览器 DevTools 里任一 mp.toutiao.com 请求的 cookie 头整段复制），"
-                       "或恢复 5180 那份 runtime/toutiao-cookies.json")
+                       "或把 output/legacy-5180/toutiao-cookies.json 放回原处")
 
 
 def _to_cookies(header):

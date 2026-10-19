@@ -30,7 +30,9 @@
 **故意不加新列**：`ui_ops_walk.py` 按列位取格子（`slice(2,-1)`），多一列就把那条断言打歪。
 三、**cookie 落到本仓库**：`config/config.env.local` 加 `TOUTIAO_COOKIE`（那份 09-22 存的 2247 字符是
 当前唯一可用登录态，实测 `load_cookie()` 现在取的是 config 这一路）。改前已备份
-`config/config.env.local.bak-20261019-cookie`，值全程没打印过。
+`config/config.env.local.bak-20261019-cookie`，值全程没打印过。**兜底链也跟着改**：原来只认
+`media-workbench/runtime/…`（仓库一删就成空路径），现在 `COOKIE_FALLBACKS = [归档那份, 原仓库那份]`，
+实测把 config 那一行藏掉后取到的是 `output/legacy-5180/toutiao-cookies.json`，且两份内容逐字一致。
 四、**runtime 整目录归档**到 `output/legacy-5180/`（236K、17 份 + logs，`output/` 已被 .gitignore 挡住）：
 `toutiao-performance.json` 96 篇（4-8 月的表现，DB 只从 09-14 起）、两份 benchmark（26+8 条，别处零副本）、
 `strategy-report*.json`（9-22 周报快照含 G1/G2/G3 阶段门）、`draft-states.json`、`state.json` + 35 次自动运行史。
