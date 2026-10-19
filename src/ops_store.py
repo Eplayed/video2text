@@ -33,8 +33,15 @@ import sqlite3
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
-LEDGER = os.path.expanduser(
-    "~/Documents/project/media-workbench/runtime/publications.json")
+# 旧台账的两份可能位置：归档那份（5180 仓库删了也还在）→ 原仓库那份（还在时）。
+# 2026-10-19 号主决定删掉 media-workbench，只写死原路径的话，删完这个按钮就报"找不到台账"，
+# 而数据其实就在 output/legacy-5180/ 里——跟 cookie 那处同一个改法。
+LEDGER_CANDIDATES = [
+    os.path.expanduser("~/Documents/project/video2text/output/legacy-5180/publications.json"),
+    os.path.expanduser("~/Documents/project/media-workbench/runtime/publications.json"),
+]
+# 老名字留着给别处引用/排查用（指向第一份，也就是归档那份）
+LEDGER = LEDGER_CANDIDATES[0]
 CHANNELS = {"wechat": "公众号", "toutiao": "头条", "xiaohongshu": "小红书"}
 # 同一列在不同渠道的后台叫什么，写在这里一份，界面按这张表出表头——
 # 以前表头写死"阅读/在看/转发"（那是公众号的词），头条的"点赞"、小红书的"收藏"塞进去就是假标签
@@ -318,11 +325,11 @@ def import_ledger(db_path: str, ledger_path: Optional[str] = None) -> Dict[str, 
     只补空不覆盖：人工后录的数比台账旧快照准；已有人工行时只填 title/pub_date/url 这种描述字段。
     数字一律"非零才写"：旧台账 shares24h 96 条全 0，写进去就成了"他转发都是 0"这个结论。
     """
-    path = ledger_path or LEDGER
+    path = ledger_path or next((p for p in LEDGER_CANDIDATES if os.path.isfile(p)), "")
     out = {"ledger_file": path, "created": 0, "merged": 0, "skipped": [], "seeded": 0,
            "error": "", "channels": {}}
-    if not os.path.isfile(path):
-        out["error"] = "找不到台账：%s" % path
+    if not path:
+        out["error"] = "找不到旧台账，找过的两个位置：%s" % " ｜ ".join(LEDGER_CANDIDATES)
         return out
     try:
         with open(path, encoding="utf-8") as fh:

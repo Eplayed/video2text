@@ -72,6 +72,23 @@
    `article-humanize` 里"唯一权威源"那一行，全部从 `media-workbench/server.js` 改指这份。
    **`server.js` 里那份从此是待删的旧副本**——再往那边改就是第五份漂移。
 
+### 同日第三件：删之前那三件收尾（号主说"先把这三件收掉"）
+
+1. **`ops_store` 的旧台账路径改成两份候选**：`LEDGER_CANDIDATES = [归档那份, 原仓库那份]`，
+   `import_ledger()` 取第一个存在的，报错时把两个位置都打出来。原来写死
+   `media-workbench/runtime/publications.json`——仓库一删那个按钮就报"找不到台账"，
+   而数据其实就在 `output/legacy-5180/`。实测：`cmp` 证两份逐字一致；重启后走真接口
+   `POST /api/ops/import-ledger` → 用的是归档那份、`created 0 / merged 99`、台账仍 136 行（幂等）。
+2. **截图也归档**：`docs/screenshots/` 那 4 张（8-24 三张渠道表单 + 9-16 系列面板，3.6M）既不在 git 里
+   也没被上一次归档带上，删了就没了 → 现在在 `output/legacy-5180/screenshots/`。
+   全仓库被 .gitignore 挡住的只有 `runtime/` 与 `docs/screenshots/` 两项，两处都齐了。
+3. **我自己的会话记忆里 6 处写死 5180 的条目改了**：头条号实名的 cookie 取法命令（原来 `python3 -c` 读
+   MW 那份，现在读 `config/config.env.local` 的 `TOUTIAO_COOKIE`）、头条数据落点那三份 json 的路径、
+   服务地图里"5180 = 自媒体发文主线"整条、用户画像里"三仓库产线"、每日回填那条（任务 10-19 起查不到、
+   号主说先别建）、以及**一条本来就记错的**——小红书字数线那个 yml 我记成在 media-workbench，
+   实际一直在 `自媒体/_content_factory/dify/custom/`。措辞统一成"已下线、号主决定删（本地 clone 可能还在）"，
+   不写成"已删"，因为删这一下还没发生。
+
 仍未做：② media-workbench 那 3 个未 push 提交**已处理**（10-19 号主点头后先 `git ls-remote` +
 `git fetch` 实测：远端 main 停在 `1f4d361`，本地 `431fff6`，确实差 3 个——不是缓存假象；
 推送前扫过 diff：只碰 `server.js` / `public/app.js` / `public/index.html` 三份代码、6 行增，
