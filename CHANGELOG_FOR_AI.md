@@ -45,16 +45,41 @@
 ② `ui_ops_walk.py` 那条「只看这一周」的断言在**新的一周还没发文**时会误报（占位提示也是一个 `tr`），
 10-19 早上红的就是这个，已改成只数有输入框的行——门禁判据自己也会错，这条又应验一次。
 
-仍未做：① **句式黑名单的新家没定**（号主点头前不动 `自媒体/_content_factory` 那两个 verify 脚本），
-候选是把 `server.js:927-1060` 抽成 `banned_patterns.js` 放生产层，顺手让 `draft_audit.py` 对"切片失败"报错；
-② media-workbench 有 **3 个未 push 提交**（含 10-05 那次黑名单改动），远端是公开仓库
-`github.com:Eplayed/media-workbench`——删之前要么推上去、要么确认本地那份就是终态；
+### 同日第二件：句式黑名单搬进本仓库（号主选了"搬进 video2text"）
+
+问句是"这份词表搬到哪里"，三个选项（抽成 JS 放生产层 / 搬进 video2text / 仓库先不删），他选**搬进 video2text**。
+
+1. **新家：`tools/banned_patterns.js`**（跟 `tools/douyin_browser_fetch.js` 同一层，那已经是"给外部
+   node 脚本消费的 JS 模块"的落点）。内容是 `server.js:951-1091` **整段逐字搬**（19 条 `BANNED_PATTERNS`
+   + 20 条 `SANITIZE_PATTERNS` + `CONTRAST_DENSITY_RE` + `extractLintZone` / `lintDraftContent` /
+   `evaluateDraftGate`），末尾加 `module.exports`。为什么整段而不是只抄词表：两个消费方要的是**能跑的函数**，
+   其中"只查复制区"那段裁剪逻辑才是过去把审计文案误判成禁用句式的关口。
+2. **两个消费方改指它**：`自媒体/_content_factory/verify_toutiao.js`（require，只查复制区那套不变）、
+   `verify_draft.js`（原来是 `readFileSync` + `eval`，现在换成 require，`lintDraftContent` /
+   `evaluateDraftGate` 用解构接出来，下游代码不用改）。
+3. **顺手把静默失效堵住**：以前切片失败走 `line()` 打一行 `[INFO] 禁用句式（19 类）— 切片失败`，
+   而 `src/draft_audit.py:178` 只匹配 `[PASS|WARN|FAIL]` → 那行被整条丢掉，报告看着像查过了。
+   现在 verify_toutiao 读不到文件就 `check(..., false, ...)` 判 **FAIL**，verify_draft 直接 throw。
+   类数也不写死"19 类"，改成 `lint.BANNED_PATTERNS.length` 现算。
+4. **取证**：拿一份真稿（`auto_out/2026-09-23/1_暗金观察长文.md`）把**新旧两份词表各跑一遍**对照——
+   命中类与次数逐条相同（下定义腔×1、账号定位泄漏×1）、`evaluateDraftGate` 的 `canPublish` 与 `hard`
+   数组完全一致、条数都是 19/20。再把模块临时改名跑一次：verify_toutiao 出
+   `[FAIL] 禁用句式（机检未跑） — 读不到禁用句式权威源…`、verify_draft 抛错带行号，**都报得出来**。
+5. **口径文件跟着改**：`src/draft_audit.py` 与 `src/humanize.py` 的文档字符串、
+   `product/…/article-audit/draft_audit.py` 那份副本、`.qoder/skills/article-audit` 与
+   `article-humanize` 里"唯一权威源"那一行，全部从 `media-workbench/server.js` 改指这份。
+   **`server.js` 里那份从此是待删的旧副本**——再往那边改就是第五份漂移。
+
+仍未做：② media-workbench 有 **3 个未 push 提交**（含 10-05 那次黑名单改动），远端是公开仓库
+`github.com:Eplayed/media-workbench`——号主点头"fetch 核对后推上去"；注意本机 `origin/main` 可能只是
+缓存旧了，"未 push"这个判断**要先 fetch 证伪**（这条我提交这份说明时还没做，做完全写在下面那条提交里）；
 ③ 台账里**导入前就存在**的 4 组同篇两行（`tt:<gid>` 与 `tt:<item id>` 各一行、数字还打架，
 例如《魔兽无限练级：四条经验加成》93 vs 123 阅读）没合并——这是 10-16 那次对账留下的，
 合哪一行的数要号主定，我没擅自动；④ 小红书那条整条暂停（10-15 口径）没变；
 ⑤ **每日回填那个定时任务今早在 `qoder_cron list` 里查不到了**（昨天我把它改成 revision 5 并打开、
 10-18 09:31 真跑过：台账 22 行更新 + 暴雪公告从 12 条涨到 19 条），现在列表为空，
-要么别的会话删了、要么被清了——**明天 09:30 不会自动跑，重建前要问号主**。
+要么别的会话删了、要么被清了——号主说**先别建**，所以明天 09:30 不会自动跑，
+头条数据回填与暴雪公告抓取在重建之前都要人工触发（`python3 -m src.blizzard_news --limit 8`）。
 
 ## 2026-10-17（一手源）：国服官网公告入库——库里五个微信订阅全是二手转述号
 

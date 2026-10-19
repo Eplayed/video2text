@@ -3,7 +3,7 @@
 
 为什么这样接：Qoder 的 skill 只在会话里由 agent 加载，Flask 进程调不到。
 但 skill 的本事是三样东西——**必改清单、定点替换、不许重写**——这三样都能代码化。
-所以这里不复制一份词表（句式黑名单仍以 media-workbench/server.js 为准，
+所以这里不复制一份词表（句式黑名单以本仓库 tools/banned_patterns.js 为准，2026-10-19 从 media-workbench/server.js 搬来，
 写作原则仍以 ~/Documents/自媒体/ 那两份权威源为准），而是**直接读 SKILL.md 当纪律**：
 skill 改了这里就跟着变，两处口径不许漂移。
 

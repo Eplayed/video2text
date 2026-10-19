@@ -14,9 +14,15 @@
 `node server.js`）**号主决定删掉**，5180 从 10-08 起就没在监听、它的数据冻在 9 月下旬。
 搬过来的只有台账与发布登记：登记口现在是 **15801 `POST /api/ops/register`**（运营页顶部那一行），
 旧台账 100 条已整本导入 `publish_stats`（来源标「旧台账」），原始 `runtime/` 归档在 `output/legacy-5180/`。
-`docs/DEV-SYNC.md` 与 `AGENTS.md` 第七节那两份文档在删仓库前要先把能用的部分搬进这里或 `~/Documents/自媒体`，
-**搬之前别删**——句式黑名单（`server.js` 的 `BANNED_PATTERNS`）目前仍是生产层 `verify_*.js` 的读取目标，
-而且它切片失败是**静默**的（打印 `[INFO] … 切片失败`，`src/draft_audit.py` 只认 PASS/WARN/FAIL 会把这行丢掉）。
+**句式黑名单的权威源已改成 `tools/banned_patterns.js`**（2026-10-19 从 `server.js:951-1091` 整段搬来、
+逐字未改；生产层 `自媒体/_content_factory/verify_toutiao.js` 与 `verify_draft.js` 现在 require 这份，
+**读不到直接判 FAIL**——以前切片失败只打一行 INFO，`src/draft_audit.py` 只认 PASS/WARN/FAIL
+会把那行丢掉，机检看着像查过了）。同步义务没变：这份与
+`自媒体/_content_factory/dify/custom/05-darkgold-…-v2.yml` 的 02C PATTERNS / 02E SANITIZE 两处要一起改，
+`server.js` 里那份从此是**待删的旧副本，别再往那边改**。
+`docs/DEV-SYNC.md` 与 `AGENTS.md` 第七节那两份文档（三仓库架构、换机流程、"不进 git 的 6 项数据清单"、
+产线双端分工纪律）在删仓库前要先搬进这里或 `~/Documents/自媒体`，**搬之前别删**；
+逐条核对表见 `output/角色交接/2026-10-19-dev-删5180前核对表.md`。
 
 ## 1. 规则有几份、改哪一份
 

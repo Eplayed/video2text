@@ -6,8 +6,8 @@
 再抄一份规则表就是等着两处口径漂移，本项目在图文三轴上已经栽过三次。
 
 判定分三档：可以发（零 FAIL 零 WARN）/ 改完再发（只有 WARN）/ 不能发（有 FAIL）。
-机器只判形：句式黑名单仍由 verify_toutiao.js 动态读 media-workbench/server.js，
-本文件不复制那份表；游戏机制对不对、数字准不准，仍要人按整合稿【风险核查】核。
+机器只判形：句式黑名单在 `tools/banned_patterns.js`（2026-10-19 从 media-workbench/server.js 搬来，
+由 verify_toutiao.js require），本文件不复制那份表；游戏机制对不对、数字准不准，仍要人按整合稿【风险核查】核。
 """
 from __future__ import annotations
 

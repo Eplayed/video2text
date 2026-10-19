@@ -11,7 +11,7 @@ description: 头条/公众号稿子发布前体检（审核角色）。用户说
 
 判定标准来自三份权威源，本技能不复制规则表：
 
-- 句式黑名单：`media-workbench/server.js` 的 `BANNED_PATTERNS`（`verify_toutiao.js` 动态切片读取）
+- 句式黑名单：`video2text/tools/banned_patterns.js` 的 `BANNED_PATTERNS`（`verify_toutiao.js` require 它；2026-10-19 从 media-workbench/server.js 搬来，读不到会判 FAIL 不再静默跳过）
 - 写作原则：`~/Documents/自媒体/ARPG去AI味写作规则-v7.md`（第一原则：不要装得比实际更懂）
 - AI 味评分：`_content_factory/wechat-publisher/scripts/ai_score.py`
 

@@ -19,7 +19,7 @@ description: 把 AI 生成的头条稿/公众号稿改得像人写的（改写�
 
 ## 禁用清单不在这里维护
 
-句式黑名单以 `media-workbench/server.js` 的 `BANNED_PATTERNS` 为唯一权威源（`audit_draft.py` 会自动读到）；写作原则以 `~/Documents/自媒体/ARPG去AI味写作规则-v7.md` 为准。**不要在本技能里另抄一份词表**——两处口径迟早漂移，这是本项目反复踩过的静默失效。
+句式黑名单以 `video2text/tools/banned_patterns.js` 的 `BANNED_PATTERNS` 为唯一权威源（`audit_draft.py` 会自动读到）；写作原则以 `~/Documents/自媒体/ARPG去AI味写作规则-v7.md` 为准。**不要在本技能里另抄一份词表**——两处口径迟早漂移，这是本项目反复踩过的静默失效。
 
 ## 工作流
 
