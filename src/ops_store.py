@@ -63,7 +63,7 @@ CREATE TABLE IF NOT EXISTS publish_stats (
   title TEXT, pub_date TEXT,
   reads INTEGER, looks INTEGER, shares INTEGER, net_follow INTEGER, revenue REAL,
   show_n INTEGER, comment INTEGER, saves INTEGER,
-  source TEXT, note TEXT, url TEXT, updated_at TEXT,
+  source TEXT, note TEXT, url TEXT, slot_key TEXT, updated_at TEXT,
   PRIMARY KEY (channel, ref_id)
 );
 CREATE TABLE IF NOT EXISTS week_stats (
@@ -76,7 +76,7 @@ CREATE TABLE IF NOT EXISTS week_stats (
 # `show` 是 SQL 保留字，库里那一列叫 show_n，对外（接口与界面）仍叫 show，调用方不用知道
 # url 是 2026-10-18 加的：发布登记要能带回平台原文链接，不然"发了哪篇"还是只能靠标题猜
 ARTICLE_FIELDS = ("title", "pub_date", "reads", "looks", "shares", "net_follow",
-                  "revenue", "show", "comment", "saves", "source", "note", "url")
+                  "revenue", "show", "comment", "saves", "source", "note", "url", "slot_key")
 _COL_ALIAS = {"show": "show_n"}
 WEEK_FIELDS = ("followers_total", "followers_new", "revenue", "note")
 # 表单交上来的都是字符串；空串按"没填"存 NULL，不存 0——0 会被读成一个结论
@@ -109,7 +109,7 @@ def ensure(db_path: str) -> None:
         # 2026-10-14 加了 展现/评论/收藏 三列，不补一次的话所有写入都会 "no such column"
         have = {r[1] for r in conn.execute("PRAGMA table_info(publish_stats)").fetchall()}
         for col, typ in (("show_n", "INTEGER"), ("comment", "INTEGER"), ("saves", "INTEGER"),
-                         ("url", "TEXT")):
+                         ("url", "TEXT"), ("slot_key", "TEXT")):
             if col not in have:
                 conn.execute("ALTER TABLE publish_stats ADD COLUMN %s %s" % (col, typ))
         conn.commit()
@@ -224,12 +224,34 @@ def register_publish(db_path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     if not ref_id:
         same = [a for a in list_articles(db_path, channel)
                 if (a.get("title") or "").strip() == title and (a.get("pub_date") or "") == pub_date]
-        ref_id = same[0]["ref_id"] if same else "reg:%s" % datetime.now().strftime("%Y%m%d%H%M%S")
+        if same:
+            ref_id = same[0]["ref_id"]
+        else:
+            # 键撞到秒就完了：2026-10-21 实测连点两条不同标题的登记，`reg:<秒>` 相同 →
+            # 第二条把第一条那行**原地 UPDATE 成自己的标题**，台账里凭空少一行。
+            # 所以这把键只在"同渠道同标题同一天"时复用，被别的标题占了就往后加序号。
+            base = "reg:%s" % datetime.now().strftime("%Y%m%d%H%M%S")
+            taken = {(a.get("ref_id") or ""): (a.get("title") or "").strip()
+                     for a in list_articles(db_path, channel)}
+            ref_id, n = base, 1
+            while taken.get(ref_id) and taken[ref_id] != title:
+                n += 1
+                ref_id = "%s-%d" % (base, n)
     fields = {"title": title, "pub_date": pub_date, "source": "人工登记"}
     for key in ("url", "note"):
         val = str(payload.get(key) or "").strip()
         if val:
             fields[key] = val
+    # 排产槽号（odur / ban / gift…）：`scripts/daily_brief.py` 判"这一格发过没有"就靠它，
+    # 比拿标题去匹配可靠得多（台账里那批 2026-10-18 导入的老行没有槽号，只能标"疑似"）。
+    # **只收白名单字符，清洗后跟原值不一样就报错**——悄悄存个 `scriptodur--` 这种怪值，
+    # 比直接拒绝更难查（槽号是日报的键，键错了整条判据就废了）。
+    raw_slot = str(payload.get("slot_key") or "").strip()
+    slot = re.sub(r"[^0-9A-Za-z_\-]", "", raw_slot)[:24]
+    if slot:
+        if slot != raw_slot:
+            raise ValueError("排产槽号只能用字母/数字/-/_（如 odur、day1），你填的是「%s」" % raw_slot[:24])
+        fields["slot_key"] = slot
     existed = bool(_existing(db_path, channel, ref_id))
     row = upsert_article(db_path, channel, ref_id, fields)
     return {"row": row, "created": not existed, "ref_id": ref_id}

@@ -1679,6 +1679,7 @@ textarea{resize:vertical;min-height:84px}
         <input id="ops-reg-title" placeholder="标题（照平台上显示的写）">
         <label>发布日<input id="ops-reg-date" type="date" style="width:140px"></label>
         <input id="ops-reg-url" placeholder="平台链接（可留空，回填时自动补）">
+        <input id="ops-reg-slot" placeholder="排产槽号（如 odur，可留空）" style="width:190px">
         <button class="btn sm" onclick="opsRegister()">＋ 登记这条已发</button>
         <span class="hint" id="ops-reg-hint">发出去之后在这里记一行；这里只记账，不代发。</span>
       </div>
@@ -7302,8 +7303,10 @@ function renderOpsRows() {
     // 「原文」挂在标题同一格，不加新列：走查脚本按列数取格子（slice(2,-1)），多一列就把断言打歪
     const src = /^https?:\/\//.test(u)
       ? ' <a class="src" href="' + escAttr(u) + '" target="_blank" rel="noreferrer">原文 ↗</a>' : '';
+    // 排产槽号也挂在标题这一格（同上：不加新列，加了会把按列数取格子的走查断言打歪）
+    const slot = a.slot_key ? ' <span class="pill" style="font-size:10.5px">槽 ' + esc(a.slot_key) + '</span>' : '';
     return '<tr><td><span class="t" title="' + escAttr(a.title || a.ref_id) + '">'
-        + esc(a.title || '（没标题 · ' + a.ref_id + '）') + '</span>' + src + '</td>'
+        + esc(a.title || '（没标题 · ' + a.ref_id + '）') + '</span>' + src + slot + '</td>'
       + '<td><input class="dt" value="' + esc(a.pub_date || '') + '" placeholder="YYYY-MM-DD"'
         + ' onchange="opsSaveArt(\'' + key + '\',\'pub_date\',this)"></td>'
       + cols.map(cell).join('')
@@ -7329,7 +7332,8 @@ async function opsRegister() {
     channel: (document.getElementById('ops-reg-channel') || {}).value || 'toutiao',
     title: ((document.getElementById('ops-reg-title') || {}).value || '').trim(),
     pub_date: (document.getElementById('ops-reg-date') || {}).value || '',
-    url: ((document.getElementById('ops-reg-url') || {}).value || '').trim()
+    url: ((document.getElementById('ops-reg-url') || {}).value || '').trim(),
+    slot_key: ((document.getElementById('ops-reg-slot') || {}).value || '').trim()
   };
   let d;
   try {
