@@ -301,6 +301,35 @@ def main():
                str(sorted({x["width"] for x in off}))[:40])
             pg.screenshot(path=str(out_dir / "schedule_brief_offline.png"))
             br.close()
+
+        print("── 5. D 段：工作台进程还是旧判据（少 verdict_why/fresh_label）时，整个不画 ──")
+        # 为什么单验这条：静态 JS 一改就生效、后端要重启才生效。这中间的混态就是
+        # "新图例 + 旧档位名（今天就发）"——R1 要挡的正是页面上出现这句话。
+        old = dict(b)
+        old.pop("verdict_why", None)
+        old.pop("fresh_label", None)
+        with sync_playwright() as pw:
+            br = pw.chromium.launch(channel="chrome", headless=True)
+            pg = br.new_page(viewport={"width": 1440, "height": 1000})
+            pg.route("**/api/plan/brief",
+                     lambda route: route.fulfill(status=200, content_type="application/json",
+                                                 body=json.dumps(old)))
+            pg.goto(base + "/static/schedule.html", wait_until="domcontentloaded")
+            for _ in range(20):
+                pg.wait_for_timeout(1000)
+                t = pg.evaluate("() => (document.getElementById('vb-legend')||{}).textContent || ''")
+                if "旧判据" in t or "不猜" in t:
+                    break
+            t = pg.evaluate("() => (document.getElementById('vb-legend')||{}).textContent || ''")
+            painted = pg.evaluate("() => [...document.querySelectorAll('[data-item]')]"
+                                  ".filter(c=>/\\bvb-\\w+/.test(c.className)).length")
+            ck("旧判据的响应被拒收，图例说要重启（不拿旧五档画新页面）",
+               "旧判据" in t or "重启" in t, t[:80])
+            ck("旧判据时卡上不画任何颜色", painted == 0, "%d 张仍有色" % painted)
+            ck("页面上不出现「今天就发」这句旧档位名",
+               "今天就发" not in pg.evaluate("() => document.body.innerText"))
+            pg.screenshot(path=str(out_dir / "schedule_brief_stale_api.png"))
+            br.close()
         ck("页面没有 JS 报错（上色脚本没把渲染打断）", not errs, "; ".join(errs[:2])[:120])
     finally:
         proc.terminate()
@@ -309,7 +338,7 @@ def main():
         except subprocess.TimeoutExpired:
             proc.kill()
 
-    print("截图：temp/schedule_brief_1440.png / _all6.png / _375.png / _offline.png")
+    print("截图：temp/schedule_brief_1440.png / _all6.png / _375.png / _offline.png / _stale_api.png")
     if fails:
         print("\nSCHEDULE_BRIEF_WALK_FAIL %d 条：\n  - %s" % (len(fails), "\n  - ".join(fails)))
         return 1

@@ -155,6 +155,11 @@
       })
       .then(function (d) {
         if (d && d.error) throw new Error(d.error);
+        // 握手：老进程算出来的还是旧五档（"今天就发"那句就在这一类混态里回到页面上）。
+        // 缺任何一份下发文案就**整个不画**，比"新图例配旧档位名"诚实。
+        if (!d.verdicts || !d.verdict_why || !d.fresh_label) {
+          throw new Error('接口没下发 verdict_why/fresh_label，工作台进程还是旧判据，重启后才有新颜色');
+        }
         slots = (d && d.slots) || null;
         labels = (d && d.verdicts) || null;
         why = (d && d.verdict_why) || null;
