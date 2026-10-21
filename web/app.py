@@ -1763,6 +1763,49 @@ def api_plan_brief():
         return jsonify({"error": str(e)[:200]}), 500
 
 
+@app.route("/api/plan/provenance", methods=["GET", "POST"])
+def api_plan_provenance():
+    """编辑证据链的读写（原创增量那一层）。
+
+    GET  按 `slot_key/channel/form/version` 或 `summary_id` 读一份（预览与表单回填用）；
+    POST 存一份（允许空着存草稿——缺项由 `guide_provenance` 算，不在这一步拦人）。
+    这里**不判原创**：只记"解决什么问题 / 新增了什么 / 依据在哪 / 借来的东西凭什么用"。
+    """
+    from src import guide_provenance
+    if request.method == "GET":
+        sid = str(request.args.get("summary_id") or "").strip()
+        slot = str(request.args.get("slot_key") or "").strip()
+        try:
+            if sid:
+                row = guide_provenance.load_for_summary(DB_PATH, int(sid))
+            elif slot:
+                row = guide_provenance.load(
+                    DB_PATH, slot, str(request.args.get("channel") or "toutiao"),
+                    str(request.args.get("form") or "guide"),
+                    int(request.args.get("version") or 1))
+            else:
+                return jsonify({"error": "要带 summary_id 或 slot_key"}), 400
+        except (TypeError, ValueError) as e:
+            return jsonify({"error": str(e)[:120]}), 400
+        key, label = guide_provenance.state(row)
+        return jsonify({"row": row, "recorded": bool(row), "state": key, "label": label,
+                        "gaps": guide_provenance.compute_gaps(row),
+                        "blocking": guide_provenance.blocking_gaps(row),
+                        "line": guide_provenance.summary_line(row)})
+    data = request.get_json(force=True, silent=True) or {}
+    if not data:
+        return jsonify({"error": "请求体不是合法 JSON，没敢写库"}), 400
+    try:
+        with _db_lock:
+            row = guide_provenance.save(DB_PATH, data)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    key, label = guide_provenance.state(row)
+    return jsonify({"row": row, "state": key, "label": label,
+                    "gaps": guide_provenance.compute_gaps(row),
+                    "blocking": guide_provenance.blocking_gaps(row),
+                    "line": guide_provenance.summary_line(row)})
+
 @app.route("/api/ops/register", methods=["POST"])
 def api_ops_register():
     """发布登记：记一条"这篇已经在平台发出去了"。
@@ -2886,6 +2929,12 @@ def api_poster_generate():
     def fn():
         def cb(msg):
             _poster_status["progress"] = msg
+        # 编辑证据链按整理稿倒查（表/模块都是我这轮的，函数内 import 少碰别人那片导入区）
+        try:
+            from src import guide_provenance
+            prov = guide_provenance.load_for_summary(DB_PATH, summary["id"])
+        except Exception:
+            prov = {}
         manifest = ai_poster.generate_poster(summary, _fast_config(), theme=theme, title=title,
                                              ratio=ratio, progress_cb=cb, plan=plan,
                                              publish=publish, force=force, copies=copies,
@@ -2894,7 +2943,8 @@ def api_poster_generate():
                                              bases=bases or None,
                                              publish_channel=publish_channel, form=pk_form,
                                              fact_evidence=fact_evidence,
-                                             fact_checked_by=fact_checked_by)
+                                             fact_checked_by=fact_checked_by,
+                                             provenance=prov)
         v = manifest.get("verify") or {}
         rv = manifest.get("review") or {}
         ts_chk = manifest.get("typeset") or {}
@@ -2912,6 +2962,7 @@ def api_poster_generate():
                                      # 放行不等于能发：界面按这个字段决定写"已就绪"还是"不可发布"
                                      "publishable": manifest.get("publishable", True),
                                      "fact_gate": manifest.get("fact_gate") or {},
+                                     "provenance": manifest.get("provenance") or {},
                                      "photos_unjudged": manifest.get("photos_unjudged") or []}
         _poster_status["plan"] = {"plan": manifest["plan"], "publish": manifest["publish"],
                                   "violations": errs, "chars": manifest["text_chars"],
@@ -2919,11 +2970,18 @@ def api_poster_generate():
                                   "publish_channel": manifest.get("publish_channel") or "toutiao",
                                   "form": manifest.get("form") or ""}
         score = ("，视觉评审 %s/%s 分" % (rv.get("score"), rv.get("full"))) if rv.get("score") else ""
-        # 「图出了」和「能发了」是两件事：待核事实没有逐条凭据时，末尾这句必须说清不可发布，
-        # 否则人看见 ✅ 就以为过了（2026-10-21 Codex P1）
-        block = ("" if manifest.get("publishable", True)
-                 else "，⛔ 但有 %d 条待核事实没有逐条核验凭据 —— 这张不算已核实，不可发布"
-                 % len((manifest.get("fact_gate") or {}).get("hard") or []))
+        # 「图出了」和「能发了」是两件事：待核事实没凭据、或编辑证据链缺项时，
+        # 末尾这句必须说清不可发布，否则人看见 ✅ 就以为过了（2026-10-21 Codex P1 + 原创增量单）
+        reasons = []
+        if not manifest.get("publishable", True):
+            fg_hard = len((manifest.get("fact_gate") or {}).get("hard") or [])
+            prov_gaps = len((manifest.get("provenance") or {}).get("gaps") or [])
+            if fg_hard:
+                reasons.append("%d 条待核事实没有逐条凭据" % fg_hard)
+            if prov_gaps:
+                reasons.append("编辑证据链缺 %d 项（%s）" % (
+                    prov_gaps, (manifest.get("provenance") or {}).get("label") or ""))
+        block = ("，⛔ 不可发布：" + "；".join(reasons)) if reasons else ""
         if manifest.get("text_mode") == "typeset":
             warn = ("，⚠️ 版面提示：" + "；".join(ts_chk.get("problems") or [])) if ts_chk.get("problems") else ""
             _poster_status["progress"] = "✅ 海报已生成（%d 字，字由程序排版、不存在错字）%s%s%s" % (
