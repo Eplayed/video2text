@@ -711,6 +711,18 @@ def _clip_publish(raw):
     return pub
 
 
+def _publish_view(plan, pub):
+    """把**实际要发出去**的发布字段并进一个只读视图给事实闸查（不改原 plan）。
+
+    2026-10-21 Codex P2：闸口原来只读 `plan.publish`，而海报线的发布文案是独立字段 `pub`，
+    调用时只额外塞了 `copy_text` 一项——待核的数写进 `tt_titles`／`xhs_copy`／`digest`
+    这些同样会发出去的位置时，这一道根本查不到。合并视图让同一份判据覆盖全字段。
+    """
+    view = dict(plan or {})
+    view["publish"] = pub or {}
+    return view
+
+
 def lint_publish(pub):
     """发布文案侧软校验：不阻断出图，只进 manifest.lint 提示人工补。"""
     bad = []
@@ -2319,7 +2331,8 @@ def choose_candidate(summary_id, index):
 def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
                     progress_cb=None, do_verify=True, plan=None, publish=None, force=False,
                     copies=1, do_review=True, text_mode=DEFAULT_TEXT_MODE, photo=None,
-                    preview_clicks=0, bases=None, publish_channel="toutiao", form="newspic"):
+                    preview_clicks=0, bases=None, publish_channel="toutiao", form="newspic",
+                    fact_evidence=None, fact_checked_by=""):
     """整理稿 → 海报一张。返回 manifest dict（已落盘 output/poster/<summary_id>/）。
 
     plan / publish 非空时跳过 LLM 拆解（前端审改过文案再出图走这条）：plan 是要画进图的
@@ -2333,6 +2346,12 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
     force=True 放行 status=draft 的骨架稿。海报线与 HTML 卡片线不同：这里永远有一次 LLM
     提炼在中间，骨架稿只要底层转写有料就能出好文案（实测 61 号那篇超时稿，价格与时间线
     数字全对），所以门禁做成「默认拦、人工复核后可显式放行」，而不是一刀切。
+
+    fact_evidence / fact_checked_by（2026-10-21 Codex P1）：事实闸拦下来后走 force 放行，
+    必须**逐条**给「出处 + 核验结论」（`[{"item":…, "source":…, "result":…}]`）。
+    缺任何一条，图照样出（人是最终判断者），但 `publishable=False`：
+    界面不许显示"已核实"，也不许当待发成品用——以前只有一个 `overridden: true`，
+    等于给没核过的数盖了"已核实"的章。
 
     copies=2/3 时一次出多张候选（poster_1.png…），自动把回读最干净的一张复制成 poster.png
     当默认，人工可在前端改选。AI 出图有方差，并行挑比反复重出省时间。
@@ -2376,8 +2395,8 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
     # 数字/名词，原样出现在图上任何一处文字或配文里 → 不出图。
     # 判据只有"标过没有 + 出没出现"两条，不叫模型再打一次分（那等于用编造审核编造）。
     # 语义类问题（同一条里既说别拉满又说推荐拉满、缺操作步骤）只列进 soft，交人看，不夸称全能抓。
-    fact_hard, fact_soft = fact_gate.check(plan, summary.get("content") or "",
-                                           copy_extra=pub.get("copy_text") or "")
+    fact_hard, fact_soft = fact_gate.check(
+        _publish_view(plan, pub), summary.get("content") or "")
     fact_gaps = fact_gate.guide_gaps(plan) if plan_is_guide(plan) else []
     if fact_gaps:
         fact_soft.append("按攻略发就得让人照做，这几段现在没有明确内容：%s；"
@@ -2387,10 +2406,19 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
                                       fact_gate.risk_items(summary.get("content") or "")],
                        "hard": fact_hard, "soft": fact_soft, "guide_gaps": fact_gaps,
                        "overridden": bool(force and fact_hard)}
+    fact_override = None
     if fact_hard and not force:
-        raise PosterError("有 %d 处待核事实进了成品：%s。"
-                          "核清来源后改文案再出图，或点「仍然出图」放行（放行会记在成品里）。"
+        err = PosterError("有 %d 处待核事实进了成品：%s。"
+                          "先把这些卖点改掉再出图；确实核过了，就逐条填「出处 + 核验结论」再放行"
+                          "（凭据会记进成品，缺记录这张不算已核实、不许标待发布）。"
                           % (len(fact_hard), "；".join(fact_hard[:3])))
+        err.fact_hard = list(fact_hard)      # 前端按条开输入框，不能只给一句话
+        raise err
+    if fact_hard:
+        fact_override = fact_gate.check_override(fact_hard, fact_evidence, fact_checked_by)
+        fact_gate_state["override"] = fact_override
+    # 「有图」≠「能发」：放行没有逐条凭据时，这张只能当草稿看（界面读 publishable）
+    fact_blocks = bool(fact_hard) and not (fact_override or {}).get("complete")
     chars = plan_chars(plan)
 
     # 渠道分叉（2026-10-13 拍板）：小红书档不输出尾注与关键词回复。尾注有两处——
@@ -2669,6 +2697,8 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
         "draft_override": overrode,
         # 事实闸的结果必须落盘：放行过哪几条、当时看到的是什么，事后要能查（不许只活在会话里）
         "fact_gate": fact_gate_state,
+        # 「有图」≠「能发」：待核卖点没有逐条凭据时这张只是草稿（2026-10-21 Codex P1）
+        "publishable": not fact_blocks,
         "verify": check,
         "review": review,
         "source_title": summary.get("title") or "",
@@ -2679,10 +2709,30 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
     }
     manifest["lint"] = issues
     # 事实闸的条目并进同一份告警清单：前端只有一处给人看的地方，另开一处迟早没人看
-    for _m in fact_gate_state.get("hard") or []:
-        issues.append("error: 待核事实进了成品 —— " + _m)
-    for _m in fact_gate_state.get("soft") or []:
-        issues.append("warn: " + _m)
+    if fact_hard and fact_blocks:
+        for msg in fact_hard:
+            issues.append("error: 待核事实进了成品 —— " + msg)
+        miss = (fact_override or {}).get("missing") or [str(x)[:40] for x in fact_hard]
+        issues.append("error: 图已出但 %d 条待核事实没有完整逐条凭据（缺：%s）——"
+                      "这张不算已核实，不许当待发成品用"
+                      % (len(miss), "；".join(m[:36] for m in miss[:3])))
+    else:
+        for msg in fact_gate_state.get("hard") or []:
+            issues.append("warn: 待核事实曾进了卖点（已逐条留凭据）—— " + msg)
+        ov = fact_gate_state.get("override") or {}
+        if ov.get("complete"):
+            issues.append("warn: 人工放行 %d 条待核事实，凭据已逐条记录（核验人：%s）"
+                          % (len(ov.get("rows") or []), ov.get("checked_by") or "未填"))
+    for msg in fact_gate_state.get("soft") or []:
+        issues.append("warn: " + msg)
+    # 没判过帧的配图：出图照出，但清单上必须写"未判，需人眼看"（2026-10-21 Codex P0）
+    unjudged = unjudged_photos(plan)
+    manifest["photos_unjudged"] = unjudged
+    for name in unjudged:
+        issues.append("warn: %s 这张图没走判帧（手工给的路径），"
+                      "发布前人眼确认画面里没有字幕条／花字／账号名" % name)
+    if manifest["publishable"] and any(i.startswith("error") for i in issues):
+        manifest["publishable"] = False      # 别的硬伤（字数/骨架稿）也一样不能标待发
     (out_dir / "manifest.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     errs = [i for i in issues if i.startswith("error")]

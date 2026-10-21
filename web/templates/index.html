@@ -613,6 +613,11 @@ textarea{resize:vertical;min-height:84px}
 .pk-verify.pass{background:color-mix(in srgb,#07c160 10%,transparent);color:#07c160;font-weight:700}
 .pk-verify.fail{background:color-mix(in srgb,var(--danger) 10%,transparent);color:var(--danger);font-weight:700}
 .pk-verify.mild{background:var(--surface-nested);color:var(--text-secondary)}
+/* 事实闸逐条凭据表单（2026-10-21）：放行要留出处与结论，输入框得跟这一格一样的底色 */
+.pk-fact input{display:block;box-sizing:border-box;width:100%;margin-top:3px;padding:6px 8px;
+  font-size:12.5px;color:var(--text);background:var(--surface-card);
+  border:1px solid var(--border-input);border-radius:7px}
+.pk-fact .q{font-size:11.5px;line-height:1.6;color:var(--text-tertiary)}
 /* 多页：页签 + 整组预览缩略条 */
 .pk-tabs{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:2px 0 10px}
 .pk-tabs-k{font-size:11px;font-weight:800;color:var(--text-secondary);margin-right:2px}
@@ -4600,6 +4605,29 @@ async function posterPreview() {
   const warn = _pkPreviewPages.filter(p => ((p.check || {}).problems || []).length).length;
   setStatus('done', warn ? ('预览已出，' + warn + ' 页有版面提示') : '预览已出，版面没问题');
 }
+function pkFactEvidence() {
+  // 闸口回了几条待核就采几行：出处与结论任一为空，后端把这条记成「未核」（不许显示已核实）
+  const box = document.getElementById('pk-result');
+  const out = [];
+  if (!box) return out;
+  const srcs = box.querySelectorAll('.pke-src');
+  for (let i = 0; i < srcs.length; i++) {
+    const inp = srcs[i];
+    const k = inp.getAttribute('data-i');
+    const resEl = box.querySelector('.pke-res[data-i="' + k + '"]');
+    const row = inp.parentElement || {};
+    const qEl = row.querySelector ? row.querySelector('.q') : null;
+    out.push({item: qEl ? qEl.textContent.replace(/^第\d+条：/, '') : '',
+              source: (inp.value || '').trim(),
+              result: resEl ? (resEl.value || '').trim() : ''});
+  }
+  return out;
+}
+function pkFactBy() {
+  const el = document.getElementById('pke-by');
+  return el ? (el.value || '').trim() : '';
+}
+
 async function posterGenerate(force) {
   if (!_pkId) { alert('请先选择整合稿'); return; }
   const hasPlan = !!document.getElementById('pk-title');
@@ -4632,7 +4660,14 @@ async function posterGenerate(force) {
   // 确认框文案按"这次图从哪来"分四种情况说清楚，别让人以为都在花钱。
   // 原来是一串嵌套三元，加一个分支就得数括号——改成平铺，读得下去也配得平。
   let tip;
-  if (force) {
+  const ev = force ? pkFactEvidence() : [];
+  if (force && ev.length) {
+    // 事实闸放行：确认框里就把"每条有没有出处"摊开，别让人在没填的情况下点出"已核实"
+    tip = '事实闸拦下的 ' + ev.length + ' 条待核事实，这次带凭据出图：\n'
+        + ev.map(e => '· ' + String(e.item).slice(0, 26) + ' → '
+             + (e.source && e.result ? '出处已填、结论已填' : (e.source ? '缺结论' : '缺出处'))).join('\n')
+        + '\n缺任何一项的那条会记成「未核」，图照样出但整张标不可发布。确认？';
+  } else if (force) {
     tip = '这条整合稿被判定为规则版骨架。\n确认你已人工复核过拆解出的文案、仍要出图？';
   } else if (pkGuideChrome()) {
     // 攻略档单独一条：这一档不叫底图、不花钱，混在"0.5 元/张"那几条里会让人以为还在花钱
@@ -4670,6 +4705,10 @@ async function posterGenerate(force) {
                 preview_clicks: _pkPreviewClicks};
   if (_pkPhoto) body.photo = _pkPhoto.ref;
   if (nBase) body.bases = baseRefs;              // 豆包回传的无字底图，按页对齐
+  if (force && ev.length) {                      // 逐条凭据跟着放行一起交，缺的记录由后端判
+    body.fact_evidence = ev;
+    body.fact_checked_by = pkFactBy();
+  }
   const r = await fetch('/api/poster/generate', {method: 'POST',
     headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)}).then(x => x.json());
   if (r.error) { setStatus('error', r.error); return; }
@@ -4714,10 +4753,30 @@ function pollPoster(stage, task) {
       // 两类拦法两种说法（2026-10-21）：骨架稿不合格 / 待核事实进了成品。判据要跟后端文案同源——
       // 以前只认「整合稿不合格」，事实闸拦完人就没有出口，只能绕开接口去改数据。
       const factHit = msg.indexOf('待核事实进了成品') >= 0;
-      const override = (msg.indexOf('整合稿不合格') >= 0 || factHit)
-        ? '<div style="margin-top:8px"><button class="btn ghost sm" onclick="posterGenerate(true)">'
-          + (factHit ? '仍然出图（这些数我已人工核实）' : '仍然出图（我已人工复核文案）')
-          + '</button></div>' : '';
+      // 放行不再是"一句我核过了"：每条待核都要填出处与结论（2026-10-21 Codex P1）。
+      // 缺凭据照样出图，但整张标不可发布——所以这里连按钮的名字都不许写"已核实"。
+      let override = '';
+      if (factHit) {
+        const hard = st.fact_hard || [];
+        override = hard.length
+          ? '<div class="pk-verify mild pk-fact" style="margin-top:8px;text-align:left">'
+            + '<div style="margin-bottom:6px">逐条填「出处 + 核验结论」再出图。凭据写进成品留档；'
+            + '缺任何一条，图照样出，但整张标 <b>不可发布</b>。</div>'
+            + hard.map((h, i) => '<div style="margin:0 0 8px">'
+                + '<div class="q">第' + (i + 1) + '条：' + esc(h) + '</div>'
+                + '<input class="pke-src" data-i="' + i + '" '
+                + 'placeholder="出处：官方公告链接／游戏内实测位置／第几条素材">'
+                + '<input class="pke-res" data-i="' + i + '" '
+                + 'placeholder="核验结论：核出来到底是什么（一句话）"></div>').join('')
+            + '<input id="pke-by" placeholder="核验人（事后要能问到人）">'
+            + '<div style="margin-top:8px"><button class="btn ghost sm" onclick="posterGenerate(true)">'
+            + '带这些凭据出图</button></div></div>'
+          : '<div class="pk-verify mild" style="margin-top:8px">后端没回逐条清单（'
+            + '这是旧服务，刷新或重启后再试）。</div>';
+      } else if (msg.indexOf('整合稿不合格') >= 0) {
+        override = '<div style="margin-top:8px"><button class="btn ghost sm" onclick="posterGenerate(true)">'
+          + '仍然出图（我已人工复核文案）</button></div>';
+      }
       box.innerHTML = `<div class="pk-verify fail">✗ ${esc(msg)}</div>` + override;
       setStatus('error', '海报任务失败'); return;
     }
@@ -4853,9 +4912,24 @@ async function renderPosterResult(id) {
   // 事实闸（2026-10-21）：整理稿标过待核的东西进了成品卖点，放行也要在界面上看得见。
   // 不另开一处提示——混在 warns 里会被"error 开头不显示"那条过滤掉，等于放行完没人知道放过的是什么。
   const fg = m.fact_gate || {};
-  const factHtml = (fg.overridden
-      ? `<div class="pk-verify fail">⚠ 已放行 ${esc(String((fg.hard || []).length))} 条待核事实：`
-        + `${(fg.hard || []).map(esc).join('<br>')}<br>这些数没有核实记录，发布前请自己核一手来源。</div>`
+  const ov = fg.override || {};
+  const ovRows = (ov.rows || []).map(r => '<br>· ' + esc(String(r.item || '').slice(0, 46))
+      + (r.ok ? (' ← 出处：' + esc(r.source) + '｜结论：' + esc(r.result)) : ' ← <b>这条没填凭据</b>')).join('');
+  // 「放行」不等于「能发」：凭据齐不齐决定这一格是绿的还是红的（2026-10-21 Codex P1）
+  const factHtml = ((fg.hard || []).length
+      ? '<div class="pk-verify ' + (ov.complete ? 'mild' : 'fail') + '">'
+        + (ov.complete
+            ? ('✅ 待核事实 ' + fg.hard.length + ' 条已逐条留凭据（核验人：'
+               + esc(ov.checked_by || '未填') + '）')
+            : ('⛔ 图已经出了，但 <b>不可发布</b>：' + fg.hard.length + ' 条待核事实里 '
+               + ((ov.missing || []).length || fg.hard.length) + ' 条没有「出处 + 核验结论」'))
+        + ovRows
+        + (ov.complete ? '' : '<br>要发就回这里把凭据补齐，或者把文案里那个卖点改掉。')
+        + '</div>'
+      : '')
+    + ((m.photos_unjudged || []).length
+      ? `<div class="pk-verify mild">有 ${m.photos_unjudged.length} 张配图没走判帧（手工选的路径）：`
+        + `${m.photos_unjudged.map(esc).join('、')}——发布前人眼确认画面里没有字幕条／花字／账号名。</div>`
       : '')
     + ((fg.soft || []).length
       ? `<div class="pk-verify mild">要人看一眼（机器不替你判）：<br>`
@@ -5217,12 +5291,27 @@ async function openPosterDetail(id) {
   const warns = (m.lint || []).filter(s => !s.startsWith('error') && !s.startsWith('info:'));
   // 成品页也要看得见事实闸（这里是发布前最后一次回看的地方），一行汇总 + 明细
   const fg = m.fact_gate || {};
-  const fgN = (fg.hard || []).length + (fg.soft || []).length;
+  const fgN = (fg.hard || []).length + (fg.soft || []).length
+             + (m.photos_unjudged || []).length;
+  const fov = fg.override || {};
   const factHtml = fgN
-    ? '<div class="pk-verify ' + ((fg.hard || []).length ? 'fail' : 'mild') + '">'
+    ? '<div class="pk-verify ' + ((fg.hard || []).length && !fov.complete ? 'fail' : 'mild') + '">'
       + '事实闸：' + ((fg.hard || []).length
-        ? ('待核事实进卖点 ' + fg.hard.length + ' 处' + (fg.overridden ? '（已放行）' : ''))
+        ? (fov.complete
+            ? ('待核事实进卖点 ' + fg.hard.length + ' 处，已逐条留凭据（核验人 '
+               + esc(fov.checked_by || '未填') + '，放行时间 ' + esc(fov.at || '') + '）')
+            : ('⛔ 不可发布：待核事实进卖点 ' + fg.hard.length + ' 处，其中 '
+               + ((fov.missing || []).length || fg.hard.length) + ' 条没有「出处 + 核验结论」'))
         : '没有拦下的') + ((fg.soft || []).length ? ' · 要人看一眼 ' + fg.soft.length + ' 条' : '')
+      + ((fov.rows || []).length
+        ? '<br>凭据：' + fov.rows.map(r => esc(String(r.item || '').slice(0, 30))
+              + (r.ok ? '（' + esc(r.source).slice(0, 40) + '→' + esc(r.result).slice(0, 30) + '）'
+                      : '（未填）')).join('；')
+        : '')
+      + ((m.photos_unjudged || []).length
+        ? '<br>没走判帧的配图：' + m.photos_unjudged.map(esc).join('、')
+          + '——人眼确认画面里没有字幕条／花字／账号名'
+        : '')
       + '<br>' + (fg.hard || []).map(esc).join('<br>')
       + ((fg.hard || []).length && (fg.soft || []).length ? '<br>' : '')
       + (fg.soft || []).map(s => '· ' + esc(s)).join('<br>') + '</div>'

@@ -63,10 +63,13 @@ def main():
     # generate_poster 阻断、_clip_publish 不再硬切）和另一条会话 10-16 那份未提交的
     # 「发布标题/小红书分叉」长在同一个函数上，拆不出干净的一刀，所以可能先只有模块进了仓库。
     # 少了预检，干净检出上跑出来的三条 FAIL 会被误读成"内容判据退化了"。
-    missing = [n for n in ("risks_prompt_block", "plan_is_guide") if not hasattr(ai, n)]
+    missing = [n for n in ("risks_prompt_block", "plan_is_guide", "_publish_view")
+               if not hasattr(ai, n)]
+    missing += ["check_override"] if not hasattr(fact_gate, "check_override") else []
     if missing:
-        print("!! 前置缺失：src/ai_poster.py 还没有 %s —— 闸口的接线没在这份检出里，"
-              "下面的 E/F 两段必然红，那不是内容判据退化，是接线未提交。" % "、".join(missing))
+        print("!! 前置缺失：%s 还没有 %s —— 闸口的接线没在这份检出里，"
+              "下面的 E/F/H/I 四段必然红，那不是内容判据退化，是接线未提交。"
+              % ("src/ai_poster.py 或 src/fact_gate.py", "、".join(missing)))
 
     print("── A. 三篇错成品必须被拦（87 的 46亿 / 85 的 +20% / 83 的毛边全消）──")
     for sid, needle, why in (
@@ -146,6 +149,59 @@ def main():
     ck("四篇老成品列出待人工处理清单", len(rep) >= 3, "%d 条" % len(rep))
     for line in rep:
         print("       · " + line[:96])
+
+    print("── H. 实际会发出去的字段也要查（挪进发布标题/小红书正文不能绕过闸口）──")
+    if hasattr(ai, "_publish_view"):
+        conn = sqlite3.connect("file:%s?mode=ro" % DB, uri=True)
+        row87 = conn.execute("SELECT content FROM ai_summaries WHERE id=87").fetchone()
+        conn.close()
+        c87 = (row87[0] if row87 else "") or ""
+        if "46亿" in c87:
+            # 图面一个字都没用那颗待核数，风险数只写在**发布标题**里（Codex P2 点名的形状）
+            clean_plan = {"title": "传承点数怎么花",
+                          "cards": [{"t": "先看三个池子", "d": "各池独立结算，以游戏内为准"}]}
+            pub_title = {"copy_text": "三个池子分开结算，先看清楚再花。",
+                         "tt_titles": ["传承点数还能卖46亿？"], "xhs_copy": "", "digest": ""}
+            h, s = fact_gate.check(ai._publish_view(clean_plan, pub_title), c87)
+            ck("待核数只写在发布标题 → 仍算卖点、拦住", any("46亿" in x for x in h),
+               (h[0][:70] if h else "没拦（闸口只读图面字段）"))
+            ck("报的位置点名是哪条字段（人知道改哪儿）",
+               any("tt_titles" in x for x in h), "；".join(h)[:70])
+            pub_narr = {"copy_text": "三个池子分开结算，先看清楚再花。",
+                        "tt_titles": [], "xhs_copy": "顺带一提那个 46亿 的数还要核。", "digest": ""}
+            h2, s2 = fact_gate.check(ai._publish_view(clean_plan, pub_narr), c87)
+            ck("同一颗数只写在正文叙述里 → 不拦，但进「要人看一眼」",
+               not h2 and any("46亿" in x for x in s2),
+               "hard=%d soft=%s" % (len(h2), (s2[0][:50] if s2 else "无")))
+            ck("合并视图不改原 plan（不把人改过的文案悄悄加字段）",
+               "publish" not in clean_plan, str(list(clean_plan.keys())))
+        else:
+            FIX.append("整合稿 87 的原文里没有 46亿（内容变了？），H 段没跑")
+    print("── I. 人工放行必须逐条留凭据（一个 force=True 不等于已核实）──")
+    if hasattr(fact_gate, "check_override"):
+        hard_i = ["「46亿」进了 主标题（还能卖46亿），可整理稿【风险核查】写着：疑似转写或口误"]
+        ov0 = fact_gate.check_override(hard_i, None)
+        ck("没给凭据 → 不算核过，并且点名缺哪条",
+           ov0["complete"] is False and len(ov0["missing"]) == 1,
+           "missing=%d" % len(ov0["missing"]))
+        ov1 = fact_gate.check_override(hard_i, [{"item": hard_i[0], "source": "官方公告 2026-09-30",
+                                                 "result": "实际口径是 4.6 亿/周"}], "号主")
+        ck("逐条给了出处 + 结论 → 算核过，凭据留在结果里",
+           ov1["complete"] is True and ov1["rows"][0]["ok"] and ov1["checked_by"] == "号主",
+           json.dumps(ov1["rows"][0], ensure_ascii=False)[:80])
+        ov2 = fact_gate.check_override(hard_i, [{"item": hard_i[0], "source": "官方公告",
+                                                 "result": "  "}])
+        ck("只有出处没有结论 → 仍算没核过", ov2["complete"] is False,
+           "missing=%s" % (ov2["missing"][0][:30] if ov2["missing"] else "无"))
+        ov3 = fact_gate.check_override(hard_i, [{"item": "另一条不相干的", "source": "a",
+                                                 "result": "b"}])
+        ck("凭据对不上号的那条不算数（不许拿别的条目凑齐）", ov3["complete"] is False,
+           "missing=%d" % len(ov3["missing"]))
+        two = hard_i + ["「20%」进了 大字数字，整理稿写明只是口播举例"]
+        ov4 = fact_gate.check_override(two, [{"item": hard_i[0], "source": "a", "result": "b"}])
+        ck("拦下两条只填一条 → 仍然 incomplete（放行要逐条，不是一句总括）",
+           ov4["complete"] is False and len(ov4["missing"]) == 1,
+           "missing=%d" % len(ov4["missing"]))
 
     if FIX:
         print("\n夹具问题（不算内容判据失败）：\n  - " + "\n  - ".join(FIX))

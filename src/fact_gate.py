@@ -115,6 +115,10 @@ def _fields(plan: Dict[str, Any]) -> List[Tuple[str, str]]:
     for k in ("tt_titles", "xhs_titles"):
         for j, t in enumerate(pub.get(k) or [], 1):
             out.append(("配文·%s%d" % (k, j), str(t)))
+    # 话题标签也是会发出去的字段：#46亿 这种待核数挂在标签里同样算卖点
+    tags = [str(t) for t in (pub.get("xhs_tags") or []) if str(t).strip()]
+    if tags:
+        out.append(("配文·xhs_tags", " ".join(tags)))
     return out
 
 
@@ -122,6 +126,11 @@ def _slot_of(label: str) -> str:
     """位置标签 → 卖点/叙述。带"卡片N标题"算卖点，"卡片N说明"算叙述。"""
     base = label.split("·")[-1]
     if base in _SELLER_SLOTS or re.match(r"卡片\d+标题", base) or re.match(r"对照\d+$", base):
+        return "卖点"
+    # 发布标题（头条候选 / 小红书候选）也是卖点位：待核的数写进标题和写进图上大字没区别。
+    # 2026-10-21 Codex P2 点名这一档——原来只查 plan 里那些会印上图的位置，
+    # 而"实际发出去"的标题/正文是另一份字段，风险数挪到那儿就绕过了闸口。
+    if re.match(r"(?:tt|xhs)_titles\d+$", base):
         return "卖点"
     return "叙述"
 
@@ -239,6 +248,39 @@ def copy_is_cut(text: str) -> str:
     if len(t) >= 240:
         return "结尾「…%s」没有句末标点且已经 %d 字，像被长度上限切过" % (t[-12:], len(t))
     return ""
+
+
+def check_override(hard, evidence, checked_by=""):
+    """人工放行要留**逐条凭据**：每一条待核都得有出处和结论，缺哪条就点名哪条。
+
+    为什么要这一层（2026-10-21 Codex 复核 P1）：界面上那颗按钮写着"这些数我已人工核实"，
+    后端收到的却只有一个 `force=True`，manifest 里只留 `overridden: true` ——
+    一句话没记、一个出处没填，等于**给没核过的数盖了"已核实"的章**。
+    现在：`evidence = [{"item": 闸口原话, "source": 出处/链接/实测位置, "result": 核出来的结论}]`，
+    每条都要 source + result 都非空才算这条核过；`complete` 为假时成品仍然出（人是最终判断者），
+    但 `publishable` 必须是 False，界面上也不许出现"已核实"字样。
+    """
+    def _n(s):
+        return re.sub(r"\s+", "", str(s or ""))
+
+    rows = []
+    pool = [e for e in (evidence or []) if isinstance(e, dict)]
+    for h in hard or []:
+        key = _n(h)
+        hit = None
+        for e in pool:
+            ei = _n(e.get("item"))
+            if ei and (ei in key or key in ei):
+                hit = e
+                break
+        src = str((hit or {}).get("source") or "").strip()[:300]
+        res = str((hit or {}).get("result") or "").strip()[:300]
+        rows.append({"item": str(h)[:300], "source": src, "result": res,
+                     "ok": bool(src and res)})
+    missing = [r["item"] for r in rows if not r["ok"]]
+    return {"rows": rows, "missing": missing,
+            "complete": bool(rows) and not missing,
+            "checked_by": str(checked_by or "").strip()[:40]}
 
 
 def legacy_report(rows: List[Dict[str, Any]]) -> List[str]:

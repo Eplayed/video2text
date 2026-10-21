@@ -2610,6 +2610,7 @@ def _poster_start(stage, fn, summary_id=0):
     _poster_status.update({"running": True, "done": False, "progress": "任务排队中...", "error": "",
                            "stage": stage, "task_id": _poster_task_seq,
                            "summary_id": int(summary_id or 0),
+                           "fact_hard": [],        # 上一任务拦下的清单不能留给下一次点按钮
                            "package": None if stage == "plan" else _poster_status["package"],
                            "plan": None if stage == "poster" else _poster_status["plan"]})
 
@@ -2618,6 +2619,8 @@ def _poster_start(stage, fn, summary_id=0):
             fn()
         except ai_poster.PosterError as e:
             _poster_status["error"] = str(e)        # 可预期失败只给一句话，不刷 traceback
+            # 事实闸拦下来的那些条目**逐条**给前端：人要按条填出处与结论，不是一句"我核过了"
+            _poster_status["fact_hard"] = list(getattr(e, "fact_hard", None) or [])
             _poster_status["progress"] = "生成失败"
         except Exception:
             full = traceback.format_exc()
@@ -2830,6 +2833,11 @@ def api_poster_generate():
     plan = data.get("plan") if isinstance(data.get("plan"), dict) else None
     publish = data.get("publish") if isinstance(data.get("publish"), dict) else None
     force = bool(data.get("force"))      # 骨架稿人工复核后的显式放行
+    # 事实闸放行必须带**逐条凭据**（2026-10-21 Codex P1）：这里不再只收一个 true。
+    fact_evidence = data.get("fact_evidence")
+    if not isinstance(fact_evidence, list):
+        fact_evidence = []
+    fact_checked_by = str(data.get("fact_checked_by") or "").strip()[:40]
     do_review = data.get("review") is not False   # 默认做视觉评审，前端可关掉省十几秒
     text_mode = str(data.get("text_mode") or ai_poster.DEFAULT_TEXT_MODE).strip()[:10]
     try:
@@ -2859,7 +2867,9 @@ def api_poster_generate():
                                              do_review=do_review, text_mode=text_mode,
                                              photo=photo, preview_clicks=clicks,
                                              bases=bases or None,
-                                             publish_channel=publish_channel, form=pk_form)
+                                             publish_channel=publish_channel, form=pk_form,
+                                             fact_evidence=fact_evidence,
+                                             fact_checked_by=fact_checked_by)
         v = manifest.get("verify") or {}
         rv = manifest.get("review") or {}
         ts_chk = manifest.get("typeset") or {}
@@ -2873,21 +2883,30 @@ def api_poster_generate():
                                      "photo_frac": manifest.get("photo_frac"),
                                      "cost": manifest.get("cost_yuan_estimate"),
                                      "typeset_problems": ts_chk.get("problems") or [],
-                                     "lint": manifest.get("lint") or []}
+                                     "lint": manifest.get("lint") or [],
+                                     # 放行不等于能发：界面按这个字段决定写"已就绪"还是"不可发布"
+                                     "publishable": manifest.get("publishable", True),
+                                     "fact_gate": manifest.get("fact_gate") or {},
+                                     "photos_unjudged": manifest.get("photos_unjudged") or []}
         _poster_status["plan"] = {"plan": manifest["plan"], "publish": manifest["publish"],
                                   "violations": errs, "chars": manifest["text_chars"],
                                   "prompt_text": manifest["prompt_text"],
                                   "publish_channel": manifest.get("publish_channel") or "toutiao",
                                   "form": manifest.get("form") or ""}
         score = ("，视觉评审 %s/%s 分" % (rv.get("score"), rv.get("full"))) if rv.get("score") else ""
+        # 「图出了」和「能发了」是两件事：待核事实没有逐条凭据时，末尾这句必须说清不可发布，
+        # 否则人看见 ✅ 就以为过了（2026-10-21 Codex P1）
+        block = ("" if manifest.get("publishable", True)
+                 else "，⛔ 但有 %d 条待核事实没有逐条核验凭据 —— 这张不算已核实，不可发布"
+                 % len((manifest.get("fact_gate") or {}).get("hard") or []))
         if manifest.get("text_mode") == "typeset":
             warn = ("，⚠️ 版面提示：" + "；".join(ts_chk.get("problems") or [])) if ts_chk.get("problems") else ""
-            _poster_status["progress"] = "✅ 海报已生成（%d 字，字由程序排版、不存在错字）%s%s" % (
-                manifest["text_chars"], score, warn)
+            _poster_status["progress"] = "✅ 海报已生成（%d 字，字由程序排版、不存在错字）%s%s%s" % (
+                manifest["text_chars"], score, warn, block)
         else:
-            _poster_status["progress"] = "✅ 海报已生成（%d 字）%s%s" % (
+            _poster_status["progress"] = "✅ 海报已生成（%d 字）%s%s%s" % (
                 manifest["text_chars"], score,
-                "" if v.get("ok") else "，⚠️ 图面文字校验未通过，发布前人眼复核")
+                "" if v.get("ok") else "，⚠️ 图面文字校验未通过，发布前人眼复核", block)
 
     if not _poster_start("poster", fn, summary["id"]):
         return jsonify({"error": "已有海报任务正在运行"}), 400
