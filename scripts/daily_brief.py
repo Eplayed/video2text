@@ -31,6 +31,7 @@ SCHEDULE = ROOT / "web" / "static" / "schedule.html"
 DB = ROOT / "output" / "video2text.db"
 NEWS_SHEET = "暴雪官方"          # 与 web/app.py 的 DB_ONLY_SHEETS["暴雪官方"]="blizzard" 同口径
 ISO72_DAYS = 3                  # 头条首发 72 小时独占，按天算取 3 天窗口
+MIN_TL = 200                    # 正文/转写短于这个数只算"线索"不占位（与排产页 MIN_TL 同值）
 
 
 def load_data():
@@ -50,6 +51,67 @@ def load_data():
 
 def norm(t):
     return re.sub(r"[\s《》“”\"'’‘（）()：:，,。.\-—、/]+", "", str(t or ""))
+
+
+def fresh_material(db, item, meta, today, limit=4):
+    """这一格**现在**能用的素材：跟排产页 `loadLive()` 同一套判据，只是不走 HTTP。
+
+    页面上那份是 fetch `/api/videos?q=…` 现查的（走的是索引，只收有 ASR 的行）；
+    日报要能在工作台没起的时候也跑得动，所以直接查 `videos` 表，但**过滤条件一条不改**：
+    搜索词命中标题或作者 → 日期不早于这格的 `since` → 白名单 must 命中、黑名单 block 不中
+    → 正文（转写）长度 ≥ MIN_TL。差一条就会变成"日报说有料、页面点开是空的"。
+    """
+    try:
+        must = re.compile(meta.get("must") or "(?!)", re.I)
+    except re.error:
+        must = re.compile("(?!)")
+    try:
+        block = re.compile(meta.get("block") or "(?!)")
+    except re.error:
+        block = re.compile("(?!)")
+    since = item.get("since") or "2026-01-01"
+    con = sqlite3.connect("file:%s?mode=ro" % db, uri=True)
+    con.row_factory = sqlite3.Row
+    found, thin = {}, 0
+    for term in (item.get("search") or []):
+        like = "%%%s%%" % term
+        rows = con.execute(
+            "SELECT source_sheet s, source_row r, title, author, published_at, "
+            "length(transcript) AS tl FROM videos "
+            "WHERE (title LIKE ? OR author LIKE ?) AND substr(published_at,1,10) >= ? "
+            "ORDER BY published_at DESC LIMIT 80", (like, like, since)).fetchall()
+        for x in rows:
+            hay = "%s %s" % (x["title"] or "", x["author"] or "")
+            if not must.search(hay) or block.search(hay):
+                continue
+            key = "%s:%s" % (x["s"], x["r"])
+            if key in found:
+                continue
+            if (x["tl"] or 0) < MIN_TL:
+                thin += 1
+                continue
+            found[key] = {"sheet": x["s"], "row": str(x["r"]), "title": (x["title"] or "")[:34],
+                          "author": x["author"] or "", "date": (x["published_at"] or "")[:10],
+                          "tl": x["tl"] or 0}
+    con.close()
+    out = sorted(found.values(), key=lambda v: (v["date"], v["tl"]), reverse=True)[:limit]
+    newest = out[0]["date"] if out else ""
+    fresh2 = [v for v in out if v["date"] >= (today - dt.timedelta(days=2)).isoformat()]
+    return {"list": out, "thin": thin, "newest": newest, "fresh48": len(fresh2)}
+
+
+def pipeline(db, today):
+    """这两天整个素材库进了多少新料（分来源）——日报开头先说这个，
+    不然"今天没有必发"会被读成"素材库没在跑"。"""
+    con = sqlite3.connect("file:%s?mode=ro" % db, uri=True)
+    rows = con.execute(
+        "SELECT source_sheet, COUNT(*) n, MAX(substr(published_at,1,10)) mx FROM videos "
+        "WHERE substr(published_at,1,10) >= ? GROUP BY source_sheet ORDER BY n DESC",
+        ((today - dt.timedelta(days=2)).isoformat(),)).fetchall()
+    con.close()
+    return {"since": (today - dt.timedelta(days=2)).isoformat(),
+            "by_sheet": [{"sheet": r[0] or "（没标来源）", "n": r[1], "newest": r[2]} for r in rows],
+            "total": sum(r[1] for r in rows)}
 
 
 def published_by(db, slot, title, day):
@@ -121,9 +183,10 @@ def build(db=DB, today=None):
     for it in items:
         d = dt.date.fromisoformat(it["date"])
         st, note = published_by(db, it["id"], it.get("title") or "", today)
+        fr = fresh_material(db, it, data.get("meta") or {}, today)
         row = {"id": it["id"], "date": it["date"], "kind": it.get("kind") or "",
                "title": it.get("title") or "", "decision": it.get("decision") or "",
-               "note": it.get("note") or "", "published": note}
+               "note": it.get("note") or "", "published": note, "fresh": fr}
         if st == "confirmed":
             done.append(row)
         elif d <= today:
@@ -132,7 +195,8 @@ def build(db=DB, today=None):
             queue.append(row)
     queue.sort(key=lambda r: r["date"])
     return {"today": today.isoformat(), "must": must, "suspect": suspect,
-            "queue": queue, "done": done, "news": news_fresh(db, today),
+            "queue": queue, "done": done, "pipeline": pipeline(db, today),
+            "news": news_fresh(db, today),
             "iso72": [{"date": r[0], "channel": r[1], "title": (r[2] or "")[:30]}
                       for r in iso72(db, today)],
             "gates": data["meta"].get("gate") or ""}
@@ -140,13 +204,28 @@ def build(db=DB, today=None):
 
 def render(b):
     L = []
-    L.append("排产日报 · %s（判据：窗口到没到 / 发过没有 / 是不是决策题）" % b["today"])
+    L.append("排产日报 · %s（判据：窗口到没到 / 发过没有 / 素材新不新 / 是不是决策题）" % b["today"])
+    pl = b.get("pipeline") or {}
+    L.append("【素材库这两天的进账】共 %d 条（自 %s）：%s" % (
+        pl.get("total", 0), pl.get("since", "-"),
+        "、".join("%s %d 条（最新 %s）" % (x["sheet"], x["n"], x["newest"])
+                  for x in (pl.get("by_sheet") or [])) or "一条都没有——同步没跑，先去采集中心拉"))
     L.append("")
     if b["must"]:
         L.append("【今天一定要发】")
         for r in b["must"]:
             L.append("  · %s｜%s" % (r["id"], r["title"]))
             L.append("      计划日 %s｜%s｜%s" % (r["date"], r["kind"], r["decision"][:26]))
+            fr = r.get("fresh") or {}
+            if fr.get("list"):
+                L.append("      能用的素材（现查，最新在前）：")
+                for v in fr["list"][:3]:
+                    L.append("        %s %s｜%s｜%s" % (v["date"], v["author"][:12], v["title"], v["sheet"]))
+                if not fr.get("fresh48"):
+                    L.append("      ⚠ 但这些都不是 48 小时内的新料（最新 %s）——"
+                             "先跑一次同步补素材，或按旧口径写、别当今天的消息发" % fr.get("newest"))
+            else:
+                L.append("      ⚠ 现查没有可用素材（正文≥%d 字、过白名单）——这篇要么先补素材要么别发" % MIN_TL)
             if r["note"]:
                 L.append("      备注：%s" % r["note"][:46])
     else:
@@ -170,7 +249,11 @@ def render(b):
         L.append("")
         L.append("【往后排】（一天一篇，别扎堆——自己抢自己的首发额度）")
         for r in b["queue"]:
-            L.append("  %s  %s｜%s｜%s" % (r["date"], r["id"], (r["kind"] or "")[:4], r["title"][:34]))
+            fr = r.get("fresh") or {}
+            L.append("  %s  %s｜%s｜%s｜素材最新 %s%s" % (
+                r["date"], r["id"], (r["kind"] or "")[:4], r["title"][:34],
+                fr.get("newest") or "无",
+                "（48h 内有 %d 条新料）" % fr["fresh48"] if fr.get("fresh48") else ""))
     if b["done"]:
         L.append("")
         L.append("【已发（登记里带槽位号）】%s" % "、".join(r["id"] for r in b["done"]))
