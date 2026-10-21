@@ -56,7 +56,17 @@ def load(sid):
 
 
 def main():
+    from src import ai_poster as ai
     from src import fact_gate
+
+    # 预检：本脚本要的是「ai_poster 已经接上闸口」的那一版。接线（提示词 __RISKS__、
+    # generate_poster 阻断、_clip_publish 不再硬切）和另一条会话 10-16 那份未提交的
+    # 「发布标题/小红书分叉」长在同一个函数上，拆不出干净的一刀，所以可能先只有模块进了仓库。
+    # 少了预检，干净检出上跑出来的三条 FAIL 会被误读成"内容判据退化了"。
+    missing = [n for n in ("risks_prompt_block", "plan_is_guide") if not hasattr(ai, n)]
+    if missing:
+        print("!! 前置缺失：src/ai_poster.py 还没有 %s —— 闸口的接线没在这份检出里，"
+              "下面的 E/F 两段必然红，那不是内容判据退化，是接线未提交。" % "、".join(missing))
 
     print("── A. 三篇错成品必须被拦（87 的 46亿 / 85 的 +20% / 83 的毛边全消）──")
     for sid, needle, why in (
