@@ -19,6 +19,11 @@ def _hash(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _fingerprint(manifest):
+    content = json.dumps(manifest, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    return hashlib.sha256(content).hexdigest()
+
+
 def _page_files(manifest):
     pages = manifest.get("pages") or []
     if not isinstance(pages, list):
@@ -29,6 +34,7 @@ def _page_files(manifest):
 def template(manifest):
     risks = (manifest.get("fact_gate") or {}).get("risk_items") or []
     return {
+        "manifest_fingerprint": _fingerprint(manifest),
         "reviewer": "",
         "reviewed_at": datetime.now().strftime("%Y-%m-%d"),
         "player_question": "",
@@ -54,6 +60,8 @@ def template(manifest):
 
 def validate(manifest, review, folder):
     problems = []
+    if review.get("manifest_fingerprint") != _fingerprint(manifest):
+        problems.append("成品在审稿后发生变化；先重新生成审稿表并逐页复核")
     if manifest.get("publish_channel") != "toutiao":
         problems.append("仅支持头条发布包；请重新选择正确渠道生成")
     if manifest.get("publishable") is not True:
