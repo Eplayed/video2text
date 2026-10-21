@@ -948,6 +948,22 @@ def bind_frames(pages, items, lim=None):
     return notes
 
 
+def borrowed_frame_count(plan):
+    """版面里真的绑上了几张**素材帧**（`bind_frames` 从帧池取的那些）。
+
+    为什么单独数这个：`guide_provenance` 光看"人登记了几条材料"会留一个洞——一条都不登记
+    照样没缺项。而 `frame` 这个键只有从这条素材的帧池取图时才写得上（手工给 path 的没有），
+    所以它说的是"这张借来的画面确实进了成品"，不是"库里有这么条素材"。
+    判帧证明的是画面干净，**不是能用**；用了就得有一条「被引用的画面」记着凭什么用。
+    """
+    n = 0
+    for pg in plan_pages(plan) or []:
+        for ph in (pg.get("photos") or []):
+            if isinstance(ph, dict) and str(ph.get("frame") or "").strip():
+                n += 1
+    return n
+
+
 def unjudged_photos(plan):
     """版面里**没走判帧**的那些配图（人手工给的路径 / 旧 plan 带回来的不明文件）。
 
@@ -2428,6 +2444,7 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
     prov_state, prov_gaps = {}, []
     if publish_channel == "toutiao" and plan_is_guide(plan):
         from . import guide_provenance
+        used_frames = borrowed_frame_count(plan)
         key, label = guide_provenance.state(provenance or {})
         prov_state = {"recorded": bool(provenance), "state": key, "label": label,
                       "question": (provenance or {}).get("question") or "",
@@ -2435,8 +2452,10 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
                       "contribution_evidence": (provenance or {}).get("contribution_evidence") or "",
                       "claims": (provenance or {}).get("claims") or [],
                       "materials": (provenance or {}).get("materials") or [],
+                      # 版面里真绑上的素材帧张数：只有出图这一刻才知道得准，界面读的时候没有
+                      "used_frames": used_frames,
                       "note": "内部提示，不是平台原创资格认证；勾不勾原创由人按当时平台规则逐篇判"}
-        prov_gaps = guide_provenance.blocking_gaps(provenance or {})
+        prov_gaps = guide_provenance.blocking_gaps(provenance or {}, used_frames=used_frames)
         prov_state["gaps"] = prov_gaps
     chars = plan_chars(plan)
 

@@ -99,6 +99,8 @@ def main():
         prov1 = pkg1.get("provenance") or {}
         ck("预览数据里带出「独立贡献未说明」这一档",
            prov1.get("label") == "独立贡献未说明", str(prov1.get("label")))
+        ck("预览数据把「绑了几张素材帧」一起带回来（这张夹具没绑帧，所以是 0；界面据此显示）",
+           prov1.get("used_frames") == 0, str(prov1.get("used_frames")))
         ck("缺项点名到具体字段（provenance / question）",
            any(g.get("field") in ("provenance", "question") for g in (prov1.get("gaps") or [])),
            str([g.get("field") for g in (prov1.get("gaps") or [])]))

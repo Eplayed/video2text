@@ -213,11 +213,36 @@ def state(row: Dict[str, Any]) -> Tuple[str, str]:
     return (STATE_THIN, STATE_LABELS[STATE_THIN]) if gaps else (STATE_CONTRIB, STATE_LABELS[STATE_CONTRIB])
 
 
-def compute_gaps(row: Dict[str, Any]) -> List[Dict[str, str]]:
+def _frames_gap(used_frames: int) -> Dict[str, str]:
+    """成品真的用了素材里的画面，就得有一条「被引用的画面」记着凭什么用。
+
+    为什么要点到这一层（2026-10-21 PRD 验收 2 的反例：借用视频帧、字幕裁干净了却没使用依据）：
+    只审"人登记了的那几条"会留一个洞——**一条都不登记**照样过。`used_frames` 由出图那一头
+    按版面里真绑上的帧编号算（`frame` 字段只有 `bind_frames` 从帧池取图时才有），
+    所以它说的是"这张图确实进了成品"，不是"库里存在这么一条素材"。
+    """
+    return {"field": "materials", "blocks": "publish",
+            "what": "成品用了素材里的 %d 张画面，但没有一条「被引用的画面」写清凭什么用"
+                    % int(used_frames),
+            "hint": "逐张登记：来源 URL/作者＋用途=被引用的画面＋使用依据＋审查=可发布；"
+                    "判帧只证明画面干净，不证明能用"}
+
+
+def _frames_covered(mats: List[Dict[str, Any]]) -> bool:
+    """有没有一条「被引用的画面」把依据写全并且审过了。"""
+    for m in mats or []:
+        if (m.get("usage") == "被引用的画面" and (m.get("rights_basis") or "").strip()
+                and m.get("review") == "可发布"):
+            return True
+    return False
+
+
+def compute_gaps(row: Dict[str, Any], used_frames: int = 0) -> List[Dict[str, str]]:
     """缺什么，逐项点名到**具体字段/结论/图片**，并标它挡什么。
 
     `blocks`：`state` 只影响编辑状态那一档；`publish` 影响"待发/可发布"（合并进 publishable）。
     缺项一律说"未说明/未审"，不写成"不合格"——判断权在人。
+    `used_frames`：成品版面里真的绑上的素材帧张数，由出图那一头传进来（界面读的时候没有）。
     """
     row = row or {}
     out: List[Dict[str, str]] = []
@@ -263,18 +288,23 @@ def compute_gaps(row: Dict[str, Any]) -> List[Dict[str, str]]:
             out.append({"field": "materials[%d].review" % i, "blocks": "publish",
                         "what": "%s 的使用依据还没人审（当前：%s）" % (who, m.get("review") or "未审"),
                         "hint": "自绘图与本站截图也要标来源，不凭一句「原创」清疑点"})
+    if int(used_frames or 0) > 0 and not _frames_covered(row.get("materials") or []):
+        out.append(_frames_gap(used_frames))
     return out
 
 
-def blocking_gaps(row: Dict[str, Any]) -> List[Dict[str, str]]:
+def blocking_gaps(row: Dict[str, Any], used_frames: int = 0) -> List[Dict[str, str]]:
     """挡"待发/可发布"的那些缺项。**整条证据链没建过**也算一项——
     旧记录、没填过的稿子一律按最保守的一档处理，不能默认通过（PRD §范围与边界）。
     """
     if not row:
-        return [{"field": "provenance", "blocks": "publish",
+        gaps = [{"field": "provenance", "blocks": "publish",
                  "what": "这篇没建编辑证据链：解决什么问题、我们新增了什么、依据在哪，都没记",
                  "hint": "如实整理也可以发，但那三行要写下来；不填不等于通过"}]
-    return [g for g in compute_gaps(row) if g["blocks"] == "publish"]
+        if int(used_frames or 0) > 0:
+            gaps.append(_frames_gap(used_frames))
+        return gaps
+    return [g for g in compute_gaps(row, used_frames) if g["blocks"] == "publish"]
 
 
 def summary_line(row: Dict[str, Any]) -> str:

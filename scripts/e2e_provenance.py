@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""编辑证据链的定点回归：正向一条 + PRD 点名的五条反例（`PRD-video2text-原创增量改造-2026-10-21.md` §可验证验收 2）。
+"""编辑证据链的定点回归：正向一条 + PRD 点名的六条反例（`PRD-video2text-原创增量改造-2026-10-21.md` §可验证验收 2）。
 
 三条纪律：
 · **不碰生产**：库是 `temp/` 下现造的临时库，跑完删；不读 `output/video2text.db`，不生成图；
@@ -62,15 +62,21 @@ def main():
                  "usage": "事实来源", "rights_basis": "官方公告转述，标来源与日期", "review": "可发布"},
                 {"ref": "self:route_table", "author": "本站",
                  "usage": "我们自己做的", "rights_basis": "路线表与说明图是我们自己排的",
+                 "review": "可发布"},
+                {"ref": "F7", "url": "https://www.douyin.com/video/7540000000000000000",
+                 "author": "某博主（副本路线讲解）", "usage": "被引用的画面",
+                 "rights_basis": "只取游戏画面本身、不带该作者的解说与字幕，文末标来源与作者",
                  "review": "可发布"}]}
     row = gp.save(str(DB), full)
     got = gp.load(str(DB), "dungeon5", "toutiao", "guide", 1)
     ck("存进去读得回来，claims/materials 结构不丢",
-       len(got["claims"]) == 3 and len(got["materials"]) == 2, "claims=%d materials=%d" % (
+       len(got["claims"]) == 3 and len(got["materials"]) == 3, "claims=%d materials=%d" % (
            len(got["claims"]), len(got["materials"])))
     gaps = gp.compute_gaps(got)
     ck("正向一条待发阻塞都没有", [g for g in gaps if g["blocks"] == "publish"] == [],
        str(fields(gaps)))
+    ck("成品绑了 3 张素材帧也照样不挡（已有一条「被引用的画面」写全依据并审过）",
+       gp.blocking_gaps(got, used_frames=3) == [], str(fields(gp.blocking_gaps(got, 3))))
     key, label = gp.state(got)
     ck("状态是「有独立贡献，待人工评估」，不是「已获原创」", key == gp.STATE_CONTRIB, label)
     line = gp.summary_line(got)
@@ -133,6 +139,42 @@ def main():
     ef = [g for g in gp.compute_gaps(e) if g["blocks"] == "publish"]
     ck("判帧只证明画面干净，不代替权利审核（这里必须仍然挡）",
        any("使用依据" in g["what"] or "还没人审" in g["what"] for g in ef), str(fields(ef)))
+
+    print("== E2 反例四之二：一条画面依据都不登记，照样不许过（PRD 那条反例的真正洞） ==")
+    # E 是"登记了但没写依据"。更省事的那条路是**根本不登记**：三项填齐、结论都有出处，
+    # materials 留空，光看这份记录是"没有缺项"。可成品明明绑着这张素材帧——
+    # 所以 used_frames 由出图那一头传进来（bind_frames 给帧池取的图写上 frame 键）。
+    silent = dict(full, slot_key="fr2", materials=[
+        {"url": "https://wow.blizzard.cn/news/24301455/index.html", "author": "暴雪官方",
+         "usage": "事实来源", "rights_basis": "官方公告转述，标来源与日期", "review": "可发布"}])
+    gp.save(str(DB), silent)
+    s = gp.load(str(DB), "fr2", "toutiao", "guide", 1)
+    s0 = [g for g in gp.compute_gaps(s) if g["blocks"] == "publish"]
+    s2 = [g for g in gp.compute_gaps(s, used_frames=2) if g["blocks"] == "publish"]
+    ck("没绑素材帧时这条记录确实一条不缺（不能把规则做成误伤）", s0 == [], str(fields(s0)))
+    ck("绑了 2 张帧却没登记画面依据 → 挡待发，且点名到 materials",
+       fields(s2) == ["materials"], str(fields(s2)))
+    ck("缺项里写出的是**几张帧**，不是笼统一句"
+       "材料有问题", "2 张" in s2[0]["what"], s2[0]["what"])
+    ck("状态不因为这条升档也不降档（权利问题 ≠ 独立贡献问题）",
+       gp.state(s)[0] == gp.STATE_CONTRIB, gp.state(s)[1])
+    ck("整条链没建 + 用了 2 张帧 → 两条都列（不合并成一句）",
+       fields(gp.blocking_gaps({}, used_frames=2)) == ["provenance", "materials"],
+       str(fields(gp.blocking_gaps({}, used_frames=2))))
+    # 这一段的要紧处：`used_frames` 不是人填的，是出图那一头按版面里真绑上的帧数出来的。
+    # 判据只能有一个来源——所以这里直接走 bind_frames 那条真实的绑定，看它写下的键算不算数。
+    from src import ai_poster
+    frames = [{"i": 7, "ts": "00:24", "file": "/tmp/_prov_f7.jpg", "subject": "天赋树界面"}]
+    pgs = {"pages": [{"title": "甲", "layout_key": "guide", "style_key": "guide_night",
+                      "cards": [{"t": "a", "d": "b"}], "photos": [{"frame": "F7"}, {"frame": "F99"}]}]}
+    ai_poster.bind_frames(pgs["pages"], frames)
+    n = ai_poster.borrowed_frame_count(pgs)
+    ck("bind_frames 从帧池取上的那张会被数到（编号对不上的那张已被丢掉）", n == 1, str(n))
+    hand = [g for g in gp.compute_gaps(s, used_frames=n) if g["blocks"] == "publish"]
+    ck("真绑上一张 → 这份「三项填齐」的记录照样挡待发", fields(hand) == ["materials"], str(fields(hand)))
+    ck("手工选的图不计进素材帧（它走「未判帧」那份清单，不重复记一遍账）",
+       ai_poster.borrowed_frame_count({"pages": [{"photos": [{"path": "/tmp/x.png",
+                                                              "judged": False}]}]}) == 0)
 
     print("== F 反例五：旧记录缺字段一律「未审」，不默认通过 ==")
     ck("什么都没记 → 状态是「独立贡献未说明」而不是「通过」",

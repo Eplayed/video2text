@@ -4687,7 +4687,9 @@ function provRenderBody() {
     + (mats || '<div class="pr-none">还没有登记外部材料。</div>')
     + '<button class="btn ghost sm" onclick="provAdd(\'materials\')">＋ 加一条材料</button>'
     + '<div class="pr-foot"><button class="btn sm" onclick="provSave()">存这一篇的证据链</button>'
-    + '<span class="hint" id="pr-hint"></span></div><div id="pr-gaps"></div>';
+    + '<span class="hint" id="pr-hint"></span></div>'
+    + '<div class="hint">这一栏只审"登记过的东西"：成品实际用了几张素材帧，要出图那一刻才数得准，'
+    + '真用了画面却没登记依据，那一条会在出图结果里点名。</div><div id="pr-gaps"></div>';
 }
 function provAdd(kind) {
   if (kind === 'claims') {
@@ -4770,6 +4772,10 @@ function provBlockHtml(p) {
   var g = p.gaps || [];
   var h = '<div class="pk-verify ' + (g.length ? 'fail' : 'mild') + '">'
     + '编辑证据链：' + esc(p.label) + '｜<b>内部提示，不是平台原创资格认证</b>';
+  if (p.used_frames) {
+    h += '<br>版面里绑了 ' + p.used_frames + ' 张素材帧（从这条素材的画面取的那些）'
+       + '——判帧只证明画面干净，不证明能用。';
+  }
   if (!p.recorded) h += '<br>这一篇还没建证据链（问题／新增／依据都没记）。';
   if (g.length) {
     h += '<ul class="pr-gaps">' + g.slice(0, 8).map(function (x) {
