@@ -219,9 +219,48 @@ def _crop_ok(where, bt, bb):
     return (where == "top" and bb <= BAND_EDGE_TOP) or (where == "bottom" and bt >= BAND_EDGE_BOT)
 
 
+def _no_verdict(item, why):
+    """模型这一句**没给出结论**时的处置：不许沿用上一轮的 clean，也不许算"判过了"。
+
+    checked=False 是故意的——`ensure_judged` 靠它挑待判的帧，下次重出还会再问一次；
+    要是写成 True，一次网络抖动就把这帧永久标成"有后期字"，而实际上谁都没看过它。
+    """
+    item["clean"] = False
+    item["checked"] = False
+    item["judge_failed"] = True
+    item["why"] = why
+    item["crop_to"] = None
+    return item
+
+
 def apply_probe(item, got):
-    """把模型那一句 JSON 落成这一帧的处置。纯函数，不联网，好测。"""
-    got = got or {}
+    """把模型那一句 JSON 落成这一帧的处置。纯函数，不联网，好测。
+
+    三种落法（2026-10-21 Codex P0 之后定的，别再改回去）：
+      1) 有结论、`post_text` 是 false → clean=True，能进版面；
+      2) 有结论、`post_text` 是 true → clean=False，贴着边的记下 crop_to，裁不动的写 why；
+      3) **没结论**（回答是空 / 不是 dict / 缺 post_text / post_text 不是布尔）
+         → 一律不可用并写明原因。
+    以前第 3 种走的是 `if not got.get("post_text")` —— 假值即算"没有后期字"，
+    而 `_probe_item` 里 `_ask_vision(...) or ({}, 0)` 会把「没配 key、openai 没装、
+    请求超时、返回的不是 JSON」全折成 `{}`：实测 `{}`、`{"where":"none"}`、
+    `{"post_text":None}` 三种都判成 clean=True。**判不了 ≠ 干净**，
+    带别人字幕条的图就是这么进版面的。
+    """
+    item["judge_failed"] = False
+    if not isinstance(got, dict):
+        return _no_verdict(item, "看图模型没给出回答（没配 key／超时／回来的不是 JSON），"
+                                 "不能当成这帧干净")
+    if not got:
+        # `_ask_vision(...) or ({}, 0)` 把「没答上来」折成空 dict，这是最常见的一种失败形状
+        return _no_verdict(item, "看图模型没给出可解析的回答（超时／被截断／不是 JSON），"
+                                 "不能当成这帧干净")
+    if "post_text" not in got:
+        return _no_verdict(item, "看图回答里没有 post_text 这个字段，不能当成这帧干净")
+    post_text = got.get("post_text")
+    if not isinstance(post_text, bool):
+        return _no_verdict(item, "看图回答的 post_text 不是 true/false（写的是「%s」），"
+                                 "不能当成这帧干净" % str(post_text)[:12])
     where = str(got.get("where") or "").strip().lower()
     subj = str(got.get("subject") or "").strip()[:24]
     if subj:
@@ -232,7 +271,8 @@ def apply_probe(item, got):
         item["words"] = [w for w in (str(x).strip()[:20] for x in words)
                          if w and not _is_echo(w)][:3]
     item["where"] = where
-    if not got.get("post_text"):
+    item["checked"] = True
+    if post_text is False:
         item["clean"] = True
         item["why"] = ""
         item["crop_to"] = None
@@ -257,8 +297,11 @@ def _probe_item(item, ai_config):
     try:
         got, t1 = _ask_vision(item["file"], Q_PROBE, ai_config) or ({}, 0)
         tok += t1
-        item["checked"] = True
         apply_probe(item, got)
+        if item.get("judge_failed"):
+            # 第一问就没拿到结论：不补裁、不回读，留着 checked=False 让下次重问
+            item.pop("crop_to", None)
+            return tok
         if not item.get("crop_to") and str(item.get("where") or "") in ("top", "bottom"):
             # 模型说了贴边却没给数（新提示词下实测 8 张里 7 张把 band 留成 0）：
             # 只补问一次数字，不重判有无。不补这一问，本可以裁的帧会被整批白扔掉
@@ -278,13 +321,26 @@ def _probe_item(item, ai_config):
             cut = str(cut_dir / ("v_%s" % os.path.basename(item["file"])))
             item["file"] = str(crop_away(src, (bt, bb, 0.0), cut))
             item["band"] = [bt, bb, 0.0]
-            got2, t2 = _ask_vision(item["file"], Q_PROBE, ai_config) or ({}, 0)
-            tok += t2
+            got2, t3 = _ask_vision(item["file"], Q_PROBE, ai_config) or ({}, 0)
+            tok += t3
             apply_probe(item, got2)
-            if not item.get("clean") and not item.get("why"):
+            if item.get("judge_failed"):
+                # 裁完回读这一问失败：这张**已知**有后期字，绝不能因为"回读没回答"就放行
+                item["clean"] = False
+                item["why"] = "裁掉一条横幅后回读没拿到有效判断，这张不能用"
+            elif not item.get("clean") and not item.get("why"):
                 item["why"] = "裁掉一条字幕条之后回读，仍有后期字"
     except Exception as e:
         item["error"] = str(e)[:80]
+        if item.get("checked"):
+            # 结论已经有了，是裁切/回读这一步挂的：留着结论，但把"没走完"写进原因
+            if not item.get("clean") and not item.get("why"):
+                item["why"] = "裁切或回读这一步失败，这张先不用（%s）" % str(e)[:40]
+        else:
+            item["clean"] = False
+            item["checked"] = False
+            item["judge_failed"] = True
+            item["why"] = "判帧调用异常，没拿到结论（%s）" % str(e)[:40]
     item.pop("crop_to", None)
     return tok
 
@@ -382,8 +438,7 @@ def build(video_path, aweme_id, ai_config=None, segments=None, progress_cb=None,
                 tokens += _probe_item(item, ai_config)
                 if item.get("checked"):
                     # 判完了（含裁一条再回读）就不再需要原帧：补裁只在 _probe_item 内部发生
-                    _drop_raw(item.get("raw"))
-                    item["raw"] = ""
+                    _drop_spent_raw(item)
         pool.append(item)
         if progress_cb and judging and (idx % 5 == 0 or idx == len(frames)):
             progress_cb("判帧 %d/%d" % (idx, len(frames)))
@@ -407,6 +462,27 @@ def _drop_raw(path):
             os.remove(str(path))
     except OSError:
         pass
+
+
+def _drop_spent_raw(item):
+    """判完之后清中间产物：**只有成品帧和原帧不是同一个文件时才删**。
+
+    2026-10-21 反向回归（`scripts/e2e_frame_judge.py` D 段）抓到：没定位到横幅的帧
+    `file` 就是 `raw` 本身，原来 `build` / `ensure_judged` 里那句无条件
+    `_drop_raw(it["raw"])` 等于把**刚判成干净、正在被版面引用的那张图删掉**。
+    生产帧池实测 108 张 clean 里有 6 张已经是悬空路径（frames.json 写着 clean=true，
+    文件没了 → `usable()` 按"文件在"筛，这一帧永远进不了版面，还看不出为什么没图）。
+    """
+    raw = item.get("raw") or ""
+    if not raw:
+        return
+    try:
+        if os.path.abspath(raw) == os.path.abspath(item.get("file") or ""):
+            return          # 这就是成品本身，删了等于把证据删了
+    except (TypeError, ValueError):
+        return
+    _drop_raw(raw)
+    item["raw"] = ""
 
 
 def prune_raw(keep_unjudged=True, progress_cb=None):
@@ -486,10 +562,9 @@ def ensure_judged(aweme_id, ai_config, limit=8, progress_cb=None):
             spent += _probe_item(it, ai_config)
         # 判过就不再留原帧：补第二刀只在 _probe_item 这一次调用里发生，之后没人再读它。
         # 条件写成 checked 而不是 band——像素那条横幅检不出来、靠模型定位的帧（实测 8 张里 7 张）
-        # 原来会把原帧留在盘上，一条素材白占一倍
+        # 原来会把原帧留在盘上，一条素材白占一倍。**但 file 就是 raw 的那些不能删**（见 _drop_spent_raw）
         if it.get("checked"):
-            _drop_raw(it.get("raw"))
-            it["raw"] = ""
+            _drop_spent_raw(it)
         if progress_cb:
             progress_cb("看图判帧 %d/%d" % (n, len(todo)))
     meta["tokens"] = int(meta.get("tokens") or 0) + spent
@@ -533,20 +608,30 @@ def usable(pool):
 
 
 def dropped(pool):
-    """判过但进不了版面的帧，按原因归堆：{(原因, 有没有原帧可裁): 张数}
+    """进不了版面的帧，按原因归堆：{(原因, 有没有原帧可裁): 张数}
 
     为什么要把原因摆出来：一条素材抽 18 帧可能只留 3 张——号主看到"18 张里 15 张被扔"
     会以为程序坏了。其实那 15 张是作者自己做的卡、盖了张对照表、或者花字压在画面正中，
     裁一条边救不回来。原因不摆出来，"宁缺毋滥"就长得像 bug。
+    2026-10-21 起**判失败的帧也归到这里**：那种帧既不是"干净"也不是"有后期字"，
+    而是"没判成"，必须出现在界面上（原因写的是"看图没给出回答"这一类），
+    否则它就两头不沾——usable 里没有、dropped 里也没有，看着像凭空少了 8 张。
     """
     out = {}
     for it in (pool or {}).get("frames") or []:
-        if it.get("clean") or not it.get("checked"):
+        if it.get("clean"):
             continue
+        if not it.get("checked") and not it.get("judge_failed"):
+            continue      # 还没判过的不算"扔"，它们是 candidates
         why = str(it.get("why") or "").strip() or "回读后仍有后期字"
         key = (why, bool(it.get("band")))
         out[key] = out.get(key, 0) + 1
     return out
+
+
+def ask_failed(pool):
+    """判过但没拿到结论的帧（空回答／模型异常／裁后回读失败）：要人眼看，不许当干净。"""
+    return [it for it in (pool or {}).get("frames") or [] if it.get("judge_failed")]
 
 
 def caption_for(item):

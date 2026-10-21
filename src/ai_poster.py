@@ -909,16 +909,23 @@ def bind_frames(pages, items, lim=None):
             elif isinstance(ph, dict):
                 fid = str(ph.get("frame") or ph.get("id") or "").strip().upper()
                 if not fid and ph.get("path"):
-                    # 人手工在界面上选过图：路径直给，图注也保留人写的那句
+                    # 人手工在界面上选过图：路径直给，图注也保留人写的那句。
+                    # 2026-10-21 Codex P0 点名：这条路**绕过了判帧**——文件是谁都行，
+                    # 程序无从知道画面上有没有别人压的字。所以标 judged=False 并留一句人话，
+                    # 让它进最终审核清单（"未判，需人眼看"），不许因为"是人选的"就当作已核。
                     kept.append({"path": str(ph.get("path")),
-                                 "caption": _clip_ws(ph.get("caption"), 40)})
+                                 "caption": _clip_ws(ph.get("caption"), 40),
+                                 "judged": False})
+                    notes.append("第 %d 页这张是手工选的路径（没走判帧，%s）——"
+                                 "发布前人眼确认画面里没有 up 主压的字幕条、花字、账号名"
+                                 % (pi, str(ph.get("path")).rsplit("/", 1)[-1][:24]))
                     continue
             it = by.get(fid)
             if not it:
                 notes.append("第 %d 页点了 %s，可用画面里没有这个编号，这张图已丢掉"
                              % (pi, fid or "空编号"))
                 continue
-            kept.append({"path": it.get("file"), "frame": fid,
+            kept.append({"path": it.get("file"), "frame": fid, "judged": True,
                          "caption": frame_pool.caption_for(it),
                          "ts": it.get("ts") or ""})
         if kept:
@@ -927,6 +934,27 @@ def bind_frames(pages, items, lim=None):
             p.pop("photos", None)
             notes.append("第 %d 页没有可用画面（编号全对不上），这一页只排文字" % pi)
     return notes
+
+
+def unjudged_photos(plan):
+    """版面里**没走判帧**的那些配图（人手工给的路径 / 旧 plan 带回来的不明文件）。
+
+    判帧那条链（frame_pool）只覆盖"按 F 编号从帧池取图"这一条路。手工给 path 的、
+    或者从旧成品复制回来的，程序无从知道画面上有没有 up 主压的字——2026-10-21 Codex
+    P0 点名的就是这个缺口。这里不拦出图（人手选的图大概率就是他看过的那张），
+    但必须在成品清单上写"未判，需人眼看"，不许因为出图成功就当它过了检。
+    """
+    out = []
+    multi = len(plan.get("pages") or []) > 1
+    for n, pg in enumerate(plan_pages(plan) or [], 1):
+        for ph in (pg.get("photos") or []):
+            if not isinstance(ph, dict):
+                continue
+            if ph.get("judged") is True or str(ph.get("frame") or "").strip():
+                continue
+            out.append("第%d页·%s" % (n, str(ph.get("path") or "").rsplit("/", 1)[-1])
+                       if multi else str(ph.get("path") or "").rsplit("/", 1)[-1])
+    return out
 
 
 def normalize_page(item, lim, style_key, has_photo, idx, first_title="",
