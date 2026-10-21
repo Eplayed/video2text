@@ -20,8 +20,8 @@
 (function () {
   var CLS = { red: 'vb-red', deferred: 'vb-deferred', orange: 'vb-orange',
               yellow: 'vb-yellow', green: 'vb-green', grey: 'vb-grey' };
-  var CHIP = { red: ['#fbe6e4', '#a8402f'], deferred: ['#e9edfb', '#3b5288'],
-               orange: ['#fdf0e0', '#9a5c12'], yellow: ['#f7f3d9', '#7a6612'],
+  var CHIP = { red: ['#f6d7d3', '#8f1d15'], deferred: ['#e6ebfa', '#33477f'],
+               orange: ['#fbe6cf', '#8a4b0c'], yellow: ['#f7f3d9', '#7a6612'],
                green: ['#e3f4ea', '#1a7a45'], grey: ['#eef0f3', '#5b6470'] };
   var slots = null, labels = null, why = null, freshLabel = '窗口内', briefErr = '';
 
@@ -30,20 +30,29 @@
     // 选择器必须打在真实 DOM 上：卡片是 `.card`（原来写 `.item` 一条都没命中，色条从没出现过）。
     // `.card.late` 自己也设 border-color，权重与这里同为两个类——所以这份 style 一定在 head 末尾，
     // 同权重后写的算，色条不会被"过期红框"那套吃掉。
+    // 宽度按"该不该今天动它"分三级：红 8px（一眼要找到的）、橙/顺延 6px（要处理但今天不做）、
+    // 其余 5px（只是状态）。号主 10-21 反馈"必须发布那条色不明显"——5px 贴在 1100px 宽的卡上确实找不着，
+    // 所以除了加粗，红档再配一道左侧淡红渐层 + 标签描边，三样一起才叫"这一格今天动它"。
     s.textContent = [
-      '.card.vb-red{border-left:5px solid #d0433a}',
-      '.card.vb-deferred{border-left:5px solid #5b78c8}',
-      '.card.vb-orange{border-left:5px solid #e08a2e}',
+      '.card.vb-red{border-left:8px solid #c0271d;'
+      + 'background:linear-gradient(90deg,rgba(192,39,29,.11),rgba(192,39,29,0) 46%)}',
+      '.card.vb-orange{border-left:6px solid #d97b16}',
+      '.card.vb-deferred{border-left:6px solid #4a63b0}',
       '.card.vb-yellow{border-left:5px solid #c9b23a}',
       '.card.vb-green{border-left:5px solid #2f9e63;opacity:.82}',
       '.card.vb-grey{border-left:5px solid #b9bfc7}',
       '.vb-chip{font-size:11px;font-weight:700;padding:2px 7px;border-radius:999px;white-space:nowrap}',
+      // 红档的标签跟着加重：字大一号、内描边一圈，扫一眼就知道是哪一格
+      '.card.vb-red .vb-chip{font-size:12.5px;padding:3px 10px;'
+      + 'box-shadow:inset 0 0 0 1.5px #c0271d}',
       '.ref.vf-fresh{background:rgba(47,158,99,.10);box-shadow:inset 3px 0 0 #2f9e63}',
       '.ref.vf-window{box-shadow:inset 3px 0 0 #c9cfd8}',
       '.vb-note{font-size:11.5px;color:#5b6470;margin:0 0 10px}',
       '.vb-demote{font-size:11.5px;color:#3b5288;margin:4px 0 0}',
       '@media (prefers-color-scheme:dark){.vb-note{color:#aab2bd}'
-      + '.card.vb-grey{border-left-color:#4b5563}}'
+      + '.card.vb-grey{border-left-color:#4b5563}'
+      + '.card.vb-red{background:linear-gradient(90deg,rgba(192,39,29,.22),'
+      + 'rgba(192,39,29,0) 46%)}}'
     ].join('\n');
     document.head.appendChild(s);
   }

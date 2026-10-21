@@ -33,8 +33,8 @@ fails = []
 
 # 期望色条：这份是"显示层该有的样子"，故意写在这里而不是从 JS 里读——
 # 两边同源就测不出"JS 被人改回 .item 了"这类回归。
-EXPECT = {"vb-red": ("#d0433a", "5px"), "vb-deferred": ("#5b78c8", "5px"),
-          "vb-orange": ("#e08a2e", "5px"), "vb-yellow": ("#c9b23a", "5px"),
+EXPECT = {"vb-red": ("#c0271d", "8px"), "vb-deferred": ("#4a63b0", "6px"),
+          "vb-orange": ("#d97b16", "6px"), "vb-yellow": ("#c9b23a", "5px"),
           "vb-green": ("#2f9e63", "5px"), "vb-grey": ("#b9bfc7", "5px")}
 
 
@@ -178,7 +178,7 @@ def main():
             got = pg.evaluate(MEASURE)
             ck("每张卡都上了色（painted = 卡片数）", got["n"] > 0 and got["painted"] == got["n"],
                "%d/%d 张有色" % (got["painted"], got["n"]))
-            ck("R3：探针元素（.card.vb-*）六种颜色的色条都量得到 5px 实线",
+            ck("R3：探针元素（.card.vb-*）六种色条都按档位宽度画出来（红 8px／橙与顺延 6px／其余 5px）",
                all(v[1] == EXPECT[k][1] and v[0] == to_rgb(EXPECT[k][0])
                    for k, v in got["probe"].items()),
                str(got["probe"].get("vb-red")))
@@ -247,7 +247,7 @@ def main():
                 key = "vb-" + k
                 c = by_cls.get(key)
                 r3 = check_color(g2, c, "B") if c else None
-                ck("%s（%s）在真实 .card 上有 5px 色条且颜色对得上" % (key, labels[k]),
+                ck("%s（%s）在真实 .card 上有预期宽度的实线色条且颜色对得上" % (key, labels[k]),
                    c is not None and isinstance(r3, tuple) and r3[1],
                    (r3[0] if isinstance(r3, tuple) else "这张卡没上色"))
             ck("顺延那张卡写着原因，且不是「缺料」那句话",
@@ -256,7 +256,8 @@ def main():
             ck("六档标签都出现在页面上（跟接口 label 同源）",
                all(labels[k] in " ".join(c["chip"] for c in g2["cards"]) for k in order),
                "、".join(sorted({c["chip"] for c in g2["cards"] if c["chip"]}))[:70])
-            pg2.screenshot(path=str(out_dir / "schedule_brief_all6.png"), full_page=False)
+            # 整页拍：六档分在好几张卡上，只拍视口等于没拍到红档那条色带
+            pg2.screenshot(path=str(out_dir / "schedule_brief_all6.png"), full_page=True)
             pg2.set_viewport_size({"width": 375, "height": 900})
             pg2.wait_for_timeout(1200)
             g3 = pg2.evaluate(MEASURE)
