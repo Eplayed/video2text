@@ -1738,6 +1738,31 @@ def api_ops_article():
     return jsonify({"row": row})
 
 
+# 注：这条本该排在 /api/plan/* 那一组旁边，但那一组（排产入口第一单）还压在另一条会话
+# 未提交的改动里，HEAD 里没有那个位置可插；等她那批提交落地后挪过去即可，路由本身不用改。
+@app.route("/api/plan/brief")
+def api_plan_brief():
+    """排产日报（只读）：今天该发哪篇、每格现在有什么料。
+
+    判据只有 `src/plan_brief.py` 这一份——命令行日报、排产表的颜色、这个接口三处共用。
+    页面要是自己再算一遍"发过没有 / 素材新不新"，过两周就会和日报互相说反话
+    （同一件事两份账，本项目反复栽过：frames.json 写 usable=17、界面显示 0 张）。
+    """
+    from src import plan_brief
+    day = str(request.args.get("date") or "").strip()[:10]
+    today = None
+    if day:
+        try:
+            today = datetime.strptime(day, "%Y-%m-%d").date()
+        except ValueError:
+            return jsonify({"error": "日期要写成 2026-10-21 这样"}), 400
+    try:
+        return jsonify(plan_brief.build(str(DB_PATH), today))
+    except Exception as e:
+        # 排产页的 DATA 被改坏时也要说人话，别让页面只剩一片灰
+        return jsonify({"error": str(e)[:200]}), 500
+
+
 @app.route("/api/ops/register", methods=["POST"])
 def api_ops_register():
     """发布登记：记一条"这篇已经在平台发出去了"。
