@@ -2332,7 +2332,7 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
                     progress_cb=None, do_verify=True, plan=None, publish=None, force=False,
                     copies=1, do_review=True, text_mode=DEFAULT_TEXT_MODE, photo=None,
                     preview_clicks=0, bases=None, publish_channel="toutiao", form="newspic",
-                    fact_evidence=None, fact_checked_by=""):
+                    fact_evidence=None, fact_checked_by="", provenance=None):
     """整理稿 → 海报一张。返回 manifest dict（已落盘 output/poster/<summary_id>/）。
 
     plan / publish 非空时跳过 LLM 拆解（前端审改过文案再出图走这条）：plan 是要画进图的
@@ -2419,6 +2419,25 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
         fact_gate_state["override"] = fact_override
     # 「有图」≠「能发」：放行没有逐条凭据时，这张只能当草稿看（界面读 publishable）
     fact_blocks = bool(fact_hard) and not (fact_override or {}).get("complete")
+    # ── 编辑证据链（2026-10-21 原创增量改造，只管 头条 + 攻略页 这一条）──────────────
+    # 事实闸管的是"没核过的数别当卖点"，判帧管的是"画面上有没有别人压的字"——
+    # 两件都不等于"这篇有没有独立价值、借来的文字和画面能不能这么用"。那一层由
+    # `guide_provenance` 记，这里只做两件事：缺项并进 publishable、状态写进 manifest 给预览看。
+    # **不勾原创、不输出原创百分比、不判首发**（PRD 明写工具不证明原创资格）；
+    # 缺项也不拦出图——内部审稿的草稿照样要能生成，让人看得见要补什么。
+    prov_state, prov_gaps = {}, []
+    if publish_channel == "toutiao" and plan_is_guide(plan):
+        from . import guide_provenance
+        key, label = guide_provenance.state(provenance or {})
+        prov_state = {"recorded": bool(provenance), "state": key, "label": label,
+                      "question": (provenance or {}).get("question") or "",
+                      "contribution": (provenance or {}).get("contribution") or "",
+                      "contribution_evidence": (provenance or {}).get("contribution_evidence") or "",
+                      "claims": (provenance or {}).get("claims") or [],
+                      "materials": (provenance or {}).get("materials") or [],
+                      "note": "内部提示，不是平台原创资格认证；勾不勾原创由人按当时平台规则逐篇判"}
+        prov_gaps = guide_provenance.blocking_gaps(provenance or {})
+        prov_state["gaps"] = prov_gaps
     chars = plan_chars(plan)
 
     # 渠道分叉（2026-10-13 拍板）：小红书档不输出尾注与关键词回复。尾注有两处——
@@ -2699,6 +2718,8 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
         "fact_gate": fact_gate_state,
         # 「有图」≠「能发」：待核卖点没有逐条凭据时这张只是草稿（2026-10-21 Codex P1）
         "publishable": not fact_blocks,
+        # 编辑证据链（原创增量）：状态、逐条缺项、以及"这不是原创认证"那句原话都要落盘
+        "provenance": prov_state,
         "verify": check,
         "review": review,
         "source_title": summary.get("title") or "",
@@ -2731,6 +2752,14 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
     for name in unjudged:
         issues.append("warn: %s 这张图没走判帧（手工给的路径），"
                       "发布前人眼确认画面里没有字幕条／花字／账号名" % name)
+    # 编辑证据链的缺项：一条条点到字段（哪条结论没证据、哪张图没依据），
+    # 并明确写"不是原创资格认证"——省得有人把它读成"补完就能勾原创"
+    for g in prov_gaps[:6]:
+        issues.append("error: 编辑证据链缺项 —— %s（%s）｜怎么补：%s"
+                      % (g["what"], g["field"], g["hint"]))
+    if prov_gaps:
+        issues.append("error: 编辑状态「%s」——待发状态保持为否（这是内部提示，"
+                      "不是平台原创资格认证）" % prov_state.get("label", ""))
     if manifest["publishable"] and any(i.startswith("error") for i in issues):
         manifest["publishable"] = False      # 别的硬伤（字数/骨架稿）也一样不能标待发
     (out_dir / "manifest.json").write_text(
