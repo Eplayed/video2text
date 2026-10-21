@@ -2,6 +2,77 @@
 
 更新时间：2026-10-21
 
+## 2026-10-21（图文攻略·第二轮）：Codex 退回来的四关逐条补，判帧那条链又抓到两处
+
+复核件在另一条线：`wow-forever/wow-forever-web/docs/VERIFY-Qoder交付复核-2026-10-21.md`
+（四关 PRD `PRD-图文攻略四关验收-2026-10-21.md`）。**本轮只补图文攻略的未通过项**：没动公众号、
+没动雷达、没动线上任何一篇，也没有批量提交共享工作区文件——`src/ai_poster.py`、`web/app.py`、
+`web/templates/index.html` 三份仍压着别的会话未提交的活（发布标题、排产任务、抖音图文），
+所以按 op 点名重建 staged blob（`temp/stage_r3.py`），只提自己那一段，提完工作区照旧。
+
+一、**判帧的"空回答算干净帧"（P0，复核复现给看的）**：`apply_probe` 原来写的是
+`if not got.get("post_text")`——假值即"没有后期字"，而 `_probe_item` 里
+`_ask_vision(...) or ({}, 0)` 会把「没配 key、openai 没装、超时、回来的不是 JSON」全折成 `{}`。
+实测 `{}`、`{"where":"none"}`、`{"post_text":None}` 三种都判 `clean=True`，`usable()` 又按 clean 收帧
+→ **判不了被写成"这帧干净"**，带别人字幕条的图就是这么进版面的。现在只有 `post_text` 明确是布尔才给结论；
+缺字段／非布尔／空回答／调用异常／裁完回读失败一律不可用并写明原因，并且 `checked=False`
+——一次网络抖动不该把一帧永久判死，下次重出会再问一次（原帧也留着，重判要从没裁过的图上量）。
+
+二、**反向回归顺手抓到的第二条（没人报过）**：`build` / `ensure_judged` 判完无条件 `_drop_raw(raw)`，
+可**没定位到横幅的帧 `file` 就是 `raw` 本身**——等于把刚判成干净、正被版面引用的那张图删掉。
+生产帧池实测 108 张 `clean` 里 **6 张已经是悬空路径**（界面显示"0 张可用"，谁都不知道为什么）。
+改成只有成品帧与原帧不是同一个文件时才删（`_drop_spent_raw`）。这 6 张本轮只报不修：
+补回来要重抽帧或重下原片，属于另一件事。
+
+三、**手工选图这条路根本绕过判帧**：`bind_frames` 里 `photos[].path` 直给文件，程序不知道它判没判过。
+不拦出图（人挑的大概就是他看过的那张），但标 `judged=false` 并写进成品清单
+（`manifest.photos_unjudged` + 一条 lint warn「未判，需人眼看」）——不许因为出图成功就当它过了检。
+
+四、**放行要逐条凭据（P1）**：按钮原来写着"这些数我已人工核实"，后端只收到一个 `force=True`，
+manifest 里只留 `overridden: true`——**给没核过的数盖了"已核实"的章**。现在
+`fact_gate.check_override(hard, evidence, checked_by)` 要求每条待核都交「出处 + 核验结论 + 核验人」，
+缺任何一条：图照样出（人是最终判断者），但 `publishable=false`、lint 点名缺哪条，
+界面从按钮文案到结果条都不许出现"已核实"，只写"⛔ 不可发布"；凭据齐了才写"✅ 已逐条留凭据（核验人 X）"。
+
+五、**判据要覆盖实际会发出去的字段（P2）**：闸口只读 `plan.publish`，而海报线的发布文案是独立字段 `pub`，
+调用时只额外塞了 `copy_text` 一项——待核数挪进 `tt_titles`／`xhs_copy`／`digest` 就绕过去了。
+改成出图前用 `_publish_view(plan, pub)` 合成只读视图（不改原 plan）一起查，并把**发布标题算卖点位**；
+`e2e_guide_gate.py` 加 H 段两条反例：那颗数只写在标题里必须拦、只写在正文叙述里只提示。
+
+六、**UI 走查从 15801 搬进隔离服务（P1）**：脚本原来直连生产端口向 `/api/poster/generate` 发真 POST，
+安全前提是"闸口会拦下"——**可测的就是闸口本身**，它一回归测试自己就开始覆盖 `output/poster/87`。
+新增 `scripts/agent/poster_test_server.py`：临时库副本 + 临时成品目录 + `openai` 内存桩 +
+`requests` 一调就抛（收费那一跳真发不出去）+ **解析出的路径撞上生产就拒绝启动**（退出码 2，不靠"我记得没写"）。
+走查另加一条反向验证：`--gate off` 故意让闸口失效，图确实出了、但只写临时目录，
+生产 87 的 manifest `mtime + sha256` 双核不变。
+
+七、**83 四关补齐**：选题卡 `2026-10-21-头条-planner-图文攻略样本.md`（角度门三问实答、五处分歧、
+四项需实测）；三页最终样稿 `output/样稿/2026-10-21-83/83/poster_p1..p3.png`（0 元、程序排字，
+**旧成品 `output/poster/83/` 原样保留**，前后 sha 一致）；每页实际用图 + 重跑判帧 + 逐张目视
+见 `2026-10-21-头条-ui-83样张与用图记录.md`（四张帧重判 3135 token，F3 右下角那两个色块
+放大核过是游戏内小队头像框、不是贴纸）；逐页前后对照与配文改法追加在
+`2026-10-21-头条-writer-83画面设置样稿.md` 末尾。这一版**没有走"放行"**：
+把「1080p毛边全消」从副标题撤掉、把"视野别一次拉满"与"推荐拉满"统一成一句、
+把大字从"改完抗锯齿毛边变少的分辨率 1080p"换成"5 档"，硬伤自己变成 0——
+待核的东西一律留在"要核"的位置，不升格成卖点，也不拿 force 把它放行成海报。
+
+验证与退出码（解释器一律 `env -u PYTHONHOME -u PYTHONPATH /usr/local/bin/python3`）：
+
+| 命令 | 结果 | 退出码 |
+|---|---|---|
+| `scripts/e2e_frame_judge.py`（新增，A–E 段） | `FRAME_JUDGE_OK` | 0 |
+| `scripts/e2e_guide_gate.py`（A–I 段，新增 H/I） | `GUIDE_GATE_OK` | 0 |
+| `scripts/agent/ui_guide_gate_walk.py`（改隔离服务，20 项） | `GUIDE_GATE_WALK_OK` | 0 |
+| `bash .qoder/skills/graphics-verify/scripts/run_graphics_checks.sh`（五条线） | `ALL_OK … 五条线全绿` | 0 |
+| `scripts/agent/render_guide_sample.py --summary 83 … --judge` | `RENDER_SAMPLE_OK` | 0 |
+| `py_compile`（frame_pool / ai_poster / fact_gate / app / 三个脚本）+ `node --check`（staged index.html） | 无输出 | 0 |
+| `git diff --check` | 无空白错误 | 0 |
+
+没验到的（不许拿桩的结果顶替）：真收费模型的文案与画面质量（走查里那一跳是被桩拦住的）、
+号主逐条确认 83 那 5 处「待核」、手机端整页翻这三张样稿、线上 83/85/87 当前图像版本、
+6 张悬空帧的修复、生产帧池里旧缓存 `clean=true` 那批（判据修好了，账没重跑）。
+交接：`output/角色交接/2026-10-21-头条-{planner,ui,writer}` 三份 + 本文件；停在 Codex 验收点，不自动发布。
+
 ## 2026-10-21（图文攻略·事实闸）：整理稿【风险核查】以前只是写给模型看、没人读
 
 任务书在另一条线：`wow-forever/wow-forever-web/docs/OPS-头条图文攻略Qoder整改任务-2026-10-21.md`
