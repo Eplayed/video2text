@@ -48,10 +48,12 @@ E 借视频帧、字幕裁干净了但没有权利依据；**E2 一条都不登�
 顺带直接调 `bind_frames` 再数——判据只留一处，测试里不另抄一份）；F 旧记录缺字段一律未审；
 G 补一项不冲掉别的 + 版本 1/2 不互相覆盖；
 H 输出里扫不到"100%原创／已获原创／可勾原创／首发"。
-`scripts/agent/ui_provenance_walk.py` → **`PROVENANCE_WALK_OK`，26 PASS，rc=0**：没建链就出图 `publishable=False`
+`scripts/agent/ui_provenance_walk.py` → **`PROVENANCE_WALK_OK`，27 PASS，rc=0**：没建链就出图 `publishable=False`
 但图照样出、manifest 与结果区都点名到具体字段、补齐后 `publishable=True`、重新打开还读得到、
 新加那条借用画面被单独点名（`materials[3]`）、生产 `output/poster/83/manifest.json` 前后 sha 一致（没覆盖已发成品）。
-截图 `temp/prov_panel.png`（那一栏展开、填着数）、`temp/prov_result.png`（结果区那一格）。
+截图 `temp/prov_panel.png`（那一栏展开、填着数）、`temp/prov_result.png`（**只截结果区那一格**：
+"编辑证据链：有独立贡献，待人工评估｜内部提示，不是平台原创资格认证"——第一版截的是整个 `#pk-result`，
+一屏输入框，等于没证据）。
 全量图形卡口 `.qoder/skills/graphics-verify/scripts/run_graphics_checks.sh` → 五条线 `ALL_OK`、**rc=0**。
 
 仍未做 / 没验到：① 83 号旧样稿**没在生产库上走过这条链**（它没有 `slot_key`，落在"没建链"那一档），

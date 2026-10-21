@@ -207,7 +207,16 @@ def main():
                [ln for ln in txt.split("\n") if "编辑证据链" in ln][:1][0][:80] if txt else "")
             pg.eval_on_selector("#pk-result", "e=>e.scrollIntoView({block:'center'})")
             pg.wait_for_timeout(300)
-            pg.query_selector("#pk-result").screenshot(path=str(ROOT / "temp" / "prov_result.png"))
+            # 截图要截**那一格**，不是整个结果区：#pk-result 里装着文案编辑表单，
+            # 整块截出来是一屏输入框，等于没证据（10-21 目视自己这张才发现）。
+            shot = None
+            for el in pg.query_selector_all("#pk-result .pk-verify"):
+                if "编辑证据链" in (el.inner_text() or ""):
+                    shot = el
+                    break
+            ck("结果区里那一格是独立一块、能单独截出来（不是混在文案表单里）", shot is not None)
+            if shot is not None:
+                shot.screenshot(path=str(ROOT / "temp" / "prov_result.png"))
             pg.eval_on_selector("#pk-prov", "e=>e.scrollIntoView({block:'center'})")
             pg.wait_for_timeout(300)
             pg.query_selector("#pk-prov").screenshot(path=str(ROOT / "temp" / "prov_panel.png"))
