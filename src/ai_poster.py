@@ -27,6 +27,7 @@ from pathlib import Path
 
 import requests
 
+from . import fact_gate
 from .graphics import gate as draft_gate
 from .graphics import package as pkg_store
 from .graphics.channels.toutiao import _parse_json
@@ -653,8 +654,32 @@ __LAYOUT__
 spine、scene、每张卡片的 v、style_key 与 publish 里的文字都不会画进海报，所以不占合计字数预算；
 但同样只能用素材里的事实。
 
+__RISKS__
 素材：
 __CONTENT__"""
+
+
+def risks_prompt_block(summary):
+    """把整理稿【风险核查】列成"这些说法不许当卖点"塞进拆解提示词。
+
+    以前这一节只是随素材原文一起进去、没有任何一句提到它，于是模型照常用它当事实
+    （87 的"46亿"整理稿明明标了疑似口误，成品照样拿它当第二页卖点）。
+    这里只做一件事：**把上游已经标过的疑点显式列出来、说不许升格**。
+    判断真假仍然归人，不是叫模型自己再评一遍。
+    """
+    items = fact_gate.risk_items(summary.get("content") or "")
+    if not items:
+        return ("整理稿没有【风险核查】这一节。凡是没有出处的数字、版本号和效果承诺，"
+                "一律不要写成确定语气；确实要提就写清「以游戏内实际为准」。\n\n")
+    lines = "\n".join("- %s" % it["raw"] for it in items[:12])
+    return ("【整理稿已经标为待核的说法——这些不许当卖点、不许进标题、不许放大字】\n"
+            "%s\n"
+            "写法要求：① 上面点到的数字/名词，要么整条不写，要么只作为「作者称…」的转述，"
+            "并明确写「需按游戏内实际核实」；② 不许把它们变成行动指令（"
+            "「按 5 年不变值准备」这种）；③ 不许在配文里说「已核对 / 逐项核对过」——"
+            "列出核实点不等于完成核实；④ 上游写了「没有实测数据 / 不承诺」的，"
+            "成品里就不许出现「毛边全消」「一定提升」这类效果保证。\n\n"
+            % lines)
 
 
 def _clip(text, limit):
@@ -670,10 +695,20 @@ def _clip_ws(text, limit):
 def _clip_publish(raw):
     """发布文案单独裁切：它不进图，所以不受图面合计字数预算约束。"""
     raw = raw if isinstance(raw, dict) else {}
-    return {"copy_text": re.sub(r"[ \t]+", " ", str(raw.get("copy_text") or "")).strip()[:COPY_MAX],
-            "digest": _clip_ws(raw.get("digest"), DIGEST_MAX),
-            "keyword_reply": _clip_ws(raw.get("keyword_reply"), KEYWORD_MAX),
-            "source_note": _clip_ws(raw.get("source_note"), SOURCE_MAX)}
+    # 配文**不再按长度硬切**（2026-10-21）：原来这里是 `[:COPY_MAX]`，实测 83/85/80 三条成品
+    # 配文都正好 260 字并断在句中（83 停在「帧数提升幅」），切完再接合规尾注，
+    # 读者看见的就是一句半截话。超线交给 lint_publish 报出来让人自己删——
+    # 标题候选那一档早就是同一条口径：宁可报出来让人删，也不留一句看着合格的断头话。
+    pub = {"copy_text": re.sub(r"[ \t]+", " ", str(raw.get("copy_text") or "")).strip(),
+           "digest": _clip_ws(raw.get("digest"), DIGEST_MAX),
+           "keyword_reply": _clip_ws(raw.get("keyword_reply"), KEYWORD_MAX),
+           "source_note": _clip_ws(raw.get("source_note"), SOURCE_MAX)}
+    bad = lint_publish(pub)
+    cut = fact_gate.copy_is_cut(pub["copy_text"])
+    if cut:
+        bad.append("配文%s" % cut)
+    pub["warnings"] = bad
+    return pub
 
 
 def lint_publish(pub):
@@ -1134,6 +1169,7 @@ def build_text_plan(summary, ai_config, theme="", title="", style_key="", text_m
               .replace("__STYLE_FIXED__", style_fixed_prompt(style_key))
               .replace("__LAYOUT__", layout_plan_prompt(has_photo, page_hint))
               .replace("{{DATE}}", datetime.now().strftime("%m月%d日"))
+              .replace("__RISKS__", risks_prompt_block(summary))
               .replace("__CONTENT__", (summary.get("content") or "")[:8000])
               .replace("__META__", META_RULE)
               + guide_rules_text(frames, lim["total"]))
@@ -1350,6 +1386,17 @@ def lint_visual(plan):
         bad.append("%d 张卡片里只有 %d 张配了画面，建议每条都能画出一个具体物件"
                    % (len(cards), len(with_vis)))
     return bad
+
+
+def plan_is_guide(plan):
+    """整份 plan 是不是"攻略页"体裁（判据与 lint_plan 里那一处同源，别写第二份口径）。"""
+    if (plan.get("layout_key") or "") == "guide":
+        return True
+    for pg in plan_pages(plan):
+        if (pg.get("layout_key") or "") == "guide" or any(
+                pg.get(k) for k in GUIDE_KEYS if k != "kicker"):
+            return True
+    return False
 
 
 def lint_plan(plan, lim=None, card_min=None):
@@ -2296,6 +2343,26 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
     if bad:
         raise PosterError("文案不合格：" + "；".join(bad))
     pub = _clip_publish(publish or llm_publish or {})
+    # ── 事实闸（2026-10-21 号主抽查 87/85/83 之后加的）────────────────────────
+    # 拦的是"上游已经标过待核的东西被升格成卖点"这一件确定性的事：整理稿【风险核查】点名的
+    # 数字/名词，原样出现在图上任何一处文字或配文里 → 不出图。
+    # 判据只有"标过没有 + 出没出现"两条，不叫模型再打一次分（那等于用编造审核编造）。
+    # 语义类问题（同一条里既说别拉满又说推荐拉满、缺操作步骤）只列进 soft，交人看，不夸称全能抓。
+    fact_hard, fact_soft = fact_gate.check(plan, summary.get("content") or "",
+                                           copy_extra=pub.get("copy_text") or "")
+    fact_gaps = fact_gate.guide_gaps(plan) if plan_is_guide(plan) else []
+    if fact_gaps:
+        fact_soft.append("按攻略发就得让人照做，这几段现在没有明确内容：%s；"
+                         "补不齐就把标题改成「介绍/观察」，别逼模型编步骤"
+                         % "、".join(fact_gaps))
+    fact_gate_state = {"risk_items": [it["raw"] for it in
+                                      fact_gate.risk_items(summary.get("content") or "")],
+                       "hard": fact_hard, "soft": fact_soft, "guide_gaps": fact_gaps,
+                       "overridden": bool(force and fact_hard)}
+    if fact_hard and not force:
+        raise PosterError("有 %d 处待核事实进了成品：%s。"
+                          "核清来源后改文案再出图，或点「仍然出图」放行（放行会记在成品里）。"
+                          % (len(fact_hard), "；".join(fact_hard[:3])))
     chars = plan_chars(plan)
 
     # 渠道分叉（2026-10-13 拍板）：小红书档不输出尾注与关键词回复。尾注有两处——
@@ -2572,6 +2639,8 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
         "base_check": base_rows,
         "auto_notes": notes,
         "draft_override": overrode,
+        # 事实闸的结果必须落盘：放行过哪几条、当时看到的是什么，事后要能查（不许只活在会话里）
+        "fact_gate": fact_gate_state,
         "verify": check,
         "review": review,
         "source_title": summary.get("title") or "",
@@ -2581,6 +2650,11 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
         "elapsed_sec": int((datetime.now() - started).total_seconds()),
     }
     manifest["lint"] = issues
+    # 事实闸的条目并进同一份告警清单：前端只有一处给人看的地方，另开一处迟早没人看
+    for _m in fact_gate_state.get("hard") or []:
+        issues.append("error: 待核事实进了成品 —— " + _m)
+    for _m in fact_gate_state.get("soft") or []:
+        issues.append("warn: " + _m)
     (out_dir / "manifest.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     errs = [i for i in issues if i.startswith("error")]

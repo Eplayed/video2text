@@ -4710,9 +4710,14 @@ function pollPoster(stage, task) {
     if (st.error) {
       pkGuideAbortNote();         // 整组那条链断在这一页，别让人以为全配好了
       const msg = String(st.error).split('\n')[0];
-      // 骨架稿被拦：给一次显式放行的出口，而不是让人去改数据
-      const override = msg.indexOf('整合稿不合格') >= 0
-        ? '<div style="margin-top:8px"><button class="btn ghost sm" onclick="posterGenerate(true)">仍然出图（我已人工复核文案）</button></div>' : '';
+      // 被门禁拦下时给一次显式放行的出口，而不是让人去改数据。
+      // 两类拦法两种说法（2026-10-21）：骨架稿不合格 / 待核事实进了成品。判据要跟后端文案同源——
+      // 以前只认「整合稿不合格」，事实闸拦完人就没有出口，只能绕开接口去改数据。
+      const factHit = msg.indexOf('待核事实进了成品') >= 0;
+      const override = (msg.indexOf('整合稿不合格') >= 0 || factHit)
+        ? '<div style="margin-top:8px"><button class="btn ghost sm" onclick="posterGenerate(true)">'
+          + (factHit ? '仍然出图（这些数我已人工核实）' : '仍然出图（我已人工复核文案）')
+          + '</button></div>' : '';
       box.innerHTML = `<div class="pk-verify fail">✗ ${esc(msg)}</div>` + override;
       setStatus('error', '海报任务失败'); return;
     }
@@ -4845,10 +4850,22 @@ async function renderPosterResult(id) {
   const TOP_RE = /回传的底图不合格|底图里带着文案里没有的数字/;
   const topWarns = warns.filter(s => TOP_RE.test(s));
   const restWarns = warns.filter(s => !TOP_RE.test(s));
+  // 事实闸（2026-10-21）：整理稿标过待核的东西进了成品卖点，放行也要在界面上看得见。
+  // 不另开一处提示——混在 warns 里会被"error 开头不显示"那条过滤掉，等于放行完没人知道放过的是什么。
+  const fg = m.fact_gate || {};
+  const factHtml = (fg.overridden
+      ? `<div class="pk-verify fail">⚠ 已放行 ${esc(String((fg.hard || []).length))} 条待核事实：`
+        + `${(fg.hard || []).map(esc).join('<br>')}<br>这些数没有核实记录，发布前请自己核一手来源。</div>`
+      : '')
+    + ((fg.soft || []).length
+      ? `<div class="pk-verify mild">要人看一眼（机器不替你判）：<br>`
+        + (fg.soft || []).map(s => '· ' + esc(s)).join('<br>') + '</div>'
+      : '');
   document.getElementById('pk-result').innerHTML =
     imgHtml
     + (topWarns.length ? `<div class="pk-verify fail">${topWarns.map(esc).join('<br>')}</div>` : '')
     + `<div class="pk-verify ${cls}">${esc(txt)}</div>`
+    + factHtml
     + (isPhoto ? '<div class="pk-verify mild">真图主视觉不做画面评审：那五项打的是 AI 插画画得好不好，你的图不需要它打分。</div>'
                : pkReviewHtml(m.review))
     + (restWarns.length ? `<div class="pk-verify mild">${restWarns.map(esc).join('<br>')}</div>` : '')
@@ -5198,6 +5215,18 @@ async function openPosterDetail(id) {
     flag = '<div class="pk-verify fail">✗ 图面文字与文案不一致，缺失：' + esc((v.missing || []).join('、') || '未知') + '——别发布</div>';
   }
   const warns = (m.lint || []).filter(s => !s.startsWith('error') && !s.startsWith('info:'));
+  // 成品页也要看得见事实闸（这里是发布前最后一次回看的地方），一行汇总 + 明细
+  const fg = m.fact_gate || {};
+  const fgN = (fg.hard || []).length + (fg.soft || []).length;
+  const factHtml = fgN
+    ? '<div class="pk-verify ' + ((fg.hard || []).length ? 'fail' : 'mild') + '">'
+      + '事实闸：' + ((fg.hard || []).length
+        ? ('待核事实进卖点 ' + fg.hard.length + ' 处' + (fg.overridden ? '（已放行）' : ''))
+        : '没有拦下的') + ((fg.soft || []).length ? ' · 要人看一眼 ' + fg.soft.length + ' 条' : '')
+      + '<br>' + (fg.hard || []).map(esc).join('<br>')
+      + ((fg.hard || []).length && (fg.soft || []).length ? '<br>' : '')
+      + (fg.soft || []).map(s => '· ' + esc(s)).join('<br>') + '</div>'
+    : '';
   document.getElementById('pk-detail-meta').innerHTML =
     '<div class="pk-cm" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;font-size:11.5px">'
     + '<span class="pill">风格 ' + esc(m.style_label || '未指定') + '</span>'
