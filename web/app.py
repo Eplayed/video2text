@@ -2971,6 +2971,14 @@ def api_poster_generate():
             prov = guide_provenance.load_for_summary(DB_PATH, summary["id"])
         except Exception:
             prov = {}
+        # 行动依据闸要比对原转写：多源稿不能只看主素材那一条，把所有来源的转写拼起来
+        asr_text = ""
+        try:
+            ids = [int(x) for x in (json.loads(summary.get("source_video_ids") or "[]") or [])]
+            rows = content_store.get_videos_by_ids(DB_PATH, ids or [summary["video_id"]])
+            asr_text = "\n".join(str(r.get("transcript") or "") for r in rows)
+        except Exception:
+            asr_text = str(summary.get("transcript") or "")
         manifest = ai_poster.generate_poster(summary, _fast_config(), theme=theme, title=title,
                                              ratio=ratio, progress_cb=cb, plan=plan,
                                              publish=publish, force=force, copies=copies,
@@ -2980,7 +2988,7 @@ def api_poster_generate():
                                              publish_channel=publish_channel, form=pk_form,
                                              fact_evidence=fact_evidence,
                                              fact_checked_by=fact_checked_by,
-                                             provenance=prov)
+                                             provenance=prov, asr_text=asr_text)
         v = manifest.get("verify") or {}
         rv = manifest.get("review") or {}
         ts_chk = manifest.get("typeset") or {}
@@ -2999,6 +3007,7 @@ def api_poster_generate():
                                      "publishable": manifest.get("publishable", True),
                                      "fact_gate": manifest.get("fact_gate") or {},
                                      "provenance": manifest.get("provenance") or {},
+                                     "action_gate": manifest.get("action_gate") or {},
                                      "photos_unjudged": manifest.get("photos_unjudged") or []}
         _poster_status["plan"] = {"plan": manifest["plan"], "publish": manifest["publish"],
                                   "violations": errs, "chars": manifest["text_chars"],
@@ -3017,6 +3026,9 @@ def api_poster_generate():
             if prov_gaps:
                 reasons.append("编辑证据链缺 %d 项（%s）" % (
                     prov_gaps, (manifest.get("provenance") or {}).get("label") or ""))
+            act_of = len((manifest.get("action_gate") or {}).get("overflow") or [])
+            if act_of:
+                reasons.append("%d 条建议的数值/选项名在原转写里定位不到（待回听/待游戏核）" % act_of)
         block = ("，⛔ 不可发布：" + "；".join(reasons)) if reasons else ""
         if manifest.get("text_mode") == "typeset":
             warn = ("，⚠️ 版面提示：" + "；".join(ts_chk.get("problems") or [])) if ts_chk.get("problems") else ""

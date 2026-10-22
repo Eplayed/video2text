@@ -4774,6 +4774,28 @@ document.addEventListener('input', function (e) {
   if (t.id === 'pr-evidence') _prov.contribution_evidence = t.value;
 });
 
+function actBlockHtml(a) {
+  /* 行动依据闸：哪条建议的数值/选项名在原转写里定位不到，一条条列出来。
+     判据全在后端 src/action_gate.py，这里只渲染——前端不自己比字符串。 */
+  if (!a || !a.stats) return '';
+  var of = a.overflow || [], pd = a.pending || [];
+  if (!of.length && !pd.length) return '';
+  var h = '<div class="pk-verify ' + (of.length ? 'fail' : 'mild') + '">'
+    + '行动依据：' + a.stats.ok + ' 条能照做｜' + a.stats.pending + ' 条待核'
+    + (a.asr_chars ? '（比对原转写 ' + a.asr_chars + ' 字）' : '（<b>没拿到原转写</b>，全部按待核算）');
+  if (of.length) {
+    h += '<ul class="pr-gaps">' + of.slice(0, 8).map(function (x) {
+      return '<li>' + esc(x) + '</li>'; }).join('') + '</ul>'
+      + '<div class="hint">上面这些已经挡在待发之前。要放行：回听原片或进游戏核对，'
+      + '把出处与结论写进待核清单逐条升档；或者把这条从行动建议/标题里删掉。</div>';
+  } else if (pd.length) {
+    h += '<div class="hint">稿子里还有 ' + pd.length + ' 条内部待核（没进成品位置，不挡这张）：'
+      + pd.slice(0, 3).map(function (r) { return esc(r.text || '').slice(0, 22) + '（'
+      + esc(r.status) + '）'; }).join('、') + ' …</div>';
+  }
+  return h + '</div>';
+}
+
 function provBlockHtml(p) {
   // 成品预览里那一格：状态 + 逐条缺项。文案里不许出现"已获原创/可勾原创"这类字样，
   // 工具只负责把缺口摆出来，勾不勾原创是人按当时平台规则逐篇判的。
@@ -5129,6 +5151,7 @@ async function renderPosterResult(id) {
   document.getElementById('pk-result').innerHTML =
     imgHtml
     + provBlockHtml(m.provenance)
+    + actBlockHtml(m.action_gate)
     + (topWarns.length ? `<div class="pk-verify fail">${topWarns.map(esc).join('<br>')}</div>` : '')
     + `<div class="pk-verify ${cls}">${esc(txt)}</div>`
     + factHtml
@@ -5521,6 +5544,7 @@ async function openPosterDetail(id) {
     + '<span class="pill">' + esc(m.created_at || '') + '</span></div>'
     + flag
     + provBlockHtml(m.provenance)
+    + actBlockHtml(m.action_gate)
     + (warns.length ? '<div class="pk-verify mild">' + warns.map(esc).join('<br>') + '</div>' : '')
     + '<div style="margin:8px 0 0;display:flex;gap:8px;flex-wrap:wrap">'
     + '<button class="btn ghost sm" onclick="openSummary(' + (m.summary_id || m.id) + ')">看整理稿原文</button>'

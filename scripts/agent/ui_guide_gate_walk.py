@@ -13,7 +13,10 @@
 四条断言线：
 1. 后端拦：87 那份带「46亿」的文案提交即被拦，且回传**逐条**清单（`fact_hard`）；
 2. 界面有出口：拦完之后逐条凭据表单真的渲染出来、能填、点得动；
-3. 凭据齐 → 成品 `publishable=true` 且逐条来源/结论落进临时 manifest；
+3. 凭据齐 → **事实闸这一层**放行（`fact_gate.override.complete=true`）并逐条落进临时 manifest；
+   但 2026-10-22 复核点名：这一支以前直接断 `publishable=true`，而现在还有两道门
+   （编辑证据链、行动依据）叠在后面——**只填事实凭据的那一支必须断 false 并显示真实缺项**，
+   另起一支把两道门一起补齐才允许断 true。不许为了旧断言绕开现行闸口。
 4. 空凭据 / 闸口失效 → 图照样出，但 `publishable=false`、lint 里有"不可发布"，
    并且**生产 `output/poster/87/manifest.json` 的 mtime 与字节都没变**。
 
@@ -243,10 +246,23 @@ def main():
             for _ in range(60):
                 time.sleep(1)
                 ok_txt = pg.evaluate("() => (document.getElementById('pk-result')||{}).innerText || ''")
-                if "已逐条留凭据" in ok_txt:
+                # 轮询要等**最后一句**（带 ✅/⛔ 的那条进度），不能一看见"已逐条留凭据"就停——
+                # 那半句在中途就出现了，停早了读到的是过程文案，断言会打在空气上。
+                if "海报已生成" in ok_txt or "不可发布" in ok_txt or "不能出图" in ok_txt:
                     break
-            ck("填齐凭据再放行 → 界面写「已逐条留凭据（核验人）」，不再写「不可发布」",
-               "已逐条留凭据" in ok_txt and "不可发布" not in ok_txt, line_with(ok_txt, "已逐条留凭据"))
+            ck("填齐凭据再放行 → 事实闸这一层认了（界面写「已逐条留凭据（核验人）」）",
+               "已逐条留凭据" in ok_txt, line_with(ok_txt, "已逐条留凭据"))
+            # 复核 R4 点名的过期断言就在这：只填事实凭据**不等于**这张能发。
+            # 桩里填的文本只测字段契约（表单收不收、传不传、落不落 manifest），
+            # 不代表真有人回听/截图核过——真要放行得号主自己填。
+            # 结果区那一句由三个来源拼：进度末尾的 ⛔、证据链那一格、行动依据那一格。
+            # 任一处说了"还不行"就算界面尽到了告知义务（断在进度那半句上会因时序飘）。
+            ck("但整张仍被标为不行：编辑证据链/行动依据两道门还挡着（不为旧断言绕闸）",
+               any(k in ok_txt for k in ("不可发布", "编辑证据链", "行动依据")),
+               line_with(ok_txt, "证据链") or line_with(ok_txt, "行动依据"))
+            ck("缺项说的是别的原因，不是「事实没凭据」这一条",
+               ("编辑证据链" in ok_txt) or ("行动依据" in ok_txt) or ("证据链缺" in ok_txt),
+               ok_txt[:0] or "见截图")
             pg.eval_on_selector("#pk-result", "e=>e.scrollIntoView({block:'center'})")
             pg.wait_for_timeout(300)
             pg.query_selector("#pk-result").screenshot(path=a.out.replace(".png", "_with_ev.png"))
@@ -264,11 +280,66 @@ def main():
             ck("每条都有出处与结论、核验人留名",
                all(r.get("ok") for r in (ov.get("rows") or [])) and bool(ov.get("checked_by")),
                json.dumps((ov.get("rows") or [{}])[0], ensure_ascii=False)[:110])
-            ck("有凭据的放行才允许 publishable=true", tm.get("publishable") is True,
-               str(tm.get("publishable")))
+            ck("manifest 里事实闸 complete=true（这一层确实被凭据放行了）",
+               ov.get("complete") is True, "missing=%d" % len(ov.get("missing") or []))
+            ck("但 publishable=false——编辑证据链没建、行动依据没落地，两道门各拦各的",
+               tm.get("publishable") is False, str(tm.get("publishable")))
+            ck("lint 里点名了「编辑证据链缺项」这一类原因",
+               any("编辑证据链" in x for x in (tm.get("lint") or [])),
+               str([x for x in (tm.get("lint") or []) if "证据链" in x][:1])[:110])
             ck("图真的画出来了（逐页 PNG 落在临时目录）",
                os.path.getsize(os.path.join(srv["poster_out"], str(SID), "poster.png")) > 20000,
                "%d 字节" % os.path.getsize(os.path.join(srv["poster_out"], str(SID), "poster.png")))
+        print("── 3b. 第二支夹具：文案避开待核内容 + 编辑证据链补齐 → 才允许 publishable=true ──")
+        # 复核 R4 要的就是这一支：不能只测"缺门时挡"，也要测"两道门都过时真的放行"，
+        # 否则闸口写成一律拦也照样绿。这里的 plan 是人改过的干净文案（不含被点名的数值与专名），
+        # 证据链走 /api/plan/provenance 写进**临时库**——生产库一个字节不动。
+        clean_plan = {"title": "会不会删档：测试期该怎么决定", "subtitle": "先想清楚再花钱",
+                      "style_key": "guide_night", "footer": "内容整理自公开分享，以游戏内为准。",
+                      "pages": [{"kicker": "无限服 · 决策", "title": "会不会删档：测试期该怎么决定",
+                                 "layout_key": "guide", "style_key": "guide_night",
+                                 "cards": [{"t": "先看官方怎么写删档", "d": "公告里写没写清，比谁说的都重要。"},
+                                           {"t": "花钱前想一件事", "d": "这轮能不能带进正式服，答案没出就先别买。"},
+                                           {"t": "拿不准就等", "d": "等官方补口径不丢人，钱花了才被动。"}]}]}
+        clean_pub = {"copy_text": "这轮测试到底删不删档，官方口径还没写全；先别急着花钱，"
+                                  "等口径明确再决定也不迟。以游戏内实际为准。",
+                     "digest": "删档口径没定，先别花钱。", "source_note": "整理自公开公告与一条视频。",
+                     "tt_titles": ["会不会删档？先别急着花钱", "测试期这钱要不要出"]}
+        api(port, "/api/plan/provenance",
+            {"slot_key": "summary:%d" % SID, "channel": "toutiao", "form": "guide", "version": 1,
+             "summary_id": SID,
+             "question": "这轮测试会不会删档，388 元该不该现在花",
+             "contribution": "把官方公告与一条口播的口径并列出来，标清哪句有出处、哪句只是博主说法",
+             "contribution_evidence": "官方公告页 + 本条素材转写（走查桩，字段契约测试）",
+             "claims": [{"text": "官方公告未写清是否删档", "evidence": "官方公告页",
+                         "evidence_kind": "官方一手页面", "verifier": "走查脚本",
+                         "vdate": "2026-10-22", "status": "已核"}],
+             "materials": [{"url": "https://wow.blizzard.cn/news/", "author": "暴雪官方",
+                            "usage": "事实来源", "rights_basis": "官方公告转述，标来源与日期",
+                            "review": "可发布"},
+                           {"ref": "self:walk", "author": "本站", "usage": "我们自己做的",
+                            "rights_basis": "版面与说明图是我们自己排的", "review": "可发布"}]})
+        api(port, "/api/poster/generate", {"summary_id": SID, "plan": clean_plan, "publish": clean_pub,
+                                          "text_mode": "typeset", "review": False, "copies": 1,
+                                          "form": "guide"})
+        st3 = wait_done(port)
+        pkg3 = st3.get("package") or {}
+        tm3 = {}
+        mf3 = os.path.join(srv["poster_out"], str(SID), "manifest.json")
+        if os.path.isfile(mf3):
+            tm3 = json.load(open(mf3, encoding="utf-8"))
+        ck("两道门都补齐 → publishable=true（闸口不是一律拦）",
+           pkg3.get("publishable") is True or tm3.get("publishable") is True,
+           "pkg=%s manifest=%s 缺项=%s" % (pkg3.get("publishable"), tm3.get("publishable"),
+                                          str([g.get("field") for g in
+                                               ((tm3.get("provenance") or {}).get("gaps") or [])])[:70]))
+        ck("行动依据这一层在干净文案下不报越界",
+           not ((tm3.get("action_gate") or {}).get("overflow") or []),
+           str(((tm3.get("action_gate") or {}).get("overflow") or [""])[0])[:90])
+        ck("内部待核清单照样带着（稿子里没落地的条目不因为这张能发就消失）",
+           bool(((tm3.get("action_gate") or {}).get("stats") or {}).get("pending", 0)) or
+           "action_gate" in tm3, str(tm3.get("action_gate", {}).get("stats")))
+
     finally:
         stop_server(proc)
 

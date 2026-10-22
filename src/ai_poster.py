@@ -2348,7 +2348,7 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
                     progress_cb=None, do_verify=True, plan=None, publish=None, force=False,
                     copies=1, do_review=True, text_mode=DEFAULT_TEXT_MODE, photo=None,
                     preview_clicks=0, bases=None, publish_channel="toutiao", form="newspic",
-                    fact_evidence=None, fact_checked_by="", provenance=None):
+                    fact_evidence=None, fact_checked_by="", provenance=None, asr_text=None):
     """整理稿 → 海报一张。返回 manifest dict（已落盘 output/poster/<summary_id>/）。
 
     plan / publish 非空时跳过 LLM 拆解（前端审改过文案再出图走这条）：plan 是要画进图的
@@ -2457,6 +2457,29 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
                       "note": "内部提示，不是平台原创资格认证；勾不勾原创由人按当时平台规则逐篇判"}
         prov_gaps = guide_provenance.blocking_gaps(provenance or {}, used_frames=used_frames)
         prov_state["gaps"] = prov_gaps
+    # ── 行动依据闸（2026-10-22 模型换档验收那一单）─────────────────────────────
+    # 判的是"这条建议玩家能不能照做"：句里的数值与选项名要能在**原 ASR** 定位，
+    # 定位不到就是"待回听/ASR查无/口播说法未核"。`fact_gate` 只认"风险节点名的 token 有没有印到卖点"，
+    # 而新稿的形状是"末尾老实写需回听、前面已经排成可照做的表格"——同一件事它判 heavy=false，
+    # 所以这一层补的是**证据**，不是往同义词表上加正则。
+    # 只挡"越界进成品"的那几条：稿子里留内部待核清单、成品里避开它们，是编辑的正常动作（人是编辑）。
+    act_state, act_hard = {}, []
+    if publish_channel == "toutiao" and plan_is_guide(plan):
+        from . import action_gate
+        asr = str(asr_text or summary.get("transcript") or "")
+        # 人工凭据只有一份：事实闸那条逐条凭据（fact_evidence）就是"这条核过了"的记录，
+        # 这里把它当升档依据喂给行动依据闸——**不另立一本账**，否则同一件事两处记，
+        # 迟早出现"事实闸说核过、依据闸说没核过"互相说反话（本项目栽过多次）。
+        conf = [{"item": (e or {}).get("item") or "", "source": (e or {}).get("source") or "",
+                 "result": (e or {}).get("result") or "", "by": fact_checked_by}
+                for e in (fact_evidence or []) if isinstance(e, dict)]
+        rep = action_gate.check(summary.get("content") or "", asr,
+                                material_id=summary.get("id"), confirmations=conf)
+        act_hard = action_gate.poster_block(rep["rows"], plan)
+        act_state = {"ready_for_poster": bool(rep["ready_for_poster"] and not act_hard),
+                     "stats": rep["stats"], "asr_chars": len(asr),
+                     "pending": rep["pending"][:24], "overflow": act_hard[:12],
+                     "note": rep["note"]}
     chars = plan_chars(plan)
 
     # 渠道分叉（2026-10-13 拍板）：小红书档不输出尾注与关键词回复。尾注有两处——
@@ -2739,6 +2762,8 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
         "publishable": not fact_blocks,
         # 编辑证据链（原创增量）：状态、逐条缺项、以及"这不是原创认证"那句原话都要落盘
         "provenance": prov_state,
+        # 行动依据闸：内部待核清单 + 越界进成品的那几条（2026-10-22 那一单）
+        "action_gate": act_state,
         "verify": check,
         "review": review,
         "source_title": summary.get("title") or "",
@@ -2779,6 +2804,14 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
     if prov_gaps:
         issues.append("error: 编辑状态「%s」——待发状态保持为否（这是内部提示，"
                       "不是平台原创资格认证）" % prov_state.get("label", ""))
+    # 行动依据没落地却进了成品位置：一条条点名（哪一节、哪句话、缺什么、印在哪个位置）
+    for x in act_hard[:6]:
+        issues.append("error: 行动依据未落地 —— %s" % x)
+    if act_hard:
+        issues.append("error: 这篇有 %d 条建议的数值/选项名在原转写里定位不到，"
+                      "已挡在待发之前；要放行请先回听或进游戏核对，"
+                      "把出处与结论记进待核清单（内部清单还有 %d 条）"
+                      % (len(act_hard), (act_state.get("stats") or {}).get("pending", 0)))
     if manifest["publishable"] and any(i.startswith("error") for i in issues):
         manifest["publishable"] = False      # 别的硬伤（字数/骨架稿）也一样不能标待发
     (out_dir / "manifest.json").write_text(

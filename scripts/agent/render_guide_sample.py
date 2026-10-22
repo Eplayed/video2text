@@ -39,6 +39,32 @@ def sha(path):
         return hashlib.sha256(f.read()).hexdigest()[:16]
 
 
+def asr_for(summary, db_path):
+    """这篇整合稿的全部原转写（多源按 source_video_ids 串起来）。
+
+    为什么要脚本自己拼：`generate_poster` 里的行动依据闸退而用 `summary["transcript"]`，
+    那是**单条**视频的字幕；`toutiao_mix` 是多源稿，只拿一条去定位等于把其它源的每条建议
+    都判成「转写里查无」（2026-10-22 工作台那条同一口径改成拼全部源）。
+    """
+    import sqlite3
+    ids = [x for x in (summary.get("source_video_ids") or []) if x] if isinstance(
+        summary.get("source_video_ids"), list) else []
+    if not ids:
+        try:
+            ids = json.loads(summary.get("source_video_ids") or "[]")
+        except Exception:
+            ids = []
+    out = []
+    if ids:
+        con = sqlite3.connect("file:%s?mode=ro" % db_path, uri=True)
+        for vid in ids:
+            row = con.execute("SELECT transcript FROM videos WHERE id=?", (vid,)).fetchone()
+            if row and row[0]:
+                out.append(str(row[0]))
+        con.close()
+    return "\n".join(out) or str(summary.get("transcript") or "")
+
+
 def load_ai_config():
     import app
     return app._fast_config()
@@ -81,6 +107,11 @@ def main():
     ap.add_argument("--judge", action="store_true", help="对用到的帧重新判一遍（真调用，花少量钱）")
     ap.add_argument("--force", action="store_true",
                     help="硬伤也出图（只用于人已经逐条核过并另留凭据的情况）")
+    ap.add_argument("--prov", default="",
+                    help="编辑证据链 JSON（question/contribution/contribution_evidence/claims/materials）；"
+                         "不传就如实按「证据链没建」出，publishable 会是 false——**不替号主编凭据**")
+    ap.add_argument("--allow-overflow", action="store_true",
+                    help="行动依据闸判越界也照样出图（默认不出：样稿要证明的就是这条拦得住）")
     ap.add_argument("--check", action="store_true",
                     help="只跑闸口与字数体检，不出图（改文案时先这条，几十毫秒）")
     a = ap.parse_args()
@@ -120,9 +151,32 @@ def main():
     print("配文截断：%s" % (cut or "无"))
     bad = ai_poster.lint_plan(plan, ai_poster.limits_for("typeset"))
     print("上图字数体检：%s" % ("；".join(bad) or "过线"))
+
+    # ── 行动依据闸（2026-10-22 那一单）：先离线跑一遍，越界就不出图 ──────────
+    # 这层判的是"玩家照着这条做，做法在不在原转写里"。样稿要交付的正是
+    # 「含混的项名与没核的档位停在行动之前」，所以默认**拦下就不渲染**：
+    # 拿 --allow-overflow 把越界的样稿画出来，等于把验收对象变成待验对象。
+    from src import action_gate
+    asr = asr_for(summary, app.DB_PATH)
+    rep = action_gate.check(summary.get("content") or "", asr, material_id=summary.get("id"))
+    over = action_gate.poster_block(rep["rows"], plan)
+    print("行动依据闸：建议 %d 条 · 可用 %d · 待核 %d · 这篇拿到的转写 %d 字" % (
+        rep["stats"]["rows"], rep["stats"]["ok"], rep["stats"]["pending"], len(asr)))
+    for line in over:
+        print("   [越界] " + line[:130])
     if a.check:
         print("（--check：只看闸口与字数，没出图）")
-        return 3 if hard else 0
+        return 3 if (hard or over) else 0
+    if over and not a.allow_overflow:
+        print("\n有待核行动建议印到了卖点位置，不出样稿：把那句从标题/大字位挪走，"
+              "或先回听/进游戏核对并把出处与结论记进待核清单。")
+        return 3
+    if a.prov:
+        prov = json.loads(Path(a.prov).read_text(encoding="utf-8"))
+    else:
+        prov = None
+        print("（没传 --prov：编辑证据链按「没建」如实走，publishable 预期是 false——"
+              "样稿不替号主编凭据）")
     if hard and not a.force:
         print("\n有硬伤就不出样稿：把那句话从卖点位置改掉。")
         print("   样稿要证明的是「不拿待核数当卖点」，不是把它放行——放行要逐条凭据，"
@@ -138,7 +192,7 @@ def main():
     manifest = ai_poster.generate_poster(summary, cfg, plan=plan, publish=publish,
                                          text_mode="typeset", copies=1, do_review=False,
                                          do_verify=False, publish_channel="toutiao",
-                                         form="newspic",
+                                         form="newspic", provenance=prov, asr_text=asr,
                                          progress_cb=lambda m: print("   · " + m[:90]))
     pack_dir = out / str(a.summary)        # generate_poster 仍然按素材 id 分子目录
     pngs = sorted(p.name for p in pack_dir.glob("*.png"))
@@ -149,6 +203,32 @@ def main():
         manifest.get("publishable"), len(fg.get("hard") or []), len(fg.get("soft") or []),
         manifest.get("photos_unjudged") or []))
     print("   费用估算：%s 元（攻略页画面用素材真帧，不叫出图模型）" % manifest.get("cost_yuan_estimate"))
+
+    # ── 质量报告落盘：交付物不能只有 PNG，"当前能不能发、为什么不能"要跟着图走 ──
+    acts = manifest.get("action_gate") or {}
+    (out / "action_gate.json").write_text(json.dumps(
+        {"stats": acts.get("stats"), "asr_chars": acts.get("asr_chars"),
+         "ready_for_poster": acts.get("ready_for_poster"),
+         "overflow": acts.get("overflow"), "pending": acts.get("pending"),
+         "rows": rep["rows"]}, ensure_ascii=False, indent=1), encoding="utf-8")
+    errs = [i for i in (manifest.get("lint") or []) if i.startswith("error")]
+    lines = ["# 83 号样稿第二版 · 质量报告（%s）" % a.out, "",
+             "- 模型调用次数：**0**（文案人手抄、画面用素材真帧，不出底图）",
+             "- publishable：`%s`" % manifest.get("publishable"),
+             "- 事实闸：硬 %d · 软 %d；攻略五段结构缺：%s；配文截断：%s" % (
+                 len(fg.get("hard") or []), len(fg.get("soft") or []),
+                 "、".join(gaps) or "无", cut or "无"),
+             "- 行动依据闸：建议 %s 条 / 可用 %s / 待核 %s；越界进成品 %d 条" % (
+                 (acts.get("stats") or {}).get("rows"), (acts.get("stats") or {}).get("ok"),
+                 (acts.get("stats") or {}).get("pending"), len(acts.get("overflow") or [])),
+             "", "## 阻断原因（逐条原样，不省略）", ""]
+    lines += ["%d. %s" % (n, e) for n, e in enumerate(errs, 1)] or ["（无 error 行）"]
+    lines += ["", "## 待核清单（印到成品之前停在这里的那些）", ""]
+    lines += ["- 【%s】%s ｜ %s" % (r["where"], r["text"], "；".join(r["problems"])[:110])
+              for r in rep["rows"] if r["status"] != "可用"][:40]
+    (out / "质量报告.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print("   质量报告：%s（阻断 %d 条 · 待核 %d 条）" % (
+        out / "质量报告.md", len(errs), rep["stats"]["pending"]))
 
     if a.judge:
         pages = ai_poster.plan_pages(plan)
