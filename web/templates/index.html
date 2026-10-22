@@ -2255,6 +2255,15 @@ async function loadTopics() {
     opt.value = author; opt.textContent = `${author}（${count}）`;
     sel.appendChild(opt);
   }
+  // 未订阅的那批不藏数：列一条点不动的说明，看得见才知道要不要清（以前它直接混在名单里，
+  // 号主看到的是"这些我没订"；改成不列，但必须说清收起了多少）
+  const off = st.off_subscription || {};
+  if (off.authors) {
+    const hint = document.createElement('option');
+    hint.disabled = true;
+    hint.textContent = `——— 另有 ${off.authors} 个未订阅作者 / ${off.videos} 条，不在订阅名单里（已收起，要清去订阅页对一眼）`;
+    sel.appendChild(hint);
+  }
 }
 
 // ── 加载列表 ──

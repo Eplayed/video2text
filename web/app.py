@@ -781,18 +781,54 @@ def api_status():
     return jsonify(_task_status)
 
 # ── API: 统计 ──
+# 「全部作者」这个下拉以前是从 video_index.json 全库 group by 出来的，两个毛病：
+# ① 把取消订阅留下的、抓取失败的空壳行全列进来了（号主 10-22 的原话："有好几条不是我订阅的"）；
+# ② 那份索引跟素材列表不同源（索引 853 条、库里 1272 条）——同一件事两份账，本项目反复栽。
+# 现在：数从库里来（跟列表同一份）；只列**订阅到的作者**加**一手源**（暴雪公告、NGA 板块，
+# 那些不是订阅来的但确实是我们要的料）；被收起来的**不藏数**，下拉里留一条禁用项写明多少人多少条，
+# 看得见才好决定要不要清，别做成"看不见＝没有"。
+FIRST_PARTY_SHEETS = ("暴雪官方", "NGA无限板块")
+
+
+def _author_topics():
+    """返回 (要列出的作者→条数, 未订阅的作者数, 未订阅的条数)。"""
+    try:
+        with sqlite3.connect("file:%s?mode=ro" % DB_PATH, uri=True) as con:
+            con.row_factory = sqlite3.Row
+            subs = {r[0].strip() for r in con.execute(
+                "SELECT DISTINCT author FROM subscriptions WHERE author IS NOT NULL AND author<>''")}
+            marks = tuple(FIRST_PARTY_SHEETS)
+            rows = con.execute(
+                "SELECT author, source_sheet, COUNT(*) n FROM videos "
+                "GROUP BY author, source_sheet").fetchall()
+    except sqlite3.Error:
+        return {}, 0, 0
+    topics, off_authors, off_videos = {}, set(), 0
+    for r in rows:
+        name = (r["author"] or "").strip()
+        keep = (r["source_sheet"] in marks) or (name and name in subs)
+        if keep:
+            topics[name or "（一手源）"] = topics.get(name or "（一手源）", 0) + r["n"]
+        else:
+            off_videos += r["n"]
+            off_authors.add(name or "（没抓到作者）")
+    return dict(sorted(topics.items(), key=lambda kv: -kv[1])), len(off_authors), off_videos
+
+
 @app.route("/api/stats")
 def api_stats():
-    if not INDEX_PATH.exists():
-        return jsonify({"topics": {}, "total": 0})
-    with open(INDEX_PATH, encoding="utf-8") as f:
-        data = json.load(f)
-    topics = {}
-    for v in data.get("videos", []):
-        author = v.get("author", "未知作者") or "未知作者"
-        topics[author] = topics.get(author, 0) + 1
-    return jsonify({"topics": topics, "total": data.get("total", 0),
-                     "version": data.get("version")})
+    topics, off_authors, off_videos = _author_topics()
+    total = sum(topics.values()) + off_videos
+    version = None
+    if INDEX_PATH.exists():
+        try:
+            with open(INDEX_PATH, encoding="utf-8") as f:
+                version = json.load(f).get("version")
+        except (ValueError, OSError):
+            version = None
+    return jsonify({"topics": topics, "total": total,
+                    "off_subscription": {"authors": off_authors, "videos": off_videos},
+                    "version": version})
 
 
 # ── API: 工作台仪表盘 ──
