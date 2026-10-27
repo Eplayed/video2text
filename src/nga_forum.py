@@ -1,6 +1,12 @@
 # -*- coding: utf-8 -*-
 """nga_forum.py — 抓 NGA「魔兽世界：无限」板块（fid=510569）入库，作**选题素材**
 
+**2026-10-27 起本模块不再自抓，退回手动救急**：采集的唯一入口是 wow-forever 那条 launchd
+（每天 08:40 / 20:40，落 `~/.nga/data/`），日常入库走 `src/nga_import.py` 读那份快照。
+原因：同一个板块两处抓会撞 PHPWind 的登录态风控，而两边数对不上（快照 1104 个 tid、这条库只有 10 条）。
+`main()` 现在默认不联网，要真打接口必须显式加 `--fetch`。
+本文件的 `post_id()` 与 `insert()` 仍是唯一写入口径，导入器复用它们，所以不会出现同帖不同键的两批行。
+
 为什么加这一层（2026-10-19 号主定的）：号主要在开服窗口里知道"玩家在问什么、
 哪块资料缺答案"。官网公告（`blizzard_news.py`）只有官方口径，玩家侧的真实疑问
 在 NGA 这座板块里。库里此前**没有任何论坛来源**（实测 source_sheet 只有
@@ -24,7 +30,12 @@
 
 用途边界（这条是硬线，别在下游忘了）：帖子正文是**玩家原创**。按 wow-forever 仓库根
 AGENTS.md 第五节的第三方取数边界，论坛内容**只当选题参考，不成段引用、不改写冒充本站观点、
-不进小程序**。入库时在 remark 与 category 上把这个标记带着，下游取素材时能看见。
+不进小程序**。导入器 `nga_import.py` 把同一个 url 交给 `post_id()` 算键，所以 launchd 快照导进来的行
+和本模块救急抓的行是同一个 `aweme_id`，不会分裂成两批。remark 与 category 的标记照旧带上，
+取素材时能看见"这是玩家原创，只当线索"。
+
+**历史全量不在这儿捞**：板块 300+ 页按发帖时间倒序在涨，本模块只翻最近几页；
+导入器读的是 launchd 攒下的快照（当前 10 天 / 1104 个 tid），同样不含全史。
 
 Python 3.9 兼容：不用 match / X|Y 语法。
 """
@@ -276,13 +287,21 @@ def sync(db_path: str, pages: int = 2, limit: int = MAX_BODY_PER_RUN,
 
 
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(description="抓 NGA 无限板块入库（选题素材，不是内容源）")
+    ap = argparse.ArgumentParser(description="手动救急抓 NGA 无限板块（日常走 nga_import.py）")
     ap.add_argument("--db", default=str(Path(__file__).resolve().parent.parent
                                         / "output" / "video2text.db"))
     ap.add_argument("--pages", type=int, default=2, help="列表翻几页（默认 2）")
     ap.add_argument("--limit", type=int, default=MAX_BODY_PER_RUN, help="本轮最多抓几条正文")
-    ap.add_argument("--dry-run", action="store_true", help="只抓不写库")
+    ap.add_argument("--dry-run", action="store_true", help="只抓不写库（仍需配合 --fetch）")
+    ap.add_argument("--fetch", action="store_true",
+                    help="确认要拿号主账号登录态直连板块；不加这一句不联网")
     a = ap.parse_args(argv)
+    if not a.fetch:
+        # 默认不动网络：两处抓同一板块会撞 PHPWind 登录态风控，日常入口已经收拢到 launchd + 导入器
+        print("自抓已停用：采集唯一入口是 wow-forever 的 launchd（每天 08:40 / 20:40），"
+              "入库走 src/nga_import.py。")
+        print("确认要救急自抓，就加 --fetch。")
+        return 0
     r = sync(a.db, pages=a.pages, limit=a.limit, dry_run=a.dry_run)
     print("\n结果：%s" % {k: v for k, v in r.items() if k != "sample"})
     if r.get("sample"):
