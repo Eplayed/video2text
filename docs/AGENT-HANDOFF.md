@@ -3,6 +3,7 @@
 > 读者：**任何一个** coding agent（Qoder / Trae / WorkBuddy / Cursor / Claude Code / Codex CLI）。
 > 这份文件是"工具与流程"的单一入口；**内容口径的来龙去脉在 `CHANGELOG_FOR_AI.md`，角色间的结论在 `output/角色交接/`**。
 > 最后更新：2026-10-19。写这份的起因是号主问"换别的 agent 软件，怎么快速接手"。
+> 当前接手与任务归属先看仓库根 `NOW.md`。本文件的旧仓库路径与数量是当时记录，执行前核现有目录、代码和本题交接。
 
 ## 0. 一句话定位
 

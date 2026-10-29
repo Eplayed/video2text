@@ -10,10 +10,17 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 import main as collector  # main.py
-from src import content_store, material_store, toutiao_graphics, ai_poster, sync_tasks, topic_pack
+from src import content_store, material_store, toutiao_graphics, ai_poster, sync_tasks, topic_pack, supplements
 from src import draft_audit, review_store, toutiao_stats, humanize_routes, ops_store
 from src import ai_quota
+from src import ai_thinking
+from src import ai_models        # 主档/快速档按到期时间自动选模型（2026-10-29）
+from src import fact_gate, risk_ledger, release_review   # 待核台账 + 发布证据门 + 放行记录（2026-10-29）
 from src import bank_board
+from src import plan_tasks        # 排产任务 ↔ 素材 ↔ 整理稿的关联层（2026-10-20 第一单）
+from src import plan_brief        # 「今天该发哪一题」的唯一判据（日报/颜色/接口共用）
+from src import plan_series       # 双系列位置、候选采用、发布真相、夜间匹配（2026-10-22）
+from src.plan_series import SLOT_KEY_MAX
 from src.graphics.channels import wechat as wechat_graphics
 from src.graphics.channels import toutiao as toutiao_channel
 from src.graphics import variants as graphics_variants
@@ -30,19 +37,48 @@ PARSER_DIR    = Path(find_parser_dir())
 # DB 直写、不进 Excel 的素材源：{videos.source_sheet: 前端来源标识}。
 # 加一个新采集源就动这一处——素材库追加、来源派生、来源计数、详情与删除的"绕开 Excel"
 # 全从这里取，别再在下游写 `== '微信文章'` 的二元判断（历史上就是这么把新源判成抖音的）。
-DB_ONLY_SHEETS = {"微信文章": "wechat", "B站视频": "bilibili", "暴雪官方": "blizzard"}
+# 「抖音图文」的 key 是 douyin_note 而不是 douyin：同一个订阅一次同步会同时产出
+# 视频和图文两种素材，来源栏要能分开看（号主 2026-10-16 拍板单列一档）。
+DB_ONLY_SHEETS = {"微信文章": "wechat", "B站视频": "bilibili", "抖音图文": "douyin_note",
+                  "暴雪官方": "blizzard"}
 # B 站每轮最多翻多少条：首次订阅即"只入最近 20 条"，之后每轮也只拉新增（列表从新往老翻，
 # 整页都是已入库的就停）。存量大 UP 主不要一次全量回填——几百条字幕连打会撞风控。
 BILI_SYNC_LIMIT = 20
+# 抖音图文每轮最多入多少条（和 B 站同口径：只吃最近一屏，不做历史全量回填）。
+# 一条图文 3~9 张图、每张实测 100~200KB，一轮 20 条约 20~40MB，落 output/douyin_notes/。
+NOTE_SYNC_LIMIT = 20
+# 素材库列表里每个 DB 直写源一次最多带多少条。原来是写死的 200，B 站合集一次就入 300 条
+# （号主 2026-10-27 要的），200 会把多出来的那 100 条藏起来——表现正是"同步说明明进了
+# 300 条，素材库却只有 200"，而数据其实都在库里。加到 600 覆盖这一档，再大就要改成翻页。
+DB_ONLY_LIST_LIMIT = 600
 
 app = Flask(__name__, static_folder="static", static_url_path="/static")
+# 响应里的中文不再逐字转义成 \uXXXX：这一层几乎全是中文——/api/videos 90 条 160KB 原文
+# 被撑到 318KB，/api/content/summaries 46 篇 476KB 撑到 895KB，浏览器还要多解一遍。
+# JSON 规范默认就是 UTF-8，浏览器 response.json() 与 Python json.load 都直接吃。
+app.json.ensure_ascii = False
 
-# 免费额度记账挂在 openai SDK 的边界上（一次包住全部 12 个调用点，理由见 src/ai_quota.py）。
+# 免费额度记账挂在 openai SDK 的边界上（一次包住全部调用点，理由见 src/ai_quota.py）。
 # 挂不上不拦启动，但 /api/ai/quota 会带着 last_error，界面会明说"额度没在记账"。
-_quota_hook = ai_quota.install()
+# seed_from_env() 会连带装上"会思考的模型关掉思考"那一层（src/ai_thinking.py），
+# 让 main.py 与 scripts/e2e_ai_poster.py 走的是同一套边界，不是只有工作台这一条路。
+_quota_hook = ai_quota.seed_from_env()
 
 # ── 处理状态（内存） ──
 _task_status = {"running": False, "progress": "", "done": False, "error": ""}
+
+
+def _run_progress_cb(status):
+    """把产线的 `progress_cb(msg[, done, total])` 接到某一份任务状态上。
+
+    头条卡 / 公众号卡 / 公众号成稿各有一份状态字典，回调以前各写各的（有的只写 progress）。
+    步数字段统一在这里落，界面那根进度条只认 `step/steps`：拿不到就画流动条，不编百分比。
+    """
+    def cb(msg, done=None, total=None):
+        status["progress"] = msg
+        status["step"] = done
+        status["steps"] = total
+    return cb
 _classify_status = {"running": False, "progress": "", "done": True, "error": "", "result": None}
 # 这把锁只管**写**：同步、打标、增删订阅都在它后面串行，避免两条写流程互相踩。
 # 读接口一律不拿这把锁（2026-10-14 改）。原来读也排队等锁，而出图前那一轮自动同步
@@ -216,6 +252,7 @@ def _sync_material_workspace():
 def _ai_config():
     config = collector.load_env_file(str(ROOT / "config" / "config.env.local"))
     method = collector.normalize_ai_method(collector.config_get(config, "AI_METHOD", "skip"))
+    note = ""
     if method == "deepseek":
         api_key = collector.config_get(config, "DEEPSEEK_API_KEY") or collector.config_get(config, "AI_API_KEY")
         api_base = collector.config_get(config, "DEEPSEEK_API_BASE", "https://api.deepseek.com")
@@ -223,31 +260,48 @@ def _ai_config():
     else:
         api_key = collector.config_get(config, "OPENAI_API_KEY") or collector.config_get(config, "AI_API_KEY")
         api_base = collector.config_get(config, "AI_API_BASE", "https://api.openai.com/v1")
-        model = collector.config_get(config, "AI_MODEL", "gpt-4o-mini")
+        manual = collector.config_get(config, "AI_MODEL", "gpt-4o-mini")
+        # 主档模型名：配了候选池就按**到期时间长短**自动选（2026-10-29 号主："根据失效长短自动选择"，
+        # 且已把「免费额度用尽即停」全开——撞墙只会 403，不会悄悄按量扣钱，正好让产线自己跳）。
+        # 整条池子都不可用时退回写死的 AI_MODEL，但原因留在 model_note 里由界面说出来——
+        # 静默换一个模型还不吭声，是这仓库被反复抓到过的那类错。
+        model, note = ai_models.resolve("main")
+        model = model or manual
     cfg = {"method": method, "api_key": api_key, "api_base": api_base, "model": model,
+           "model_note": note,
            "fast_model": collector.config_get(config, "AI_MODEL_FAST", ""),
-           # 看图那类活（拆参考图做模板）单独一档，默认走 qwen3-vl-plus；
+           # 快速档可以另用一把 key（号主 2026-10-28：这一档换到 qwen3.8-omni-flash，
+           # 只给它配新 key，主档/看图那几档还照旧那把）。没配就等于跟主档同一把。
+           "fast_api_key": collector.config_get(config, "AI_API_KEY_FAST", ""),
+           # 看图那类活（拆参考图做模板、判帧、出图回读）单独一档，默认走 qwen3-vl-plus；
            # 以后想换更强的视觉模型只改配置里的 AI_MODEL_VISION，不用动代码
-           "vision_model": collector.config_get(config, "AI_MODEL_VISION", ""),
-           # 出图那一档同理（2026-10-11 端点把 qwen-image-max 下线过一次，写死就全线出不了图）
-           "image_model": collector.config_get(config, "AI_MODEL_IMAGE", "")}
+           "vision_model": collector.config_get(config, "AI_MODEL_VISION", "")}
     return cfg
 
 
 def _fast_config():
     """拆解与卡片化走「快速模型」：这类活是照抄压缩，不需要主模型深思。
 
+    模型名同样先过候选池（`AI_MODEL_POOL_FAST`，没单配就共用主档那条池）——
+    这一档是号主每天点的整理稿/拆文案/图文卡，额度用尽或到期最该自动跳的就是它。
+
     实测同一条素材（当时跑的是 deepseek-v4-flash，现已换 v4.1-flash，数字未重测）：
     主模型 qwen3.8-max 拆解约 180 秒，deepseek-v4-flash 33 秒且上图
     字数更守规矩（71 字 vs 超线）；qwen-plus 只要 9.7 秒、便宜五倍，但会把上图文字
     写到 98 字（超 80 线，会被自动压缩砍掉一张卡）。
-    没配 AI_MODEL_FAST 时原样返回主配置，行为零变化。
+    没配 AI_MODEL_FAST 也没配池子时原样返回主配置，行为零变化。
     """
     cfg = _ai_config()
-    fast = (cfg.get("fast_model") or "").strip()
+    fast, note = ai_models.resolve("fast")
+    fast = fast or (cfg.get("fast_model") or "").strip()
     if fast:
         cfg = dict(cfg)
         cfg["model"] = fast
+        cfg["model_note"] = note or "手动指定（没配候选池）"
+        # 这一档另配了 key 就换掉（网关同一个，key 是按模型/额度分开的）
+        fk = (cfg.get("fast_api_key") or "").strip()
+        if fk:
+            cfg["api_key"] = fk
     return cfg
 
 # ── API: 视频列表 ──
@@ -262,18 +316,52 @@ def _first_markdown_image(text: str) -> str:
     return m.group(1) if m else ""
 
 
-@app.route("/api/videos")
-def api_videos():
-    topic = request.args.get("topic", "")
-    q     = request.args.get("q", "").lower()
-    category = request.args.get("category", "")
-    game = request.args.get("game", "")
-    source = request.args.get("source", "")  # ''=全部 / douyin / wechat / bilibili
+# ── video_index.json 进程内缓存（性能：见 2026-10-23 排产表请求风暴那次）──────────
+# 这份索引 2.6MB，以前**每一次 /api/videos 都从磁盘重读重解析一遍**（实测 32ms/次）。
+# 排产表一次进页面按每个槽位的搜索词各发一发查询（50+ 发），光解析就 1.6 秒，
+# 把人点菜单要的那几发请求挤在后面——表现就是"点素材库/整理稿/AI海报都卡一下"。
+# 判据用 (mtime, 文件大小)：外部脚本重建索引后下一次就读到新的，不要求调用方记得清缓存。
+_INDEX_CACHE = {"key": None, "data": {}}
+
+
+def _index_raw() -> dict:
+    """整份 video_index.json（带缓存）。**返回的是缓存本体，别往上改字段**——
+    要改请先 `_index_videos()` 拿拷贝，否则上一次请求补的字段会渗到下一次。"""
+    try:
+        st = os.stat(INDEX_PATH)
+    except OSError:
+        _INDEX_CACHE["key"], _INDEX_CACHE["data"] = None, {}
+        return {}
+    key = (int(st.st_mtime), st.st_size)
+    if _INDEX_CACHE["key"] != key:
+        try:
+            with open(INDEX_PATH, encoding="utf-8") as f:
+                _INDEX_CACHE["data"] = json.load(f)
+            _INDEX_CACHE["key"] = key
+        except (ValueError, OSError):
+            return {}
+    return _INDEX_CACHE["data"] or {}
+
+
+def _index_videos() -> list:
+    """videos 列表，每条一份浅拷贝（补字段用，实测 874 条拷贝 1ms）。"""
+    return [dict(v) for v in (_index_raw().get("videos") or [])]
+
+
+def _index_invalidate():
+    _INDEX_CACHE["key"], _INDEX_CACHE["data"] = None, {}
+
+
+def _material_rows():
+    """素材库列表真正能返回的那批行（Excel 索引 + DB_ONLY_SHEETS 直写源）+ 筛选前的三份计数。
+
+    「全部作者」下拉必须与这里同源。以前它直接对整张 videos 表 group by，把还没接进列表的
+    源也列了出来（NGA 板块 1105 行，那列 author 存的是发帖人、不是内容来源），
+    表现就是名单里一排"我没订阅的人"，点下去 0 条。
+    """
     videos = []
     if INDEX_PATH.exists():
-        with open(INDEX_PATH, encoding="utf-8") as f:
-            data = json.load(f)
-        videos = data.get("videos", [])
+        videos = _index_videos()
         # 合并 SQLite 中的分类/标签/最新整理稿类型（按 sheet+row 关联）
         db_info = _load_video_extras()
         for v in videos:
@@ -301,14 +389,16 @@ def api_videos():
                 try:
                     extra_cols = (", COALESCE(view_count,0) as view_count, "
                                   "COALESCE(duration_sec,0) as duration_sec, "
-                                  "COALESCE(subs_status,'') as subs_status")
+                                  "COALESCE(subs_status,'') as subs_status, "
+                                  "COALESCE(note_images,'') as note_images, "
+                                  "COALESCE(note_image_count,0) as note_image_count")
                     rows = conn.execute(
                         "SELECT id, source_sheet, source_row, source_url, aweme_id, author, title, "
-                        "status, published_at, category, ai_tags, game, "
+                        "status, published_at, category, ai_tags, game, remark, "
                         "COALESCE(cover_url,'') as cover, COALESCE(transcript,'') as transcript"
                         + extra_cols +
-                        " FROM videos WHERE source_sheet = ? ORDER BY id DESC LIMIT 200",
-                        (sheet_name,)
+                        " FROM videos WHERE source_sheet = ? ORDER BY id DESC LIMIT ?",
+                        (sheet_name, DB_ONLY_LIST_LIMIT)
                     ).fetchall()
                 finally:
                     conn.close()
@@ -336,6 +426,23 @@ def api_videos():
                         item["view_count"] = r["view_count"] or 0
                         item["duration_sec"] = r["duration_sec"] or 0
                         item["subs_status"] = r["subs_status"] or ""
+                    if src_key == "douyin_note":
+                        # 图文专属：正文是作者文案（没有转写），图全部在本地。
+                        # 封面必须用本地图而不是 cover_url——库里那个是抖音带签名的图链，
+                        # x-expires 实测约一个月后失效，届时卡片就是一排裂图。
+                        import json as _json
+                        try:
+                            note_imgs = _json.loads(r["note_images"] or "[]")
+                        except ValueError:
+                            note_imgs = []
+                        item["aweme_id"] = r["aweme_id"] or ""
+                        item["images"] = ["/media/%s" % p for p in note_imgs]
+                        item["image_count"] = r["note_image_count"] or len(note_imgs)
+                        item["note_stats"] = r["remark"] or ""
+                        if note_imgs:
+                            local_cover = "/media/%s" % note_imgs[0]
+                            item["cover"] = local_cover
+                            item["cover_url"] = local_cover
                     videos.append(item)
             except Exception as e:
                 # 原先是裸 pass：这里一旦抛错（列缺失/DB 锁），素材库的这类内容整块消失且无痕迹，
@@ -347,7 +454,7 @@ def api_videos():
     # 药丸计数一律取"筛选前的合并列表"，跟下面真正要显示的那份数据同一个口径。
     # 之前分类药丸走 /api/categories（按 SQLite 整张 videos 表统计，含 174 条还没做转写的行），
     # 列表走索引（只收有 ASR 的行），于是"其他 240"点进去只有 128 条，每个分类都对不上。
-    source_counts = {"douyin": 0, "wechat": 0, "bilibili": 0, "blizzard": 0}
+    source_counts = {"douyin": 0, "wechat": 0, "bilibili": 0, "douyin_note": 0, "blizzard": 0}
     category_counts = {}
     game_counts = {}
     for v in videos:
@@ -357,6 +464,17 @@ def api_videos():
         if cat == "游戏攻略":            # 游戏药丸只在游戏攻略下有意义（与 get_game_stats 同口径）
             g = (v.get("game") or "").strip() or "未识别游戏"
             game_counts[g] = game_counts.get(g, 0) + 1
+    return videos, source_counts, category_counts, game_counts
+
+
+@app.route("/api/videos")
+def api_videos():
+    topic = request.args.get("topic", "")
+    q     = request.args.get("q", "").lower()
+    category = request.args.get("category", "")
+    game = request.args.get("game", "")
+    source = request.args.get("source", "")  # ''=全部 / douyin / wechat / bilibili
+    videos, source_counts, category_counts, game_counts = _material_rows()
     if source == "douyin" or source in DB_ONLY_SHEETS.values():
         videos = [v for v in videos if v["source"] == source]
     if topic:
@@ -497,26 +615,9 @@ def api_categories():
                     "all_categories": list(content_store.CATEGORIES)})
 
 
-# ── API: 选题雷达 ──
-@app.route("/api/topics/radar")
-def api_topic_radar():
-    """选题雷达：标签热度聚合。category/game/author 可选筛选，channel 切换渠道策略。"""
-    category = (request.args.get("category") or "").strip()
-    game = (request.args.get("game") or "").strip()
-    author = (request.args.get("author") or "").strip()
-    channel = (request.args.get("channel") or "").strip()
-    if channel and channel not in content_store.RADAR_CHANNEL_STRATEGY:
-        channel = ""
-    if not DB_PATH.exists():
-        return jsonify({"topics": [], "total_videos": 0, "window_days": 90})
-    try:
-        data = content_store.get_topic_radar(
-            DB_PATH, category, game, author, channel=channel
-        )
-        return jsonify(data)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
+# 选题雷达那三个字的接口已于 2026-10-20 删除（路径与雷达页同名）：排产表（/static/schedule.html）
+# 直接查素材库 + 人工钉选，热度聚合那一套没人再打开。旧 #radar 链接在前端导向 #schedule。
+# 渠道策略接口 /api/strategy/channels **保留**（那是权威源下发口，不只雷达页在用）。
 
 # ── API: 渠道策略配置下发（自媒体工作台策略引擎的单一权威源） ──
 @app.route("/api/strategy/channels")
@@ -609,6 +710,38 @@ def api_update_video_category():
         return jsonify({"error": str(e)}), 500
 
 # ── API: 视频详情 ──
+def _video_detail_from_db(video, sheet, row):
+    """库里那一行 → 详情响应。与抖音视频那份同构，前端弹窗零特判。
+
+    单独成一个函数是因为有两个入口要用同一份：登记过的 DB 直写源（微信/B站/图文/暴雪），
+    以及**库里存着但还没登记成直写源的表**（NGA 板块）。后者以前直接 404——
+    排产格「补充资料」里点论坛帖的「看原文」就是一颗死按钮。
+    """
+    body = video.get("transcript") or ""
+    cover = video.get("cover_url") or _first_markdown_image(body)
+    return {
+        "link": video.get("source_url") or "",
+        "video_url": video.get("source_url") or "",
+        "status": video.get("status") or "",
+        "id": "",
+        "author": video.get("author") or "",
+        "pub_time": video.get("published_at") or "",
+        "title": video.get("title") or "",
+        "asr": body,
+        "raw_transcript": "",
+        "tags": video.get("ai_tags") or "",
+        "cover": cover,
+        "ai_copy": "",
+        "ai_title": "",
+        "keywords": "",
+        "remark": video.get("remark") or "",
+        "sheet": sheet,
+        "row": row,
+        "keyframes": [],
+        "source": DB_ONLY_SHEETS.get(sheet, "db"),
+    }
+
+
 @app.route("/api/videos/<sheet>/<int:row>")
 def api_video_detail(sheet, row):
     # DB 直写的源（微信文章 / B站视频）：不落 Excel，DB 是权威源；
@@ -619,37 +752,40 @@ def api_video_detail(sheet, row):
         video = content_store.get_video_by_source(DB_PATH, sheet, row)
         if not video:
             return jsonify({"error": f"{sheet} R{row} 不存在"}), 404
-        body = video.get("transcript") or ""
-        cover = video.get("cover_url") or _first_markdown_image(body)
-        detail = {
-            "link": video.get("source_url") or "",
-            "video_url": video.get("source_url") or "",
-            "status": video.get("status") or "",
-            "id": "",
-            "author": video.get("author") or "",
-            "pub_time": video.get("published_at") or "",
-            "title": video.get("title") or "",
-            "asr": body,
-            "raw_transcript": "",
-            "tags": video.get("ai_tags") or "",
-            "cover": cover,
-            "ai_copy": "",
-            "ai_title": "",
-            "keywords": "",
-            "remark": "",
-            "sheet": sheet,
-            "row": row,
-            "keyframes": [],
-            "source": DB_ONLY_SHEETS[sheet],
-        }
+        detail = _video_detail_from_db(video, sheet, row)
         if DB_ONLY_SHEETS[sheet] == "bilibili":
             detail["id"] = video.get("aweme_id") or ""
             detail["bvid"] = video.get("aweme_id") or ""
             detail["view_count"] = video.get("view_count") or 0
             detail["duration_sec"] = video.get("duration_sec") or 0
             detail["subs_status"] = video.get("subs_status") or ""
+        if DB_ONLY_SHEETS[sheet] == "douyin_note":
+            # 图文：正文只有作者文案（asr 那份就是），"画面"这一格摆的是本地存下来的图，
+            # 不是抽帧——没有视频可抽。封面同理改指本地图，库里那个抖音签名链会过期。
+            import json as _json
+            try:
+                note_imgs = _json.loads(video.get("note_images") or "[]")
+            except ValueError:
+                note_imgs = []
+            detail["id"] = video.get("aweme_id") or ""
+            detail["images"] = ["/media/%s" % p for p in note_imgs]
+            detail["image_count"] = video.get("note_image_count") or len(note_imgs)
+            detail["note_stats"] = video.get("remark") or ""
+            detail["remark"] = video.get("remark") or ""
+            if note_imgs:
+                detail["cover"] = "/media/%s" % note_imgs[0]
         _attach_related_summaries(detail, sheet, row)
         return jsonify(detail)
+
+    if DB_PATH.exists() and sheet not in {(v.get("sheet") or "") for v in _index_videos()}:
+        # 库里存着、但既没登记成 DB 直写源、也不在 Excel 索引里的表（NGA 板块就是这状态）：详情别 404。
+        # 判据用"索引里有没有这张表"现算，不写死表名——写死就会跟素材库那份账再次对不上。
+        # 这颗「看原文」按钮在排产格补充资料里会被点到，死链等于界面说反话。
+        hit = content_store.get_video_by_source(DB_PATH, sheet, row)
+        if hit:
+            detail = _video_detail_from_db(hit, sheet, row)
+            _attach_related_summaries(detail, sheet, row)
+            return jsonify(detail)
 
     import openpyxl
     if not EXCEL_PATH.exists():
@@ -738,7 +874,43 @@ def _attach_related_summaries(detail: dict, sheet: str, row: int) -> None:
 
 @app.route("/media/<path:filename>")
 def api_media(filename):
-    """Serve local output assets such as covers and keyframes."""
+    """Serve local output assets such as covers and keyframes.
+
+    `?w=320` 这类缩略图请求：列表页以前每张卡都拉原图（海报一张 600-750KB，
+    20 张卡一屏就是 13-20MB，AI 海报列表那一眼最明显）。这里按宽度等比缩，
+    结果落在 `output/_thumb/` 里按 (文件 mtime, 宽度) 命名，第二次直接送缓存。
+    只认 64-1600 的整数宽度，其余一律按原图走——不给人拿这个接口去生成任意尺寸。
+    """
+    raw = request.args.get("w", "")
+    try:
+        want = int(raw)
+    except (TypeError, ValueError):
+        want = 0
+    src = (OUTPUT_DIR / filename).resolve()
+    # 小于这个头的图不值得缩：本机回环带宽不是瓶颈，浏览器解码也不吃力，
+    # 而每次缩放要花 60-250ms 的 CPU——素材库一页 50 张封面，那笔账会算到第一次点进去的人头上。
+    BIG_ENOUGH = 180 * 1024
+    if want and 64 <= want <= 1600 and str(src).startswith(str(OUTPUT_DIR.resolve())) \
+            and src.is_file() and src.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp") \
+            and os.stat(src).st_size > BIG_ENOUGH:
+        try:
+            st = os.stat(src)
+            cache = OUTPUT_DIR / "_thumb" / ("%s-%d-%d-%d.jpg"
+                                             % (hashlib.sha1(str(src).encode()).hexdigest()[:16],
+                                                want, int(st.st_mtime), st.st_size))
+            if not cache.is_file():
+                from PIL import Image
+                im = Image.open(src).convert("RGB")
+                if im.width > want:
+                    im = im.resize((want, max(1, int(round(im.height * want / float(im.width))))),
+                                   Image.LANCZOS)
+                cache.parent.mkdir(parents=True, exist_ok=True)
+                tmp = cache.with_suffix(".part")
+                im.save(tmp, "JPEG", quality=82, optimize=True)
+                os.replace(tmp, cache)     # 原子落盘：并发请求同一张也不会读到半个文件
+            return send_from_directory(cache.parent, cache.name, mimetype="image/jpeg")
+        except Exception as e:
+            print("[media] 缩略图没成，回原图：%s" % e, flush=True)
     return send_from_directory(OUTPUT_DIR, filename)
 
 
@@ -762,7 +934,10 @@ def api_rebuild_index():
     try:
         collector.update_video_index(str(EXCEL_PATH))
         _sync_content_db()
-        count = len(json.load(open(INDEX_PATH, encoding="utf-8"))) if INDEX_PATH.exists() else 0
+        _index_invalidate()
+        # 以前是 `len(json.load(...))` —— 数的是顶层键的个数（version/videos 那几样），
+        # 报出来的"共 4 条"跟实际条数没关系
+        count = len(_index_videos())
         return jsonify({"success": True, "message": f"索引已重建，共 {count} 条", "count": count})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
@@ -781,53 +956,106 @@ def api_status():
     return jsonify(_task_status)
 
 # ── API: 统计 ──
-# 「全部作者」这个下拉以前是从 video_index.json 全库 group by 出来的，两个毛病：
-# ① 把取消订阅留下的、抓取失败的空壳行全列进来了（号主 10-22 的原话："有好几条不是我订阅的"）；
-# ② 那份索引跟素材列表不同源（索引 853 条、库里 1272 条）——同一件事两份账，本项目反复栽。
-# 现在：数从库里来（跟列表同一份）；只列**订阅到的作者**加**一手源**（暴雪公告、NGA 板块，
-# 那些不是订阅来的但确实是我们要的料）；被收起来的**不藏数**，下拉里留一条禁用项写明多少人多少条，
-# 看得见才好决定要不要清，别做成"看不见＝没有"。
-FIRST_PARTY_SHEETS = ("暴雪官方", "NGA无限板块")
+# 「全部作者」这个下拉的口径，两次翻车各修了一半，得说清到底以谁为准：
+# ① 早先是拿 video_index.json 全库 group by，把取消订阅留下的空壳行全列进来了
+#    （号主 10-22 的原话："有好几条不是我订阅的"）；
+# ② 10-27 改成"从库里现数"，但查的是整张 videos 表——库里那 1105 行 NGA 板块还没接进
+#    素材库列表（见 docs/NGA导入接进工作台-任务书），它的 author 存的是发帖人不是来源，
+#    于是下拉一口气多出 814 个"我没订阅的人"，点下去还是 0 条。
+# 定论：名单只从**素材库列表真正能返回的那批行**（_material_rows）里出，两项硬条件同时成立才列——
+# 一是这一行在列表里筛得到，二是这个 author 真是一个**来源**（订阅表里订到的账号，
+# 或一手源那种整表就一个账号在发的）。论坛发帖人不算来源。
+# 被收起来的**不藏数**，按"为什么被收起"分两堆各自报人报条数，看得见才好决定要不要清。
+# 只放"整表就一个账号在发"的一手源。NGA 板块别塞进来——它 1105 行、814 个发帖人，
+# author 那一列是署名不是来源，塞进来名单当场涨到 852 项且点下去 0 条（就是上面②那次翻车）。
+# 等它按 docs/NGA导入接进工作台-任务书 第 1 件接进素材库列表时，要整表出一个"NGA无限板块"来源项。
+FIRST_PARTY_SHEETS = ("暴雪官方",)
 
 
-def _author_topics():
-    """返回 (要列出的作者→条数, 未订阅的作者数, 未订阅的条数)。"""
+def _subscribed_authors():
+    """订阅表里订到的账号名（判断"这个人是不是我们订的来源"的权威）。"""
+    try:
+        with sqlite3.connect("file:%s?mode=ro" % DB_PATH, uri=True) as con:
+            return {r[0].strip() for r in con.execute(
+                "SELECT DISTINCT author FROM subscriptions "
+                "WHERE author IS NOT NULL AND author<>''")}
+    except sqlite3.Error:
+        return set()
+
+
+def _not_in_library(visible):
+    """库里存着、但素材库列表返回不了的行，按表报条数（不藏数，也不冒充来源）。
+
+    口径是**行级**的，不是"整张表接没接"：NGA 是整表没接（1105 行），`抖音视频数据`
+    接了但仍有漏行的（没进 video_index.json 的空壳/失败行 151 条）。只按表判的话，
+    首页会变成"素材 1480 + 另有 1105 ≠ 库里 2736"，那 151 条就凭空消失了——又成两份账。
+    """
+    buckets = {}
     try:
         with sqlite3.connect("file:%s?mode=ro" % DB_PATH, uri=True) as con:
             con.row_factory = sqlite3.Row
-            subs = {r[0].strip() for r in con.execute(
-                "SELECT DISTINCT author FROM subscriptions WHERE author IS NOT NULL AND author<>''")}
-            marks = tuple(FIRST_PARTY_SHEETS)
-            rows = con.execute(
-                "SELECT author, source_sheet, COUNT(*) n FROM videos "
-                "GROUP BY author, source_sheet").fetchall()
+            for r in con.execute("SELECT source_sheet, source_row, author, status FROM videos"):
+                if (str(r["source_sheet"] or ""), str(r["source_row"])) in visible:
+                    continue
+                key = (r["source_sheet"] or "").strip() or "（没标来源）"
+                b = buckets.setdefault(key, {"videos": 0, "signers": set(), "failed": 0})
+                b["videos"] += 1
+                b["signers"].add((r["author"] or "").strip() or "（没抓到作者）")
+                if (r["status"] or "") == "失败":
+                    b["failed"] += 1
     except sqlite3.Error:
-        return {}, 0, 0
-    topics, off_authors, off_videos = {}, set(), 0
-    for r in rows:
-        name = (r["author"] or "").strip()
-        keep = (r["source_sheet"] in marks) or (name and name in subs)
-        if keep:
-            topics[name or "（一手源）"] = topics.get(name or "（一手源）", 0) + r["n"]
+        return []
+    return [{"sheet": k, "videos": b["videos"], "signers": len(b["signers"]), "failed": b["failed"]}
+            for k, b in sorted(buckets.items(), key=lambda kv: -kv[1]["videos"])]
+
+
+def _material_stats(rows=None):
+    """首页那行数字的唯一出口——一律按**素材库列表可见集**算，不按整张 videos 表。
+
+    以前这里 `COUNT(*) FROM videos`＝2736，而素材库页头 1480：差的 1256 条是"库里躺着、
+    列表根本不接"的行（NGA 1105 + 索引没收到的抖音行 151）。表现就是首页说
+    「有转写还没整理稿 867 条，去素材库勾选」，人到了素材库翻不出那么多；
+    「转写失败 6 条」那 6 行更是列表里一条都没有——数字和入口必须同源。
+    """
+    if rows is None:
+        rows = _material_rows()[0]
+    total = len(rows)
+    with_asr = sum(1 for v in rows if (v.get("transcript_length") or 0) > 0)
+    visible = {(str(v.get("sheet") or ""), str(v.get("row"))) for v in rows}
+    return {
+        "rows": rows, "total": total, "with_asr": with_asr,
+        "missing_asr": max(0, total - with_asr),
+        "asr_rate": round(with_asr * 100 / total, 1) if total else 0,
+        "off_library": _not_in_library(visible),
+    }
+
+
+def _author_topics(stats=None):
+    """返回 (要列出的来源→条数, 未订阅那堆, 已入库但没接进列表的那堆)。"""
+    stats = stats or _material_stats()
+    rows = stats["rows"]
+    subs = _subscribed_authors()
+    topics, off_count = {}, {}
+    for v in rows:
+        name = (v.get("author") or "").strip()
+        sheet = (v.get("sheet") or "").strip()
+        label = name or "（没抓到作者）"
+        if name in subs or sheet in FIRST_PARTY_SHEETS:
+            topics[label] = topics.get(label, 0) + 1
         else:
-            off_videos += r["n"]
-            off_authors.add(name or "（没抓到作者）")
-    return dict(sorted(topics.items(), key=lambda kv: -kv[1])), len(off_authors), off_videos
+            off_count[label] = off_count.get(label, 0) + 1
+    off = {"authors": len(off_count), "videos": sum(off_count.values())}
+    return dict(sorted(topics.items(), key=lambda kv: (-kv[1], kv[0]))), off, stats["off_library"]
 
 
 @app.route("/api/stats")
 def api_stats():
-    topics, off_authors, off_videos = _author_topics()
-    total = sum(topics.values()) + off_videos
-    version = None
-    if INDEX_PATH.exists():
-        try:
-            with open(INDEX_PATH, encoding="utf-8") as f:
-                version = json.load(f).get("version")
-        except (ValueError, OSError):
-            version = None
+    topics, off, not_in_library = _author_topics()
+    total = sum(topics.values()) + off["videos"]
+    # 以前这里为了拿一个 version 把 2.6MB 索引整份解析一遍；走缓存
+    version = _index_raw().get("version")
     return jsonify({"topics": topics, "total": total,
-                    "off_subscription": {"authors": off_authors, "videos": off_videos},
+                    "off_subscription": off, "not_in_library": not_in_library,
                     "version": version})
 
 
@@ -893,12 +1121,15 @@ def api_todo():
     if not DB_PATH.exists():
         return jsonify({"items": [], "stats": {}, "error": "数据库还没生成，先去采集中心跑一条"})
     now = datetime.now()
+    # 素材侧的判定走列表可见集（_material_stats），跟首页那行数字同一个口径：
+    # 以前 "有转写还没整理稿 867 条 → 去素材库勾选"，人到了素材库只翻出 768 条，
+    # 多出来的那批是库里躺着、列表根本不接的行（NGA 帖子 + 索引没收的抖音行），点进去对不上。
+    stats = _material_stats()
+    vids = [{"id": v.get("db_id"), "status": v.get("status") or "",
+             "tlen": v.get("transcript_length") or 0} for v in stats["rows"]]
     conn = sqlite3.connect(str(DB_PATH))
     conn.row_factory = sqlite3.Row
     try:
-        vids = conn.execute(
-            "SELECT id, status, LENGTH(COALESCE(transcript,'')) AS tlen FROM videos"
-        ).fetchall()
         covered = set()
         for r in conn.execute("SELECT video_id, source_video_ids FROM ai_summaries"):
             if r["video_id"]:
@@ -973,7 +1204,8 @@ def api_todo():
 
     return jsonify({
         "items": items,
-        "stats": {"total": len(vids), "with_asr": sum(1 for v in vids if (v["tlen"] or 0) > 0),
+        "stats": {"total": stats["total"], "with_asr": stats["with_asr"],
+                  "off_library": stats["off_library"],
                   "summaries": n_sum, "subs": n_subs,
                   "last_output": last_out, "days_since": days_since},
         "packages": pkg_counts,
@@ -988,27 +1220,19 @@ def api_todo():
 
 @app.route("/api/dashboard")
 def api_dashboard():
-    """聚合 SQLite 内容库统计，供首页仪表盘使用。"""
+    """聚合内容库统计，供首页仪表盘使用。
+
+    素材侧的数（总数/已转写/最近入库/主要作者）一律走 `_material_stats()`——
+    跟素材库列表同一批行；整理稿侧仍按 `ai_summaries` 算（那张表就是整理稿的账本）。
+    """
     try:
         if not DB_PATH.exists():
             _sync_content_db()
         conn = sqlite3.connect(str(DB_PATH))
         conn.row_factory = sqlite3.Row
         try:
-            total = conn.execute("SELECT COUNT(*) AS c FROM videos").fetchone()["c"]
-            with_asr = conn.execute(
-                "SELECT COUNT(*) AS c FROM videos WHERE transcript IS NOT NULL AND transcript != ''"
-            ).fetchone()["c"]
-            authors = conn.execute(
-                "SELECT author AS name, COUNT(*) AS c FROM videos "
-                "GROUP BY author ORDER BY c DESC LIMIT 8"
-            ).fetchall()
             summary_rows = conn.execute(
                 "SELECT summary_type, COUNT(*) AS c FROM ai_summaries GROUP BY summary_type"
-            ).fetchall()
-            recent_videos = conn.execute(
-                "SELECT title, author, status, updated_at FROM videos "
-                "ORDER BY updated_at DESC, id DESC LIMIT 6"
             ).fetchall()
             recent_summaries = conn.execute(
                 "SELECT id, title, summary_type, status, updated_at FROM ai_summaries "
@@ -1016,7 +1240,7 @@ def api_dashboard():
             ).fetchall()
             question_count = 0
             for row in conn.execute(
-                "SELECT structured_data FROM ai_summaries WHERE summary_type = 'ai_interview'"
+                    "SELECT structured_data FROM ai_summaries WHERE summary_type = 'ai_interview'"
             ).fetchall():
                 try:
                     payload = json.loads(row["structured_data"] or "{}")
@@ -1026,20 +1250,33 @@ def api_dashboard():
         finally:
             conn.close()
 
+        stats = _material_stats()
+        total, with_asr = stats["total"], stats["with_asr"]
+        # 主要作者取「全部作者」那份同源名单（整表 group by 会把论坛发帖人算成"作者"）
+        authors = _author_topics(stats)[0]
+        # 最近入库跟列表一样按发布时间排：以前按 updated_at 排，下次导 NGA 快照就会把
+        # "最近素材"整片换成论坛帖子，而那些帖子在素材库里根本看不到、点进去也找不到
+        recent_videos = sorted(stats["rows"],
+                               key=lambda v: (v.get("published_at") or v.get("create_time") or ""),
+                               reverse=True)[:6]
         summaries = {row["summary_type"]: row["c"] for row in summary_rows}
         return jsonify({
             "total": total,
             "with_asr": with_asr,
-            "missing_asr": max(0, total - with_asr),
+            "missing_asr": stats["missing_asr"],
             "asr_rate": round(with_asr * 100 / total, 1) if total else 0,
-            "authors": [{"name": r["name"] or "未知作者", "count": r["c"]} for r in authors],
+            "off_library": stats["off_library"],
+            "authors": [{"name": k, "count": n} for k, n in list(authors.items())[:8]],
             "summaries": {
                 "game_guide": summaries.get("game_guide", 0),
                 "ai_interview": summaries.get("ai_interview", 0),
                 "wechat_material": summaries.get("wechat_material", 0),
             },
             "question_count": question_count,
-            "recent_videos": [dict(r) for r in recent_videos],
+            "recent_videos": [{"title": v.get("title"), "author": v.get("author"),
+                               "status": v.get("status"),
+                               "updated_at": v.get("published_at") or v.get("create_time") or ""}
+                              for v in recent_videos],
             "recent_summaries": [dict(r) for r in recent_summaries],
             "running": _task_status.get("running", False),
         })
@@ -1410,6 +1647,15 @@ def api_content_summaries():
         total = content_store.count_summaries(DB_PATH, summary_type=summary_type, query=q)
         items = content_store.list_summaries(DB_PATH, summary_type=summary_type, query=q,
                                             limit=size, offset=(page - 1) * size)
+        # brief=1（整理稿列表页传）：卡片只用正文前 220 字当摘要，正文与结构化数据整段返回
+        # 时这两样占了 46 篇里的 433KB。点开来是走 /api/content/summaries/<id> 取全量的，
+        # 所以列表这一刀不影响详情；面试题页要整段 structured_data，它不传 brief。
+        if request.args.get("brief", "") in ("1", "true"):
+            for it in items:
+                c = it.get("content") or ""
+                if len(c) > 300:
+                    it["content"] = c[:300]
+                it["structured_data"] = ""
         return jsonify({"items": items, "total": total,
                         "page": page, "page_size": size,
                         "pages": max(1, (total + size - 1) // size)})
@@ -1423,6 +1669,15 @@ def api_content_summary_detail(summary_id):
         item = content_store.get_summary(DB_PATH, summary_id)
         if not item:
             return jsonify({"error": "总结不存在"}), 404
+        # 带一句"这篇挂在哪一格"：公众号的生成入口收在排产格那条竖线上，
+        # 但没挂格的稿（从素材库那条路生成的 9 篇）不能因此没入口——界面按这个字段分情况给。
+        try:
+            t = plan_tasks.task_of_summary(DB_PATH, summary_id)
+            item["plan_slot"] = {"slot_key": t["slot_key"], "channel": t["channel"],
+                                 "form": t["form"], "version": t["version"]} if t else None
+        except Exception:
+            app.logger.warning("查这篇稿挂哪一格失败（界面会按没挂格处理，入口保留）", exc_info=True)
+            item["plan_slot"] = None
         return jsonify(item)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -1442,7 +1697,8 @@ def api_content_material_check(summary_id):
         sources = content_store.material_source_text(DB_PATH, item)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-    result = draft_audit.audit_material(item.get("content") or "", sources)
+    result = draft_audit.audit_material(item.get("content") or "", sources,
+                                          summary_type=item.get("summary_type") or "")
     return jsonify({"summary_id": summary_id, "summary_type": item.get("summary_type"),
                     "has_source": bool(sources), "verdict": result["verdict"],
                     "label": result["label"], "fails": result["fails"],
@@ -1550,7 +1806,15 @@ def api_topic_pack():
     safe = re.sub(r"[^\w一-鿿-]+", "", (theme or keyword))[:24] or "未命名"
     folder = OUTPUT_DIR / PACK_DIR_NAME
     folder.mkdir(parents=True, exist_ok=True)
-    path = folder / ("%s-%s.md" % (datetime.now().strftime("%Y-%m-%d"), safe))
+    # 文件名**必须带渠道**：以前只有"当天日期+主题"，同一题同一天先出头条再出公众号，
+    # 第二份 write_text 直接盖掉第一份，人只看到"生成成功"，丢了那份没人提醒。
+    # 同渠道同题同一天也不许静默覆盖 → 撞名就加 -2、-3。
+    stem = "%s-%s-%s" % (datetime.now().strftime("%Y-%m-%d"), channel, safe)
+    path = folder / ("%s.md" % stem)
+    n = 2
+    while path.exists():
+        path = folder / ("%s-%d.md" % (stem, n))
+        n += 1
     path.write_text(markdown, encoding="utf-8")
     app.logger.info("选题包已生成 %s：%s", path, stats)
     return jsonify({
@@ -1774,8 +2038,331 @@ def api_ops_article():
     return jsonify({"row": row})
 
 
-# 注：这条本该排在 /api/plan/* 那一组旁边，但那一组（排产入口第一单）还压在另一条会话
-# 未提交的改动里，HEAD 里没有那个位置可插；等她那批提交落地后挪过去即可，路由本身不用改。
+@app.route("/api/ops/register", methods=["POST"])
+def api_ops_register():
+    """发布登记：记一条"这篇已经在平台发出去了"。
+
+    2026-10-18 从 5180 搬过来（那边服务已停、数据冻在 09-24）。口径没变过一条：
+    **这里只记账，不发车**——发布那一下永远是他在平台后台点的那一下。
+    校验都交给 ops_store.register_publish，界面不抄一份判据（抄了迟早跟后端对不上）。
+    """
+    data = request.get_json(silent=True) or {}
+    if not data:
+        return jsonify({"error": "请求体不是合法 JSON，没敢写库"}), 400
+    try:
+        with _db_lock:
+            out = ops_store.register_publish(DB_PATH, data)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    return jsonify(out)
+
+
+@app.route("/api/ops/week", methods=["POST"])
+def api_ops_week():
+    data = request.get_json(silent=True) or {}
+    if not data:
+        return jsonify({"error": "请求体不是合法 JSON，没敢写库"}), 400
+    week = (data.get("week") or "").strip()
+    if not week:
+        return jsonify({"error": "week 不能空"}), 400
+    try:
+        with _db_lock:
+            row = ops_store.upsert_week(DB_PATH, week, data.get("fields") or {})
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    return jsonify({"row": row})
+
+
+@app.route("/api/ops/import-ledger", methods=["POST"])
+def api_ops_import_ledger():
+    """把旧台账（media-workbench/runtime/publications.json）整本接进来 + 按审核台「已发布」补空行。
+    2026-10-18 起是全渠道（原来只导微信 4 条，那边 96 条头条记录没人接）。只补空，不覆盖手填的数。"""
+    try:
+        with _db_lock:
+            out = ops_store.import_ledger(DB_PATH)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    return jsonify(out)
+
+
+@app.route("/api/bank/overview")
+def api_bank_overview():
+    """答案库与交付看板：题数、来源、自检结论、交付物清单、数据源分级，全部现读现算。
+
+    2026-10-19 换轨：ledger 那节已从"外部仓库许可判定"换成"魔兽资料站数据源分级"
+    （键 source/tier/verdict/checked/note，口径见 src/bank_board.py 表头注释）；
+    paid / free / artifacts 三节仍是 AI 线的冻结现状，只读不改。
+    """
+    try:
+        return jsonify(bank_board.overview())
+    except Exception as e:
+        return jsonify({"error": str(e), "trace": traceback.format_exc().splitlines()[-3:]}), 500
+
+
+@app.route("/api/bank/file")
+def api_bank_file():
+    """只开放看板列出来的那几个文件，不把整个 product/ 暴露成可猜的下载口。"""
+    name = os.path.basename(request.args.get("name") or "")
+    if name not in bank_board.artifact_names():
+        return jsonify({"error": "这个文件不在看板清单里，不给打开"}), 404
+    return send_from_directory(bank_board.PRODUCT, name)
+
+
+def _run_generation(video_keys, summary_type, combine, st, brief=None, video_ids=None):
+    """生成那一段的真身：把 `sheet:row` 列表整理成整理稿并落库，进度写进 `st` 这个字典。
+
+    为什么抽出来：排产任务那条链（`/api/plan/task/generate`）要跑**同一套**提示词与落库，
+    复制一份就等于埋下"素材库那条改了这个入口没改"的双份口径。
+    `st` 由调用方给：老路由传全局 `_task_status`（素材库批量那套轮询不动它），
+    任务路由传 `_plan_jobs[task_id]`（一题一渠道一份进度，双渠道同时跑互不覆盖）。
+    `brief` 是排产那一格的选题要求（标题/hook/补充/排期/渠道/形式），会进真实提示词
+    （content_store._brief_block）；**旧素材库那条路不传，行为与抽取前完全一致**。
+    `video_ids` 是排产任务**已确认并存在库里的那几条素材主键**（T1）：给了就按 id 取素材，
+    不再经 `sheet:row` 绕回——绕回去可能在同步 Excel 之后取到另一条记录，证据就漂移了。
+    缺哪条、哪条没正文一律写进 `st["error"]` 明说，不许无声丢掉之后照跑。
+    旧素材库那条仍传 `video_keys`（`video_ids=None`），行为一字不变。
+    返回 summary_ids；每条素材为什么被跳过写在 `st["error"]` 里（原样保留老文案）。
+    """
+    try:
+        st["progress"] = "同步 Excel 到内容库..."
+        _sync_content_db()
+        config = _fast_config()   # 同上：整理稿走快速档，理由见 /regenerate 那段注释
+        success_count = 0
+        summary_ids = []
+        selected_videos = []
+
+        if video_ids is not None:
+            # T1（排产任务走这条）：按**库里那一版存着的素材主键**取文。
+            # 不再经 sheet:row 绕回——上面刚同步过 Excel，绕回去可能取到另一条记录，
+            # 任务记的素材与稿子用的素材就会又对不上。缺哪条、哪条没正文都写进 error 明说。
+            st["progress"] = "按本篇确认的素材取文..."
+            want_ids = [int(x) for x in video_ids]
+            found = {int(v["id"]): v for v in content_store.get_videos_by_ids(DB_PATH, want_ids)}
+            for vid in want_ids:
+                video = found.get(vid)
+                if not video:
+                    st["error"] += "素材 %d: 内容库里已经没有这条（生成前被删了）\n" % vid
+                    continue
+                if not (video.get("transcript") or "").strip():
+                    st["error"] += "素材 %d: 没有 ASR 文本，跳过\n" % vid
+                    continue
+                selected_videos.append(video)
+            # 真掉了几条就按剩下的重算合并档：三条变一条还按"合并稿"走会产出一篇假合集
+            combine = len(selected_videos) > 1
+            if not selected_videos:
+                st["progress"] = "没有可生成的 ASR 文本"
+                st["done"] = True
+                return []
+        else:
+            for i, key in enumerate(video_keys or []):
+                try:
+                    sheet, row_text = key.split(":", 1)
+                    row = int(row_text)
+                    st["progress"] = f"读取 [{i+1}/{len(video_keys)}] {sheet} 第{row}行..."
+                    video = content_store.get_video_by_source(DB_PATH, sheet, row)
+                    if not video:
+                        st["error"] += f"{key}: 内容库中找不到视频\n"
+                        continue
+                    if not (video.get("transcript") or "").strip():
+                        st["error"] += f"{key}: 没有 ASR 文本，跳过\n"
+                        continue
+                    selected_videos.append(video)
+                except Exception as e:
+                    st["error"] += f"{key}: {e}\n"
+
+        if combine:
+            if not selected_videos:
+                st["progress"] = "没有可生成的 ASR 文本"
+                st["done"] = True
+                return []
+
+            st["progress"] = f"合并整理 {len(selected_videos)} 条视频..."
+            result, model, status = content_store.generate_collection_summary(
+                selected_videos, summary_type, config, brief
+            )
+            _risk_inherit(result, selected_videos)      # 台账兜底：模型漏写的待核不能消失
+            if summary_type in GUIDE_SUMMARY_TYPES:
+                # 攻略类：抽关键帧做配图，嵌入整理稿尾部
+                st["progress"] = "抽取视频关键帧配图..."
+                result["content"] = (result.get("content") or "") + _video_keyframe_markdown(selected_videos)
+            source_ids = [int(v["id"]) for v in selected_videos]
+            with _db_lock:
+                summary_id = content_store.save_summary(
+                    DB_PATH,
+                    video_id=source_ids[0],
+                    summary_type=summary_type,
+                    result=result,
+                    model=model,
+                    status=status,
+                    source_video_ids=source_ids,
+                )
+            _risk_record(result, selected_videos, summary_id)
+            summary_ids.append(summary_id)
+            success_count = 1
+        else:
+            for i, video in enumerate(selected_videos):
+                st["progress"] = f"整理 [{i+1}/{len(selected_videos)}] 第{video['source_row']}行..."
+
+                result, model, status = content_store.generate_summary(
+                    video, summary_type, config, brief
+                )
+                _risk_inherit(result, [video])          # 同上：单条素材也要继承
+                if summary_type in GUIDE_SUMMARY_TYPES:
+                    # 攻略类：抽关键帧做配图，嵌入整理稿尾部
+                    st["progress"] = f"抽取关键帧配图 [{i+1}/{len(selected_videos)}] 第{video['source_row']}行..."
+                    result["content"] = (result.get("content") or "") + _video_keyframe_markdown([video])
+                with _db_lock:
+                    summary_id = content_store.save_summary(
+                        DB_PATH,
+                        video_id=video["id"],
+                        summary_type=summary_type,
+                        result=result,
+                        model=model,
+                        status=status,
+                        source_video_ids=[int(video["id"])],
+                    )
+                _risk_record(result, [video], summary_id)
+                summary_ids.append(summary_id)
+                success_count += 1
+
+        st["success"] = success_count
+        st["summary_ids"] = summary_ids
+        label = "合并整理稿" if combine else "整理稿"
+        st["progress"] = f"✅ 已生成 {success_count} 条{label}"
+        st["done"] = True
+        return summary_ids
+    except Exception:
+        st["error"] = traceback.format_exc()
+        st["done"] = True
+        return []
+
+
+@app.route("/api/content/generate", methods=["POST"])
+def api_content_generate():
+    """把选中的视频整理成游戏攻略或 AI 面试题，并保存到 SQLite。"""
+    global _task_status
+    if _task_status.get("running"):
+        return jsonify({"error": "已有任务正在运行"}), 400
+
+    data = request.get_json(force=True)
+    videos = data.get("videos", [])
+    summary_type = data.get("summary_type", "game_guide")
+    combine = bool(data.get("combine", False))
+    if summary_type not in ("game_guide", "ai_interview", "wechat_material", "toutiao_mix"):
+        return jsonify({"error": "summary_type 只能是 game_guide / ai_interview / wechat_material / toutiao_mix（攻略成品文章走自媒体工作台生成）"}), 400
+    if not videos:
+        return jsonify({"error": "请选择要整理的视频"}), 400
+
+    _task_status = {
+        "running": True,
+        "progress": "准备生成内容...",
+        "done": False,
+        "error": "",
+        "success": 0,
+        "summary_ids": [],
+    }
+
+    def run():
+        global _task_status
+        _run_generation(videos, summary_type, combine, _task_status)
+        _task_status["running"] = False
+
+    threading.Thread(target=run, daemon=True).start()
+    return jsonify({"status": "started", "total": len(videos), "summary_type": summary_type, "combine": combine})
+
+
+# ══ 排产任务 → 生成链路（2026-10-20 排产入口第一单）═══════════════════════
+# 为什么另开一套端点、不给 /api/content/generate 加几个可选字段：
+# 那条是"素材库勾一批 → 出几篇稿"的批量口，**没有"题"的身份**，点两次就 INSERT 两行孤立稿
+# （实测 video_id=125681 的 game_guide 已经三行）。排产这一侧要的是
+# "这一题·这一渠道·这一版 = 哪篇稿"，幂等判据完全不同，混在一个端点里两边都会迁就对方。
+_plan_jobs = {}                    # task_id -> 进度字典（一份任务一格，双渠道同时跑互不覆盖）
+_plan_jobs_lock = threading.Lock()
+
+
+def _plan_job(task_id):
+    with _plan_jobs_lock:
+        job = _plan_jobs.get(task_id)
+        if not job:
+            job = {"running": False, "progress": "", "done": False, "error": "",
+                   "success": 0, "summary_ids": []}
+            _plan_jobs[task_id] = job
+        return job
+
+
+def _short_err(text):
+    """把 traceback 压成人读得懂的那一行。
+
+    任务行里的 error 是**给号主看的**（面板直接摆出来），整段 traceback 存进去，
+    前 500 字全是文件路径，真正那句"模型超时/额度没了"被截掉了——等于没写原因。
+    完整 traceback 仍在内存那份 job 里，排查的人看得到。
+    """
+    text = str(text or "").strip()
+    if not text:
+        return ""
+    lines = [l for l in text.split("\n") if l.strip()]
+    return (lines[-1] if lines else text)[:300]
+
+
+def _plan_job_reset(job, progress):
+    job.update({"running": True, "progress": progress, "done": False, "error": "",
+                "success": 0, "summary_ids": []})
+
+
+def _plan_materials(video_ids):
+    """按 **DB 主键**取素材，逐条给"能不能生成"的结论。
+
+    为什么按 id 不按 sheet:row：排产表钉选与实时查回来的就是库里的 id，
+    行号会随 Excel 变动，而任务要能五年后还指得回同一条素材。
+    每个问题必须带 action——光写"没有正文"等于没提示，人要的是下一步点哪里。
+    """
+    want = []
+    for x in (video_ids or []):
+        try:
+            vid = int(x)
+        except (TypeError, ValueError):
+            continue
+        if vid and vid not in want:
+            want.append(vid)
+    if not want:
+        return [], [{"code": "no_ids", "msg": "没带任何素材 id",
+                     "action": "reselect", "action_label": "回排产表确认采用素材"}]
+    try:
+        found = {int(v["id"]): v for v in content_store.get_videos_by_ids(DB_PATH, want)}
+    except Exception as e:
+        # 查库失败**不等于"这些素材不存在"**：当成错误抛出去，让界面报"查不到，重试"，
+        # 否则一次数据库抖动就会让人以为"还没有稿"，然后重跑一次收费生成。
+        raise RuntimeError("素材查询失败：%s" % e)
+    ok, problems = [], []
+    for vid in want:
+        v = found.get(vid)
+        if not v:
+            problems.append({"code": "missing", "video_id": vid,
+                             "msg": "素材库里已经没有这条（被删了，或 id 写错）",
+                             "action": "reselect", "action_label": "回排产表重选素材"})
+            continue
+        if not (v.get("transcript") or "").strip():
+            problems.append({"code": "no_transcript", "video_id": vid,
+                             "title": v.get("title") or "",
+                             "sheet": v.get("source_sheet"), "row": v.get("source_row"),
+                             "msg": "这条没有转写正文，整理稿无米下锅",
+                             "action": "transcribe", "action_label": "去素材库开这条补转写"})
+            continue
+        ok.append(v)
+    return ok, problems
+
+
+def _plan_meta(data):
+    return {"title": str(data.get("title") or "")[:120],
+            "hook": str(data.get("hook") or "")[:200],
+            "note": str(data.get("note") or "")[:500],
+            "date": str(data.get("plan_date") or data.get("date") or "")[:20]}
+
+
 @app.route("/api/plan/brief")
 def api_plan_brief():
     """排产日报（只读）：今天该发哪篇、每格现在有什么料。
@@ -1842,190 +2429,645 @@ def api_plan_provenance():
                     "blocking": guide_provenance.blocking_gaps(row),
                     "line": guide_provenance.summary_line(row)})
 
-@app.route("/api/ops/register", methods=["POST"])
-def api_ops_register():
-    """发布登记：记一条"这篇已经在平台发出去了"。
 
-    2026-10-18 从 5180 搬过来（那边服务已停、数据冻在 09-24）。口径没变过一条：
-    **这里只记账，不发车**——发布那一下永远是他在平台后台点的那一下。
-    校验都交给 ops_store.register_publish，界面不抄一份判据（抄了迟早跟后端对不上）。
+def _plan_ids_from_keys(keys):
+    """把素材库的 `sheet:row` 卡片键现查成 DB 主键；查不到的丢掉（调用方会报"没有可用素材"）。
+
+    行号不是稳定身份（Excel 动一行就错位），所以这里只做"当场换算一次"，
+    换算完仍然把 **DB id** 存进任务与证据快照——与排产页那条入口同一份身份。
     """
-    data = request.get_json(silent=True) or {}
-    if not data:
-        return jsonify({"error": "请求体不是合法 JSON，没敢写库"}), 400
+    out = []
+    for k in keys or []:
+        s = str(k or "")
+        if ":" not in s:
+            continue
+        sheet, row = s.split(":", 1)
+        try:
+            con = sqlite3.connect(str(DB_PATH))
+            try:
+                r = con.execute("SELECT id FROM videos WHERE source_sheet=? AND source_row=?",
+                                (sheet, row)).fetchone()
+            finally:
+                con.close()
+        except Exception:
+            r = None
+        if r and int(r[0]) not in out:
+            out.append(int(r[0]))
+    return out
+
+
+# ══ 双系列排产：位置身份、候选采用、发布真相、夜间匹配（2026-10-22 那一单）══════
+# 判据与状态全在 `src/plan_series.py` 一份，这里只做参数校验与事务包装。
+# 三条硬规矩（任务书 §2–§4）：
+#   · 匹配只写候选，采用只写 plan_tasks，发布只写台账 —— 三本账各记各的，谁也不冒充谁；
+#   · 已发布的位置不再匹配、也不再采用（要写后续篇就另建槽号）；
+#   · 任何一步都不自动出稿、不出图、不发布。
+
+def _plan_slot_or_400(slot):
+    slot = str(slot or "").strip()[:SLOT_KEY_MAX]
+    if not slot or not plan_series.valid_slot(slot):
+        return None, (jsonify({"error": "槽号只能用字母/数字/-/_且不超过 %d 位，收到「%s」"
+                               % (SLOT_KEY_MAX, slot)}), 400)
+    s = plan_series.get_slot(DB_PATH, slot)
+    if not s:
+        return None, (jsonify({"error": "查不到这个内容位置（%s）：先确认它已注册，"
+                                        "或从素材库直接起稿建一个" % slot}), 404)
+    return s, None
+
+
+@app.route("/api/plan/series")
+def api_plan_series_board():
+    """两个系列的折叠大纲 + 每个位置现在走到哪一档 + 夜间匹配状态。"""
+    try:
+        legacy = []
+        try:
+            legacy = (plan_brief.load_data().get("items") or [])
+        except Exception as e:
+            print("[排产] 旧题名单读不到（%s），本次看板只列双系列" % str(e)[:80], flush=True)
+        plan_series.seed(DB_PATH, legacy)
+        return jsonify(plan_series.board(DB_PATH))
+    except Exception as e:
+        return jsonify({"error": str(e)[:200]}), 500
+
+
+def _plan_adopt(data):
+    """采用清单落库的那一段，返回 (payload, http_status)。
+
+    两个入口共用：排产页点「采用勾选项到本篇」，素材库选了某个位置起稿（那等于采用到那一格）。
+    写的是 `plan_tasks`（沿用第一单那套版本语义）：已开工的那版绝不改，改清单就开新版；
+    候选永远进不了这一格——只有人勾了的 id 会落进 video_ids。
+    """
+    s, err = _plan_slot_or_400(data.get("slot_key"))
+    if err:
+        return err
+    try:
+        # 渠道拼错要当场拒（`norm_channel` 现在不再静默退成头条），否则下面 guard/形式全都算错
+        channel = plan_series.norm_channel(data.get("channel") or "toutiao")
+    except ValueError as e:
+        return (jsonify({"error": str(e)}), 400)
+    # 「这一格发过没有」按 (槽号, 渠道) 判：公众号发过不算头条发过，采用清单照样能写
+    guard = plan_series.slot_guard(DB_PATH, s["slot_key"], channel=channel)
+    if guard["error"]:
+        return (jsonify({"error": guard["error"], "slot": s["slot_key"],
+                         "state": (guard["slot"] or {}).get("publish_state", {})}), 409)
+    form = str(data.get("form") or s.get("form") or plan_tasks.DEFAULT_FORM).strip()[:20]
+    if not plan_tasks.resolve_summary_type(channel, form):
+        return (jsonify({"error": "渠道「%s」没有内容形式「%s」" % (channel, form)}), 400)
+    raw_ids = data.get("video_ids")
+    if raw_ids is None:
+        raw_ids = _plan_ids_from_keys(data.get("keys") or [])
+    if raw_ids is None:
+        return (jsonify({"error": "没带 video_ids：要清空请显式传空数组"}), 400)
+    try:
+        selected, problems = _plan_materials(raw_ids)
+    except Exception as e:
+        return (jsonify({"error": str(e), "retry": True}), 502)
+    if raw_ids and not selected:
+        return (jsonify({"error": "没有可用素材，采用清单没存", "problems": problems}), 422)
+    meta = _plan_meta(dict(data, title=str(data.get("title") or s.get("title") or "")))
+    task, action = plan_tasks.save_sources(DB_PATH, s["slot_key"], channel, form, meta, selected)
+    return (jsonify({"task": task, "action": action, "problems": problems,
+                     "slot": s["slot_key"], "position": s.get("position") or "",
+                     "summary_type": plan_tasks.resolve_summary_type(channel, form)}), 200)
+
+
+@app.route("/api/plan/series/adopt", methods=["POST"])
+def api_plan_series_adopt():
+    """把勾选的一条或多条素材存成**本篇已采用**。一次提交多条，生成前可反复增删。"""
+    out, code = _plan_adopt(request.get_json(force=True, silent=True) or {})
+    return (out, code) if code != 200 else out
+
+
+@app.route("/api/plan/supplements/<int:task_id>")
+def api_plan_supplements(task_id):
+    """这一格的「补充资料」提名：拿已采用的视频素材去找强相关的非视频料。
+
+    只提名、不自动采用（号主 10-28 定的规矩：判据再硬也可能错，人勾了才算），
+    也不自动进任何生成——要等 POST 存进这一版的 supplement_ids。
+    """
+    task = plan_tasks.get_task(DB_PATH, task_id)
+    if not task:
+        return jsonify({"error": "找不到这条排产任务"}), 404
+    ids = [int(i) for i in (task.get("video_ids") or [])]
+    if not ids:
+        return jsonify({"candidates": [], "adopted": [], "scanned": 0, "count_all": 0,
+                        "need_main": True,
+                        "msg": "这一格还没采用视频素材——补充料是挂在主素材下面的，先采用素材。"})
+    try:
+        mains = content_store.get_videos_by_ids(DB_PATH, ids)
+    except Exception as e:
+        return jsonify({"error": str(e), "retry": True}), 502
+    res = supplements.candidates(DB_PATH, mains)
+    adopted = task.get("supplement_ids") or []
+    return jsonify({"candidates": res["list"], "count_all": res["count_all"],
+                    "scanned": res["scanned"],
+                    "adopted": adopted,
+                    # 已勾的那几条也按同一份口径渲染（分级/日期/当初凭什么勾的理由都在里面），
+                    # 不在前端再抄一张 sheet→分级 的表
+                    "adopted_rows": supplements.rows_by_ids(
+                        DB_PATH, adopted, snaps=task.get("supplement_sources")),
+                    "started": plan_tasks.is_started(task),
+                    "max_items": supplements.MAX_ITEMS})
+
+
+@app.route("/api/material/supplements")
+def api_material_supplements():
+    """给**一条视频素材**找强相关的非视频料——排产表那一侧展开子集时才查。
+
+    判据、分级、条数全在 `src/supplements.py`，和工作台排产格那块是同一份实现，不抄第二份。
+    懒查是有意的：一页 26 个选题、每个十几条候选，全算要几十秒；点开一条算一条（实测 0.2s）。
+    """
+    try:
+        vid = int(request.args.get("video_id") or 0)
+    except (TypeError, ValueError):
+        vid = 0
+    if not vid or not DB_PATH.exists():
+        return jsonify({"error": "要带 video_id（库里那条视频素材的主键）"}), 400
+    try:
+        mains = content_store.get_videos_by_ids(DB_PATH, [vid])
+    except Exception as e:
+        return jsonify({"error": str(e), "retry": True}), 502
+    if not mains:
+        return jsonify({"error": "库里查不到这条素材 id=%s" % vid}), 404
+    if (mains[0].get("source_sheet") or "") not in supplements.VIDEO_SHEETS:
+        return jsonify({"candidates": [], "scanned": 0, "count_all": 0, "not_video": True,
+                        "msg": "这条不是视频素材，下面不挂子集（它可以当别的素材的补充料）"})
+    res = supplements.candidates(DB_PATH, mains, limit=8)
+    return jsonify({"candidates": res["list"], "scanned": res["scanned"],
+                    "count_all": res["count_all"], "max_items": supplements.MAX_ITEMS})
+
+
+@app.route("/api/plan/supplements", methods=["POST"])
+def api_plan_supplements_save():
+    """勾定补充料。"凭什么算相关"由服务端现算并冻进快照，不信前端回传的那份。"""
+    data = request.get_json(force=True, silent=True) or {}
+    try:
+        task_id = int(data.get("task_id"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "没带 task_id"}), 400
+    raw = data.get("video_ids")
+    if raw is None:
+        return jsonify({"error": "没带 video_ids：要清空请显式传空数组"}), 400
+    task = plan_tasks.get_task(DB_PATH, task_id)
+    if not task:
+        return jsonify({"error": "找不到这条排产任务"}), 404
+    ids = []
+    for x in raw:
+        try:
+            v = int(x)
+        except (TypeError, ValueError):
+            continue
+        if v and v not in ids:
+            ids.append(v)
+    if len(ids) > supplements.MAX_ITEMS:
+        return jsonify({"error": "补充资料最多 %d 条——它们是配角，给多了挤掉主素材"
+                        % supplements.MAX_ITEMS}), 400
+    try:
+        rows = content_store.get_videos_by_ids(DB_PATH, ids) if ids else []
+        mains = content_store.get_videos_by_ids(DB_PATH, task.get("video_ids") or [])
+    except Exception as e:
+        return jsonify({"error": str(e), "retry": True}), 502
+    got = {int(r["id"]) for r in rows}
+    missing = [i for i in ids if i not in got]
+    if missing:
+        return jsonify({"error": "库里查不到这些素材 id：%s（可能刚被删掉），没保存" % missing}), 422
+    bad = [r for r in rows if (r.get("source_sheet") or "") not in supplements.NON_VIDEO_SHEETS]
+    if bad:
+        return jsonify({"error": "这几条不是非视频素材，不能当补充料：%s"
+                        % "、".join((r.get("title") or str(r["id"]))[:20] for r in bad)}), 400
+    task, action = plan_tasks.save_supplements(DB_PATH, task_id, rows,
+                                               supplements.why_map(mains, rows))
+    if action == "no-main":
+        return jsonify({"error": "这一格还没有采用视频素材，先采用素材再勾补充料。",
+                        "task": task}), 409
+    return jsonify({"task": task, "action": action})
+
+
+@app.route("/api/plan/series/open", methods=["POST"])
+def api_plan_series_open():
+    """起稿入口（素材库直接起、或从 S2 章节线索起一篇）。
+
+    关联系列 = 传 series/chapter；不传就是独立篇。
+    **先建独立稿、事后关联系列**走 `/api/plan/series/link`：换标签不换键，任务与稿都不复制。
+    """
+    data = request.get_json(force=True, silent=True) or {}
+    ids = data.get("video_ids") or []
+    if not ids:
+        # 素材库那边勾的是 `sheet:row`（卡片键就是它），排产页那边勾的是 DB 主键。
+        # 两个入口都要能用，所以在服务端把 sheet:row 现查成 DB id——
+        # 让前端各自决定传哪种，迟早出现"传了行号被当成 id"那种串号。
+        ids = _plan_ids_from_keys(data.get("keys") or [])
+    if not isinstance(ids, list) or not ids:
+        return jsonify({"error": "至少勾一条素材才能起稿（本单不做空稿占位）"}), 400
+    series = str(data.get("series") or "free").strip()[:10]
+    if series not in ("s1", "s2", "free"):
+        return jsonify({"error": "series 只能是 s1 / s2 / free"}), 400
+    chapter = str(data.get("chapter") or "").strip()[:6]
+    form = str(data.get("form") or "guide").strip()[:20]
+    channel = str(data.get("channel") or "toutiao").strip()[:20]
+    if not plan_tasks.resolve_summary_type(channel, form):
+        return jsonify({"error": "渠道「%s」没有内容形式「%s」" % (channel, form)}), 400
+    title = str(data.get("title") or "").strip()[:80]
+    if not title:
+        return jsonify({"error": "给这一篇起个标题（台账与海报都要用，空着没法复盘）"}), 400
+    if str(data.get("slot_key") or "").strip():
+        # 选了 S1 的某个位置（或旧题）→ 这就是"采用到那一格"，走 _plan_adopt 那条路。
+        # 为什么不能新建槽号：A3 是**内容位置**，不是一篇稿。给它另建一槽，排产表上就会
+        # 出现"入门设置 7 个位置"这种假数，还会多出一条没人认领的 free-xxxxx
+        # （第一版实测就长出过一条，走查截图里看得见）。
+        out, code = _plan_adopt(dict(data, slot_key=str(data["slot_key"]).strip(),
+                                     video_ids=ids, channel=channel, form=form))
+        return (out, code) if code != 200 else out
+    try:
+        s = plan_series.new_slot(DB_PATH, title=title, series=series, chapter=chapter,
+                                 form=form, link_slot=str(data.get("link_slot") or "")[:40],
+                                 keywords=[str(x)[:20] for x in (data.get("keywords") or [])][:6])
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    selected, problems = _plan_materials(ids)
+    if not selected:
+        return jsonify({"error": "素材都不可用，稿没起", "problems": problems,
+                        "slot": s["slot_key"]}), 422
+    meta = _plan_meta(dict(data, title=title))
+    task, action = plan_tasks.save_sources(DB_PATH, s["slot_key"], channel, form, meta, selected)
+    # `slot` 一律回**槽号字符串**（与 _plan_adopt 一致），细节放 `slot_obj`：
+    # 两个入口的返回形状不一样，前端迟早写出 d.slot.slot_key 或 d.slot 两种取法，
+    # 其中一种会在另一个入口上静默变 undefined。
+    return jsonify({"slot": s["slot_key"], "slot_obj": s, "task": task,
+                    "action": action, "problems": problems})
+
+
+@app.route("/api/plan/series/link", methods=["POST"])
+def api_plan_series_link():
+    """独立稿事后**引用**到某个内容位置：只写 parent_slot，稿件自己的身份与槽号都不动。
+
+    为什么不改 series/position：S1 那 26 格是内容位置，把稿件写进 s1 会让看板数出 27 个位置，
+    还和地图里真正的那个位置撞成两行（Codex 二次复验第 4 条）。
+    """
+    data = request.get_json(force=True, silent=True) or {}
+    s, err = _plan_slot_or_400(data.get("slot_key"))
+    if err:
+        return err
+    series = str(data.get("series") or "").strip()[:10]
+    if series not in ("s1", "s2", "free", "legacy"):
+        return jsonify({"error": "series 只能是 s1 / s2 / free / legacy"}), 400
+    try:
+        out = plan_series.link_to_series(DB_PATH, s["slot_key"], series,
+                                         str(data.get("chapter") or "").strip()[:6],
+                                         str(data.get("position") or "").strip()[:10],
+                                         str(data.get("link_slot") or "").strip()[:40])
+    except ValueError as e:
+        return jsonify({"error": str(e), "slot": s["slot_key"]}), 400
+    return jsonify({"slot": out})
+
+
+@app.route("/api/plan/match/run", methods=["POST"])
+def api_plan_match_run():
+    """页面上那颗「现在匹配」。与夜间同一套代码、同一个幂等判据，只是键带时间戳。"""
+    data = request.get_json(force=True, silent=True) or {}
     try:
         with _db_lock:
-            out = ops_store.register_publish(DB_PATH, data)
+            out = plan_series.run_match(DB_PATH, kind="manual",
+                                        actor=str(data.get("by") or "页面"),
+                                        only_slots=data.get("only_slots") or None)
+        return jsonify(out)
+    except Exception as e:
+        return jsonify({"error": str(e)[:200]}), 500
+
+
+@app.route("/api/plan/match/config", methods=["GET", "POST"])
+def api_plan_match_config():
+    """夜间匹配的开关与执行时刻（默认 22:00 北京时间）。"""
+    if request.method == "GET":
+        return jsonify({"cfg": plan_series.load_cfg(), "status": plan_series.status_line(DB_PATH)})
+    data = request.get_json(force=True, silent=True) or {}
+    try:
+        cfg = plan_series.save_cfg(bool(data.get("enabled")),
+                                   str(data.get("run_at") or plan_series.DEFAULT_RUN_AT))
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    return jsonify({"cfg": cfg, "status": plan_series.status_line(DB_PATH)})
+
+
+@app.route("/api/plan/publish", methods=["GET", "POST"])
+def api_plan_publish():
+    """「已发布」这一勾的服务端真相。
+
+    GET  读这一格发过没有（含撤销后的状态）；
+    POST action=register 登记（写台账 + 审计）｜revoke 撤销（只追加审计，不删台账行）｜
+         report_local 上报旧浏览器的本地勾选｜resolve_local 人核对完旧勾选。
+    这里**不判内容质量**：登记只证明"人工发出去了"，质量门在下游那几道闸里。
+    """
+    if request.method == "GET":
+        s, err = _plan_slot_or_400(request.args.get("slot_key"))
+        if err:
+            return err
+        try:
+            return jsonify(plan_series.published_state(
+                DB_PATH, s["slot_key"], channel=request.args.get("channel") or ""))
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+    data = request.get_json(force=True, silent=True) or {}
+    s, err = _plan_slot_or_400(data.get("slot_key"))
+    if err:
+        return err
+    action = str(data.get("action") or "").strip()
+    # 渠道一律归一后再传：排产页交的是 'toutiao'，读的人可能写「头条」，两个都认，
+    # 但判据始终是 (槽号, 渠道) 这一对——公众号发过不能替头条说"这格已发"。
+    # 拼错的渠道在这里就拒（`norm_channel` 不再静默退成头条），别拿头条的答案糊过去。
+    try:
+        channel = plan_series.norm_channel(data.get("channel") or "toutiao")
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    try:
+        with _db_lock:
+            if action == "register":
+                out = plan_series.register_slot(DB_PATH, s["slot_key"],
+                                                dict(data, channel=channel))
+            elif action == "revoke":
+                out = plan_series.revoke_slot(DB_PATH, s["slot_key"],
+                                              str(data.get("ref_id") or ""),
+                                              str(data.get("reason") or ""),
+                                              str(data.get("by") or ""), channel=channel)
+            elif action == "report_local":
+                out = plan_series.report_local(DB_PATH, s["slot_key"],
+                                               bool(data.get("local_published")),
+                                               str(data.get("note") or "浏览器本地勾选"))
+            elif action == "resolve_local":
+                out = plan_series.resolve_local(DB_PATH, s["slot_key"],
+                                                str(data.get("verdict") or ""),
+                                                str(data.get("by") or ""))
+            else:
+                return jsonify({"error": "action 只能是 register / revoke / report_local /"
+                                         " resolve_local，收到「%s」" % action}), 400
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
-    return jsonify(out)
+        return jsonify({"error": str(e), "retry": True}), 500
+    return jsonify({"result": out, "channel": channel,
+                    "state": plan_series.published_state(DB_PATH, s["slot_key"],
+                                                          channel=channel)})
 
 
-@app.route("/api/ops/week", methods=["POST"])
-def api_ops_week():
-    data = request.get_json(silent=True) or {}
-    if not data:
-        return jsonify({"error": "请求体不是合法 JSON，没敢写库"}), 400
-    week = (data.get("week") or "").strip()
-    if not week:
-        return jsonify({"error": "week 不能空"}), 400
+@app.route("/api/plan/task", methods=["POST"])
+def api_plan_task_save():
+    """只存任务与"本篇采用哪几条素材"，**不生成**（生成是下一个端点，那一下才花钱）。
+
+    采用清单落库而不是留在浏览器里：PRD 3.1 要求"重新查素材只刷新候选，
+    不能悄悄替换已用证据"——候选是每次现查的，采用的是这一行存下来的。
+    """
+    data = request.get_json(force=True) or {}
+    slot = str(data.get("slot_key") or "").strip()[:40]
+    channel = str(data.get("channel") or "").strip()[:20]
+    form = str(data.get("form") or plan_tasks.DEFAULT_FORM).strip()[:20]
+    if not slot:
+        return jsonify({"error": "缺 slot_key（排产表里这一题的 id）"}), 400
+    if channel not in plan_tasks.VALID_CHANNELS:
+        return jsonify({"error": "本单只开头条与公众号两条线，channel 只能是 %s"
+                        % "/".join(plan_tasks.VALID_CHANNELS)}), 400
+    if not plan_tasks.resolve_summary_type(channel, form):
+        return jsonify({"error": "渠道「%s」没有内容形式「%s」" % (channel, form),
+                        "forms": [f for (c, f) in plan_tasks.FORMS if c == channel]}), 400
+    raw_ids = data.get("video_ids")
+    if raw_ids is None:
+        return jsonify({"error": "没带 video_ids 字段：要清空请显式传空数组"}), 400
     try:
-        with _db_lock:
-            row = ops_store.upsert_week(DB_PATH, week, data.get("fields") or {})
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
+        selected, problems = _plan_materials(raw_ids)
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
-    return jsonify({"row": row})
+        return jsonify({"error": str(e), "retry": True}), 502
+    # 显式传空数组＝"这一版的素材全部取消采用"，要存得下来（界面那颗「取消采用」点到最后一条靠它）；
+    # 给了 id 但一条都不能用＝素材本身有问题，不存空任务，把原因交回界面。
+    if raw_ids and not selected:
+        return jsonify({"error": "没有可用素材，任务没存", "problems": problems}), 422
+    task, action = plan_tasks.save_sources(DB_PATH, slot, channel, form, _plan_meta(data), selected)
+    return jsonify({"task": task, "action": action, "created": action == "created",
+                    "problems": problems,
+                    "summary_type": plan_tasks.resolve_summary_type(channel, form)})
 
 
-@app.route("/api/ops/import-ledger", methods=["POST"])
-def api_ops_import_ledger():
-    """把旧台账（media-workbench/runtime/publications.json）整本接进来 + 按审核台「已发布」补空行。
-    2026-10-18 起是全渠道（原来只导微信 4 条，那边 96 条头条记录没人接）。只补空，不覆盖手填的数。"""
+@app.route("/api/plan/task/generate", methods=["POST"])
+def api_plan_task_generate():
+    """排产主入口那一下：默认**继续已有稿**，显式重新生成才建新版本。
+
+    四条硬规矩（都是这一单要验收的）：
+      1 已有 done 的稿且没传 regenerate → 直接回那篇稿，一次模型都不调（不重复花钱）；
+      2 正在跑的那版没跑完 → 409，双击/刷新/第二个标签都撞在同一行上（防重靠 DB 那一条
+        带条件的 UPDATE，不靠内存标志）；
+      3 素材缺正文/已被删 → 422 带具体恢复入口，**不起任务**；
+      4 regenerate → version+1 新行，前稿原样留着。
+    """
+    data = request.get_json(force=True) or {}
+    slot = str(data.get("slot_key") or "").strip()[:40]
+    channel = str(data.get("channel") or "").strip()[:20]
+    form = str(data.get("form") or plan_tasks.DEFAULT_FORM).strip()[:20]
+    regenerate = bool(data.get("regenerate"))
+    if not slot:
+        return jsonify({"error": "缺 slot_key"}), 400
+    if channel not in plan_tasks.VALID_CHANNELS:
+        return jsonify({"error": "本单只开头条与公众号两条线，channel 只能是 %s"
+                        % "/".join(plan_tasks.VALID_CHANNELS)}), 400
+    summary_type = plan_tasks.resolve_summary_type(channel, form)
+    if not summary_type:
+        return jsonify({"error": "渠道「%s」没有内容形式「%s」，不能默认落到游戏攻略那一档"
+                        % (channel, form),
+                        "forms": [f for (c, f) in plan_tasks.FORMS if c == channel]}), 400
+    req_ids = [int(x) for x in (data.get("video_ids") or []) if str(x).strip()]
+    base_task_id = data.get("base_task_id")
+    base_version = data.get("base_version")
+    # T1/T2（Codex 第二次复验）：**素材只认库里那一版**。prepare_run 在一个写事务里把
+    # "读当前版 → 判能不能跑 → 定这一版用哪几条"做完；请求带来的 video_ids 只当校验用，
+    # 与库里不一致一律 409 stale——以前 pending/failed 上不拦，于是存 [12] 却用 [112] 生成，
+    # 任务记的是一回事、稿子的来源是另一回事（复现见 repro-r2.py 第一项）。
+    # 先验请求带的素材，再决定要不要落一行：**一条都不能用就不建任务**，
+    # 否则库里会留下一行"记着素材 120、其实什么都没生成"的脏版本（第一版就踩过，
+    # 后面同一题的请求全部撞上 409，看着像 stale 其实是上一条留下的壳）。
+    problems = []
+    usable_ids = []
+    if req_ids:
+        try:
+            selected_req, problems = _plan_materials(req_ids)
+        except Exception as e:
+            return jsonify({"error": str(e), "retry": True}), 502
+        if not selected_req:
+            return jsonify({"mode": "blocked", "error": "没有可用素材，没起生成任务",
+                            "problems": problems}), 422
+        # 存进去的必须是"真能用的那几条"：请求带了 3 条、1 条没正文，
+        # 若把 3 条原样存下，稿子只用 2 条，任务记的与稿子用的又对不上（T1 同一个洞）
+        usable_ids = [int(v["id"]) for v in selected_req]
+    d = plan_tasks.prepare_run(DB_PATH, slot, channel, form, _plan_meta(data), usable_ids,
+                               regenerate=regenerate, base_task_id=base_task_id,
+                               base_version=base_version)
+    latest = d.get("task")
+    decision = d["decision"]
+    if decision == "continue":
+        return jsonify({"mode": "continue", "task": latest,
+                        "summary_id": latest.get("summary_id"),
+                        "note": "这一版已经有稿，默认继续处理；要换一版请显式点「重新生成」"})
+    if decision == "running":
+        return jsonify({"mode": "running", "error": "这一版正在生成，等它跑完再说",
+                        "task": latest, "job": _plan_job(latest["id"])}), 409
+    if decision == "blocked":
+        return jsonify({"mode": "blocked", "task": latest,
+                        "error": d.get("reason") or "这一版没有可用素材",
+                        "problems": [{"code": "no_sources", "msg": d.get("reason") or "",
+                                      "action": "reselect", "action_label": "回排产表确认采用素材"}]}), 422
+    if decision == "stale":
+        return jsonify({"mode": "stale", "task": latest,
+                        "stored_video_ids": (latest or {}).get("video_ids"),
+                        "error": (d.get("reason") or "请求与库里那一版不一致")
+                                 + "。已开工版本的证据不许被覆盖：要换素材请先在排产表点「采用」存好"}), 409
+
+    # 占锁前先验一次素材：全不可用就别占锁，那一版留在原状态，人改完可以直接再试
+    run_ids = [int(x) for x in (latest.get("video_ids") or [])]
     try:
-        with _db_lock:
-            out = ops_store.import_ledger(DB_PATH)
+        selected, run_problems = _plan_materials(run_ids)
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
-    return jsonify(out)
-
-
-@app.route("/api/bank/overview")
-def api_bank_overview():
-    """答案库与交付看板：题数、来源、自检结论、交付物清单、许可判定，全部现读现算。"""
-    try:
-        return jsonify(bank_board.overview())
-    except Exception as e:
-        return jsonify({"error": str(e), "trace": traceback.format_exc().splitlines()[-3:]}), 500
-
-
-@app.route("/api/bank/file")
-def api_bank_file():
-    """只开放看板列出来的那几个文件，不把整个 product/ 暴露成可猜的下载口。"""
-    name = os.path.basename(request.args.get("name") or "")
-    if name not in bank_board.artifact_names():
-        return jsonify({"error": "这个文件不在看板清单里，不给打开"}), 404
-    return send_from_directory(bank_board.PRODUCT, name)
-
-
-@app.route("/api/content/generate", methods=["POST"])
-def api_content_generate():
-    """把选中的视频整理成游戏攻略或 AI 面试题，并保存到 SQLite。"""
-    global _task_status
-    if _task_status.get("running"):
-        return jsonify({"error": "已有任务正在运行"}), 400
-
-    data = request.get_json(force=True)
-    videos = data.get("videos", [])
-    summary_type = data.get("summary_type", "game_guide")
-    combine = bool(data.get("combine", False))
-    if summary_type not in ("game_guide", "ai_interview", "wechat_material", "toutiao_mix"):
-        return jsonify({"error": "summary_type 只能是 game_guide / ai_interview / wechat_material / toutiao_mix（攻略成品文章走自媒体工作台生成）"}), 400
-    if not videos:
-        return jsonify({"error": "请选择要整理的视频"}), 400
-
-    _task_status = {
-        "running": True,
-        "progress": "准备生成内容...",
-        "done": False,
-        "error": "",
-        "success": 0,
-        "summary_ids": [],
-    }
+        return jsonify({"error": str(e), "retry": True}), 502
+    # 请求里被剔掉的那几条（没正文/已删除）要一路带到响应里——界面靠它给恢复入口；
+    # 只报"跑起来那几条"的问题会把"你刚才那条 120 我没用"这件事悄悄吞掉。
+    problems = list(problems or []) + [p for p in (run_problems or [])
+                                       if p not in (problems or [])]
+    if not selected:
+        return jsonify({"mode": "blocked", "error": "没有可用素材，没起生成任务",
+                        "task": latest, "problems": problems}), 422
+    token = plan_tasks.claim_running(DB_PATH, latest["id"])
+    if not token:
+        # T2：抢不到锁要**重读之后分情况回**，不能一律说"正在跑"
+        back = plan_tasks.get_task(DB_PATH, latest["id"]) or latest
+        if back.get("summary_id") and back.get("status") == "done":
+            return jsonify({"mode": "continue", "task": back, "summary_id": back["summary_id"],
+                            "note": "这一版刚被别的请求跑完了，直接用它"})
+        if back.get("status") == "running":
+            return jsonify({"mode": "running", "error": "这一版刚被别人占了（同一题同渠道只跑一个）",
+                            "task": back, "job": _plan_job(back["id"])}), 409
+        return jsonify({"mode": "stale", "task": back,
+                        "error": "这一版的状态刚被改动（现在 %s），请刷新再看"
+                                 % back.get("status")}), 409
+    attempt_this = (latest.get("attempt") or 0) + 1   # claim 只 +1，重读之后也还是这个数
+    # T1 收尾的一刀：prepare_run 与 claim 之间还有一段没上锁的时间，
+    # 若这期间有人把采用清单改了（pending 上就地改），我手上那份快照就不是库里那一版了。
+    # 占锁成功后**按锁住的这一行重读一次**，生成依据与记录同源；行已经是 running，
+    # 之后的 save_sources 只会开新版、改不动这一行，所以这次读数就是最终值。
+    after = plan_tasks.get_task(DB_PATH, latest["id"]) or latest
+    if [int(x) for x in (after.get("video_ids") or [])] != run_ids:
+        run_ids = [int(x) for x in (after.get("video_ids") or [])]
+        latest = after
+        try:
+            selected, run_problems = _plan_materials(run_ids)
+        except Exception as e:
+            return jsonify({"error": str(e), "retry": True}), 502
+        problems = [p for p in (run_problems or []) if p not in (problems or [])] + problems
+        if not selected:
+            plan_tasks.finish(DB_PATH, latest["id"], "aborted",
+                              error=_short_err("占锁后采用清单被改成没有可用素材的那一组，"
+                                               "这次没生成；先在排产表重新确认采用再生成"),
+                              token=token)
+            return jsonify({"mode": "blocked", "error": "这一版的采用清单刚被改过，改完的那几条"
+                                                        "现在都不能用，没起生成",
+                            "task": after, "problems": problems}), 422
+    job = _plan_job(latest["id"])
+    _plan_job_reset(job, "准备生成内容...")
+    task_id = latest["id"]
+    model_name = (_fast_config() or {}).get("model") or ""
+    # R3：选题要求进真实提示词。取的是**库里那一版**存的字段（不是请求里带的），
+    # 这样"当初用什么要求生成的"永远能从任务行回查，与冻结的证据同源。
+    brief = {"title": latest.get("title"), "hook": latest.get("hook"),
+             "note": latest.get("note"), "plan_date": latest.get("plan_date"),
+             "channel_label": plan_tasks.channel_label(latest.get("channel") or channel),
+             "form_label": plan_tasks.form_label(latest.get("form") or form)}
+    # 补充资料（非视频料）也取自**任务行里存的那一份**，与选题要求同一套规矩：
+    # 当初勾了哪几条、凭什么算相关，事后能从 supplement_sources 回查，不许现编。
+    sup_ids = latest.get("supplement_ids") or []
+    if sup_ids:
+        try:
+            brief["supplements"] = supplements.rows_by_ids(
+                DB_PATH, sup_ids, snaps=latest.get("supplement_sources"))
+        except Exception as e:
+            print("[plan] 补充资料读取失败（这次生成不带它们）: %s" % e, flush=True)
 
     def run():
-        global _task_status
+        # T1：worker 用事务定下来的那几条素材 id，不再经 sheet:row 绕回另一条记录
+        ids = _run_generation(None, summary_type, len(run_ids) > 1, job, brief,
+                              video_ids=run_ids)
         try:
-            _task_status["progress"] = "同步 Excel 到内容库..."
-            _sync_content_db()
-            config = _fast_config()   # 同上：整理稿走快速档，理由见 /regenerate 那段注释
-            success_count = 0
-            summary_ids = []
-            selected_videos = []
-
-            for i, key in enumerate(videos):
-                try:
-                    sheet, row_text = key.split(":", 1)
-                    row = int(row_text)
-                    _task_status["progress"] = f"读取 [{i+1}/{len(videos)}] {sheet} 第{row}行..."
-                    video = content_store.get_video_by_source(DB_PATH, sheet, row)
-                    if not video:
-                        _task_status["error"] += f"{key}: 内容库中找不到视频\n"
-                        continue
-                    if not (video.get("transcript") or "").strip():
-                        _task_status["error"] += f"{key}: 没有 ASR 文本，跳过\n"
-                        continue
-                    selected_videos.append(video)
-                except Exception as e:
-                    _task_status["error"] += f"{key}: {e}\n"
-
-            if combine:
-                if not selected_videos:
-                    _task_status["progress"] = "没有可生成的 ASR 文本"
-                    _task_status["done"] = True
-                    return
-
-                _task_status["progress"] = f"合并整理 {len(selected_videos)} 条视频..."
-                result, model, status = content_store.generate_collection_summary(
-                    selected_videos, summary_type, config
-                )
-                if summary_type in GUIDE_SUMMARY_TYPES:
-                    # 攻略类：抽关键帧做配图，嵌入整理稿尾部
-                    _task_status["progress"] = "抽取视频关键帧配图..."
-                    result["content"] = (result.get("content") or "") + _video_keyframe_markdown(selected_videos)
-                source_ids = [int(v["id"]) for v in selected_videos]
-                with _db_lock:
-                    summary_id = content_store.save_summary(
-                        DB_PATH,
-                        video_id=source_ids[0],
-                        summary_type=summary_type,
-                        result=result,
-                        model=model,
-                        status=status,
-                        source_video_ids=source_ids,
-                    )
-                summary_ids.append(summary_id)
-                success_count = 1
+            if ids:
+                plan_tasks.finish(DB_PATH, task_id, "done", summary_id=ids[0],
+                                  error=job.get("error") or "", model=model_name, token=token)
             else:
-                for i, video in enumerate(selected_videos):
-                    _task_status["progress"] = f"整理 [{i+1}/{len(selected_videos)}] 第{video['source_row']}行..."
-
-                    result, model, status = content_store.generate_summary(
-                        video, summary_type, config
-                    )
-                    if summary_type in GUIDE_SUMMARY_TYPES:
-                        # 攻略类：抽关键帧做配图，嵌入整理稿尾部
-                        _task_status["progress"] = f"抽取关键帧配图 [{i+1}/{len(selected_videos)}] 第{video['source_row']}行..."
-                        result["content"] = (result.get("content") or "") + _video_keyframe_markdown([video])
-                    with _db_lock:
-                        summary_id = content_store.save_summary(
-                            DB_PATH,
-                            video_id=video["id"],
-                            summary_type=summary_type,
-                            result=result,
-                            model=model,
-                            status=status,
-                            source_video_ids=[int(video["id"])],
-                        )
-                    summary_ids.append(summary_id)
-                    success_count += 1
-
-            _task_status["success"] = success_count
-            _task_status["summary_ids"] = summary_ids
-            label = "合并整理稿" if combine else "整理稿"
-            _task_status["progress"] = f"✅ 已生成 {success_count} 条{label}"
-            _task_status["done"] = True
+                plan_tasks.finish(DB_PATH, task_id, "failed",
+                                  error=_short_err(job.get("error") or job.get("progress")
+                                                   or "没生成出稿"),
+                                  model=model_name, token=token)
         except Exception:
-            _task_status["error"] = traceback.format_exc()
-            _task_status["done"] = True
+            app.logger.warning("排产任务收尾失败 task=%s", task_id, exc_info=True)
         finally:
-            _task_status["running"] = False
+            job["running"] = False
 
     threading.Thread(target=run, daemon=True).start()
-    return jsonify({"status": "started", "total": len(videos), "summary_type": summary_type, "combine": combine})
+    return jsonify({"mode": "started", "task_id": task_id, "task": latest,
+                    "total": len(run_ids), "combine": len(run_ids) > 1,
+                    "summary_type": summary_type, "problems": problems,
+                    "attempt": attempt_this})
+
+
+@app.route("/api/plan/task/<int:task_id>")
+def api_plan_task_detail(task_id):
+    """一个任务的当前状态 + 它自己的进度（**不读全局 _task_status**）。
+
+    为什么单独一条：素材库批量那套轮询的是全局状态，双渠道同时生成时谁后跑谁覆盖，
+    两条进度会串。这里按 task_id 各存一份。
+    """
+    task = plan_tasks.get_task(DB_PATH, task_id)
+    if not task:
+        return jsonify({"error": "任务不存在"}), 404
+    return jsonify({"task": task, "job": _plan_job(task_id),
+                    "summary": (content_store.get_summary(DB_PATH, task["summary_id"])
+                                if task.get("summary_id") else None)})
+
+
+@app.route("/api/plan/tasks")
+def api_plan_tasks_list():
+    """按选题（slot_key）或按素材（video_id）查任务。同题双渠道要能同时看见。"""
+    slot = str(request.args.get("slot_key") or "").strip()[:40]
+    vid = str(request.args.get("video_id") or "").strip()
+    try:
+        if slot:
+            return jsonify({"tasks": plan_tasks.tasks_for_slot(DB_PATH, slot)})
+        if vid:
+            return jsonify({"tasks": plan_tasks.tasks_for_video(DB_PATH, int(vid))})
+    except Exception as e:
+        return jsonify({"error": str(e), "tasks": []}), 500
+    return jsonify({"error": "要带 slot_key 或 video_id"}), 400
+
+
+# ══ 整理稿精确关联（修 12/112 子串误配与前 500 篇漏稿）════════════════════
+@app.route("/api/content/summaries/by-video/<int:video_id>")
+def api_content_summaries_by_video(video_id):
+    """这条素材的整理稿，**服务端精确匹配**。
+
+    以前是前端拉 `?page_size=500` 再在 JS 里对 `source_video_ids` 那个 JSON 字符串做
+    indexOf：id=12 命中 "[112, 113]"（把无关合集稿算成这条的稿），第 501 篇以后永远看不见。
+    现在用 SQLite 的 json_each 精确比，且**没有条数上限**；查不到就明确返回空列表，
+    查询本身出错返回 500——前端据此区分"确实没有稿"和"没查到"，不许把后者当前者重跑收费生成。
+    """
+    try:
+        con = sqlite3.connect(str(DB_PATH))
+        con.row_factory = sqlite3.Row
+        try:
+            rows = con.execute(
+                "SELECT s.id, s.summary_type, s.title, s.status, s.video_id,"
+                " s.source_video_ids, s.model, s.updated_at"
+                " FROM ai_summaries s"
+                " WHERE s.video_id = ?"
+                "    OR (json_valid(s.source_video_ids)"
+                "        AND EXISTS (SELECT 1 FROM json_each(s.source_video_ids)"
+                "                    WHERE value = ?))"
+                " ORDER BY s.updated_at DESC", (int(video_id), int(video_id))).fetchall()
+        finally:
+            con.close()
+        return jsonify({"video_id": int(video_id), "items": [dict(r) for r in rows]})
+    except Exception as e:
+        return jsonify({"error": str(e), "items": []}), 500
 
 
 # ── 攻略整理稿配图：抽取视频关键帧并生成 Markdown 图片段 ──
@@ -2223,7 +3265,8 @@ def _video_keyframe_markdown(videos: list, max_frames: int = 5, per_video: int =
 
 # ── 头条图文：整合稿 → 信息图 + 微头条文案（复制发布保持手动，合规红线） ──
 # 独立任务状态：不与 /api/content/generate 共用 _task_status，避免两条产线互相打断
-_tt_task_status = {"running": False, "done": True, "progress": "", "error": "", "package": None}
+_tt_task_status = {"running": False, "done": True, "progress": "", "error": "", "package": None,
+                   "step": None, "steps": None}
 
 
 @app.route("/api/toutiao/guide-upload", methods=["POST"])
@@ -2283,8 +3326,7 @@ def api_toutiao_generate():
 
     def run():
         try:
-            def cb(msg):
-                _tt_task_status["progress"] = msg
+            cb = _run_progress_cb(_tt_task_status)
             _tt_task_status["progress"] = "LLM 卡片化整合稿..."
             package = toutiao_graphics.generate_graphics(summary, _fast_config(), progress_cb=cb,
                                                           theme=theme, skin=skin, title=title,
@@ -2302,6 +3344,7 @@ def api_toutiao_generate():
         finally:
             _tt_task_status["done"] = True
             _tt_task_status["running"] = False
+            _tt_task_status["step"] = _tt_task_status["steps"] = None
 
     threading.Thread(target=run, daemon=True).start()
     return jsonify({"status": "started", "summary_id": summary_id})
@@ -2452,7 +3495,11 @@ def api_toutiao_delete(summary_id):
 
 # ── 公众号图文：wechat_material 整合稿 + 作者真实底稿 → 3:4 卡片 + 配文/摘要/关键词回复 ──
 # 独立任务状态：与 _task_status / _tt_task_status 三者刻意分离，产线互不打断（迁移方案 §5.5）
-_wx_task_status = {"running": False, "done": True, "progress": "", "error": "", "package": None}
+_wx_task_status = {"running": False, "done": True, "progress": "", "error": "", "package": None,
+                    "step": None, "steps": None}
+# 成稿单独一份进度：卡片在跑与成稿在跑是两件事，混一份状态一定出现"另一条说完成"的假读数
+_wx_article_status = {"running": False, "done": True, "progress": "", "error": "", "article": None,
+                        "step": None, "steps": None}
 
 
 @app.route("/api/wechat/shot-upload", methods=["POST"])
@@ -2585,8 +3632,7 @@ def api_wechat_generate():
 
     def run():
         try:
-            def cb(msg):
-                _wx_task_status["progress"] = msg
+            cb = _run_progress_cb(_wx_task_status)
             package = wechat_graphics.generate_graphics(summary, _fast_config(), author_draft=author_draft,
                                                         progress_cb=cb, theme=theme, title=title,
                                                         template=template, real_screenshots=shots,
@@ -2605,6 +3651,7 @@ def api_wechat_generate():
         finally:
             _wx_task_status["done"] = True
             _wx_task_status["running"] = False
+            _wx_task_status["step"] = _wx_task_status["steps"] = None
 
     threading.Thread(target=run, daemon=True).start()
     return jsonify({"status": "started", "summary_id": summary_id})
@@ -2613,6 +3660,127 @@ def api_wechat_generate():
 @app.route("/api/wechat/status")
 def api_wechat_status():
     return jsonify(_wx_task_status)
+
+
+# ── 公众号成稿（2026-10-26 策略：这一渠道交的是完整文章，卡片只是可选配图）──
+# 单独一条路由而不是给 /api/wechat/generate 加 mode：那一路径的产物是 6-8 张卡，
+# 成稿的产物是一篇 md，两者的进度、门禁、结果页都不一样，混在一个 status 里
+# 一定会出现"卡片在跑、成稿说完成"这种对不上的读数（排产那条线刚踩过同类坑）。
+@app.route("/api/wechat/article", methods=["POST"])
+def api_wechat_article_generate():
+    data = request.get_json(force=True) or {}
+    summary_id = data.get("summary_id")
+    ask = str(data.get("ask") or "").strip()[:120]     # 这篇要解决哪一件事（进提示词）
+    if not summary_id:
+        return jsonify({"error": "缺少 summary_id"}), 400
+    # 空切口在**花钱之前**拦：97 号那篇就是 ask 空着跑的，团本预告＋九座地下城＋九处未核实入口
+    # 订成一篇，标题还承诺"一次查清"。这一趟实测 3.4 万 token、6 分钟，拦晚了白花。
+    if not ask:
+        return jsonify({"error": "先写「这篇要解决哪一件事」。空着不生成——没有单篇切口，"
+                                 "模型会把整理稿里几个主题订成一篇合订表（97 号就是这么来的）"}), 400
+    if _wx_article_status.get("running"):
+        return jsonify({"error": "已有一篇成稿在写，等它跑完"}), 409
+    try:
+        summary = content_store.get_summary(DB_PATH, int(summary_id))
+    except Exception as e:
+        return jsonify({"error": str(e), "retry": True}), 502
+    if not summary:
+        return jsonify({"error": "整理稿不存在"}), 404
+    if summary.get("summary_type") != "wechat_material":
+        return jsonify({"error": "只有公众号整理稿（wechat_material）能成稿，请先用「生成：公众号文章」出一份"}), 400
+    _wx_article_status.update({"running": True, "done": False, "progress": "准备整篇改写...", "error": "",
+                               "article": None})
+
+    def run():
+        try:
+            cb = _run_progress_cb(_wx_article_status)
+            # 素材台账（类型＋发布日）由存储层给：上一版成稿把两篇暴雪官方公告通篇写成
+            # "官方视频1/视频2"，就是成稿这一层看不到素材是什么类型、只能照整理稿的编号措猜。
+            ledger = ""
+            try:
+                src_ids = [int(x) for x in json.loads(summary.get("source_video_ids") or "[]")]
+                if not src_ids and summary.get("video_id"):
+                    src_ids = [int(summary["video_id"])]
+                vids = content_store.get_videos_by_ids(DB_PATH, src_ids)
+                ledger = content_store.source_ledger(vids)
+            except Exception:
+                app.logger.warning("成稿台账取不到（来源类型与日期会写成素材未记录）", exc_info=True)
+            meta = wechat_graphics.generate_article(summary, _fast_config(), ask=ask,
+                                                    progress_cb=cb, ledger=ledger)
+            _wx_article_status["article"] = meta
+        except GraphicsGateError as e:
+            _wx_article_status["error"] = str(e)
+            _wx_article_status["progress"] = "成稿被门禁拦下"
+        except Exception:
+            _wx_article_status["error"] = _short_err(traceback.format_exc())
+            _wx_article_status["progress"] = "成稿失败"
+        finally:
+            _wx_article_status["done"] = True
+            _wx_article_status["running"] = False
+            _wx_article_status["step"] = _wx_article_status["steps"] = None
+
+    threading.Thread(target=run, daemon=True).start()
+    return jsonify({"status": "started", "summary_id": int(summary_id)})
+
+
+@app.route("/api/wechat/article/status")
+def api_wechat_article_status():
+    return jsonify(_wx_article_status)
+
+
+@app.route("/api/wechat/article/parts", methods=["POST"])
+def api_wechat_article_parts():
+    """现算**一份最终判定**（拆分 + 全部机检 error）——绿条、复制许可、lint 面板读同一份。
+
+    前端每次按键 debounce 后把编辑框里这份 md 递过来。为什么不在前端切：编辑框是活的，
+    客户端自己切一遍就会和 lint／复制／存档各判各的（上一版"提示让你手动截正文、
+    按钮却复制全文"就是两份实现漂出来的）。不落盘、不调模型。
+    响应回显 `echo`（请求文本的字数与结尾 24 字）：前端拿它判"这份结果属不属于当前文本"，
+    防的是"旧请求晚回来、把新文本解锁"这类竞态（Codex 复验 P0-1）。
+    """
+    md = str((request.get_json(force=True) or {}).get("md") or "")
+    verdict = wechat_graphics.article_verdict(md)
+    verdict["echo"] = {"chars": len(md), "tail": md[-24:]}
+    return jsonify(verdict)
+
+
+@app.route("/api/wechat/article/topics/<int:summary_id>")
+def api_wechat_article_topics(summary_id):
+    """单篇切口建议：从整理稿的小节标题确定性列出来（不调模型、不花钱），供弹窗点选。"""
+    try:
+        summary = content_store.get_summary(DB_PATH, int(summary_id))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    if not summary:
+        return jsonify({"error": "整理稿不存在"}), 404
+    art = wechat_graphics.read_article(summary_id)
+    return jsonify({"topics": wechat_graphics.topic_suggestions(summary),
+                    "summary_title": summary.get("title") or "",
+                    "ask_used": (art or {}).get("ask") or "",
+                    "has_article": bool(art)})
+
+
+@app.route("/api/wechat/article/<int:summary_id>")
+def api_wechat_article_get(summary_id):
+    art = wechat_graphics.read_article(summary_id)
+    if not art:
+        return jsonify({"error": "这一篇还没有成稿", "summary_id": summary_id}), 404
+    return jsonify(art)
+
+
+@app.route("/api/wechat/article/<int:summary_id>", methods=["PUT"])
+def api_wechat_article_save(summary_id):
+    """人工改稿存回去，并**按改后这份重判格式**——沿用旧判定等于"改了字报警还挂着"。"""
+    data = request.get_json(force=True) or {}
+    md = data.get("md")
+    if md is None:
+        return jsonify({"error": "没带 md 字段"}), 400
+    try:
+        return jsonify(wechat_graphics.save_article(summary_id, str(md)))
+    except GraphicsGateError as e:
+        return jsonify({"error": str(e)}), 409
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/wechat/list")
@@ -2673,6 +3841,36 @@ _poster_status = {"running": False, "done": True, "progress": "", "error": "",
 _poster_task_seq = 0
 
 
+def _poster_plan_file(sid):
+    return Path(str(OUTPUT_DIR)) / "poster" / str(int(sid)) / "plan.json"
+
+
+def _poster_save_plan(sid, payload):
+    """把拆好的文案（连档位、渠道、那份 0 元提示词）落进成品包。
+
+    为什么：`_poster_status` 是进程内的，**重启一次就把刚拆好的文案一起吃掉**——
+    那是花过模型钱、等过八九分钟的那一份（号主 10-23 为这个重拆了两回）。
+    落盘后重开弹窗、重启服务都接得回来。写失败不影响这次结果，只少一份备份。
+    """
+    try:
+        p = _poster_plan_file(sid)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    except Exception as e:
+        print("[poster] 文案备份没写成（不影响这次结果）:", e)
+
+
+def _poster_load_plan(sid):
+    try:
+        p = _poster_plan_file(sid)
+        if not p.is_file():
+            return None
+        d = json.loads(p.read_text(encoding="utf-8"))
+        return d if isinstance(d, dict) and isinstance(d.get("plan"), dict) else None
+    except Exception:
+        return None
+
+
 def _humanize_llm_error(full_tb: str) -> str:
     """把 LLM 端抛回来的堆栈翻成一句人话（完整堆栈已经进日志，不丢）。
 
@@ -2684,10 +3882,16 @@ def _humanize_llm_error(full_tb: str) -> str:
     model = m.group(1) if m else ""
     who = model or "这次用的模型"
     if "insufficient_quota" in full_tb or "Free quota exhausted" in full_tb:
-        return ("%s 的免费额度用完了（平台按模型算额度，不是按账号）。"
-                "三条出路：① 设置页把这一档模型换成还有额度的；② 清空「快速模型」让它退回主模型；"
+        from src import ai_failover
+        ev = [e for e in ai_failover.events() if e.get("from") == model]
+        jumped = ("；刚才已经自动跳过 %d 个候选（%s）" % (
+            len(ev), "、".join("%s→%s" % (e["from"], e["to"]) for e in ev))) if ev else ""
+        return ("%s 的免费额度用完了（平台按模型算额度，不是按账号）%s。"
+                "现在这条池子里没有可用模型了，三条出路：① 去控制台看哪个模型还有额度，"
+                "把 `模型名|到期日` 加进 config/config.env.local 的 AI_MODEL_POOL（改完不用重启）；"
+                "② 设置页把这一档写死成还有额度的那个模型；"
                 "③ 去控制台关掉「免费额度用尽即停」转按量付费（要花钱）。"
-                % who)
+                % (who, jumped))
     if "AuthenticationError" in full_tb or "Error code: 401" in full_tb:
         return "%s 鉴权失败：key 不对或已失效，去设置页重填" % who
     if "PermissionDenied" in full_tb or "Error code: 403" in full_tb:
@@ -2745,31 +3949,187 @@ def _poster_get_summary(summary_id):
     return content_store.get_summary(DB_PATH, int(summary_id))
 
 
-def _guide_frames_for(summary, cfg, progress=None):
-    """这条素材有没有"能当攻略证据的干净帧"：读帧池 → 没判过的按出图需要判几张。
+GUIDE_FRAME_TOTAL_CAP = 12     # 整组最多给拆解层几张真帧（一页一张，6 页也用不完这么多）
+GUIDE_JUDGE_CAP = 8            # 每条素材最多判几张：判帧要花钱，一条 18 帧全判不值
 
-    判帧要花钱，所以放在拆解这一步（而不是采集时全判），而且一次最多判 8 张：
-    批量同步 20 条素材如果每条都判 18 帧就是 38 万 token，出一次图只要 8 张。
-    没有帧池（老素材、抽帧时视频已删）就返回空，提示词里那条"铁律六"整段不出现，
-    出图仍然照走插画那条老路——不能因为没图可配就把整条产线卡住。
+
+def _risk_inherit(result, videos):
+    """新稿落库前：把这一素材台账里**还开着**的待核并进正文那一节核查清单。
+
+    为什么必须做在落库前（2026-10-29 反例）：同一份素材 309874，10-26 那版列了 11 条待核，
+    10-29 重跑只写了 2 条——读者抓的「愈合祷言 40%/200%」「切目标不掉连击点」正好丢了。
+    解析器只能读已经写出来的内容，**模型漏写就等于风险静默消失**，所以记忆得存在稿子外面。
     """
-    aid = str((summary or {}).get("aweme_id") or "").strip()
-    if not aid:
+    ids = [int(v["id"]) for v in videos if v.get("id")]
+    if not ids:
+        return 0
+    try:
+        with _db_lock:
+            risk_ledger.ensure(DB_PATH)
+            items = risk_ledger.open_items(DB_PATH, ids)
+        md, n = risk_ledger.inherit_into(result.get("content") or "", items)
+        if n:
+            result["content"] = md
+            print("[台账] 这一版漏写、从台账继承 %d 条待核（素材 %s）" % (n, ids), flush=True)
+        return n
+    except Exception as e:                                  # noqa: BLE001
+        print("[台账] 继承待核失败（不拦生成）:", e, flush=True)
+        return 0
+
+
+def _risk_record(result, videos, summary_id):
+    """新稿写出来的待核入账（含刚继承进去的那些，重复登记不改变判据）。"""
+    ids = [int(v["id"]) for v in videos if v.get("id")]
+    if not ids:
+        return 0
+    try:
+        with _db_lock:
+            risk_ledger.ensure(DB_PATH)
+            return risk_ledger.record_draft(DB_PATH, ids, summary_id,
+                                            fact_gate.risk_items(result.get("content") or ""))
+    except Exception as e:                                  # noqa: BLE001
+        print("[台账] 入账失败（不拦生成）:", e, flush=True)
+        return 0
+
+
+def _fact_ctx(summary):
+    """出包这一刻的事实上下文：素材来源与日期 + 台账里还开着的待核 + 一手文本。
+
+    `official_blobs` 是"这句官方公告里到底有没有"的对照面——库里那批《"无限"职业深度解析》
+    就是现成的一手文本，不花钱、不用问模型。命中就把硬拦降成提示（按一手发）。
+    """
+    mats = _guide_materials(summary) or []
+    ids = [int(m["video_id"]) for m in mats if m.get("video_id")]
+    by_id = {}
+    if ids:
+        try:
+            with _db_lock:
+                rows = content_store.get_videos_by_ids(DB_PATH, ids)
+            by_id = {int(r["id"]): r for r in rows}
+        except Exception as e:                              # noqa: BLE001
+            print("[事实上下文] 取素材行失败:", e, flush=True)
+    materials = []
+    for m in mats:
+        v = by_id.get(int(m.get("video_id") or 0)) or {}
+        sheet = str(v.get("source_sheet") or m.get("sheet") or "")
+        materials.append({"author": v.get("author") or "", "sheet": sheet,
+                          "published_at": v.get("published_at") or "",
+                          "first_party": sheet in FIRST_PARTY_SHEETS,
+                          "is_video": supplements.is_video(sheet)})
+    open_items, resolved, blobs = [], [], []
+    try:
+        with _db_lock:
+            risk_ledger.ensure(DB_PATH)
+            open_items = risk_ledger.open_items(DB_PATH, ids)
+            resolved = [r for r in risk_ledger.all_items(DB_PATH, ids)
+                        if r.get("status") == "resolved"]
+            con = sqlite3.connect(str(DB_PATH))
+            con.row_factory = sqlite3.Row
+            ph = ",".join("?" for _ in FIRST_PARTY_SHEETS)
+            blobs = [r["transcript"] or "" for r in con.execute(
+                "SELECT transcript FROM videos WHERE source_sheet IN (%s)"
+                " AND COALESCE(transcript,'')<>''" % ph, FIRST_PARTY_SHEETS)]
+            con.close()
+    except Exception as e:                                  # noqa: BLE001
+        print("[事实上下文] 台账/一手文本读取失败:", e, flush=True)
+    return {"materials": materials, "open_items": open_items, "resolved": resolved,
+            "official_blobs": blobs,
+            "open_risks": [str(i.get("raw") or "") for i in open_items],
+            "generated_at": datetime.now().strftime("%Y-%m-%d")}
+
+
+def _guide_materials(summary):
+    """这篇稿**实际采用的每一条素材**（主素材排最前），返回 [{"video_id","aweme_id","title"}]。
+
+    为什么不能只看主素材那一条（2026-10-22 真试用抓到的）：`summary["aweme_id"]` 是
+    `get_summary` join 出来的**主视频**，而整合稿的主视频常常抽完 ASR 就把原片删了 —— 帧池是空的。
+    那次 B2 圣骑士就是这么废掉真帧档的：主素材 222920 没有帧池，同一篇采用的另一条
+    302741 有 18 张帧却没人去看，于是提示词里"铁律六·攻略页"整段不出现，
+    模型只能给纯卡片，出图还花 1.0 元画了两张插画，玩家看不到一行游戏画面。
+    """
+    ids = []
+    try:
+        for x in json.loads((summary or {}).get("source_video_ids") or "[]"):
+            ids.append(int(x))
+    except (TypeError, ValueError):
+        pass
+    try:
+        if summary.get("video_id"):
+            ids.insert(0, int(summary["video_id"]))
+    except (TypeError, ValueError, AttributeError):
+        pass
+    want, seen = [], set()
+    for v in ids:
+        if v and v not in seen:
+            seen.add(v)
+            want.append(v)
+    if not want:
         return []
+    try:
+        vids = {int(v["id"]): v for v in content_store.get_videos_by_ids(DB_PATH, want)}
+    except Exception as e:
+        # 查库失败不等于"这些素材不存在"：报出来，别静默退回"没有真帧"那一档
+        print("[guide] 取采用素材失败:", e, flush=True)
+        return []
+    out = []
+    for vid in want:
+        v = vids.get(vid) or {}
+        sheet = str(v.get("source_sheet") or "").strip()
+        # 带来源表出来：论坛帖／微信文章**根本没有视频可抽帧**，
+        # 这和"老素材没抽过帧"是两件事，界面以前把两者混成一句"抽帧流程上线前采的"，
+        # 还给了一个必然失败的「补画面」按钮（2026-10-29 号主报"看版面没有关键帧"抓到的）。
+        out.append({"video_id": vid, "aweme_id": str(v.get("aweme_id") or "").strip(),
+                    "title": v.get("title") or "", "sheet": sheet,
+                    "is_video": supplements.is_video(sheet)})
+    return out
+
+
+def _guide_frames_for(summary, cfg, progress=None, may_judge=True):
+    """这篇稿所有采用素材里"能当攻略证据的干净帧"，合起来给拆解层。
+
+    三条口径：
+      · 判帧要花钱 → 每条素材最多判 `GUIDE_JUDGE_CAP` 张、整组最多带 `GUIDE_FRAME_TOTAL_CAP` 张；
+      · 合并后**全局重编号**（F1…Fn），模型只许点这个编号；每张留着自己是哪条素材的
+        （`video_id`/`aweme_id`/`file` 路径里有），画面使用依据与回读校验都还指得回去；
+      · 没有帧池（老素材、原片已删）就跳过那一条，不抛错——不能因为一条没图就把整条产线卡住。
+
+    `may_judge=False`（出图那一步补图用）：只读已经判过的，一张都不新判——
+    出图是 0 元那条路，不能在这里悄悄花判帧的钱。
+    """
     try:
         from src import frame_pool
     except ImportError:
         import frame_pool
-    try:
-        meta = frame_pool.load(aid)
-        if not meta:
-            return []
-        if not meta.get("checked"):
-            meta = frame_pool.ensure_judged(aid, cfg, limit=8, progress_cb=progress)
-        return frame_pool.usable(meta)
-    except Exception as e:
-        print("[guide] 帧池读取失败（不影响拆解，退回无真帧那一档）:", e)
-        return []
+    merged = []
+    for m in _guide_materials(summary):
+        if len(merged) >= GUIDE_FRAME_TOTAL_CAP:
+            break
+        aid = m["aweme_id"]
+        if not aid:
+            continue
+        try:
+            meta = frame_pool.load(aid)
+            if not meta:
+                continue
+            if not meta.get("checked") and may_judge:
+                # 只有拆解那一步允许新判帧（花钱）；出图补图这一路不许顺手花这笔钱
+                meta = frame_pool.ensure_judged(aid, cfg, limit=GUIDE_JUDGE_CAP,
+                                                progress_cb=progress)
+            # 没判过整池 ≠ 一张都没判过：`usable()` 只挑已判且干净的，照用
+            take = frame_pool.usable(meta)[:GUIDE_JUDGE_CAP]
+        except Exception as e:
+            print("[guide] 素材 %s 帧池读取失败（跳过这一条）:" % m["video_id"], e)
+            continue
+        for it in take:
+            if len(merged) >= GUIDE_FRAME_TOTAL_CAP:
+                break
+            merged.append(dict(it, video_id=m["video_id"], aweme_id=aid))
+    for n, it in enumerate(merged, 1):
+        it["i"] = n
+    if merged:
+        print("[guide] 这篇稿可用真帧 %d 张，来自素材 %s"
+              % (len(merged), sorted({x["video_id"] for x in merged})), flush=True)
+    return merged
 
 
 @app.route("/api/poster/plan", methods=["POST"])
@@ -2824,6 +4184,7 @@ def api_poster_plan():
                                                   else ai_poster.build_prompt_text(plan, ratio)),
                                   # 每页一份、自包含的"拿去豆包手动出图"提示词（0 元那条路）
                                   "manual_prompts": ai_poster.manual_prompts_for(plan, ratio, text_mode)}
+        _poster_save_plan(summary["id"], _poster_status["plan"])
         _poster_status["progress"] = ("✅ 文案已拆解（合计 %d 字 · 模型 %s）"
                                       % (ai_poster.plan_chars(plan), cfg.get("model") or "?")
                                       + ("；自动压缩：" + "、".join(notes) if notes else "")
@@ -2979,6 +4340,10 @@ def api_poster_generate():
             asr_text = "\n".join(str(r.get("transcript") or "") for r in rows)
         except Exception:
             asr_text = str(summary.get("transcript") or "")
+        # 出图前那道核对会把"太虚/字幕压中间"的那张拦掉，拦完这一页不能就空着
+        # （号主 10-23：② 看版面有图、③ 出来第 3 页没图）。这里把可用帧名单带进出图层，
+        # 让它当场换一张再核一遍。**只读已判过的，不新判帧——这一档 0 元。**
+        frame_items = _guide_frames_for(summary, _fast_config(), may_judge=False)
         manifest = ai_poster.generate_poster(summary, _fast_config(), theme=theme, title=title,
                                              ratio=ratio, progress_cb=cb, plan=plan,
                                              publish=publish, force=force, copies=copies,
@@ -2988,7 +4353,9 @@ def api_poster_generate():
                                              publish_channel=publish_channel, form=pk_form,
                                              fact_evidence=fact_evidence,
                                              fact_checked_by=fact_checked_by,
-                                             provenance=prov, asr_text=asr_text)
+                                             fact_ctx=_fact_ctx(summary),
+                                             provenance=prov, asr_text=asr_text,
+                                             frame_items=frame_items)
         v = manifest.get("verify") or {}
         rv = manifest.get("review") or {}
         ts_chk = manifest.get("typeset") or {}
@@ -3005,6 +4372,9 @@ def api_poster_generate():
                                      "lint": manifest.get("lint") or [],
                                      # 放行不等于能发：界面按这个字段决定写"已就绪"还是"不可发布"
                                      "publishable": manifest.get("publishable", True),
+                                     # 证据链缺登记：单独一个旗子，不再并进 publishable
+                                     "needs_evidence": bool(manifest.get("needs_evidence")),
+                                     "frames_refilled": manifest.get("frames_refilled") or [],
                                      "fact_gate": manifest.get("fact_gate") or {},
                                      "provenance": manifest.get("provenance") or {},
                                      "action_gate": manifest.get("action_gate") or {},
@@ -3014,35 +4384,186 @@ def api_poster_generate():
                                   "prompt_text": manifest["prompt_text"],
                                   "publish_channel": manifest.get("publish_channel") or "toutiao",
                                   "form": manifest.get("form") or ""}
+        # 出图后这一份（含换过的那几张画面）才是真印出去的，备份要跟着更新
+        _poster_save_plan(summary["id"], _poster_status["plan"])
         score = ("，视觉评审 %s/%s 分" % (rv.get("score"), rv.get("full"))) if rv.get("score") else ""
         # 「图出了」和「能发了」是两件事：待核事实没凭据、或编辑证据链缺项时，
         # 末尾这句必须说清不可发布，否则人看见 ✅ 就以为过了（2026-10-21 Codex P1 + 原创增量单）
         reasons = []
         if not manifest.get("publishable", True):
             fg_hard = len((manifest.get("fact_gate") or {}).get("hard") or [])
-            prov_gaps = len((manifest.get("provenance") or {}).get("gaps") or [])
             if fg_hard:
                 reasons.append("%d 条待核事实没有逐条凭据" % fg_hard)
-            if prov_gaps:
-                reasons.append("编辑证据链缺 %d 项（%s）" % (
-                    prov_gaps, (manifest.get("provenance") or {}).get("label") or ""))
             act_of = len((manifest.get("action_gate") or {}).get("overflow") or [])
             if act_of:
                 reasons.append("%d 条建议的数值/选项名在原转写里定位不到（待回听/待游戏核）" % act_of)
         block = ("，⛔ 不可发布：" + "；".join(reasons)) if reasons else ""
+        # 编辑证据链缺登记：号主 10-23 拍板放宽，不再拦在最后一步（图能出、也能发），
+        # 但那句话必须留在结果里——放宽不等于抹掉，发之前那三行还是得补。
+        prov_gaps = len((manifest.get("provenance") or {}).get("gaps") or [])
+        ev = ("，⚠️ 编辑证据链缺 %d 项（%s）：这张能发，但发前把「问题/新增/依据」和"
+              "画面使用依据补上" % (prov_gaps, (manifest.get("provenance") or {}).get("label") or "")) \
+            if prov_gaps else ""
+        # 出图前核对换掉/补不出的那几页要点名，否则"② 看版面有图、③ 出来没图"又成了玄学
+        rf = ["第 %d 页→%s" % (r.get("page"), r.get("frame") or "补不出")
+              for r in (manifest.get("frames_refilled") or [])]
+        rfb = ("，🔁 出图前核对换过画面：" + "、".join(rf)) if rf else ""
         if manifest.get("text_mode") == "typeset":
             warn = ("，⚠️ 版面提示：" + "；".join(ts_chk.get("problems") or [])) if ts_chk.get("problems") else ""
-            _poster_status["progress"] = "✅ 海报已生成（%d 字，字由程序排版、不存在错字）%s%s%s" % (
-                manifest["text_chars"], score, warn, block)
+            _poster_status["progress"] = "✅ 海报已生成（%d 字，字由程序排版、不存在错字）%s%s%s%s" % (
+                manifest["text_chars"], score, warn, rfb, block + ev)
         else:
-            _poster_status["progress"] = "✅ 海报已生成（%d 字）%s%s%s" % (
+            _poster_status["progress"] = "✅ 海报已生成（%d 字）%s%s%s%s" % (
                 manifest["text_chars"], score,
-                "" if v.get("ok") else "，⚠️ 图面文字校验未通过，发布前人眼复核", block)
+                "" if v.get("ok") else "，⚠️ 图面文字校验未通过，发布前人眼复核",
+                rfb, block + ev)
 
     if not _poster_start("poster", fn, summary["id"]):
         return jsonify({"error": "已有海报任务正在运行"}), 400
     return jsonify({"status": "started", "summary_id": summary["id"],
                     "task_id": _poster_status["task_id"]})
+
+
+@app.route("/api/poster/publish", methods=["GET", "POST"])
+def api_poster_publish():
+    """海报这一篇的发布状态：在海报里就地登记「已发布」/撤销，**写的还是排产那本台账**。
+
+    为什么要这个入口（号主 10-23：出图、发出去、改状态以前要跑两个页面）：
+    登记动作只在一处点，后端按这篇稿挂在哪个槽上决定怎么写——
+      · 有排产槽号 → `plan_series.register_slot`：排产表那一格同时变「已发布」，夜间匹配也不再给它出候选；
+      · 没槽号（独立稿、老素材直接起的稿）→ 记一行 `slot_key=''` 的台账，键里带稿 id。
+    两条都只写 `publish_stats` 这一张表，所以运营页立刻看得到，不另造第二份发布真相。
+    校验（标题必填、日期格式、没链接要写原因、撤销要写原因）全在后端那一份里。
+    """
+    if request.method == "GET":
+        try:
+            sid = int(request.args.get("summary_id") or 0)
+        except (TypeError, ValueError):
+            return jsonify({"error": "summary_id 要是一个数字"}), 400
+        if not sid:
+            return jsonify({"error": "缺 summary_id"}), 400
+        try:
+            out = plan_series.poster_publish_state(DB_PATH, sid,
+                                                   channel=request.args.get("channel") or "toutiao")
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+        return jsonify(out)
+
+    data = request.get_json(silent=True) or {}
+    try:
+        sid = int(data.get("summary_id") or 0)
+    except (TypeError, ValueError):
+        return jsonify({"error": "summary_id 要是一个数字"}), 400
+    if not sid:
+        return jsonify({"error": "缺 summary_id"}), 400
+    action = str(data.get("action") or "register").strip()
+    ch = str(data.get("channel") or "toutiao")
+    try:
+        with _db_lock:
+            if action == "register":
+                out = plan_series.poster_publish(DB_PATH, sid, data)
+            elif action == "revoke":
+                out = plan_series.poster_revoke(DB_PATH, sid, str(data.get("ref_id") or ""),
+                                                str(data.get("reason") or ""),
+                                                str(data.get("by") or "AI 海报"), channel=ch)
+            else:
+                return jsonify({"error": "action 只能是 register / revoke，收到「%s」" % action}), 400
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e), "retry": True}), 500
+    return jsonify(out)
+
+
+# ── 待核事实台账与最终放行（2026-10-29 小红书反例后加的）──────────────────────
+# 三件事各管一段：台账管"上一版标过的别丢"，证据门管"没核过的机制说法别当结论发"，
+# 放行记录管"你签的是哪一版"。判据全在 src/risk_ledger.py 与 src/fact_gate.py，这里只做接口。
+
+
+@app.route("/api/fact/risk")
+def api_fact_risk():
+    """这一篇的素材上还挂着哪些待核事实：台账里开着的 + 解除过的 + 稿子里写了几条。"""
+    try:
+        sid = int(request.args.get("summary_id") or 0)
+    except (TypeError, ValueError):
+        sid = 0
+    summary = _poster_get_summary(sid)
+    if not summary:
+        return jsonify({"error": "整理稿不存在"}), 404
+    ctx = _fact_ctx(summary)
+    return jsonify({"materials": ctx["materials"], "open": ctx["open_items"],
+                    "resolved": ctx["resolved"],
+                    "in_draft": len(fact_gate.risk_items(summary.get("content") or "")),
+                    "ledger": len(ctx["open_items"])})
+
+
+@app.route("/api/fact/risk/resolve", methods=["POST"])
+def api_fact_risk_resolve():
+    """解除一条待核事实。只认可定位证据：官方原句，或写明版本与日期的本人实测。
+
+    证据不合格就**一条都不解除**（不部分生效）——列了核实点不等于完成核实，
+    这条规矩跟 `fact_gate.check_override` 一致。
+    """
+    data = request.get_json(force=True) or {}
+    refs = data.get("ids") or []
+    if not refs:
+        return jsonify({"ok": False, "missing": ["没点名要解除哪一条"]}), 400
+    out = risk_ledger.resolve(DB_PATH, refs, data.get("source") or "",
+                              data.get("result") or "", data.get("by") or "")
+    return jsonify(out), (200 if out.get("ok") else 400)
+
+
+def _poster_manifest_path(summary_id):
+    return OUTPUT_DIR / "poster" / str(int(summary_id)) / "manifest.json"
+
+
+@app.route("/api/poster/review")
+def api_poster_review_status():
+    """这一版成品有没有被最终放行过（改稿后旧放行自动作废）。"""
+    try:
+        sid = int(request.args.get("summary_id") or 0)
+    except (TypeError, ValueError):
+        sid = 0
+    chan = str(request.args.get("channel") or "toutiao")
+    fp = _poster_manifest_path(sid)
+    if not fp.exists():
+        return jsonify({"error": "这一版还没有成品"}), 404
+    manifest = json.loads(fp.read_text(encoding="utf-8"))
+    h = manifest.get("package_hash") or ""
+    st = release_review.status(str(fp.parent), chan, h)
+    return jsonify(dict(st, package_hash=h, channel=chan,
+                        checklist=release_review.checklist_hint(chan)))
+
+
+@app.route("/api/poster/review", methods=["POST"])
+def api_poster_review_sign():
+    """签一次放行：绑的就是刚才看到的那一版哈希。
+
+    只记"谁、什么时候、放行哪一版"，不做逐项打分——号主自己说审稿判断他也没把握，
+    那就不拿伪判据冒充审核；能机器判的只有"改过就没有效"。
+    """
+    data = request.get_json(force=True) or {}
+    try:
+        sid = int(data.get("summary_id") or 0)
+    except (TypeError, ValueError):
+        return jsonify({"error": "summary_id 要是一个整数"}), 400
+    chan = str(data.get("channel") or "toutiao")
+    fp = _poster_manifest_path(sid)
+    if not fp.exists():
+        return jsonify({"error": "这一版还没有成品，没什么可放行的"}), 404
+    manifest = json.loads(fp.read_text(encoding="utf-8"))
+    h = manifest.get("package_hash") or ""
+    out = release_review.record(str(fp.parent), chan, h, data.get("reviewer") or "",
+                                data.get("note") or "")
+    if not out.get("ok"):
+        return jsonify({"error": out.get("error") or "放行没记上"}), 400
+    manifest["release_review"] = dict(
+        release_review.status(str(fp.parent), chan, h),
+        checklist=release_review.checklist_hint(chan))
+    if chan == "xhs" and manifest.get("publishable") is not False:
+        pass                                   # 出图时的硬伤仍然算数，这里只补"已放行"这件事
+    fp.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    return jsonify({"ok": True, "status": manifest["release_review"], "package_hash": h})
 
 
 @app.route("/api/poster/preview", methods=["POST"])
@@ -3204,7 +4725,24 @@ def api_poster_base():
 
 @app.route("/api/poster/status")
 def api_poster_status():
-    return jsonify(_poster_status)
+    """进度与上一次结果。带 `summary_id` 时：内存里没有这一条（重启过、或被别的任务顶掉）
+    就从成品包里的备份接回来——不然一次重启就把人花过钱等过的拆解吃掉。"""
+    st = dict(_poster_status)
+    sid = request.args.get("summary_id")
+    try:
+        sid = int(sid) if sid else 0
+    except (TypeError, ValueError):
+        sid = 0
+    if sid and not st.get("running") and st.get("summary_id") != sid:
+        saved = _poster_load_plan(sid)
+        if saved:
+            st["summary_id"] = sid
+            st["plan"] = saved
+            st["package"] = None        # 那份成品属于另一条，不许贴到这里（串号那次就是这毛病）
+            st["error"] = ""
+            st["done"] = True
+            st["progress"] = "这条的文案是从成品包里的备份接回来的（服务重启过也能接着改）"
+    return jsonify(st)
 
 
 @app.route("/api/poster/frames")
@@ -3221,43 +4759,78 @@ def api_poster_frames():
     summary = _poster_get_summary(sid)
     if not summary:
         return jsonify({"error": "整合稿不存在"}), 404
-    aid = str(summary.get("aweme_id") or "").strip()
-    if not aid:
-        return jsonify({"aweme_id": "", "total": 0, "usable": 0, "judged": 0,
-                        "dropped": [], "checked": False})
     try:
         from src import frame_pool
     except ImportError:
         import frame_pool
-    meta = frame_pool.load(aid)
-    frames = (meta or {}).get("frames") or []
+    # 逐条采用素材各读一遍自己的帧池（**只读，不判帧、不花钱**）。
+    # 以前这里只看主素材那一条：整合稿的主视频常常已经删了原片 → 报"0 张能用"，
+    # 而同一篇里另一条明明有 18 张帧——界面上那句"没有可用画面"就是这么骗人的。
+    mats, all_items = [], []
+    total = judged = usable_n = 0
+    drop_kinds = {}
+    checked_any = False
+    primary_dur = 0
+    for k, m in enumerate(_guide_materials(summary)):
+        aid = m["aweme_id"]
+        meta = frame_pool.load(aid) if aid else {}
+        frames = (meta or {}).get("frames") or []
+        us = frame_pool.usable(meta)
+        drops = frame_pool.dropped(meta)
+        for (w, _c), n in drops.items():
+            drop_kinds[w] = drop_kinds.get(w, 0) + n
+        for it in us:
+            p = str(it.get("file") or "")
+            nm = os.path.basename(p)
+            # URL 一律从**真实路径**推：裁过边的成品落在 raw/ 里（`v_` 前缀）、没裁的就直接是 raw 原帧，
+            # 只有极少数落在 clean/。以前这里写死 `frames/<aid>/clean/<文件名>`，
+            # 于是画面条整排 404 碎图（2026-10-22 走查抓到：10 张里 0 张打得开）。
+            rel = ""
+            try:
+                rel = os.path.relpath(p, str(OUTPUT_DIR)).replace(os.sep, "/")
+            except (TypeError, ValueError):
+                rel = ""
+            url = "" if rel.startswith("..") else ("/media/" + rel)
+            all_items.append({"i": it.get("i"), "ts": it.get("ts") or "",
+                              "subject": (it.get("subject") or "").strip(),
+                              "video_id": m["video_id"],
+                              # 名字带上素材 id：两条素材都可能有 v_f_001.jpg，
+                              # 只按文件名对"用在第几页"会张冠李戴（前端按 …/frames/<aid>/<file> 对）
+                              "name": "%s/%s" % (aid, nm),
+                              "url": url})
+        total += len(frames)
+        judged += len([f for f in frames if f.get("checked")])
+        usable_n += len(us)
+        checked_any = checked_any or bool((meta or {}).get("checked"))
+        if k == 0:
+            primary_dur = (meta or {}).get("duration") or 0
+        mats.append({"video_id": m["video_id"], "aweme_id": aid, "title": m["title"][:40],
+                     "sheet": m.get("sheet") or "", "is_video": bool(m.get("is_video")),
+                     "has_pool": bool(meta), "total": len(frames),
+                     "judged": len([f for f in frames if f.get("checked")]),
+                     "usable": len(us), "checked": bool((meta or {}).get("checked"))})
     job = _frames_job(sid)
-    if job.get("done") and not job.get("running"):
-        # 补完画面就把这条任务的成功态收掉；失败原因留着让人看得见
-        if not job.get("error"):
-            job = {}
-    drops = frame_pool.dropped(meta)
-    # 能用的那几张列出来给界面摆成缩略图：号主点完「看图」想知道那 8 张到底是什么，
-    # 只给一个数等于没给（2026-10-13 他原话"点了看8张图后，没地方预览"）。
-    # 只给 clean 那些（判过、确认干净的），raw 中间帧一律不暴露。
-    items = []
-    for it in frame_pool.usable(meta):
-        p = it.get("file") or ""
-        name = os.path.basename(str(p))
-        rel = "assets/frames/%s/clean/%s" % (aid, name)
-        items.append({"i": it.get("i"), "ts": it.get("ts") or "",
-                      "subject": (it.get("subject") or "").strip(),
-                      "url": "/media/" + rel, "name": name})
-    return jsonify({"aweme_id": aid, "total": len(frames),
-                    "usable": len(frame_pool.usable(meta)),
-                    "items": items[:24],
-                    "judged": len([f for f in frames if f.get("checked")]),
+    if job.get("done") and not job.get("running") and not job.get("error"):
+        job = {}
+    primary = (mats or [{}])[0]
+    # 「一条帧都没有」有两种完全不同的原因，界面必须分得开：
+    #   A 素材本来就不是视频（NGA 帖／微信文章）→ 没有视频可下载，「补画面」点了必失败；
+    #   B 是视频但没抽过帧/原片删了 → 才谈得上"补画面 · 不花钱"。
+    # 以前这里只回一个 usable=0，界面统一说成"抽帧流程上线前采的"并给按钮（2026-10-29 抓到）。
+    non_video = [m for m in mats if not m["is_video"]]
+    return jsonify({"aweme_id": primary.get("aweme_id") or "",
+                    "materials": mats,
+                    "total": total, "usable": usable_n,
+                    "no_video_source": bool(mats) and len(non_video) == len(mats),
+                    "non_video_sheets": sorted({m["sheet"] for m in non_video if m["sheet"]}),
+                    "items": all_items[:24],
+                    "judged": judged,
                     # 扔掉的那些为什么不能用（整帧是卡 / 花字在中间 / 裁完回读还有字）——
                     # 号主看到"18 张只剩 3 张"要能一眼看懂，否则就像程序坏了
-                    "dropped": [{"why": w, "n": n} for (w, _c), n in
-                                sorted(drops.items(), key=lambda kv: -kv[1])][:3],
-                    "checked": bool((meta or {}).get("checked")),
-                    "duration": (meta or {}).get("duration") or 0,
+                    "dropped": [{"why": w, "n": n} for w, n in
+                                sorted(drop_kinds.items(), key=lambda kv: -kv[1])][:3],
+                    "checked": checked_any,
+                    "duration": primary_dur,
                     "building": bool(job.get("running")),
                     "progress": job.get("progress") or "",
                     "build_error": job.get("error") or ""})
@@ -3410,7 +4983,24 @@ def api_poster_frames_build():
     summary = _poster_get_summary(sid)
     if not summary:
         return jsonify({"error": "整合稿不存在"}), 404
-    aweme_id = str(summary.get("aweme_id") or "").strip()
+    # 可以点名给"这篇采用的某一条素材"补画面/判帧（2026-10-22 真试用抓到的）：
+    # 以前这里硬取 summary["aweme_id"]＝**主素材**那一条，而整合稿的主视频常常抽完 ASR
+    # 就把原片删了（没帧池），同一篇里另一条明明有 18 张帧却永远点不到 ——
+    # 「补画面 / 先看图确认」全打在没救的那条上，0 元真帧档就此在界面上打不通。
+    try:
+        want_vid = int(data.get("video_id") or 0)
+    except (TypeError, ValueError):
+        want_vid = 0
+    aweme_id = ""
+    if want_vid:
+        for m in _guide_materials(summary):
+            if m["video_id"] == want_vid:
+                aweme_id = m["aweme_id"]
+                break
+        if not aweme_id:
+            return jsonify({"error": "这篇稿没有采用编号 %s 的素材，补不了它的画面" % want_vid}), 400
+    else:
+        aweme_id = str(summary.get("aweme_id") or "").strip()
     if not aweme_id or not aweme_id.isdigit():
         return jsonify({"error": "这条不是抖音视频（没有 aweme_id），补不了画面"}), 400
     job = _frames_job(sid)
@@ -3429,8 +5019,16 @@ def api_poster_frames_build():
         threading.Thread(target=lambda: _judge_thread(sid, aweme_id), daemon=True).start()
         return jsonify({"started": True, "action": "judge",
                         "summary_id": sid, "aweme_id": aweme_id})
-    video = content_store.get_video_by_source(DB_PATH, summary.get("source_sheet"),
-                                              summary.get("source_row")) or dict(summary)
+    # 重下原片要用"那一条素材自己的"记录，不能用整理稿 join 出来的主视频行
+    video = {}
+    if want_vid:
+        try:
+            video = {int(v["id"]): v for v in content_store.get_videos_by_ids(DB_PATH, [want_vid])}.get(want_vid) or {}
+        except Exception as e:
+            print("[guide] 取素材 %s 失败:" % want_vid, e, flush=True)
+    if not video:
+        video = content_store.get_video_by_source(DB_PATH, summary.get("source_sheet"),
+                                                  summary.get("source_row")) or dict(summary)
     _frames_set(sid, running=True, done=False, error="", progress="排队中...")
     threading.Thread(target=_frames_worker, daemon=True,
                      args=(sid, video, aweme_id, _ai_config(),
@@ -3723,26 +5321,57 @@ def api_ai_config_get():
         key = collector.config_get(config, "OPENAI_API_KEY") or collector.config_get(config, "AI_API_KEY")
         base = collector.config_get(config, "AI_API_BASE", "")
         model = collector.config_get(config, "AI_MODEL", "")
+    fast_model = collector.config_get(config, "AI_MODEL_FAST", "")
+    fast_key = collector.config_get(config, "AI_API_KEY_FAST", "")
+    live = _ai_config()
+    live_fast = _fast_config()
     return jsonify({
         "method": method,
         "has_key": bool(key),
         "api_key_masked": _mask_key(key),
         "api_base": base,
         "model": model,
-        "fast_model": collector.config_get(config, "AI_MODEL_FAST", ""),
+        "fast_model": fast_model,
+        # 池子在驱动时，输入框里那个 AI_MODEL 只是"池子全不可用时的兜底"，
+        # 所以这一栏必须另给实际生效的模型名，否则界面写着一个模型、跑的是另一个。
+        "active_model": live.get("model") or "",
+        "active_fast_model": live_fast.get("model") or "",
+        "main_note": live.get("model_note") or "",
+        "fast_note": live_fast.get("model_note") or "",
+        "main_pool": ai_models.pool("main"),
+        "fast_pool": ai_models.pool("fast"),
+        # 快速档另配了一把 key 就得在设置页说出来，不然"API Key"那一栏看着像全局共用的
+        "fast_key_own": bool(fast_key),
+        "fast_api_key_masked": _mask_key(fast_key) if fast_key else "",
+        # 哪些模型被这层关掉了"先思考"（以及没挂上的原因）——设置页要说实话
+        "thinking_off": ai_thinking.installed().get("off_prefixes") or [],
+        "thinking_error": ai_thinking.installed().get("error") or "",
     })
 
 
 @app.route("/api/ai/quota")
 def api_ai_quota():
-    """免费额度还剩多少（本地账）。产线现在用哪两个模型也一并回，界面才知道该盯谁。"""
+    """免费额度还剩多少（本地账）。产线现在用哪几个模型也一并回，界面才知道该盯谁。"""
+    from src import ai_failover
     cfg = _ai_config()
+    fast = _fast_config()
     return jsonify({"rows": ai_quota.status(),
                     "hook": ai_quota.installed(),
-                    "in_use": {"主模型（出图/回读/整理稿）": cfg.get("model") or "",
-                               "快速模型（拆解·卡片化）": _fast_config().get("model") or "",
-                               "看图（拆参考图）": cfg.get("vision_model") or "",
-                               "出图（画底图）": cfg.get("image_model") or ""},
+                    # 结构化返回，别让前端拿中文标签当键名去取（改一个字面就静默失效）
+                    "in_use": [{"tier": "main", "label": "主档",
+                                "does": "采集打标·连通测试", "model": cfg.get("model") or "",
+                                "note": cfg.get("model_note") or ""},
+                               {"tier": "fast", "label": "快速档",
+                                "does": "整理稿·拆解·卡片化·成稿", "model": fast.get("model") or "",
+                                "note": fast.get("model_note") or ""},
+                               {"tier": "vision", "label": "看图档",
+                                "does": "判帧·回读·打分·拆参考图",
+                                "model": cfg.get("vision_model") or ai_poster.OCR_MODEL,
+                                "note": "固定一档，不进候选池"}],
+                    # 出图这一档 2026-10-29 号主撤了（近三周 manifest 的 image_model 全空，
+                    # 实际走素材真帧 + 豆包手工出图），这里不再列一行假档位
+                    "pool": {"main": ai_models.pool("main"), "fast": ai_models.pool("fast")},
+                    "failover": ai_failover.events(),
                     "warn_at": ai_quota.WARN_AT, "danger_at": ai_quota.DANGER_AT})
 
 
@@ -3890,6 +5519,18 @@ def api_bilibili_probe():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+# ════════════════════════════════════════════════════════════════
+# B 站合集整档入库 + 补转写
+# 为什么要这两个入口：订阅同步只翻 UP 主投稿列表、每轮 20 条，而「好赛雷切片」这种
+# 把内容全塞进合集的号，投稿列表里看不见合集那 997 条（实测订阅它 last_new_count=0）。
+# 号主 2026-10-27 要的就是"合集整档"。
+# ════════════════════════════════════════════════════════════════
+
+_bili_job = {"kind": "", "running": False, "done": True, "progress": "", "error": "",
+             "result": None, "started_at": "", "elapsed": 0}
+_bili_job_lock = threading.Lock()
+
+
 def _job_start(store: dict, lock, kind: str, fn) -> bool:
     """跑一个后台采集任务并把它那份状态写进 store。同一时刻同一档只允许一个：
     合集入库和补转写都要连打外部接口，并行跑既没意义又更容易撞 B 站风控。"""
@@ -3917,6 +5558,135 @@ def _job_start(store: dict, lock, kind: str, fn) -> bool:
 
     threading.Thread(target=_run, daemon=True).start()
     return True
+
+
+def _bili_job_start(kind: str, fn) -> bool:
+    return _job_start(_bili_job, _bili_job_lock, kind, fn)
+
+
+@app.route("/api/bilibili/collection", methods=["POST"])
+def api_bilibili_collection():
+    """合集链接（合集里任意一条稿件）→ 整档入库。body: {url, limit?, category?, game?}"""
+    from src.bilibili_fetcher import sync_bilibili_collection, parse_bvid, load_cookie
+    data = request.get_json(force=True, silent=True) or {}
+    raw = (data.get("url") or "").strip()
+    bvid = parse_bvid(raw)
+    if not bvid:
+        return jsonify({"ok": False, "error": "贴合集里任意一条视频链接（含 BV 号）就行"}), 400
+    limit = int(data.get("limit") or 300)
+    category = (data.get("category") or "").strip()
+    game = (data.get("game") or "").strip()
+    try:
+        cookie, _where = load_cookie()
+    except Exception:
+        cookie = ""
+
+    def _job(progress):
+        known = content_store.get_bilibili_bvids(DB_PATH)
+        progress("取合集清单（一次接口，实测 997 条约 1.7MB）…")
+        res = sync_bilibili_collection(bvid, known_bvids=known, limit=limit, cookie=cookie)
+        if res.get("error"):
+            return {"ok": False, "note": res["error"]}
+        # 分类没在请求里给，就退回这个号订阅时设的分类与游戏（同一口径，不新造规则）
+        cat, gm = category, game
+        if not cat:
+            for s in content_store.list_subscriptions(DB_PATH):
+                if s.get("sec_uid") == "bili:%s" % res.get("mid"):
+                    cat = s.get("category") or ""
+                    gm = gm or (s.get("game") or "")
+                    break
+        progress("合集共 %d 条，库里已有 %d 条，本轮入 %d 条…"
+                 % (res["total"], res["skipped"], len(res["videos"])))
+        with _db_lock:
+            inserted = content_store.insert_bilibili_videos(
+                DB_PATH, res["videos"], author=res.get("author") or "",
+                sec_uid="bili:%s" % res.get("mid"), category=cat, game=gm)
+        progress("入库完成")
+        return {"ok": True, "note": "合集「%s」共 %d 条：本轮入库 %d 条，库里原有 %d 条%s"
+                % (res.get("season") or "?", res["total"], len(inserted), res["skipped"],
+                   ("，分类「%s」" % cat) if cat else "，未分类（可在素材库里改）")}
+
+    if not _bili_job_start("collection", _job):
+        return jsonify({"ok": False, "error": "已有一个 B 站采集任务在跑，等它结束再点"}), 409
+    return jsonify({"ok": True, "started": True, "bvid": bvid, "limit": limit})
+
+
+@app.route("/api/bilibili/asr", methods=["POST"])
+def api_bilibili_asr():
+    """给正文还空着的 B 站素材补 ASR。body: {limit?, author?, model?}
+
+    只下音频不下整片（一个合集 122.7 小时，整片几十 GB 没意义）。这一步很慢且吃 CPU，
+    所以限量、给进度、且同一时刻只跑一个任务。
+    """
+    from src.bilibili_fetcher import transcribe_bvid, load_cookie
+    data = request.get_json(force=True, silent=True) or {}
+    limit = max(1, int(data.get("limit") or 20))
+    author = (data.get("author") or "").strip()
+    model_size = (data.get("model") or "base").strip()
+    # 条长上限：这个合集里最长的一条是 4 小时 20 分的直播录像，不截一刀的话"补 20 条"
+    # 里随便一条就能吃掉一小时机器时间，而号主看到的只是"卡在进度上没动"
+    max_minutes = int(data.get("max_minutes") or 45)
+    try:
+        cookie, _where = load_cookie()
+    except Exception:
+        cookie = ""
+
+    def _job(progress):
+        rows = content_store.pending_bili_transcripts(
+            DB_PATH, limit=limit, season_author=author, max_seconds=max_minutes * 60)
+        if not rows:
+            return {"ok": True, "note": "没有可转写的 B 站素材（正文都已有，或都超过 %d 分钟）"
+                    % max_minutes}
+        audio_min = sum(int(r.get("duration_sec") or 0) for r in rows) / 60.0
+        # 本机 faster-whisper base 实测约 5.5 倍实时（见记忆/README），先给预计时间再开跑，
+        # 别让他自己发现"做不完"
+        progress("本轮 %d 条、共 %.1f 小时音频，预计约 %.0f 分钟（跳过超 %d 分钟的长录像）…"
+                 % (len(rows), audio_min / 60.0, audio_min / 5.5, max_minutes))
+        done = 0
+        chars = 0
+        failed = []
+        work = str(OUTPUT_DIR / "bili_asr_tmp")
+        t0 = time.time()
+        for i, r in enumerate(rows, 1):
+            mins = int(time.time() - t0) // 60
+            progress("转写 %d/%d：%s（%d 分钟长，已用 %d 分 %d 秒）"
+                     % (i, len(rows), r["aweme_id"], int(r.get("duration_sec") or 0) // 60,
+                        mins, int(time.time() - t0) % 60))
+            text, err = transcribe_bvid(r["aweme_id"], cookie=cookie,
+                                        model_size=model_size, workdir=work)
+            if err:
+                failed.append("%s: %s" % (r["aweme_id"], err[:60]))
+                continue
+            with _db_lock:
+                ok = content_store.set_video_transcript(DB_PATH, r["id"], text)
+            if ok:
+                done += 1
+                chars += len(text)
+        spent = int(time.time() - t0)
+        note = ("补转写完成：%d/%d 条有正文（平均 %d 字），用时 %d 分 %d 秒"
+                % (done, len(rows), (chars // done) if done else 0, spent // 60, spent % 60))
+        if failed:
+            note += "；失败 %d 条（%s）" % (len(failed), "；".join(failed[:3]))
+        return {"ok": True, "note": note, "done": done, "failed": failed,
+                "audio_hours": round(audio_min / 60.0, 2), "seconds": spent}
+
+    if not _bili_job_start("asr", _job):
+        return jsonify({"ok": False, "error": "已有一个 B 站采集任务在跑，等它结束再点"}), 409
+    return jsonify({"ok": True, "started": True, "limit": limit, "model": model_size})
+
+
+@app.route("/api/bilibili/job")
+def api_bilibili_job():
+    """合集入库 / 补转写这两个后台任务共用的进度。"""
+    out = dict(_bili_job)
+    if out["running"]:
+        try:
+            out["elapsed"] = int(time.time() - time.mktime(
+                time.strptime(out["started_at"], "%Y-%m-%d %H:%M:%S")))
+        except Exception:
+            pass
+    return jsonify(out)
+
 
 # ── 暴雪官方公告：抓取入口 + 状态（源类定时任务的第一个用户） ──
 # 为什么必须有这一格（2026-10-29）：这条源此前**只有 CLI**（python3 -m src.blizzard_news），
@@ -4108,13 +5878,29 @@ def api_subscriptions_add():
             return jsonify({"error": str(e)}), 500
         return jsonify({"success": True, "subscription": sub, "mid": mid})
 
-    # 抖音：url 是用户主页链接
-    from src.fetch_user_videos import extract_sec_uid_from_url, resolve_short_url
+    # 抖音：url 是用户主页链接，或者一条作品（视频/图文）的分享链接
+    from src.fetch_user_videos import (extract_sec_uid_from_url, first_url,
+                                       is_work_url, resolve_short_url)
+    url = first_url(url)          # 整段分享文案粘进来是常态，先剥壳再判形状
     if "v.douyin.com" in url or "/share/" in url:
         url = resolve_short_url(url)
     sec_uid = extract_sec_uid_from_url(url)
+    if not sec_uid and is_work_url(url):
+        # 图文作品的短链展开后是 www.douyin.com/note/<id>，链接里没有 sec_uid，
+        # 纯 requests 无解——必须开一次真实浏览器把作品页的作者主页认出来。
+        from src.browser_fetch import browser_fetch_author
+        info = browser_fetch_author(url)
+        sec_uid = info.get("sec_uid") or ""
+        if sec_uid:
+            if not author:
+                author = info.get("nickname") or ""
+            c = info.get("counts") or {}
+            print(f"[subscriptions] 作品链接认出作者「{author}」主页视频 {c.get('video', '?')} 条、"
+                  f"图文 {c.get('note', '?')} 条（首屏计数）", flush=True)
     if not sec_uid:
-        return jsonify({"error": "无法从链接提取 sec_uid，请使用 www.douyin.com/user/... 格式"}), 400
+        return jsonify({"error": "认不出这个抖音号：链接里没有主页 sec_uid，作品页也没对到作者。"
+                                 "改贴作者主页链接再试（在抖音里点他头像 → 右上角分享 → 复制链接，"
+                                 "展开是 www.douyin.com/user/... 那种）"}), 400
     user_url = f"https://www.douyin.com/user/{sec_uid}"
     try:
         with _db_lock:
@@ -4127,7 +5913,12 @@ def api_subscriptions_add():
 
 @app.route("/api/authors")
 def api_authors():
-    """视频库作者统计（含是否已订阅）。"""
+    """视频库作者统计（含是否已订阅）——「导入素材库作者为订阅」那颗列表。
+
+    论坛行必须挡掉：NGA 那 1105 行的 author 是发帖人，814 个署名混进这张列表，
+    点一下就去解析人家的抖音主页，导进来的全是废订阅（同一列在不同源里语义不同，
+    素材库「全部作者」那次翻车就是这个原因，见 _author_topics 上方口径）。
+    """
     if not DB_PATH.exists():
         return jsonify({"authors": []})
     try:
@@ -4135,7 +5926,7 @@ def api_authors():
         try:
             rows = conn.execute(
                 "SELECT COALESCE(NULLIF(TRIM(author),''),'未知作者') AS a, COUNT(*) AS n "
-                "FROM videos GROUP BY a ORDER BY n DESC"
+                "FROM videos WHERE COALESCE(source,'') <> 'forum' GROUP BY a ORDER BY n DESC"
             ).fetchall()
             subs = {s["author"] for s in content_store.list_subscriptions(DB_PATH)}
         finally:
@@ -4295,7 +6086,7 @@ def api_subscriptions_delete(sub_id):
                 DB_PATH, sec_uid, sub.get("author") or "")
         videos = targets["videos"]
         sids = targets["summary_ids"]
-        purged = {"videos": 0, "summaries": 0, "packages": 0, "frames": 0}
+        purged = {"videos": 0, "summaries": 0, "packages": 0, "frames": 0, "note_dirs": 0}
 
         with _db_lock:
             # 1. 整理稿（含被判定整篇删掉的合集稿）+ 它们的图文包/海报目录
@@ -4322,6 +6113,11 @@ def api_subscriptions_delete(sub_id):
                 if kdir.exists():
                     shutil.rmtree(kdir, ignore_errors=True)
                     purged["frames"] += 1
+                if v["sheet"] == content_store.NOTE_SHEET:
+                    # 图文的产物就是那批本地图（douyin_notes/<aweme_id>/），不删会变成
+                    # 孤儿目录：DB 行没了、图还在盘上占地方，也没地方再找到它们
+                    from src.douyin_notes import purge_note_images
+                    purged["note_dirs"] += purge_note_images(OUTPUT_DIR, [aweme_id])
                 for jpg in material_store.COVERS_DIR.glob(safe + ".*"):
                     try:
                         jpg.unlink()
@@ -4520,10 +6316,17 @@ def _do_subscription_sync(sub_id=None, sub_ids=None, cookie=None):
                 _items = [{"id": str(s["id"]), "url": s["user_url"]} for s in douyin_subs]
 
                 def _bp(done, total, item_id, ids, err):
-                    mark = f"✓ {len(ids)} 条" if ids else f"✗ {err[:40]}"
+                    n = len(browser_notes.get(str(item_id)) or [])
+                    if ids is not None:
+                        # 纯图文的号 ids 是空列表但 notes 有货，这里不能报成失败
+                        mark = "✓ %d 视频" % len(ids) + (" / %d 图文" % n if n else "")
+                    else:
+                        mark = f"✗ {err[:40]}"
                     _sub_status["progress"] = f"[抖音主页 {done}/{total}] {mark}"
 
-                browser_ids = browser_fetch_users_batch(_items, on_progress=_bp)
+                browser_notes = {}   # {作者id: [图文条目]}，同一次主页加载顺手带回来的
+                browser_ids = browser_fetch_users_batch(_items, on_progress=_bp,
+                                                        notes_out=browser_notes)
             except Exception as be:
                 summary.append(f"浏览器批量拉取异常 ({be})，逐作者退回旧 API")
             from src.fetch_user_videos import load_existing_aweme_ids as _load_ids
@@ -4557,13 +6360,46 @@ def _do_subscription_sync(sub_id=None, sub_ids=None, cookie=None):
                         # 任何一条，多半是 Argus 风控拦了旧 API——这要如实报，不能说"无新"
                         fetch_empty = ((result.get("total") or 0)
                                        + (result.get("filtered") or 0)) == 0
+                    # ── 图文这一侧先走 ──
+                    # 位置要紧：纯图文的号在下面 `if not videos` 那里就 continue 了，
+                    # 图文同步放后面等于这个号一条也进不来。图和文案是同一次主页加载
+                    # 带回来的（见 tools/douyin_browser_fetch.js 的 attachPostCapture），
+                    # 不额外付冷启动 Chromium 的成本。
+                    note_res: dict = {}
+                    notes = browser_notes.get(str(sub["id"])) or []
+                    if notes:
+                        _sub_status["progress"] = (
+                            f"[抖音 {si}/{len(douyin_subs)}] {name}: 图文 {len(notes)} 条取图中...")
+                        try:
+                            from src.douyin_notes import sync_notes
+                            with _db_lock:
+                                note_res = sync_notes(
+                                    DB_PATH, OUTPUT_DIR, notes,
+                                    author=sub["author"] or name, sec_uid=sub["sec_uid"],
+                                    category=sub.get("category") or "",
+                                    game=sub.get("game") or "", limit=NOTE_SYNC_LIMIT)
+                            for p in (note_res.get("rows") or []):
+                                new_rows.append(p)
+                            if note_res.get("inserted"):
+                                summary.append("%s: 图文新增 %d 条 / 存图 %d 张"
+                                               % (name, note_res["inserted"], note_res["images"]))
+                            if note_res.get("errors"):
+                                summary.append("%s: 图文有 %d 张图没取到"
+                                               % (name, len(note_res["errors"])))
+                        except Exception as ne:
+                            summary.append("%s: 图文入库失败 (%s)" % (name, str(ne)[:60]))
+                    note_inserted = note_res.get("inserted") or 0
+
                     new_author = ""
                     if not videos:
                         note = ("取链为空（浏览器没覆盖到、旧 API 疑似被风控拦），别当无新处理"
                                 if fetch_empty else "无新视频")
+                        if note_inserted:
+                            # 号主只看这一行：明明进了 20 条图文却报"无新视频"就是说假话
+                            note = "%s；图文另入 %d 条" % (note, note_inserted)
                         with _db_lock:
                             content_store.update_subscription_sync(
-                                DB_PATH, sub["id"], 0, note)
+                                DB_PATH, sub["id"], note_inserted, note)
                         summary.append(f"{name}: {note}")
                         continue
 
@@ -4609,6 +6445,7 @@ def _do_subscription_sync(sub_id=None, sub_ids=None, cookie=None):
                         "sub": sub,
                         "next_row": next_row,
                         "count": len(videos),
+                        "notes": note_inserted,
                         "new_author": new_author,
                     })
                 except Exception as e:
@@ -4662,11 +6499,18 @@ def _do_subscription_sync(sub_id=None, sub_ids=None, cookie=None):
                         finally:
                             conn.close()
                     cat_note = f"，已按订阅标记分类「{sub['category']}」{marked} 条"
+                n_img = pm.get("notes") or 0
+                total_new = pm["count"] + n_img
+                # 没有图文时措辞一字不改（别的会话和号主都按这句对账）；有图文就不能再说
+                # "N 条并已转写"——图文没有语音可转写，混进去就是把存图说成转写。
+                done_note = ("新增 %d 条并已转写" % pm["count"] if not n_img else
+                             "新增 %d 条（视频 %d 已转写、图文 %d 已存图）"
+                             % (total_new, pm["count"], n_img))
                 with _db_lock:
                     content_store.update_subscription_sync(
-                        DB_PATH, sub["id"], pm["count"],
-                        f"新增 {pm['count']} 条并已转写{cat_note}", author=pm["new_author"])
-                summary.append(f"{name}: 新增 {pm['count']} 条{cat_note}")
+                        DB_PATH, sub["id"], total_new, f"{done_note}{cat_note}",
+                        author=pm["new_author"])
+                summary.append(f"{name}: 新增 {total_new} 条{cat_note}")
                 _sub_status["new_items"] += [
                     {"kind": "douyin", "author": pm["new_author"] or name, "title": tt,
                      "published_at": ""} for tt in new_titles if tt]
@@ -4840,6 +6684,75 @@ def _start_autosync():
     threading.Thread(target=_autosync_loop, daemon=True, name="autosync").start()
 
 
+# ── 夜间素材匹配（2026-10-22 那一单：默认 22:00 北京时间，只刷未发布位置的候选）──
+_planmatch_state = {"started_at": "", "last_check": "", "note": "", "running": False}
+
+
+def _planmatch_tick(now=None):
+    """每分钟看一眼：今晚该不该跑。到期判据与幂等全在 `plan_series.due_run`／`claim_run`。
+
+    三条不许越界：不采集外站、不调付费模型、不自动采用/生成/出图/发布——
+    这一轮只往 `plan_candidates` 里写候选（已发布与待核对的位置连候选都不写）。
+    时钟必须由 `cn_now()` 出（Codex 二次复验第 5 条）：原来写 `now or datetime.now()`，
+    交进去的是**本机 naive 时间**，而 cn_now 对 naive 一律"就当北京时间"不再换算——
+    `TZ=UTC` 下同一瞬间本机 07:31 被当成北京 07:31，22:00 那一档整整偏 8 小时。
+    测试要拿固定时钟就传明确的北京时间（naive），这里不认"机器时区"。
+    """
+    now = plan_series.cn_now(now)
+    _planmatch_state["last_check"] = now.strftime("%Y-%m-%d %H:%M:%S")
+    if _planmatch_state.get("running"):
+        return              # 上一轮还在跑（一轮要扫全库），不叠第二遍
+    try:
+        due = plan_series.due_run(DB_PATH, now)
+    except Exception as e:
+        _planmatch_state["note"] = "到期判断失败（下一轮继续）：%s" % str(e)[:120]
+        return
+    if not due.get("due"):
+        return
+    _planmatch_state["running"] = True
+    _planmatch_state["note"] = "开始匹配：%s" % due.get("why")
+    print("[夜间匹配] %s" % due.get("why"), flush=True)
+
+    def wrap():
+        try:
+            st = plan_series.run_match(DB_PATH, now=now, kind="night",
+                                       actor="定时器%s" % ("（补跑）" if due.get("catchup") else ""))
+            _planmatch_state["note"] = "匹配结束：新增 %s 条候选、重复命中 %s 条、跳过 %s 格" % (
+                st.get("added"), st.get("seen"), st.get("skipped_n"))
+            print("[夜间匹配] %s" % _planmatch_state["note"], flush=True)
+        except Exception as e:
+            # 抛出去会让线程静默停摆，表现和"没配"一模一样——记在状态里，界面上看得见
+            _planmatch_state["note"] = "匹配失败：%s" % str(e)[:160]
+            print("[夜间匹配] 失败：%s" % e, flush=True)
+        finally:
+            _planmatch_state["running"] = False
+
+    threading.Thread(target=wrap, daemon=True, name="planmatch").start()
+
+
+def _planmatch_loop():
+    # 这条状态栏与到期判据共用同一把钟（北京时间），否则页面上会并排显示两个时区的时刻
+    _planmatch_state["started_at"] = plan_series.cn_now().strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        with _db_lock:
+            n = plan_series.sweep_stale_runs(DB_PATH)     # 上个进程留下的 running 先收尾
+        if n:
+            print("[夜间匹配] 中断核对：%d 轮 running 标为 failed" % n, flush=True)
+    except Exception as e:
+        print("[夜间匹配] 中断核对失败（不影响本轮）：%s" % e, flush=True)
+    print("[夜间匹配] 定时器已启动（每 60 秒检查一次，默认 22:00 北京时间）", flush=True)
+    while True:
+        time.sleep(60)
+        try:
+            _planmatch_tick()
+        except Exception as e:
+            print("[夜间匹配] 本轮检查异常（下一轮继续）: %s" % e, flush=True)
+
+
+def _start_planmatch():
+    threading.Thread(target=_planmatch_loop, daemon=True, name="planmatch-loop").start()
+
+
 def _alive_subs():
     return content_store.list_subscriptions(DB_PATH)
 
@@ -4866,7 +6779,8 @@ def _task_view(cfg, subs, now):
         kind = str(t.get("kind") or "subs")
         if kind == "source":
             # 源类任务没有订阅成员。不单独走这一支的话，下面那句「成员空就 continue」
-            # 会把它整条藏掉——号主既看不见它、也没法改频率或删掉，而它每天照常在后台跑。
+            # 会把它整条藏掉——号主既看不见它、也没法改频率或删掉，
+            # 而它每天照常在后台跑（看不见又在动的配置最坑）。
             nxt = sync_tasks.next_due(t, run_at, now)
             tasks.append({"key": t["key"], "name": t.get("name") or "",
                           "kind": "source", "source": t.get("source") or "",
@@ -5085,9 +6999,9 @@ def api_sync_tasks_run():
         targets = list(cfg.get("tasks") or [])
     else:
         targets = sync_tasks.due_tasks(cfg, datetime.now(), alive)
-    # 订阅类与源类分开走：源类不占订阅同步那把闸，也不能混进 ids——
-    # 混进去就是"任务数算它一个、实际什么都没跑"，而 ids 为空时整句直接报错，
-    # 源类任务永远手动跑不动。
+    # 订阅类与源类分开走：源类不占订阅同步那把闸（抓一次官方公告约十秒），
+    # 也不能混进 ids——混进去就会"任务数算它一个、实际什么都没跑"，
+    # 更糟的是 ids 为空时整句直接报"没有到期的任务"，源类任务永远手动跑不动。
     src_targets = [t for t in targets if str(t.get("kind") or "subs") == "source"]
     sub_targets = [t for t in targets if str(t.get("kind") or "subs") != "source"]
     started_sources = []
@@ -5105,8 +7019,7 @@ def api_sync_tasks_run():
     if not ids:
         if started_sources:
             return jsonify({"success": True, "ids": [], "sources": started_sources,
-                            "note": "这一轮只有源类任务：%s"
-                                    % "、".join([s or "?" for s in started_sources])})
+                            "note": "这一轮只有源类任务：%s" % "、".join([s or "?" for s in started_sources])})
         return jsonify({"error": "现在没有到期的任务（点「全部跑一遍」可强制跑）"}), 400
     if not _claim_sync():
         return jsonify({"error": "订阅同步进行中，请稍候"}), 409
@@ -5155,6 +7068,7 @@ def _purge_library_rows(pairs):
         ]
         with open(INDEX_PATH, "w", encoding="utf-8") as f:
             json.dump(idx, f, ensure_ascii=False, indent=2)
+        _index_invalidate()      # 文件刚被自己改过，缓存里那份立刻作废
 
 
 @app.route("/api/videos/delete", methods=["POST"])
@@ -5167,6 +7081,17 @@ def api_videos_delete():
     try:
         deleted = 0
         with _db_lock:
+            # 0. 图文这一档先把本地图片的归属记下来——图是新引入的大块产物（一条 3~9 张、
+            #    实测单张 100~200KB），删行不删图就只增不减。视频那侧的帧池/封面沿用原行为
+            #    （这个删除路由本来就不碰它们），要把两类一起清是另一件事。
+            note_ids = []
+            for it in items:
+                if (it.get("sheet") or "") != content_store.NOTE_SHEET:
+                    continue
+                v = content_store.get_video_by_source(
+                    DB_PATH, it.get("sheet"), int(it.get("row") or 0))
+                if v and v.get("aweme_id"):
+                    note_ids.append(v["aweme_id"])
             # 1. 删 SQLite
             pairs = []
             for it in items:
@@ -5181,6 +7106,10 @@ def api_videos_delete():
             deleted += sum(1 for s, _ in pairs if s not in DB_ONLY_SHEETS)
             # 4. 重同步内容库
             _sync_content_db()
+        if note_ids:
+            from src.douyin_notes import purge_note_images
+            purged_dirs = purge_note_images(OUTPUT_DIR, note_ids)
+            print(f"[delete] 图文图片目录清理 {purged_dirs}/{len(note_ids)} 个", flush=True)
         return jsonify({"success": True, "deleted": deleted})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -5246,7 +7175,7 @@ if __name__ == "__main__":
     except Exception as _e:
         print(f"   [启动] author_sec_uid 回填失败（不影响启动）：{_e}")
     # 源类定时任务：暴雪官方公告。必须在启动时建好，不能等页面来拉——定时器 60 秒看一眼，
-    # 任务不存在就等于"这条源没人管"，正是它八天没抓的原因。
+    # 任务不存在就等于"这条源没人管"，正是它八天没抓的原因（上游 10-22/10-24/10-27 连发三批）。
     try:
         _bt = _blizzard_task()
         if _bt:
@@ -5259,4 +7188,21 @@ if __name__ == "__main__":
         _start_autosync()
     except Exception as _e:
         print(f"   [启动] 自动同步定时器启动失败（手动同步不受影响）：{_e}")
+    # 双系列排产：先把位置注册到位，再开夜间匹配的定时器。
+    # 为什么注册要放在启动里而不是等页面来拉：定时器 60 秒看一眼，若此刻 `plan_slots` 还是空的，
+    # 它会"成功跑完一轮 0 个位置"并把今晚的账记掉——页面再打开时，当晚就不会再匹配了。
+    try:
+        if DB_PATH.exists():
+            with _db_lock:
+                _legacy = []
+                try:
+                    _legacy = plan_brief.load_data().get("items") or []
+                except Exception as _e2:
+                    print(f"   [启动] 旧排产名单读不到（{_e2}），只注册双系列位置")
+                _seeded = plan_series.seed(DB_PATH, _legacy)
+            print("   [启动] 排产位置注册：%d 个在册、新增 %d 个"
+                  % (_seeded["registered"], _seeded["added"]))
+        _start_planmatch()
+    except Exception as _e:
+        print(f"   [启动] 夜间匹配启动失败（页面手动匹配不受影响）：{_e}")
     app.run(host="127.0.0.1", port=15801, debug=False)

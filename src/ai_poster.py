@@ -19,6 +19,7 @@ Python 3.9 兼容：不用 match / X|Y 语法。
 """
 import base64
 import json
+import os
 import re
 import shutil
 import time
@@ -35,20 +36,18 @@ from .graphics.channels.toutiao import _parse_json
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT_DIR = ROOT / "output" / "poster"
 
-# 中文文字渲染主力。2026-10-11 实测：这个中转端点把 qwen-image-max 下线了
-# （models.list 里只剩 qwen-image-2.x / 3.0 / 2.1-pro / wan2.7-image / z-image-turbo），
-# 调用直接 404「Model not exist」——出图那一下是**会报错**的，不像看图那三处被吞成 skipped，
-# 所以这条是当场能发现的。换到 qwen-image-3.0-pro 实测一张 936×1664 出图正常（1.69MB PNG）。
-# ⚠ 没核实的两件事：① 这个档在聚合站的单价（原来 max 是 0.5 元/张、账单核对过；
-#    新档大概率更贵，界面按钮上写的"0.5 元/张"要以账单为准，别当已核实）；
-# ② 它的中文逐字稳定率没重测（0.5 元那张的 63 字翻车记录是 max 的，见 CHANGELOG 10-01）。
-#    要重测跑 `python3 scripts/probe_poster_stability.py 5 9:16`（5 张 ≈ 2.5 元）。
-IMAGE_MODEL = "qwen-image-3.0-pro"
+# 出图这一档 2026-10-29 号主撤了。依据：近三周 21 份海报 manifest 的 `image_model` 全为空，
+# 实际流程一直是「素材真帧 / 豆包手工出图 + 程序排真字」，API 出图一次没跑过。
+# 原来这里写死一个默认模型名——档位撤掉后那个默认值还留着，等于任何一次"没有底图"的出图
+# 都会拿一个没人认领的模型去扣 0.5 元/张（而且它走 requests 直连百炼，不在额度记账那一层里）。
+# 所以现在没配模型就是不出图，并且要抛一句说得清出路的话（见 generate_image 开头）。
 
 
 def _image_model(ai_config):
-    """出图模型名：配置里给了 AI_MODEL_IMAGE 就用它，理由同 _ocr_model——别再写死。"""
-    return ((ai_config or {}).get("image_model") or "").strip() or IMAGE_MODEL
+    """出图模型名：只认配置里显式写的 `AI_MODEL_IMAGE`，没写就是不出图（不再自带默认值）。"""
+    return ((ai_config or {}).get("image_model") or "").strip()
+
+
 # 转录型视觉模型（qwen-vl-ocr 只回坐标框，不能用）。
 # 2026-10-11 实测：配置里那个中转端点的 models.list 有 175 个模型，但已经没有
 # qwen3-vl-flash 了，调用直接 404「Model not exist」——而这三道看图检查（回读校验、
@@ -168,6 +167,30 @@ COPY_MIN, COPY_MAX = 120, 260
 DIGEST_MAX = 120
 KEYWORD_MAX, SOURCE_MAX = 30, 50
 
+# ── 发布标题（2026-10-16 号主点名）──────────────────────────────────────
+# 他要的是"拆文案那一次就把头条标题+配文、小红书标题+配文一起给我"，理由是
+# **标题和配文直接决定点击率**——图面主标题（title，≤16 字）是给卡片看的，
+# 从来不是平台标题：manifest.title 一直拿的是图面主标题，所以这一档以前是空的。
+# 字数线抄自权威源（都在本仓库外，改口径先改那两份、再回来改这里）：
+#   头条：~/Documents/自媒体/头条出稿规范.md:49-53「每条含标点 ≤30 字（信息流显示上限，
+#         超出截断丢关键信息）」「双标题 A/B 位必须不同题型」「标题里的日期、数字、
+#         时间线必须与正文完全一致」；media-workbench/server.js:411 另给一条取向
+#         「18-25 字、数字+具体+利益点、不堆惊叹号」→ 写进提示词当偏好，不做硬闸。
+#   小红书：media-workbench 的 06-xiaohongshu-integrated-publishing-v1.yml:801
+#         「5 个 ≤20 字标题」「话题标签 5-8 个」→ 这里取 3 条候选（号主一个人发，
+#         5 条挑不过来）+ 标签 5-8 个。
+TT_TITLE_MAX, TT_TITLE_N = 30, 2
+XHS_TITLE_MAX, XHS_TITLE_N = 20, 3
+XHS_COPY_MAX = 300          # 小红书正文比头条配文长一点：要点用文字带全 + 一句"我"
+XHS_TAG_MIN, XHS_TAG_MAX = 5, 8
+# 小红书正文/标题的自证禁词——只挡"看着像机器在代发"这一类，**故意不收**全部过程词
+# （头条配文与 source_note 本来就要写「整理自」，那是合规声明不是自证）。
+# 与 META_WORDS 是两份名单、口径不同，别合并。
+XHS_BAN = [(r"回复\s*[^\s，。]{1,8}\s*(?:获取|领取|领|拿|要)", "回复 XX 获取…（自动回复引导＝托管特征）"),
+           (r"本文由\s*AI|AI\s*辅助整理|由\s*AI\s*(?:生成|整理|归纳)", "本文由 AI…（正文自证）"),
+           (r"侵权|免责声明", "尾注免责句（该走发布页的【笔记内容声明】勾选）")]
+
+
 # 出图后视觉评审的五项 rubric（详见 review_image）：回读管"字对不对"，这里管"好不好看"
 REVIEW_ITEMS = [("overflow", "文字完整"), ("hierarchy", "层级清晰"), ("visual", "画面占比"),
                 ("contrast", "可读性"), ("polish", "精致度")]
@@ -189,6 +212,10 @@ _CHECKLIST_ITEMS = [
     (("toutiao", "wechat"), "「文章设置」勾选「内容由 AI 生成」（2025-09-01 起强制，平台不自动标注）"),
     (("wechat:newspic",), "图片消息无「声明原创」入口（平台未开放图片原创），勿找该按钮、勿群发后补标"),
     (("toutiao", "wechat:newspic"), "配文保留文末合规尾注，勿删；正文禁外链"),
+    (("toutiao",), "头条后台两个标题位各填一条（A/B 不同题型，每条含标点 ≤%d 字）；"
+                   "别拿图面主标题当发布标题，那条是给卡片看的、只有 %d 字" % (TT_TITLE_MAX, TS_LIMITS["title"])),
+    (("xhs",), "小红书标题从三条候选里挑一条（≤%d 字），正文用「小红书那份」——"
+               "把头条配文连尾注一起粘过去，就是 10-10 那次被判托管的样子" % XHS_TITLE_MAX),
     # ── 小红书单独四查（2026-10-13 复盘：10-10 那条《魔兽无限服国服金团随便开》
     #    10-11 23:20 被判「笔记存在利用AI托管进行发文/互动的内容」，处置=不可被他人查看）。
     #    平台 2026-03-10《打击AI托管运营账号治理公告》+ 04-27《AI内容治理规则》：
@@ -210,6 +237,41 @@ _CHECKLIST_ITEMS = [
 
 PUBLISH_CHANNELS = {"toutiao": "头条", "xhs": "小红书", "wechat": "公众号"}
 WECHAT_FORMS = {"newspic": "图片消息", "article": "文章配图"}
+
+
+def compose_source_note(ctx, fallback=""):
+    """来源那一行由**代码**拼，不让模型写日期。
+
+    2026-10-29 反例：提示词里的 `{{DATE}}` 取的是生成当天，素材是 10-24 的第三方口播，
+    成品却写「数据口径截至10月29日」——读者一句"你这啥时候的信息"就问穿了。
+    三个日期各说各的：**素材发布日**（连来源号与一手/第三方一起）、**本稿生成日**、
+    **事实核验情况**（没核就明写没核，不许写成"已核到某日"）。
+    """
+    mats = (ctx or {}).get("materials") or []
+    if not mats:
+        return fallback                      # 没接台账的老路径：不自己编日期，也不假装核过
+    bits = []
+    for m in mats[:3]:
+        who = str(m.get("author") or "未知作者")
+        when = str(m.get("published_at") or "")[:10] or "日期未知"
+        level = "官方一手公告" if m.get("first_party") else (
+            "第三方口播" if m.get("is_video") else "第三方转述")
+        bits.append("%s·%s·%s" % (who, level, when))
+    if len(mats) > 3:
+        bits.append("等 %d 条" % len(mats))
+    line = "来源：" + "；".join(bits)
+    open_r = (ctx or {}).get("open_risks") or []
+    resolved = (ctx or {}).get("resolved") or []
+    if open_r:
+        line += "｜未逐项核验 %d 条（%s）" % (
+            len(open_r), "、".join(str(r)[:14] for r in open_r[:2]))
+    if resolved:
+        line += "｜已核 %d 条：%s" % (
+            len(resolved), "；".join("%s（出处：%s）" % (str(r.get("raw"))[:14],
+                                                  str(r.get("source"))[:28]) for r in resolved[:2]))
+    else:
+        line += "｜事实核验：无（不得写成已核到某日）"
+    return line + "｜本稿生成于 %s" % ((ctx or {}).get("generated_at") or "日期未知")
 
 
 def checklist_for(publish_channel, form=""):
@@ -430,8 +492,21 @@ def resolve_style_text(plan):
     return base + "。" + TYPE_RULE
 
 
-def style_plan_prompt():
-    """拼进拆解 prompt 的预设清单：让模型自己挑风格键，而不是自己编一句风格。"""
+def style_plan_prompt(frames=None):
+    """拼进拆解 prompt 的预设清单：让模型自己挑风格键，而不是自己编一句风格。
+
+    给了真帧清单（`frames` 非空）就只列攻略页那三套皮：界面上的风格下拉本来就只给攻略页
+    （任务 #93 收窄过），提示词却把插画档全列出来，模型会挑 `game_epic` 这种要 AI 画底图的风格
+    ——2026-10-22 实测就是这么把"0 元真帧"又变回"2 元插画"的：同一份提示词里前后打架。
+    """
+    if frames:
+        lines = ["可选风格（这一档画面用素材真帧，只许从这三套攻略页皮里选）："]
+        for k in GUIDE_STYLES:
+            p = STYLE_PRESETS[k]
+            lines.append('  - "%s"：%s（适用：%s）' % (k, p["label"], p["when"]))
+        lines.append("不许选插画类风格（game_epic / tool_review / checklist / minimal 等），"
+                     "那些要 AI 画底图，会把真帧盖掉。")
+        return "\n".join(lines)
     lines = []
     for k in STYLE_ORDER:
         p = STYLE_PRESETS[k]
@@ -453,8 +528,11 @@ PAGE_RULES = [
      "why": "6-9 条同类要点：首页抓眼，次页一口气说完"},
     {"max_points": 13, "pages": 3,
      "why": "10 条以上，或「有什么 + 怎么办」两类都有：封面 / 要点 / 收尾"},
-    {"max_points": 999, "pages": 4,
-     "why": "14 条以上按每页 4 条切；再往上没人看完，成本也按页数翻倍"},
+    {"max_points": 19, "pages": 4,
+     "why": "14-19 条按每页 4 条切：封面 / 两页要点 / 收尾"},
+    {"max_points": 999, "pages": 5,
+     "why": "20 条以上就一页一个论点，别往一页里塞。多一页不加钱——"
+             "画面用素材真帧（出图档 2026-10-29 撤了，模型画底图那条 0.5 元/页已停用）"},
 ]
 
 # 题材信号 → 风格 + 布局（无图 / 有图两套）+ 页数倾向。加新题材往这里追加一行就够。
@@ -495,15 +573,31 @@ def layout_choices_prompt(has_photo):
     return lines
 
 
-def layout_plan_prompt(has_photo, page_hint=0):
+GUIDE_LAYOUT_LOCK = (
+    '**这一组走攻略页那一档：每页的 layout_key 一律填 "guide"**，'
+    "画面用「铁律六」列出的素材真帧，不叫 AI 画底图。"
+    "那十种构图是给没有真帧的稿子准备的，这次不用挑，也别按"
+    "「有没有上传配图」判断这一组能不能用图——**这些真帧就算真图**。")
+
+
+def layout_plan_prompt(has_photo, page_hint=0, has_frames=False):
     """拼进拆解 prompt 的那段"拆几页 + 每页什么布局"规则。
 
     里面的 __TOTAL__ 交给调用方那串 replace 一起替换，跟主模板用同一个预算数。
 
     page_hint 是用户在界面上已经定了的页数（他嫌 2 页太挤、手动加到 3 页，再点「换一套」
     就是想要 3 页的结构）。这时候页数不再由模型判断，剩下的只让它决定怎么分配与选布局。
+
+    has_frames（有可用真帧）时**不再列那十种构图**：以前列了，模型就按"无真图"去推插画布局，
+    `why` 里写"无真图先用 top_art 起幅"，photos 一张都不给（2026-10-22 实测两次都是这样）。
+    这一档的布局只有一个答案，直接说死，省得它替我们做决定。
     """
-    lines = layout_choices_prompt(has_photo)
+    lines = []
+    if has_frames:
+        lines.append(GUIDE_LAYOUT_LOCK)
+        lines.append("")
+    else:
+        lines = layout_choices_prompt(has_photo)
     if page_hint and page_hint > 0:
         lines.append("**页数已由用户定死：这一组必须正好 %d 页**（page_count 填 %d，"
                      "pages 数组给满 %d 项，每页都要有自己的 role、主标题和至少 1 条要点）。"
@@ -636,13 +730,17 @@ __LAYOUT__
   "pages": [
     {"role": "封面", "layout_key": "上面布局键名之一", "title": "这页主标题",
      "subtitle": "这页副标题，可留空", "scene": "这页要画成什么场景",
-     "cards": [{"t": "卡片标题", "d": "卡片说明", "v": "这一条画什么"}]}
+     "cards": [{"t": "卡片标题", "d": "卡片说明", "v": "这一条画什么"}]__GUIDE_SHAPE__}
   ],
   "publish": {
     "copy_text": "发布页配文，120-260 字纯文本：钩子开头 1-2 句 + 要点 3-5 条（每条一行，用「· 」开头）+ 收尾引导 1 句。不要 markdown 符号。",
     "digest": "摘要，≤120 字，单独成段能读懂，不写「见图」这类字样",
     "keyword_reply": "关注后自动回复引导语，≤30 字（例：回复 清单 领取完整列表）；素材里没有可推的关键词就留空字符串",
-    "source_note": "来源说明一句话，≤50 字，含数据口径截至{{DATE}}"
+    "source_note": "来源说明一句话，≤50 字，只写内容从哪来（谁/哪类来源），**不要写日期**——素材发布日与核验状态由系统在出包时补，写在这里会被覆盖",
+    "tt_titles": ["头条标题 A 位", "头条标题 B 位"],
+    "xhs_titles": ["小红书标题一", "小红书标题二", "小红书标题三"],
+    "xhs_copy": "小红书正文：第一句给结论，然后 3-5 条要点，最后一句收尾",
+    "xhs_tags": ["#游戏名", "#版本名"]
   }
 }
 
@@ -650,6 +748,21 @@ __LAYOUT__
 同时顶层的 title / subtitle / cards / scene 仍然填**第 1 页**的内容（老代码读这几个键）。
 只拆一页时 pages 可以省略。footer 整组共用一句，只填顶层就行。
 配文（publish.copy_text）要把被分到后面几页的要点也用文字带上，读者不看第二页也不漏信息。
+
+关于 publish 里的标题与小红书正文（**都不画进海报，但直接决定人家点不点进来**，值得给字数）：
+- `tt_titles` 两条头条标题：每条含标点 **≤30 字**（信息流显示上限，超出被截断就丢关键信息）；
+  两条必须是**不同题型**（一条给结论、一条给疑问或对比可以，同一句式换个词不行）；
+  取向是 18-25 字、带一个具体数字或时间、不堆感叹号。
+- `xhs_titles` 三条小红书标题：每条 **≤20 字**，说人话，直接给玩家能拿到的那个东西。
+- **标题里的数字、日期、版本名必须在卡片文案或配文里也出现**。素材里没有的数不许只出现在标题里，
+  那是标题党；标题写「175 小时」，正文里就得有「175 小时」。
+- `xhs_copy` 小红书正文：第一句就给结论，要点 3-5 条（每条一行、用「· 」开头），收尾一句。
+  可以写"我"，但**只能用在整理动作上**（"这份清单按公告逐条对过"），
+  **不许编游戏内亲测**（"我昨天打了团本"——素材里没有你发生过的事就不写）。
+  不许出现「回复 XX 获取」「本文由 AI 辅助整理」「侵权／免责」这类句子：
+  那正是 2026-10-10 那篇被判「AI 托管发文」的旁证，AI 参与走发布页的官方声明勾选。
+- `xhs_tags` 5-8 个话题标签，**只用这一篇讲的那个游戏**的名字／版本名／团本名；
+  素材里顺带提到的别的游戏（拿来对比的）不许当标签——那会把笔记推给不相干的人，别造词。
 
 spine、scene、每张卡片的 v、style_key 与 publish 里的文字都不会画进海报，所以不占合计字数预算；
 但同样只能用素材里的事实。
@@ -692,21 +805,57 @@ def _clip_ws(text, limit):
     return re.sub(r"\s+", " ", str(text or "")).strip()[:limit]
 
 
-def _clip_publish(raw):
-    """发布文案单独裁切：它不进图，所以不受图面合计字数预算约束。"""
+def _title_list(raw, limit_n):
+    """标题候选：去空、去重、只截条数，**不截长度**。
+
+    为什么不裁长度：裁到 30 字会留下一句断头话，看着像合格的、实际发不出去。
+    超长交给 lint_publish 报出来让人自己改——和「过程词闸只报不自动改写」同一条口径。
+    """
+    out = []
+    for x in (raw if isinstance(raw, list) else []):
+        t = _clip_ws(x, 60)
+        if t and t not in out:
+            out.append(t)
+    return out[:limit_n]
+
+
+def _tag_list(raw):
+    out = []
+    for x in (raw if isinstance(raw, list) else []):
+        t = re.sub(r"\s+", "", str(x or "")).lstrip("#")[:12]
+        if t and "#" + t not in out:
+            out.append("#" + t)
+    return out[:XHS_TAG_MAX]
+
+
+def _clip_publish(raw, plan=None):
+    """发布文案单独裁切：它不进图，所以不受图面合计字数预算约束。
+
+    plan 传进来是为了让 lint_publish 能查"标题里的数字正文里有没有"这一条；
+    校验结果挂在 publish.warnings 里随结果回前端——**拆解那一步就要看得见**，
+    等出图完再看已经晚了（app.py 因此一行不用改，它原样把 publish 存进 status）。
+    """
     raw = raw if isinstance(raw, dict) else {}
-    # 配文**不再按长度硬切**（2026-10-21）：原来这里是 `[:COPY_MAX]`，实测 83/85/80 三条成品
-    # 配文都正好 260 字并断在句中（83 停在「帧数提升幅」），切完再接合规尾注，
-    # 读者看见的就是一句半截话。超线交给 lint_publish 报出来让人自己删——
-    # 标题候选那一档早就是同一条口径：宁可报出来让人删，也不留一句看着合格的断头话。
+    # 配文/小红书正文**不再按长度硬切**（2026-10-21）：以前这里是 `[:COPY_MAX]`，
+    # 实测 83/85/80 三条成品配文都正好 260 字并断在句中——83 停在「帧数提升幅」，
+    # 被切掉的半句恰好是【风险核查】第 9 条"帧数提升幅度未给具体数值"，
+    # 切完再接合规尾注，读者看见的就是一句半截话。超线交给 lint_publish 报出来让人自己删，
+    # 与 `_title_list` 那句"裁到 30 字会留下一句断头话"是同一条口径。
     pub = {"copy_text": re.sub(r"[ \t]+", " ", str(raw.get("copy_text") or "")).strip(),
            "digest": _clip_ws(raw.get("digest"), DIGEST_MAX),
            "keyword_reply": _clip_ws(raw.get("keyword_reply"), KEYWORD_MAX),
-           "source_note": _clip_ws(raw.get("source_note"), SOURCE_MAX)}
-    bad = lint_publish(pub)
+           "source_note": _clip_ws(raw.get("source_note"), SOURCE_MAX),
+           "tt_titles": _title_list(raw.get("tt_titles"), TT_TITLE_N),
+           "xhs_titles": _title_list(raw.get("xhs_titles"), XHS_TITLE_N),
+           "xhs_copy": re.sub(r"[ \t]+", " ", str(raw.get("xhs_copy") or "")).strip(),
+           "xhs_tags": _tag_list(raw.get("xhs_tags"))}
+    bad = lint_publish(pub, plan)
     cut = fact_gate.copy_is_cut(pub["copy_text"])
     if cut:
         bad.append("配文%s" % cut)
+    cut_x = fact_gate.copy_is_cut(pub["xhs_copy"])
+    if cut_x:
+        bad.append("小红书正文%s" % cut_x)
     pub["warnings"] = bad
     return pub
 
@@ -723,8 +872,24 @@ def _publish_view(plan, pub):
     return view
 
 
-def lint_publish(pub):
-    """发布文案侧软校验：不阻断出图，只进 manifest.lint 提示人工补。"""
+def _body_pool(pub, plan):
+    """标题里那些数字该去哪儿找：图面文案 + 两份配文 + 摘要，全算正文。"""
+    bits = [pub.get("copy_text") or "", pub.get("xhs_copy") or "", pub.get("digest") or ""]
+    if isinstance(plan, dict):
+        for p in plan_pages(plan):
+            for _k, v in ink_texts(p):
+                bits.append(v or "")
+            bits.append(p.get("footer") or "")
+    return re.sub(r"\s+", "", " ".join(bits))
+
+
+def lint_publish(pub, plan=None):
+    """发布文案侧软校验：不阻断出图，只进 manifest.lint 提示人工补。
+
+    标题这几条是**机器真能查的**，所以不靠模型自觉：字数线、A/B 重不重、
+    标题里的数字正文有没有（《头条出稿规范》那句「标题里的日期、数字必须与正文完全一致」
+    的可执行版本）、小红书自证禁词。
+    """
     bad = []
     n = len(pub.get("copy_text") or "")
     if n and (n < COPY_MIN or n > COPY_MAX):
@@ -733,6 +898,37 @@ def lint_publish(pub):
         bad.append("摘要超 %d 字" % DIGEST_MAX)
     if len(pub.get("keyword_reply") or "") > KEYWORD_MAX:
         bad.append("关键词回复超 %d 字" % KEYWORD_MAX)
+    tts = pub.get("tt_titles") or []
+    if tts and len(tts) < TT_TITLE_N:
+        # 两条一模一样在 _title_list 里就被并成一条了，所以这条同时管"只给一条"和"给两条但同题"
+        bad.append("头条标题只有 %d 条（两条写成同一个题型也会被并掉），后台有 A/B 两个位、"
+                   "要 %d 条不同题型" % (len(tts), TT_TITLE_N))
+    pool = _body_pool(pub, plan)
+    for label, items, lim in (("头条标题", tts, TT_TITLE_MAX),
+                              ("小红书标题", pub.get("xhs_titles") or [], XHS_TITLE_MAX)):
+        for i, t in enumerate(items, 1):
+            if len(t) > lim:
+                bad.append("%s%d %d 字，超 %d 字会被截断" % (label, i, len(t), lim))
+            for num in set(re.findall(r"\d+(?:\.\d+)?", t)):
+                if len(num.replace(".", "")) >= 2 and num not in pool:
+                    bad.append("%s%d 里的「%s」正文里没有——标题不许出现正文没有的数" % (label, i, num))
+    xcopy = pub.get("xhs_copy") or ""
+    if xcopy and len(xcopy) < 40:
+        bad.append("小红书正文只有 %d 字，太薄会被当随手发" % len(xcopy))
+    for field, text in (("小红书标题", " ".join(pub.get("xhs_titles") or [])),
+                        ("小红书正文", xcopy),
+                        ("话题标签", " ".join(pub.get("xhs_tags") or []))):
+        for pat, why in XHS_BAN:
+            if re.search(pat, text or ""):
+                bad.append("%s撞了自证句：%s" % (field, why))
+    tags = pub.get("xhs_tags") or []
+    if tags and len(tags) < XHS_TAG_MIN:
+        bad.append("话题标签 %d 个，建议 %d-%d 个" % (len(tags), XHS_TAG_MIN, XHS_TAG_MAX))
+    # 空值单独说，而且只说一句：加这个功能之前拆的老文案全都会落到这里，
+    # 分开报会变成三行"没生成"，看着像坏了。
+    if not (tts or pub.get("xhs_titles") or xcopy):
+        bad.append("发布标题／小红书正文是空的：这一组是加这一档之前拆的文案，"
+                   "点「① 拆文案」重拆一次就有（图面主标题不算发布标题，那是画进卡片的）")
     return bad
 
 
@@ -816,8 +1012,13 @@ _GUIDE_RULES = """
 铁律六·攻略页（这一档不靠模型画插画，画面全部来自素材真帧）：
 可用画面只有下面这些，编号是 F+数字，**一张都不许多编，也不许说画面里有它没说的东西**：
 __FRAMES__
-每页按内容需要给这几样，用不上就别给，别硬凑：
-- "photos": [{"frame": "F7"}] —— 这一页的证据图，最多 2 张，只能填上面的编号。
+每页按内容需要给这几样，用不上就别给，别硬凑__SHAPE__：
+- "photos": [{"frame": "F7"}] —— 这一页的证据图，**一页只给 1 张**（号主 2026-10-22 定死：
+  硬上限 1 张/页，要多放画面就加页数，不许在一页里堆两张）。只能填上面的编号。
+  **一个编号整组只许用一次，两页之间也要差 12 秒以上**——同一场景贴两遍比没图更难看。
+  **每一页都必须给 1 张图，一页都不许空着**（号主 2026-10-22 定死："必须有图片"——
+  读者就是来看游戏画面的，空页等于这一页没做完）。漏了后端会自动补一张，但那是兜底：
+  补的不一定跟这一页讲的事对得上，你自己挑才挑得准。
   **图注不上图**（那一帧的说明由程序写进档案，只给我们自己核对），所以**你不要写 caption**。挑图只有一条标准：
   这一页在讲的那件事，画面里真的看得见；看不见就不给图。
 - "kicker": "栏目名 · 本篇主题"（≤14 字，整组同一句，只填在第一页）
@@ -826,6 +1027,13 @@ __FRAMES__
 - "warn": {"t": "一句提醒", "d": "限制是什么、为什么"} —— 素材没说的写在这儿，别编成结论
 - "ask": {"q": "一个能直接回答的问题", "options": ["不超过三项"]} —— 只给最后一页
 这一档每页正文仍守 ≤__TOTAL2__ 字，但卡片建议 2-3 条，把地方留给图。
+**页与页不许同构**（号主 2026-10-22 点名：两张排版一模一样，看多了无聊）：
+- 封面页：`bignum`（或一句结论式大标题）+ 1 张图 + ≤2 条卡片；
+- 中间页：每页只讲一件事，1 张图 + 2-3 条卡片，**整组至少一页用 `contrast`（改了/没改）**、
+  **至少一页用 `warn`（限制与风险）**，这两块不许挤在同一页；
+- 最后一页：`ask` 互动 + 脚注，不再放新论点；
+- 相邻两页的"零件组合"不许完全相同：都是「1 张图 + 3 条卡片」就是同构，
+  把其中一页改成大字数字开头、或改成对照块开头。
 卡片小标题长短混着写：三条全是四个字（"装备取舍""路线规划""收益结算"）看着就像模板，
 换一条素材还是那四个字，等于把十篇做成一篇。
 **图注不用你写、也不会印到图上**——那一帧的说明只留在档案里给我们自己核对，
@@ -845,7 +1053,65 @@ def guide_rules_text(items, total):
     return (_GUIDE_RULES
             .replace("__FRAMES__", frame_pool.index_text(items))
             .replace("__TOTAL2__", str(total))
+            .replace("__SHAPE__", "（这些键就写在 pages[] 每一页的对象里，示例已经带上；"
+                                  "哪一页用不上某个零件，就把那**整个键删掉**）")
             .replace("__META__", META_RULE))
+
+
+def guide_shape_prompt(items):
+    """pages[] / 单页那个 JSON **示例**里要不要带上攻略零件（有真帧才带）。
+
+    为什么不只在提示词末尾写"铁律六"就够了：2026-10-22 真实试用实测——帧清单 6 张、
+    铁律六整段都在提示词里，模型仍然照 `pages[]` 示例的形状交了一份纯 cards
+    （示例里没有的键，它当这个键不存在），于是 `guide_only=false`、出图花 2 元画插画、
+    玩家一行游戏画面都看不到。**示例才是模型真正照着填的那张表**，规则文字管不住它。
+    这一段只在有帧时插入，没帧时留空＝形状和以前逐字一致（默认零变化）。
+    """
+    if not items:
+        return ""
+    return (', "kicker": "栏目名 · 本篇主题（整组同一句，只填第一页）",'
+            ' "photos": [{"frame": "F1"}],'
+            ' "bignum": {"v": "素材原文里出现过的数", "label": "这个数字说的是什么"},'
+            ' "contrast": [{"t": "已改", "d": "一句话"}, {"t": "没改", "d": "一句话"}],'
+            ' "warn": {"t": "一句提醒", "d": "限制是什么、为什么"},'
+            ' "ask": {"q": "结尾问一句能直接回答的问题", "options": ["选项一", "选项二"]}')
+
+
+def _as_list(v):
+    """把模型该交数组却交成对象/字符串的那一项洗成列表。
+
+    为什么不只在提示词里要求它交数组：2026-10-23 那次「① 拆文案」整单任务失败，
+    报 `TypeError: unhashable type: 'slice'`——模型把 `contrast` 交成了一个对象，
+    代码里 `page.get("contrast")[:3]` 就是给 dict 切片段。钱已经花在那一次调用上了，
+    解析层再炸等于白花钱，所以这里兜住，内容尽量留而不是丢掉。
+    """
+    if v is None or isinstance(v, bool) or isinstance(v, (int, float)):
+        return []
+    if isinstance(v, (list, tuple)):
+        return list(v)
+    if isinstance(v, dict):
+        if any(k in v for k in ("t", "d", "v", "q", "label", "note", "frame", "path")):
+            return [v]                       # 一条记录被当成对象交了
+        return [{"t": str(k), "d": str(x)} for k, x in v.items()]   # 「已改/没改」那种标签→文字
+    if isinstance(v, str):
+        s = v.strip()
+        return [s] if s else []
+    return [v]
+
+
+def _opt_text(o):
+    """`ask.options` 里的一条：字符串直接用；被交成对象时取那句人话。
+
+    模型可能交 `{"已改": "…", "没改": "…"}`（标签在键上），也可能交
+    `{"1": "手动开", "2": "宏自动"}`（标签在值上）——键是纯序号/一两个字符就当占位键，取值。
+    """
+    if not isinstance(o, dict):
+        return str(o or "")
+    k = str(o.get("t") or "").strip()
+    v = str(o.get("d") or "").strip()
+    if k and not (k.isdigit() or (len(k) <= 2 and k.isascii())):
+        return k
+    return v or k
 
 
 def guide_clip(page, lim):
@@ -860,7 +1126,7 @@ def guide_clip(page, lim):
                          "label": _clip_ws(bn.get("label"), 20),
                          "note": _clip_ws(bn.get("note"), 30)}
     con = []
-    for c in (page.get("contrast") or [])[:3]:
+    for c in _as_list(page.get("contrast"))[:3]:
         if isinstance(c, dict) and (c.get("t") or c.get("d")):
             con.append({"t": _clip_ws(c.get("t"), 8),
                         "d": _clip(c.get("d"), lim["cardD"])})
@@ -872,8 +1138,34 @@ def guide_clip(page, lim):
                        "d": _clip(wn.get("d"), lim["cardD"] * 2)}
     ak = page.get("ask")
     if isinstance(ak, dict) and str(ak.get("q") or "").strip():
-        opts = [_clip_ws(o, 8) for o in (ak.get("options") or [])[:3] if str(o).strip()]
+        opts = []
+        for o in _as_list(ak.get("options"))[:3]:
+            s = _opt_text(o)
+            if s.strip() and s not in opts:
+                opts.append(_clip_ws(s, 8))
         out["ask"] = {"q": _clip(ak.get("q"), lim["title"]), "options": opts}
+    return out
+
+
+GUIDE_FRAME_MIN_GAP = 12    # 秒：两张帧差这么点时间就是同一个场景，放同一页等于白占半屏
+GUIDE_PHOTOS_PER_PAGE = 1   # 一页几张证据图：号主 2026-10-22 定死 1 张（硬上限，要多加页数）
+
+
+def _ts_seconds(ts):
+    """'00:39' / '1:02:03' → 秒；解析不了返回 None（不拦，交给原逻辑）。"""
+    s = str(ts or "").strip()
+    if not s or ":" not in s:
+        return None
+    parts = s.split(":")
+    if len(parts) > 3:
+        return None
+    try:
+        nums = [int(float(p)) for p in parts]
+    except (TypeError, ValueError):
+        return None
+    out = 0
+    for n in nums:
+        out = out * 60 + n
     return out
 
 
@@ -894,6 +1186,7 @@ def bind_frames(pages, items, lim=None):
         except (TypeError, ValueError):
             continue
     notes = []
+    used_ts = []        # [(秒, 第几页)]：整组用过的帧时刻，用来挡"同一场景连着截两张"
     lim = lim or dict(TS_LIMITS)
     # 栏目名是"这一套"的记号，模型只肯写在第 1 页 → 往下补一遍。
     # 对标那五页每页左上角都有同一句栏目名，缺了就像五张不相干的图。
@@ -914,7 +1207,13 @@ def bind_frames(pages, items, lim=None):
         if not isinstance(raw, list) or not raw:
             continue
         kept = []
-        for ph in raw[:2]:
+        if len(raw) > GUIDE_PHOTOS_PER_PAGE:
+            # 光在提示词里说"一页只给 1 张"不算数（模型照样会给两张），代码级再切一刀：
+            # 号主 2026-10-22 定的是**硬上限**，要多放画面就加页数。
+            notes.append("第 %d 页给了 %d 张图，这一档一页只放 %d 张（号主定的硬上限），"
+                         "多的已去掉——要放更多画面就再加一页"
+                         % (pi, len(raw), GUIDE_PHOTOS_PER_PAGE))
+        for ph in raw[:GUIDE_PHOTOS_PER_PAGE]:
             fid = ""
             if isinstance(ph, str):
                 fid = ph.strip().upper()
@@ -937,6 +1236,16 @@ def bind_frames(pages, items, lim=None):
                 notes.append("第 %d 页点了 %s，可用画面里没有这个编号，这张图已丢掉"
                              % (pi, fid or "空编号"))
                 continue
+            secs = _ts_seconds(it.get("ts"))
+            if secs is not None:
+                near = next((k for k in used_ts if abs(k[0] - secs) < GUIDE_FRAME_MIN_GAP), None)
+                if near:
+                    notes.append("第 %d 页的 %s 与第 %d 页那张只差 %d 秒，是同一个画面，"
+                                 "已丢掉（一页一张、整组同一个编号只用一次；要放更多画面就加一页，"
+                                 "别挑挨着几秒的那张）"
+                                 % (pi, fid, near[1], abs(near[0] - secs)))
+                    continue
+                used_ts.append((secs, pi))
             kept.append({"path": it.get("file"), "frame": fid, "judged": True,
                          "caption": frame_pool.caption_for(it),
                          "ts": it.get("ts") or ""})
@@ -944,7 +1253,49 @@ def bind_frames(pages, items, lim=None):
             p["photos"] = kept
         else:
             p.pop("photos", None)
-            notes.append("第 %d 页没有可用画面（编号全对不上），这一页只排文字" % pi)
+
+    # ── 每一页都必须有一张关键帧（号主 2026-10-23 定死："必须有图片"）──────────
+    # 光在提示词里写"每页给一张"不算数：模型会漏，12 秒同场景闸还会把挨着的那几张挡掉，
+    # 结果就是四页里两页空着。这里代码兜底：从没用过的帧里挑一张**最清楚、
+    # 且跟已经用上的画面离得最远**的补进去，补了什么为什么补，全部写成一句人话。
+    used_ids = {ph.get("frame") for p in pages if isinstance(p, dict)
+                for ph in (p.get("photos") or []) if ph.get("frame")}
+    pool_items = [it for it in (items or []) if it.get("file")]
+
+    def _far(it):
+        """跟已用画面的最小时间距离（越大越是另一个场景）。"""
+        s = _ts_seconds(it.get("ts"))
+        if s is None or not used_ts:
+            return 9999
+        return min(abs(s - k[0]) for k in used_ts)
+
+    def _clear(it):
+        try:
+            return frame_pool.sharpness(it.get("file")) >= frame_pool.HARDEN_MIN_SHARP
+        except Exception:
+            return True
+
+    for pi, p in enumerate(pages, 1):
+        if not isinstance(p, dict) or p.get("photos"):
+            continue
+        left = [it for it in pool_items if ("F%d" % int(it.get("i") or 0)) not in used_ids]
+        if not left:
+            notes.append("第 %d 页补不出图了：这条素材能用的画面一共 %d 张，已被别的页占完——"
+                         "减一页、或你自己在「＋ 用你的图」传一张截图" % (pi, len(pool_items)))
+            continue
+        far = [it for it in left if _far(it) >= GUIDE_FRAME_MIN_GAP]
+        pick_pool = far or left          # 宁可重复场景，也不能让这一页没图（号主要的是"必须有"）
+        pick = sorted(pick_pool, key=lambda it: (not _clear(it), -_far(it)))[0]
+        fid = "F%d" % int(pick.get("i") or 0)
+        p["photos"] = [{"path": pick.get("file"), "frame": fid, "judged": True,
+                        "caption": frame_pool.caption_for(pick),
+                        "ts": pick.get("ts") or "", "auto": True}]
+        used_ids.add(fid)
+        secs = _ts_seconds(pick.get("ts"))
+        if secs is not None:
+            used_ts.append((secs, pi))
+        notes.append("第 %d 页模型没配图，已自动补 %s（%s）" % (
+            pi, fid, "画面清楚、跟已用的不是同一时刻" if far else "剩下的都跟已用画面挨得近，先保证有图"))
     return notes
 
 
@@ -995,7 +1346,7 @@ def normalize_page(item, lim, style_key, has_photo, idx, first_title="",
     """
     notes = []
     cards = []
-    for c in (item.get("cards") or [])[:CARD_MAX]:
+    for c in _as_list(item.get("cards"))[:CARD_MAX]:
         if not isinstance(c, dict):
             continue
         t, d = _clip(c.get("t"), lim["cardT"]), _clip(c.get("d"), lim["cardD"])
@@ -1094,7 +1445,7 @@ __LAYOUT__
 输出 JSON（只此一个对象，不要 pages 数组、不要 publish）：
 {"role": "两个字", "layout_key": "上面布局键名之一", "title": "这一页主标题",
  "subtitle": "这一页副标题，可留空", "scene": "这一页的画面",
- "cards": [{"t": "卡片标题", "d": "卡片说明", "v": "这一条画什么"}]}
+ "cards": [{"t": "卡片标题", "d": "卡片说明", "v": "这一条画什么"}]__GUIDE_SHAPE__}
 
 素材（可能已经是别人总结过的内容）：
 __CONTENT__
@@ -1116,12 +1467,20 @@ def page_plan_prompt(page_index, pages, spine, style_key, has_photo, theme, lim,
     for i, p in enumerate(pages, 1):
         if i == page_index:
             continue
-        pts = "、".join([(c.get("t") or c.get("d") or "")[:12] for c in (p.get("cards") or [])[:5]
-                         if (c.get("t") or c.get("d"))])
+        pts = "、".join([((c.get("t") or c.get("d") or "")[:12]) for c in _as_list(p.get("cards"))[:5]
+                         if isinstance(c, dict) and (c.get("t") or c.get("d"))])
         others.append('  - 第 %d 页「%s」：%s%s' % (i, p.get("role") or "",
                                                    p.get("title") or "（没标题）",
                                                    "；要点：" + pts if pts else ""))
     cur = pages[page_index - 1] if 1 <= page_index <= len(pages) else {}
+    used = []
+    for i, q in enumerate(pages, 1):
+        if i == page_index or not isinstance(q, dict):
+            continue
+        for ph in (q.get("photos") or []):
+            f = str((ph or {}).get("frame") or "").strip().upper()
+            if f:
+                used.append("%s(%s)" % (f, (ph or {}).get("ts") or "时刻未知"))
     txt = (_PAGE_PROMPT
            .replace("__IDX__", str(page_index))
            .replace("__THEME__", (theme or "未指定，按素材自判").strip())
@@ -1129,13 +1488,22 @@ def page_plan_prompt(page_index, pages, spine, style_key, has_photo, theme, lim,
            .replace("__OTHERS__", "\n".join(others) or "  - （这是唯一一页，没有别页）")
            .replace("__ROLE__", cur.get("role") or "（未定）")
            .replace("__STYLE__", style_key or DEFAULT_STYLE_KEY)
-           .replace("__LAYOUT__", "\n".join(layout_choices_prompt(has_photo)))
+           .replace("__LAYOUT__", GUIDE_LAYOUT_LOCK if frames
+                    else "\n".join(layout_choices_prompt(has_photo)))
            .replace("__TITLE__", str(lim["title"])).replace("__SUB__", str(lim["subtitle"]))
            .replace("__CT__", str(lim["cardT"])).replace("__CD__", str(lim["cardD"]))
            .replace("__TOTAL__", str(lim["total"]))
+           .replace("__GUIDE_SHAPE__", guide_shape_prompt(frames))
            .replace("__CONTENT__", (content or "")[:8000])
            .replace("__META__", META_RULE)
            + guide_rules_text(frames, lim["total"]))
+    if frames and used:
+        # 逐页填这条路必须告诉它"哪些编号已被别的页占了"：不说的话模型会挑同一场景里
+        # 挨着的那几张，后端 12 秒同场景闸一挡，这一页就变成没图
+        # （2026-10-22 线上实测第 3 页就是这么空的：F6 与第 1 页的 F3 只差 9 秒）。
+        txt += ("\n**这些编号已经被别的页用掉了**：%s。这一页要配图就挑跟它们**相差 %d 秒以上**的另一张；"
+                "挑不出来就这一页不放图——同一场景贴两遍比没图更难看。"
+                % ("、".join(used), GUIDE_FRAME_MIN_GAP))
     return txt
 
 
@@ -1217,14 +1585,14 @@ def build_text_plan(summary, ai_config, theme="", title="", style_key="", text_m
                            timeout=300, max_retries=1)
     prompt = (_PLAN_PROMPT
               .replace("__THEME__", (theme or "未指定，按素材自判").strip())
-              .replace("__STYLES__", style_plan_prompt())
+              .replace("__STYLES__", style_plan_prompt(frames))
               .replace("__DENSITY__", _density_rule(text_mode))
               .replace("__TOTAL__", str(lim["total"])).replace("__TITLE__", str(lim["title"]))
               .replace("__SUB__", str(lim["subtitle"])).replace("__CT__", str(lim["cardT"]))
               .replace("__CD__", str(lim["cardD"])).replace("__FOOT__", str(lim["footer"]))
               .replace("__STYLE_FIXED__", style_fixed_prompt(style_key))
-              .replace("__LAYOUT__", layout_plan_prompt(has_photo, page_hint))
-              .replace("{{DATE}}", datetime.now().strftime("%m月%d日"))
+              .replace("__LAYOUT__", layout_plan_prompt(has_photo, page_hint, bool(frames)))
+              .replace("__GUIDE_SHAPE__", guide_shape_prompt(frames))
               .replace("__RISKS__", risks_prompt_block(summary))
               .replace("__CONTENT__", (summary.get("content") or "")[:8000])
               .replace("__META__", META_RULE)
@@ -1236,7 +1604,7 @@ def build_text_plan(summary, ai_config, theme="", title="", style_key="", text_m
     data = _parse_json(resp.choices[0].message.content)
 
     cards = []
-    for c in (data.get("cards") or [])[:CARD_MAX]:
+    for c in _as_list(data.get("cards"))[:CARD_MAX]:
         if not isinstance(c, dict):
             continue
         t, d = _clip(c.get("t"), lim["cardT"]), _clip(c.get("d"), lim["cardD"])
@@ -1302,7 +1670,7 @@ def build_text_plan(summary, ai_config, theme="", title="", style_key="", text_m
                    else [_page_layout(plan.get("layout_key"), key, has_photo, 1)[0]],
         "cards": [len(p["cards"]) for p in pages] if pages else [len(plan.get("cards") or [])],
         "why": why}
-    return plan, _clip_publish(data.get("publish")), lint_plan(plan, lim), notes
+    return plan, _clip_publish(data.get("publish"), plan), lint_plan(plan, lim), notes
 
 
 def adoption_stats(rows):
@@ -1353,8 +1721,11 @@ def _plan_chars_one(plan):
     return n
 
 
-# 一页装不下就翻页：页数硬上限 4（再多没人翻，而且 AI 底图按页数翻倍花钱）
-PAGE_MAX = 4
+# 一页装不下就翻页：页数上限 6。
+# 以前定 4 的理由是"AI 底图按页数翻倍花钱"，但攻略页那一档画面用素材真帧、出图 0 元，
+# 号主 2026-10-22 点名两页一个样太呆板、信息多就该摊到 3-4 页甚至更多 ——
+# 所以上限放开到 6，钱那一头由界面在「出图」按钮上按页标出来（插画档 0.5 元/页，攻略档 0 元）。
+PAGE_MAX = 6
 
 
 def plan_pages(plan):
@@ -2039,7 +2410,8 @@ def preview_pages(plan, ratio="9:16", photo=None):
         png, chk = preview_typeset(p, ratio, photo=ph, page=pg, base=base)
         if total > 1 and photo and not ph:
             chk["base_note"] = ("模板底图（0 元）" if base
-                                else "这页没有可复用的底图：出图时要 AI 现画（0.5 元）或换一套带底图的风格")
+                                else "这页没有可复用的底图：出图档已撤（不再自动叫模型画），"
+                                     "换一套带底图的风格，或用「＋ 用你的图」回传一张")
         out.append((p, png, chk))
     return out
 
@@ -2096,10 +2468,19 @@ def generate_image(prompt_text, size, ai_config, timeout=300):
     注意三件实测事实：/images/generations（OpenAI 形状）对这些模型是 404；异步
     text2image 会被拒「current user api does not support asynchronous calls」；
     模型限流 RPM=2，撞限流要退避重试而不是直接失败。返回的 OSS 链接会过期，当场下载。
+
+    2026-10-29 起这一档默认没模型：出图档已被号主撤掉，没配 `AI_MODEL_IMAGE` 就直接拒绝，
+    免得哪一次"没有底图"悄悄拿一个写死的模型去扣钱。
     """
+    model = _image_model(ai_config)
+    if not model:
+        raise PosterError(
+            "出图这一档已经撤掉（不再调模型画底图）。要画面有两条现成的路："
+            "① 用素材真帧出攻略页（0 元）；② 复制提示词去豆包出图再回传。"
+            "确实要恢复自动出图：在 config/config.env.local 加一行 AI_MODEL_IMAGE=模型名，不用重启。")
     api_key, api_base, _ = _require_ai(ai_config)
     url = _api_root(api_base) + "/api/v1/services/aigc/multimodal-generation/generation"
-    payload = {"model": _image_model(ai_config),
+    payload = {"model": model,
                "input": {"messages": [{"role": "user", "content": [{"text": prompt_text}]}]},
                "parameters": {"size": size}}
     headers = {"Authorization": "Bearer " + api_key, "Content-Type": "application/json",
@@ -2286,7 +2667,9 @@ def pick_best(candidates):
 
 def build_lint(pub, check, overrode, review=None, typeset=None):
     """发布包告警：error 代表这张图别发，warn 代表要人补一手。"""
-    issues = lint_publish(pub)
+    # 拆解时那份告警是**带着 plan 算的**（标题里的数字有没有落在正文里），优先复用它；
+    # 老 manifest 没有 warnings 才就地重算一遍（少了数字那条，但总比没有强）。
+    issues = list(pub.get("warnings") or lint_publish(pub))
     if not pub.get("copy_text"):
         issues.append("warn: 配文为空，发布页需手写")
     if not pub.get("digest"):
@@ -2348,7 +2731,8 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
                     progress_cb=None, do_verify=True, plan=None, publish=None, force=False,
                     copies=1, do_review=True, text_mode=DEFAULT_TEXT_MODE, photo=None,
                     preview_clicks=0, bases=None, publish_channel="toutiao", form="newspic",
-                    fact_evidence=None, fact_checked_by="", provenance=None, asr_text=None):
+                    fact_evidence=None, fact_checked_by="", provenance=None, asr_text=None,
+                    frame_items=None, fact_ctx=None):
     """整理稿 → 海报一张。返回 manifest dict（已落盘 output/poster/<summary_id>/）。
 
     plan / publish 非空时跳过 LLM 拆解（前端审改过文案再出图走这条）：plan 是要画进图的
@@ -2378,6 +2762,10 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
     if photo:
         # 真图模式下字一定是程序排的（图都占了一半画面，再让模型写字就是糊图）
         text_mode = "typeset"
+    if plan is not None and text_mode != "typeset" and guide_only_plan(plan):
+        # 攻略页压根不出 AI 底图（画面是素材真帧），所以"让模型把字画进图里"这一档在这儿
+        # 只会得到一张没字的渐变底。2026-10-23 选项走查抓到的：界面选了直出，成品零文字。
+        text_mode = "typeset"
     if text_mode not in TEXT_MODES:
         text_mode = DEFAULT_TEXT_MODE
     lim = limits_for(text_mode)
@@ -2405,21 +2793,30 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
         llm_publish, bad, notes = None, lint_plan(plan, lim), []
     if bad:
         raise PosterError("文案不合格：" + "；".join(bad))
-    pub = _clip_publish(publish or llm_publish or {})
+    pub = _clip_publish(publish or llm_publish or {}, plan)
     # ── 事实闸（2026-10-21 号主抽查 87/85/83 之后加的）────────────────────────
     # 拦的是"上游已经标过待核的东西被升格成卖点"这一件确定性的事：整理稿【风险核查】点名的
     # 数字/名词，原样出现在图上任何一处文字或配文里 → 不出图。
     # 判据只有"标过没有 + 出没出现"两条，不叫模型再打一次分（那等于用编造审核编造）。
     # 语义类问题（同一条里既说别拉满又说推荐拉满、缺操作步骤）只列进 soft，交人看，不夸称全能抓。
+    pub["source_note"] = compose_source_note(fact_ctx, pub.get("source_note") or "")
+    # 台账里那些"上一版标过、这一版没写"的条目必须一起进判据；一手文本用来区分
+    # "只有口播撑着"和"公告里确实有这句"（2026-10-29 小红书反例）
+    risk_all = fact_gate.merge_items(fact_gate.risk_items(summary.get("content") or ""),
+                                     (fact_ctx or {}).get("open_items") or [])
     fact_hard, fact_soft = fact_gate.check(
-        _publish_view(plan, pub), summary.get("content") or "")
+        _publish_view(plan, pub), summary.get("content") or "",
+        extra_items=(fact_ctx or {}).get("open_items"),
+        official_blobs=(fact_ctx or {}).get("official_blobs"))
     fact_gaps = fact_gate.guide_gaps(plan) if plan_is_guide(plan) else []
     if fact_gaps:
         fact_soft.append("按攻略发就得让人照做，这几段现在没有明确内容：%s；"
                          "补不齐就把标题改成「介绍/观察」，别逼模型编步骤"
                          % "、".join(fact_gaps))
-    fact_gate_state = {"risk_items": [it["raw"] for it in
-                                      fact_gate.risk_items(summary.get("content") or "")],
+    fact_gate_state = {"risk_items": [it["raw"] for it in risk_all],
+                       "inherited": [it["raw"] for it in risk_all
+                                     if str(it.get("raw") or "").startswith("【继承")
+                                     or it.get("status") == "open"],
                        "hard": fact_hard, "soft": fact_soft, "guide_gaps": fact_gaps,
                        "overridden": bool(force and fact_hard)}
     fact_override = None
@@ -2541,14 +2938,25 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
                                                         if text_mode == "typeset" else None)
     if photo:
         n = 1
-        _pg("用你上传的图排主视觉（0 元，不出 AI 底图）"
-            + ("，其余 %d 页用纯色底" % (len(pages) - 1) if multi else "") + "...")
+        rest = ""
+        if multi:
+            # 攻略页其余那几页的画面是素材真帧，不是纯色底——话得按这一档真实的排法说
+            rest = ("，其余 %d 页用素材真帧" % (len(pages) - 1) if guide_only_plan(plan)
+                    else "，其余 %d 页用纯色底" % (len(pages) - 1))
+        _pg("用你上传的图排主视觉（0 元，不出 AI 底图）%s..." % rest)
     elif manual:
         n = 1
         _pg("用你回传的 %d 张底图排版（0 元，不出 AI 底图）..." % len(manual))
     elif multi:
         n = 1
         _pg("多页模式：一页一张，不再抽卡（张数 × 页数会把花费翻倍）")
+    elif guide_only_plan(plan):
+        # 攻略页的底图是这套皮肤的固定渐变、画面是从素材里挑定的那一张真帧，
+        # 抽几次得到的是一模一样的副本，还要白跑几次视觉评审（2026-10-23 选项走查抓到）。
+        if n > 1:
+            _pg("攻略页：画面是定好的素材真帧、底图是固定渐变，选 %d 张也只会出同一张图，"
+                "按 1 张出（评审那几步也不再重复跑）..." % n)
+        n = 1
     stale_nums = []
     # 每张回传底图的体检结果（{page, band, text, object, note, checked, bad}），落进 manifest
     base_rows = []
@@ -2570,6 +2978,120 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
             if r["bad"]:
                 _pg("第 %d 页那张不合格：%s" % (pi, r.get("why") or r["note"]))
 
+    # ── 印之前把**真要用上版的那几张帧**再收拾一遍 ──────────────────────────
+    # 号主 2026-10-22 看图点名两件事：① p3/p4 那两张底部带着作者压的字幕；② p2/p3 发虚、
+    # "没有精准截取到帧"（中间一块界面、四周一大片虚化背景，整幅放大印出来当然糊）。
+    # 判帧那一次问的是七个字段的宽问题，实测会答 where=none 漏掉底部字幕——
+    # **问题越窄答得越准**，所以这里只问"最下面三分之一有没有一行字幕 + 该保留哪块矩形"。
+    # 只往成品包里写文件，生产帧池（frames.json / raw / clean）一个字节都不动。
+    hardened = []
+    used_photos = [(pi, ph) for pi, p in enumerate(pages, 1)
+                   for ph in (p.get("photos") or [])
+                   if (ph.get("path") and os.path.exists(str(ph.get("path"))))]
+    if used_photos and ai_config and ai_config.get("api_key"):
+        try:
+            from . import frame_pool
+        except ImportError:
+            import frame_pool
+        _pg("核对要印上版的 %d 张画面：底部有没有字幕、四周虚化的边裁不裁" % len(used_photos))
+        for pi, ph in used_photos:
+            new, rec = frame_pool.harden_frame(
+                ph["path"], ai_config, out_dir / "_frames",
+                name="p%d_%s" % (pi, os.path.basename(str(ph["path"]))), progress=_pg)
+            rec["page"] = pi
+            rec["frame"] = ph.get("frame") or ""
+            hardened.append(rec)
+            if rec.get("still_text") or rec.get("too_soft"):
+                # 后期字裁不掉 / 这张本身就是虚的：不许上版。宁可这页没图，
+                # 也不能把别人的字幕或一张糊图当成我们给的证据
+                ph["_drop"] = rec.get("why") or "这一帧没通过出图前核对"
+            elif rec.get("ok"):
+                ph["path"] = new
+    for p in pages:
+        kept = [ph for ph in (p.get("photos") or []) if not ph.get("_drop")]
+        dropped = [ph for ph in (p.get("photos") or []) if ph.get("_drop")]
+        if dropped:
+            _pg("第 %d 页有 %d 张画面被拦下：%s" % (
+                (dropped[0].get("page") or 0), len(dropped),
+                "；".join(str(d.get("_drop")) for d in dropped)))
+        p["photos"] = kept
+
+    # ── 拦完当场换一张再核一遍：这条硬要求必须落在最后一步之前 ─────────────────
+    # 号主 10-23 定死"每一页都要有一张关键帧"，可兜底以前只跑在拆解那一步（bind_frames）。
+    # 出图前这道核对把某页那张判死（太虚／字幕压中间）之后没人再补，就成了
+    # "② 看版面有图、③ 出来那页没图"。补进来的那张走同一道核对，核不过就再换，最多试 3 张。
+    refilled = []
+    need_fill = any(isinstance(p, dict) and not (p.get("photos") or [])
+                    and _ts and _ts._is_guide(p) for p in pages)
+    if need_fill:
+        try:
+            from . import frame_pool
+        except ImportError:
+            import frame_pool
+        bad_ids = {str(h.get("frame") or "") for h in hardened
+                   if h.get("still_text") or h.get("too_soft")}
+        used_ids = {str(ph.get("frame") or "") for p in pages
+                    for ph in (p.get("photos") or []) if ph.get("frame")}
+        used_ts = []
+        for _pi, _p in enumerate(pages, 1):
+            for ph in (_p.get("photos") or []):
+                _s = _ts_seconds(ph.get("ts"))
+                if _s is not None:
+                    used_ts.append((_s, _pi))
+
+        def _cands():
+            """候选帧按"先清楚、再跟已用画面隔得远"排；已占用的、刚被判死的都剔掉。"""
+            out = []
+            for it in (frame_items or []):
+                fid = "F%d" % int(it.get("i") or 0)
+                f = it.get("file")
+                if not f or fid in used_ids or fid in bad_ids or not os.path.exists(str(f)):
+                    continue
+                s = _ts_seconds(it.get("ts"))
+                far = min([abs(s - k[0]) for k in used_ts], default=9999) if s is not None else 9999
+                try:
+                    clear = frame_pool.sharpness(f) >= frame_pool.HARDEN_MIN_SHARP
+                except Exception:
+                    clear = True
+                out.append(((not clear, -far), fid, it))
+            return [x[2] for x in sorted(out, key=lambda x: x[0])]
+
+        for pi, p in enumerate(pages, 1):
+            if not isinstance(p, dict) or (p.get("photos") or []) or not _ts._is_guide(p):
+                continue
+            for it in _cands()[:3]:
+                fid = "F%d" % int(it.get("i") or 0)
+                new, rec = frame_pool.harden_frame(
+                    it["file"], ai_config, out_dir / "_frames",
+                    name="p%d_补_%s" % (pi, os.path.basename(str(it["file"]))), progress=_pg)
+                rec["page"] = pi
+                rec["frame"] = fid
+                hardened.append(rec)
+                if rec.get("still_text") or rec.get("too_soft"):
+                    bad_ids.add(fid)
+                    _pg("第 %d 页换的 %s 也没过出图前核对（%s），再换一张"
+                        % (pi, fid, rec.get("why") or ""))
+                    continue
+                p["photos"] = [{"path": new, "frame": fid, "judged": True,
+                                "caption": frame_pool.caption_for(it),
+                                "ts": it.get("ts") or "", "auto": True, "refilled": True}]
+                used_ids.add(fid)
+                _s = _ts_seconds(it.get("ts"))
+                if _s is not None:
+                    used_ts.append((_s, pi))
+                refilled.append({"page": pi, "frame": fid})
+                _pg("第 %d 页那张被拦下后已换成 %s，并重新核对通过" % (pi, fid))
+                break
+            if not (p.get("photos") or []):
+                refilled.append({"page": pi, "frame": ""})
+                _pg("第 %d 页补不出第二张：能用的画面要么已被别的页占完、要么都没过出图前核对——"
+                    "这一页只排文字，或在「＋ 用你的图」传一张截图进来")
+
+    if multi:
+        # 回写：`plan_pages()` 给的是副本，拦掉的那张、换上的那张都改在副本上。
+        # 不回写就成了"成品清单里记着 F4、纸上印的是 F3"——画面使用依据也照着它数，会数错。
+        plan["pages"] = pages
+
     candidates, usage, page_rows = [], {}, []
     photo_name = ""
     if photo:
@@ -2584,9 +3106,10 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
         # 真图模式下整组都不出 AI 底图（其余页就是这套皮肤的纯色渐变），所以仍然 0 元。
         pphoto = photo if pi == 1 else None
         # 攻略页：画面是素材真帧，本来就不该叫模型画底图——整页 0 元。
+        # 「＋ 用你的图」在这一档读的是**那一块画面位**（排版层用它顶掉这一页那张帧，
+        # 一页一张是号主定的硬上限），不是插画区。以前这里写着 `if guide: pphoto = None`，
+        # 于是界面确认框说"第 1 页用你上传的真图"、成品上一张都没印（2026-10-23 选项走查抓到）。
         guide = bool(_ts and _ts._is_guide(page_plan))
-        if guide:
-            pphoto = None
         for i in range(1, n + 1):
             if guide:
                 raw = _ts.placeholder_base(page_plan.get("style_key"), w, h, 0.6,
@@ -2658,7 +3181,9 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
                 row["cards"] = len(page_plan.get("cards") or [])
                 row["role"] = page_plan.get("role") or ""
                 row["base_note"] = ("真图主视觉" if pphoto else
-                                    ("纯色底（0 元）" if photo else "AI 现画底图 0.5 元"))
+                                    ("素材真帧（0 元）" if guide else
+                                     ("纯色底（0 元）" if photo else
+                                      "无底图（出图档已撤，见 generate_image）")))
                 page_rows.append(row)
             candidates.append(row)
 
@@ -2673,8 +3198,16 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
     ts_chk = best.get("typeset")
 
     copy_text = pub.get("copy_text") or ""
-    # 小红书档不追加：正文里的 AI 自证尾注正是那次「AI 托管」判决的旁证之一（见四查清单）
-    if copy_text and publish_channel != "xhs" and COMPLIANCE_NOTE[:10] not in copy_text:
+    # 渠道分叉（2026-10-16 加了分渠道正文之后改成"按渠道取那份"）：
+    # 小红书用 xhs_copy + 话题标签，那份里没有尾注、没有「回复 XX」；
+    # 小红书档**永远不追加尾注**——正文里的 AI 自证句正是那次「AI 托管」判决的旁证之一（见四查清单）。
+    # 老 plan 没有 xhs_copy 时退回 copy_text（至少不追加尾注），并在 warnings 里已经报过。
+    if publish_channel == "xhs":
+        if (pub.get("xhs_copy") or "").strip():
+            copy_text = pub["xhs_copy"]
+            if pub.get("xhs_tags"):
+                copy_text = copy_text.rstrip() + "\n\n" + " ".join(pub["xhs_tags"])
+    elif copy_text and COMPLIANCE_NOTE[:10] not in copy_text:
         copy_text = copy_text.rstrip() + "\n\n" + COMPLIANCE_NOTE
 
     issues = build_lint(pub, check, overrode, review, ts_chk)
@@ -2793,17 +3326,32 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
     # 没判过帧的配图：出图照出，但清单上必须写"未判，需人眼看"（2026-10-21 Codex P0）
     unjudged = unjudged_photos(plan)
     manifest["photos_unjudged"] = unjudged
+    # 印之前那一道核对留痕：裁没裁字幕条、按没按内容框裁、哪张被拦下——没有这份记录，
+    # "这张图到底核过没有"又得靠猜（号主只有截图＋一句话这一种反馈方式）
+    manifest["frames_hardened"] = [
+        {k: v for k, v in rec.items() if k in ("page", "frame", "strip", "box", "still_text", "too_soft",
+                                              "sharp", "subject", "ok", "why")}
+        for rec in hardened]
+    # 被拦下后当场换的那几张（page + 换成的编号；frame 空＝这页补不出来）：
+    # 没有这条记录，"② 有图 ③ 没图"就永远只能靠人回忆
+    manifest["frames_refilled"] = refilled
     for name in unjudged:
         issues.append("warn: %s 这张图没走判帧（手工给的路径），"
                       "发布前人眼确认画面里没有字幕条／花字／账号名" % name)
     # 编辑证据链的缺项：一条条点到字段（哪条结论没证据、哪张图没依据），
-    # 并明确写"不是原创资格认证"——省得有人把它读成"补完就能勾原创"
+    # 并明确写"不是原创资格认证"——省得有人把它读成"补完就能勾原创"。
+    # 号主 10-23 拍板放宽这一档：它是**内部台账缺登记**，不是内容错，
+    # 不该把整条产线钉死在最后一步（前面拆解、看版面都过了，③ 也出图了，只是发不出去）。
+    # 所以改成 warn + `needs_evidence`，不再翻 `publishable`；
+    # 真会发错东西的那两道（事实闸的待核卖点、行动依据闸的照做不了）照旧硬拦。
+    manifest["needs_evidence"] = bool(prov_gaps)
     for g in prov_gaps[:6]:
-        issues.append("error: 编辑证据链缺项 —— %s（%s）｜怎么补：%s"
+        issues.append("warn: 编辑证据链缺项 —— %s（%s）｜怎么补：%s"
                       % (g["what"], g["field"], g["hint"]))
     if prov_gaps:
-        issues.append("error: 编辑状态「%s」——待发状态保持为否（这是内部提示，"
-                      "不是平台原创资格认证）" % prov_state.get("label", ""))
+        issues.append("warn: 编辑状态「%s」——图能出、也能发，但这篇没建证据链，"
+                      "被问「这条画面你凭什么用」时答不上（内部提示，不是平台原创资格认证）"
+                      % prov_state.get("label", ""))
     # 行动依据没落地却进了成品位置：一条条点名（哪一节、哪句话、缺什么、印在哪个位置）
     for x in act_hard[:6]:
         issues.append("error: 行动依据未落地 —— %s" % x)
@@ -2814,6 +3362,19 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
                       % (len(act_hard), (act_state.get("stats") or {}).get("pending", 0)))
     if manifest["publishable"] and any(i.startswith("error") for i in issues):
         manifest["publishable"] = False      # 别的硬伤（字数/骨架稿）也一样不能标待发
+    # ── 最终人工放行（2026-10-29 最小版）：只记"你放行的是哪一版" ──────────────
+    # 不做逐项打分表——号主自己说"最终人工审稿我也不知道正不正确"，那就不拿伪判据冒充审核。
+    # 这条只解决一件事：成品一改（文字或任一页图），哈希变、旧放行作废。
+    from . import release_review
+    pkg_hash = release_review.package_hash(str(out_dir), manifest)
+    rr = release_review.status(str(out_dir), publish_channel, pkg_hash)
+    manifest["package_hash"] = pkg_hash
+    manifest["release_review"] = dict(rr, checklist=release_review.checklist_hint(publish_channel))
+    if release_review.blocks_publish(publish_channel, rr):
+        manifest["publishable"] = False
+        issues.append("info: 小红书这一档要最终人工放行才算待发；"
+                      "现在没有匹配这一版的放行记录（改稿即失效），去发布区点「签发放行」")
+
     (out_dir / "manifest.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     errs = [i for i in issues if i.startswith("error")]

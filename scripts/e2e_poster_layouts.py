@@ -125,8 +125,10 @@ def main():
                               {"title": "", "cards": []},
                               {"title": "C", "cards": one["cards"][:2]}])
     ck("空页丢掉、其余保留", len(ai_poster.plan_pages(hybrid)) == 2)
-    many = dict(one, pages=[{"title": "P%d" % i, "cards": one["cards"][:2]} for i in range(6)])
-    ck("超过 4 页被截断", len(ai_poster.plan_pages(many)) == ai_poster.PAGE_MAX)
+    many = dict(one, pages=[{"title": "P%d" % i, "cards": one["cards"][:2]}
+                            for i in range(ai_poster.PAGE_MAX + 2)])
+    ck("超过 PAGE_MAX 的页被截断（上限跟着表走，不抄死数字）",
+       len(ai_poster.plan_pages(many)) == ai_poster.PAGE_MAX)
     ck("每页没写 footer 时继承顶层那一句，但整组只在末页印一次（10-13 收口）",
        (ai_poster.plan_pages(hybrid)[-1].get("footer") or "") == one["footer"]
        and not (ai_poster.plan_pages(hybrid)[0].get("footer") or ""),
@@ -243,8 +245,11 @@ def main():
     ck("提示词按有没有真图换话", "没有上传" in blk and "已经上传了" in ai_poster.layout_plan_prompt(True))
     ck("题材映射是数据不是散文", len(ai_poster.THEME_RULES) >= 4
        and all({"signals", "style", "no_photo", "photo", "pages"} <= set(r) for r in ai_poster.THEME_RULES))
-    ck("建议页数与规则表一致",
-       [ai_poster.suggest_pages(n)[0] for n in (3, 7, 11, 30)] == [1, 2, 3, 4])
+    ck("建议页数与规则表一致（样本数跟着表长走，改表不用改断言）",
+       [ai_poster.suggest_pages(r["max_points"] - 1)[0] for r in ai_poster.PAGE_RULES]
+       == [r["pages"] for r in ai_poster.PAGE_RULES])
+    ck("要点数多到超出表尾时回落到页数上限",
+       ai_poster.suggest_pages(99999)[0] == ai_poster.PAGE_MAX)
 
     print("== J 用户定了页数时，页数不再由模型判断 ==")
     lim = ai_poster.limits_for(ai_poster.DEFAULT_TEXT_MODE)
@@ -566,8 +571,15 @@ def main():
            "warn": {"t": "别按这页加点", "d": "素材只给了名字"},
            "ask": {"q": "你先点哪棵？", "options": ["专业", "冒险", "不点"]}}]
     bn = ai_poster.bind_frames(pg, fake)
+    ck("一页只放 1 张是硬上限：模型给两张，第二张直接切掉并说清为什么",
+       len(pg[0]["photos"]) == 1 and any("一页只放 1 张" in x for x in bn), "；".join(bn))
+    bogus = [{"title": "乙", "cards": [{"t": "a", "d": "b"}], "photos": [{"frame": "F99"}]}]
+    bn2 = ai_poster.bind_frames(bogus, fake)
     ck("模型点了不存在的编号 → 丢掉那张图并留一句人话（不静默出空位）",
-       len(pg[0]["photos"]) == 1 and any("F99" in x for x in bn), "；".join(bn))
+       any("F99" in x for x in bn2), "；".join(bn2))
+    ck("但这一页不许空着：从清单里另挑一张补上（号主 10-23：必须有图片）",
+       bool(bogus[0].get("photos")) and any(x.get("auto") for x in bogus[0]["photos"]),
+       str(bogus[0].get("photos")))
     ck("图注由代码按那一帧自己的记录写，不是模型编的",
        pg[0]["photos"][0]["caption"] == "角色旁有半透明小熊",
        pg[0]["photos"][0]["caption"])
@@ -928,6 +940,60 @@ def main():
                and any("尾注不放配文" in s for s in mw["checklist"])
                and not any("声明原创」入口" in s for s in mw["checklist"]))
             shutil.rmtree(out)
+
+    # ── P 段：发布标题与分渠道配文（2026-10-16 号主点名，全程不调模型、不花钱）──
+    # 他要的是「拆文案那一次就把头条标题+配文、小红书标题+配文都给我」，理由是标题和配文决定点不点进来。
+    # 以前 publish 只有四键、且**没有发布标题**：manifest.title 是图面主标题（≤16 字），
+    # 拿它当平台标题等于白丢点击。这一钉管三件事：四键没被人删、字数闸真会响、老数据降级只说一句。
+    print("== P 发布标题／小红书正文：拆解一次要带回两渠道那份 ==")
+    # 夹具刻意做成"合格的一份"：标题里的 20 在卡片里也有（数字闸不该响）、正文够长；
+    # 只有标签给 2 个——那是要另一条断言钉住"太短也要报"。
+    _plan_p = {"title": "老装别拆", "subtitle": "横向提升逐条对",
+               "cards": [{"t": "保值", "d": "5 年不变"},
+                         {"t": "特化", "d": "熔火之心内 +20%，黑翼失效"}]}
+    _good = {"copy_text": "头条那份配文" + "补" * 140, "digest": "摘要", "keyword_reply": "",
+             "source_note": "口径截至 2026-10-16",
+             "tt_titles": ["魔兽无限服换装：老装5年保值新装只强5%",
+                           "特化装备只在对应副本生效？熔火+20%黑翼失效"],
+             "xhs_titles": ["无限服老毕业装别拆", "新装备只强5%但更值钱", "熔火+20%黑翼失效怎么选"],
+             "xhs_copy": "结论：老毕业装别拆。\n· 老装 5 年保值，新装基础只强 5%\n"
+                         "· 新装强在特化：熔火之心内 +20%，到黑翼之巢就失效",
+             "xhs_tags": ["魔兽世界", "# 无 限服", "无限服"]}
+    _p = ai_poster._clip_publish(_good, _plan_p)
+    ck("P 新四键都在，且标签归一化（补 #、去重）",
+       all(k in _p for k in ("tt_titles", "xhs_titles", "xhs_copy", "xhs_tags"))
+       and _p["xhs_tags"] == ["#魔兽世界", "#无限服"], json.dumps(_p.get("xhs_tags"), ensure_ascii=False))
+    ck("P 合格的一份不该报标题问题（数字在卡片里找得到就不该响）",
+       not [w for w in _p["warnings"] if "标题" in w],
+       json.dumps(_p["warnings"], ensure_ascii=False))
+    ck("P 正文够长不该报薄，标签只有 2 个要报建议 5-8",
+       not any("太薄" in w for w in _p["warnings"])
+       and any("话题标签 2 个" in w for w in _p["warnings"]),
+       json.dumps(_p["warnings"], ensure_ascii=False))
+    ck("P 头条标题 31 字要报（信息流会截断）",
+       any("超 30 字" in w for w in ai_poster._clip_publish(dict(_good, tt_titles=["天" * 31, "x"]), _plan_p)["warnings"]))
+    ck("P A/B 写成同题被并条后要报缺条数",
+       any("头条标题只有 1 条" in w for w in
+           ai_poster._clip_publish(dict(_good, tt_titles=["天裔强在哪", "天裔强在哪"]), _plan_p)["warnings"]))
+    _fake_num = ai_poster._clip_publish(dict(_good, tt_titles=["老装保值 300 周，新装只强 5%",
+                                                              "另一条题型"]), _plan_p)["warnings"]
+    ck("P 标题里的数字正文没有要报（防标题党）",
+       any("300" in w and "正文里没有" in w for w in _fake_num),
+       json.dumps(_fake_num, ensure_ascii=False))
+    _ban = ai_poster._clip_publish(dict(_good, xhs_copy="结论：老装别拆。\n· 5 年保值\n回复 清单 领取完整表格"),
+                                   _plan_p)["warnings"]
+    ck("P 小红书正文撞自证句要报", any("回复 XX" in w for w in _ban), json.dumps(_ban, ensure_ascii=False))
+    _old = ai_poster._clip_publish({"copy_text": "老配文" + "补" * 140, "digest": "摘",
+                                    "keyword_reply": "", "source_note": ""}, _plan_p)
+    ck("P 老四键数据只报一句「没生成」，不是一串红",
+       len([w for w in _old["warnings"] if "空的" in w]) == 1,
+       json.dumps(_old["warnings"], ensure_ascii=False))
+    ck("P 拆解提示词里四键与两条硬口径都在",
+       all(k in ai_poster._PLAN_PROMPT for k in ("tt_titles", "xhs_titles", "xhs_copy", "xhs_tags"))
+       and "≤30 字" in ai_poster._PLAN_PROMPT and "不许编游戏内亲测" in ai_poster._PLAN_PROMPT)
+    ck("P 清单里两渠道各有一条标题动作",
+       any("A/B 不同题型" in s for s in ai_poster.checklist_for("toutiao"))
+       and any("三条候选里挑一条" in s for s in ai_poster.checklist_for("xhs")))
 
     print()
     if FAILS:

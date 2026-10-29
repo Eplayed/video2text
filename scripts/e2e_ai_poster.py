@@ -18,6 +18,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from src import ai_poster  # noqa: E402
+from src import ai_quota as _ai_quota  # noqa: E402
+
+# 真跑这一支必须和生产同一套 SDK 边界：不装"关思考"那层，快速档换成 qwen3.8-omni-flash 后
+# 每次都会 300 秒超时，红了还以为是代码坏了。
+_ai_quota.seed_from_env()
 
 DB_PATH = ROOT / "output" / "video2text.db"
 ENV_PATH = ROOT / "config" / "config.env.local"
@@ -31,16 +36,26 @@ def load_ai_config():
     if method == "deepseek":
         return {"method": method, "api_key": (kv.get("DEEPSEEK_API_KEY") or "").strip(),
                 "api_base": (kv.get("DEEPSEEK_API_BASE") or "https://api.deepseek.com").strip(),
-                "model": (kv.get("DEEPSEEK_MODEL") or "deepseek-v4.1-flash").strip(), "fast_model": fast}
+                "model": (kv.get("DEEPSEEK_MODEL") or "deepseek-v4.1-flash").strip(),
+                "fast_model": fast, "fast_api_key": (kv.get("AI_API_KEY_FAST") or "").strip()}
     return {"method": method, "api_key": (kv.get("OPENAI_API_KEY") or kv.get("AI_API_KEY") or "").strip(),
             "api_base": (kv.get("AI_API_BASE") or "https://api.openai.com/v1").strip(),
-            "model": (kv.get("AI_MODEL") or "gpt-4o-mini").strip(), "fast_model": fast}
+            "model": (kv.get("AI_MODEL") or "gpt-4o-mini").strip(),
+            "fast_model": fast, "fast_api_key": (kv.get("AI_API_KEY_FAST") or "").strip()}
 
 
 def work_config(cfg):
-    """对齐生产：拆解这类活走快速档（web/app.py 的 _fast_config 同一套规则）。"""
+    """对齐生产：拆解这类活走快速档（web/app.py 的 _fast_config 同一套规则）。
+    快速档可以另配一把 Key（AI_API_KEY_FAST）——不跟着换的话，测试会拿主档的 Key 去叫新模型，
+    红了还以为是代码坏了。"""
     fast = (cfg.get("fast_model") or "").strip()
-    return dict(cfg, model=fast) if fast else cfg
+    if not fast:
+        return cfg
+    out = dict(cfg, model=fast)
+    fk = (cfg.get("fast_api_key") or "").strip()
+    if fk:
+        out["api_key"] = fk
+    return out
 
 
 def pick_summary(conn, sid):
