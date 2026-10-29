@@ -104,7 +104,12 @@ def main():
            "缺：%s" % ("、".join(gaps) or "无"))
 
     print("── D. 健康样本不许被一律拦（放行侧也要有断言）──")
-    for sid in (74, 63, 66):
+    # 66 从这一组里挪走了：2026-10-29 加了机制证据门之后它**该被拦**——
+    # 它的清单写着「需确认"后台系统"具体指代的产品…口播原文为"字节或者月之暗面在服务器上的程序"」，
+    # 而成品把「后台系统」印进了卡片2说明、卡片3标题和配文。那句"可保留"是编辑的判断，
+    # 不是可定位证据；按号主这轮定的口径（风险只能凭证据解除），这就是要停下来的样子。
+    # 放行侧的断言仍然留着（74/63），闸写宽到全拦会被这两条抓到。
+    for sid in (74, 63):
         pack, content = load(sid)
         if not pack:
             continue
@@ -112,6 +117,12 @@ def main():
         cut = fact_gate.copy_is_cut(pack["pub"].get("copy_text") or "")
         ck("%d 健康样本放行" % sid, (not hard) and (not cut),
            "hard=%d cut=%s" % (len(hard), cut or "无"))
+
+    pack66, content66 = load(66)
+    if pack66:
+        h66, _s66 = fact_gate.check(pack66["plan"], content66)
+        ck("66 含疑转写被印进成品 → 机制证据门要停（上游那句「可保留」不算证据）",
+           bool(h66) and "后台系统" in "；".join(h66), (h66 or [""])[0][:70])
 
     print("── E. 工程 bug 本身：配文不再被长度硬切，改成报出来 ──")
     from src import ai_poster
@@ -137,6 +148,34 @@ def main():
            "块长 %d 字" % len(block))
         empty = ai_poster.risks_prompt_block({"content": "【正文】没有任何风险节"})
         ck("没有风险节时也有一句兜底", "没有【风险核查】" in empty, empty[:40])
+
+    # 2026-10-29：号主发出去的「9职业最强专精」被读者抓到两处（愈合祷言 40%/200%、切目标不掉连击点）。
+    # 查下来整理稿**列了**待核，是机器一条都没读到——这两条夹具就是那两个形状，别换成当天的真稿。
+    md_style = ("## 六、事实核查清单\n"
+                "- [ ] 神牧愈合祷言“每次弹跳递增40%、吃满200%法强收益”的具体数值。\n"
+                "- [ ] 战斗贼平缓持续回能、毒药吃属性、切目标不掉连击点。\n"
+                "## 配图素材（视频关键帧）\n![关键帧1·00:03](/media/a.jpg)\n")
+    got = fact_gate.risk_items(md_style)
+    ck("标题写成「事实核查清单」也认（以前只认字面「风险核查」，整节读不到）",
+       len(got) == 2, str([g["raw"][:18] for g in got]))
+    ck("下一节「## 配图素材」的图片行不许被当风险项抓走",
+       not any("jpg" in g["raw"] or "关键帧" in g["raw"] for g in got),
+       str([g["raw"][:20] for g in got]))
+    ck("待核里的数字抽成 token（成品上出现 40% 才比得中）",
+       any("40%" in g["tokens"] for g in got), str(got[0]["tokens"] if got else ""))
+    inline = "【风险核查】8000 金币那条待核，不许写成建议\n\n【来源】某号"
+    ck("标记和内容写在同一行也取得到（以前整行被当标题丢掉）",
+       [i["raw"] for i in fact_gate.risk_items(inline)] == ["8000 金币那条待核，不许写成建议"],
+       str([i["raw"] for i in fact_gate.risk_items(inline)]))
+    done = ("## 事实核查清单\n"
+            "- [ ] 实名核对：三个技能名均与上游数据库一致，已保留标准写法。\n"
+            "- [ ] 40% 这个数值需要游戏内核对后再做投入。\n")
+    ck("自己声明「已核过」的记录不进待核清单（噪音大了闸会被关掉）",
+       len(fact_gate.risk_items(done)) == 1 and "40%" in fact_gate.risk_items(done)[0]["raw"],
+       str([i["raw"][:22] for i in fact_gate.risk_items(done)]))
+    blk = ai_poster.risks_prompt_block({"content": md_style})
+    ck("这两条真的进了拆解提示词的「不许当卖点」那一段",
+       "愈合祷言" in blk and "连击点" in blk and "不许当卖点" in blk, "块长 %d 字" % len(blk))
 
     print("── G. 老成品只列清单、绝不改写 ──")
     rows = []

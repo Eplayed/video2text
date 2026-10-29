@@ -24,6 +24,23 @@ import re
 from typing import Any, Dict, List, Tuple
 
 RISK_HEADING = "风险核查"
+# 整理稿那一节的**标题写法模型不统一**（2026-10-29 实测，同一份素材两版稿）：
+#   10-26 那版写 `## 六、事实核查清单`，11 条 `- [ ]` 全在里面；
+#   10-29 那版把 `**风险核查**：…` 写在一条 `- [ ]` 里，标题位置根本没有那一节。
+# 以前只认字面「风险核查」→ 前一版一条都抓不到，等于上游写了清单没人读
+# （号主发出去那篇小红书的「愈合祷言 40%/200%法强」「切目标不掉连击点」正是这么漏的）。
+RISK_HEADINGS = ("风险核查", "事实核查", "核查清单", "发布前自查", "自查清单")
+# 小节结束：既认老式 `【…】` 分节，也认 markdown 的 `## 标题`（配图素材那节以前被整段吞进风险清单）
+_MD_HEAD = re.compile(r"^#{1,6}\s")
+# 条目行前缀 `- [ ]` / `- [x]` / `* ` / `1. `
+_ITEM_PREFIX = re.compile(r"^(?:[-*+]\s*\[[ xX]?\]\s*|[-*+]\s*|\d+[.、)]\s*)")
+# 图片行与纯链接行不是"说法"，是排版素材
+_MEDIA_LINE = re.compile(r"^!?\[[^\]]*\]\(")
+# 老式分节标题 `【关键数据】`：遇到它就认为核查那一节结束了
+_BRACKET_HEAD = re.compile(r"^\s*【[^】]{2,12}】")
+# 条目自己声明"已经核过"的，不是待核项。核查那一节里混着「与上游数据库一致，已保留标准写法」
+# 这类记录，把它们当"待核"列进闸口＝噪音，闸口一旦被嫌烦就会被关掉（这层第一版就吃过这个教训）。
+_DONE_MARK = re.compile(r"一致[，。]|已保留标准写法|无需核对|本节无补充|修正[，。]")
 # 一条风险项里"被点名的东西"通常用中文引号或书名号圈出来；圈出来的就当 token 用
 _QUOTED = re.compile(r"[“\"『「]([^”\"』」]{1,24})[”\"』」]")
 # 没被引号圈住时，退而抓"数字+单位"这种一眼可辨的量词组（46亿 / 5% / 2分40秒 / 28点法伤）
@@ -40,7 +57,13 @@ _HEAVY = re.compile(r"疑似转写|转写错|口误|单位需|需核实|未给.{
 # 轻级风险（只提示）：名称写法、单次样本不能当标准这类
 _LIGHT = re.compile(r"官方定名|定名|写法|不能当固定标准|单次|受.{0,8}影响")
 # 卖点位：这些位置出现待核 token 就是"把它当卖点"
-_SELLER_SLOTS = ("主标题", "副标题", "栏目名", "大字数字", "大字标签", "警示标题")
+# 「大字注释」也在内——它紧贴大字数字，读者会当成数字的说明读（2026-10-29 复核点名的漏项之一）
+_SELLER_SLOTS = ("主标题", "副标题", "栏目名", "大字数字", "大字标签", "大字注释", "警示标题")
+# 机制类待核说法的两档（判据与分级同源，`risk_ledger` 也读这一份）
+_MECH_NUM = re.compile(r"\d")
+_MECH_WORD = re.compile(r"伤害|治疗|法强|急速|暴击|命中|冷却|CD|公共冷却|点数|秒|级|收益|递减|递增|"
+                        r"返还|阈值|概率|几率|数值|层|点天赋")
+_BINARY = re.compile(r"不再|不掉|不会掉|不消耗|无冷却|必定|一定能|免疫|保留|不受|不吃|直接触发")
 # 同一条卡片的标题与说明之间，只收最稳的几对反向操作口径（跨字段比，不在单字段里找）
 _CONTRADICTION = [("别拉满", "拉满"), ("不要拉满", "拉满"), ("别一次拉满", "推荐拉满"),
                   ("别调高", "调高"), ("别降", "调低"), ("不要开", "开启")]
@@ -49,26 +72,79 @@ _TAIL_NOTE = re.compile(r"\n*(?:本文由\s*AI|内容源自公开|侵权必究|�
 _TAGS = re.compile(r"(?:\s*#[^\s#]+)+\s*$")
 
 
+def _inline_item(line: str, idx: int, head: str) -> str:
+    """标记和内容写在**同一行**时把内容取出来。
+
+    两种真实形状（以前按物理行切，整行被当标题丢掉，于是内容永远读不到）：
+      · `【风险核查】8000 金币那条待核，不许写成建议`
+      · `- [ ] **风险核查**：口播中提到的"着热之痛"疑似语音识别错误…`
+    而 `### 风险核查（发布前必看）` 这种只是标题的注解，不能当条目。
+    """
+    rest = line[idx + len(head):].lstrip("】 ").strip()
+    m = re.match(r"^[：:]\s*(.+)$", rest)
+    if m:
+        rest = m.group(1).strip()
+    if not rest or rest.startswith(("（", "(")):
+        return ""
+    return rest if len(rest) >= 6 else ""
+
+
+def risk_section(content: str) -> Dict[str, Any]:
+    """定位整理稿里"那一节核查清单"：返回 {start, end, inline}，没有就返回 {}。
+
+    单独拿出来是因为**两处要用同一个位置**：`risk_items` 读它，
+    `risk_ledger` 把上一版没核完的条目并回去也要用它（另起一节写在文末，
+    解析器只会读到第一处，继承就等于没发生）。
+    """
+    lines = str(content or "").splitlines()
+    start, head, inline = -1, "", ""
+    for n, ln in enumerate(lines):
+        for h in RISK_HEADINGS:
+            i = ln.find(h)
+            if i < 0:
+                continue
+            start, head, inline = n, h, _inline_item(ln, i, h)
+            break
+        if start >= 0:
+            break
+    if start < 0:
+        return {}
+    end = len(lines)
+    for n in range(start + 1, len(lines)):
+        s0 = lines[n].strip()
+        # 小节边界：老式 `【…】` 分节、markdown 的 `## 标题` 都算结束。
+        # 以前只认前者，于是 `## 配图素材（视频关键帧）` 后面整段图片 markdown 被当风险项抓走
+        # （2026-10-29 实测抓到 6 条，前 5 条是关键帧链接行——真该挡的那条反倒不在里面）。
+        if _MD_HEAD.match(s0) or _BRACKET_HEAD.match(s0):
+            end = n
+            break
+    return {"start": start, "end": end, "inline": inline}
+
+
 def risk_items(content: str) -> List[Dict[str, Any]]:
-    """把整合稿【风险核查】那一节解析成结构化条目：[{raw, tokens, heavy}]。
+    """把整理稿那一节核查清单解析成结构化条目：[{raw, tokens, heavy}]。
 
     自由文本实测有三种形状：破折号列表（87）、数字列表（83/85）、整段没有引号只描述。
     token 先取引号里的，取不到再退到"数字+单位"。**匹配不上 token 的条目照样保留**（raw），
     它进不了阻断判据，但要出现在人工复核清单里——不能因为机器认不出就当这条不存在。
     """
-    text = str(content or "")
-    i = text.find(RISK_HEADING)
-    if i < 0:
+    lines = str(content or "").splitlines()
+    sec = risk_section(content)
+    if not sec:
         return []
-    tail = text[i:]
-    nxt = re.search(r"\n\s*【[^】]{2,12}】", tail)
-    if nxt:
-        tail = tail[:nxt.start()]
-    out: List[Dict[str, Any]] = []
-    for line in tail.splitlines()[1:]:
-        s = re.sub(r"^[-*•]\s*|^\d+[.、)]\s*", "", line.strip()).strip()
+    start, end, inline = sec["start"], sec["end"], sec["inline"]
+    raws: List[str] = [inline] if inline else []
+    for ln in lines[start + 1:end]:
+        s0 = ln.strip()
+        if not s0 or _MEDIA_LINE.match(s0):
+            continue
+        s = _ITEM_PREFIX.sub("", s0).replace("**", "").strip()
         if len(s) < 4:
             continue
+        raws.append(s)
+    raws = [r for r in raws if not _DONE_MARK.search(r)]
+    out: List[Dict[str, Any]] = []
+    for s in raws:
         # 引号里的整串 + 串内/串外的"数字+单位"都要收。85 那条引号圈的是
         # 「熔火之心内伤害提升20%」整句，成品里写的是 bignum「+20%」——只拿整句去匹配永远对不上，
         # 于是那一处真卖点漏拦（2026-10-21 第一版实测）。数字单独抽出来才匹配得上。
@@ -97,6 +173,51 @@ def _usable_token(tok: str) -> bool:
     if re.search(r"\d", t) or re.search(r"[A-Za-z]", t):
         return True
     return len(t) >= 4
+
+
+def claim_kind(raw: str) -> str:
+    """这条待核说法是哪一类机制断言。
+
+    只给**上游已经标过待核**的条目分级（判据在台账/清单里，不拿它去全文找茬——
+    那会变成号主明确否掉的"全局关键词封杀"）。两档会触发发布前证据门：
+      · 机制数值：带量词的机制改动（"弹跳递增40%、吃满200%法强"）；
+      · 二元机制：非此即彼的机制结论（"切目标不掉连击点"）——这类最坏，
+        因为它没有数字，读者一眼看不出是待核说法，而玩家会照着练号。
+    """
+    s = str(raw or "")
+    if _MECH_NUM.search(s) and _MECH_WORD.search(s):
+        return "机制数值"
+    if _BINARY.search(s):
+        return "二元机制"
+    return "其他"
+
+
+# 二元机制条目的"可匹配签名"：圈住二元词前后一小段（`切目标不掉连击点`）。
+# 为什么非要单独抽：这类句子常常一个数字都没有、也没引号，`tokens` 是空的，
+# 老判据直接看不见它（2026-10-29 Codex 复核点名的正是这条：切目标那条没有可匹配 token）。
+_BIN_WINDOW = re.compile(
+    r"[\w\u4e00-\u9fff]{0,10}(?:不再|不掉|不会掉|不消耗|无冷却|必定|一定能|免疫|保留|不受|不吃)"
+    r"[\w\u4e00-\u9fff]{0,8}")
+
+
+def claim_signature(raw: str) -> List[str]:
+    out = [m.group(0) for m in _BIN_WINDOW.finditer(str(raw or ""))]
+    return [o for o in out if len(re.sub(r"\s+", "", o)) >= 5]
+
+
+def official_support(phrase: str, blobs: List[str]) -> str:
+    """这条说法有没有**一手文本**撑着（官方公告/蓝贴正文里能找到同一句）。
+
+    只认长度 ≥6 的短语（裸"40%"这种谁都能撞上，拿它当证据等于自欺）。
+    命中就返回出处的序号，调用方据此把硬拦降级成"一手公告里有这句"的提示。
+    """
+    key = re.sub(r"\s+", "", str(phrase or ""))
+    if len(key) < 6:
+        return ""
+    for n, blob in enumerate(blobs or [], 1):
+        if key in re.sub(r"\s+", "", str(blob or "")):
+            return "官方一手文本第 %d 篇" % n
+    return ""
 
 
 def _fields(plan: Dict[str, Any]) -> List[Tuple[str, str]]:
@@ -135,10 +256,86 @@ def _slot_of(label: str) -> str:
     return "叙述"
 
 
+def merge_items(parsed, ledger):
+    """稿子里读到的 + 台账里还开着的，合成一份（同一条说法只留一条）。
+
+    为什么要合：模型这一版**漏写**不等于这条事实核过了。台账是外置记忆，漏写时它兜底；
+    写全时只是重复登记一次，不改变判据。
+    """
+    out, seen = [], set()
+    for it in list(ledger or []) + list(parsed or []):
+        raw = str(it.get("raw") or "").strip()
+        if not raw:
+            continue
+        key = re.sub(r"\W+", "", raw)[:40].lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        merged = dict(it)
+        merged.setdefault("tokens", list(merged.get("tokens") or []))
+        merged.setdefault("kind", claim_kind(raw))
+        # 台账条目是外置记忆，不带稿内那份字段；缺了老判据会 KeyError
+        merged.setdefault("heavy", bool(_HEAVY.search(raw)))
+        out.append(merged)
+    return out
+
+
+def mechanism_gate(items, fields, official_blobs):
+    """机制类待核说法的证据门：只有第三方转述撑着，就不许以肯定语气发出去。
+
+    与老判据的分工（别混）：老那条只管"重级措辞 + 出现在卖点位"，很窄、只拦最像的；
+    这一条管**机制数值与二元机制结论**，扫所有会发出去的字段（图上文字、两份配文、
+    两份标题、摘要、话题标签）——号主挨的那两句正是"数值进卡片说明 + 机制结论进小红书标题"。
+    仍然不是关键词封杀：入口是"上游/台账把这条标成了待核"，没标过的一律不看。
+    解除只有两条路：一手文本里有同一句（降级成提示），或台账里凭可定位证据解除。
+    """
+    hard, soft = [], []
+    flat = [(label, re.sub(r"\s+", "", txt)) for label, txt in fields]
+    for it in items:
+        if str(it.get("status") or "") == "resolved":
+            continue
+        kind = it.get("kind") or claim_kind(str(it.get("raw") or ""))
+        if kind not in ("机制数值", "二元机制"):
+            continue
+        phrases = [str(t) for t in (it.get("tokens") or [])] + claim_signature(str(it.get("raw") or ""))
+        hit = None
+        for ph in phrases:
+            key = re.sub(r"\s+", "", ph)
+            if len(key) < 4:
+                continue                       # 裸"40%"谁都能撞上，不算命中
+            where = [lb for lb, txt in flat if key and key in txt]
+            if not where:
+                continue
+            sup = official_support(ph, official_blobs or [])
+            if sup:
+                hit = ("支持", ph, sup)
+                break
+            if hit is None:
+                hit = ("缺", ph, where)
+        if not hit:
+            continue
+        if hit[0] == "支持":
+            soft.append("「%s」上游标过待核，但一手文本里有同一句（%s）——按一手发，别再叠口播的说法"
+                        % (hit[1], hit[2]))
+            continue
+        hard.append("%s「%s」出现在 %s，支撑它的只有第三方转述、没有可定位证据（上游标注：%s）；"
+                    "要么补官方原句、要么写明版本和日期的本人实测，要么删掉/改成不误导的说法"
+                    % (kind, hit[1], "、".join(hit[2][:3]), str(it.get("raw"))[:60]))
+    return hard, soft
+
+
+
 def check(plan: Dict[str, Any], content: str,
-          copy_extra: str = "") -> Tuple[List[str], List[str]]:
-    """返回 (必须拦的, 要人看一眼的)。"""
-    items = risk_items(content)
+          copy_extra: str = "", extra_items=None,
+          official_blobs=None) -> Tuple[List[str], List[str]]:
+    """返回 (必须拦的, 要人看一眼的)。
+
+    `extra_items`：台账里**这一版稿没写出来、但还没解除**的待核条目（`risk_ledger.open_items`），
+    与稿内清单合并后再判——模型漏写不能让风险静默消失（2026-10-29 小红书反例）。
+    `official_blobs`：一手文本（官方公告/蓝贴正文）。用来把"只有第三方口播撑着"的机制说法
+    与"一手公告里确实有这句"分开：后者不拦，只提示按一手发。
+    """
+    items = merge_items(risk_items(content), extra_items or [])
     fields = _fields(plan)
     if copy_extra:
         fields.append(("配文·copy_text", copy_extra))
@@ -162,6 +359,10 @@ def check(plan: Dict[str, Any], content: str,
             else:
                 soft.append("「%s」出现在 %s，上游标注：%s"
                             % (tok, "、".join(l for l, _ in hits[:2]), it["raw"][:60]))
+    mech_hard, mech_soft = mechanism_gate(items, fields, official_blobs or [])
+    hard.extend(mech_hard)
+    soft.extend(mech_soft)
+
     hedge = [it["raw"] for it in items
              if re.search(r"不承诺|未给.{0,8}数值|没有.{0,8}实测|主观判断|无.{0,4}数据", it["raw"])]
     if hedge:
