@@ -1,0 +1,1050 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>排产表 · 两个系列与一手公告</title>
+<style>
+:root{
+  /* 与工作台 index.html 同一组 token（值复制自 :root，未复用其类名） */
+  --page-bg:#f4f3f0; --surface-card:#fcfbf8; --surface-nested:#f7f6f1;
+  --border:#ecebe5; --border-input:#e0ded6;
+  --text:#232220; --text-secondary:#8f8a80; --text-tertiary:#b6b1a6;
+  --accent:#2f2e2b; --accent-muted:#efeee8; --on-accent:#f4f3f0;
+  --module-2:#5f7a99; --module-3:#bd8a4e; --module-1:#6f8f6a;
+  --danger:#c25d4f; --danger-muted:#f6ece9;
+  --radius-control:8px; --radius-tile:12px; --radius-card:16px;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page-bg);color:var(--text);
+  font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  font-size:14px;line-height:1.55;-webkit-font-smoothing:antialiased}
+button{font-family:inherit;cursor:pointer}
+a{color:var(--module-2)}
+
+.wrap{max-width:1080px;margin:0 auto;padding:28px 24px 80px}
+header.top{display:flex;flex-wrap:wrap;align-items:baseline;gap:12px;margin-bottom:6px}
+header.top h1{font-size:21px;margin:0;font-weight:650;letter-spacing:.2px}
+.meta{color:var(--text-secondary);font-size:12.5px}
+
+.bar{display:flex;flex-wrap:wrap;align-items:center;gap:14px;
+  background:var(--surface-card);border:1px solid var(--border);border-radius:var(--radius-card);
+  padding:14px 16px;margin:16px 0 6px}
+.prog{display:flex;align-items:center;gap:10px;min-width:220px}
+.track{width:120px;height:6px;background:var(--accent-muted);border-radius:99px;overflow:hidden}
+.fill{height:100%;background:var(--module-1);width:0;transition:width .25s}
+.seg{display:flex;gap:2px;background:var(--accent-muted);border-radius:var(--radius-control);padding:3px}
+.seg button{border:0;background:transparent;padding:6px 11px;border-radius:6px;font-size:13px;color:var(--text-secondary)}
+.seg button.on{background:var(--surface-card);color:var(--text);box-shadow:0 1px 2px rgba(0,0,0,.07)}
+.hint{font-size:12.5px;color:var(--text-secondary)}
+/* 一手公告栏（暴雪官方）：排产表管"计划要发的"，公告是随时插队的时效料，所以钉在最上面 */
+.news{background:var(--surface-card);border:1px solid var(--border);border-left:3px solid #4aa3ff;
+      border-radius:var(--radius-card);padding:11px 13px 6px;margin:0 0 12px}
+.news-h{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:6px}
+.news-h b{font-size:13px}
+.nrow{display:flex;align-items:baseline;gap:8px;padding:5px 0;border-top:1px dashed var(--border);font-size:12.5px}
+.nrow .who{color:var(--text-tertiary);font-size:11.5px;flex:0 0 auto}
+.nrow a.tt{color:var(--text);text-decoration:none;flex:1 1 auto;min-width:120px}
+.nrow a.tt:hover{text-decoration:underline}
+
+.gate-note{background:var(--surface-nested);border:1px solid var(--border);border-left:3px solid var(--module-3);
+  border-radius:var(--radius-tile);padding:11px 14px;margin:12px 0 22px;font-size:13px;color:var(--text-secondary)}
+.gate-note b{color:var(--text);font-weight:600}
+
+.day{margin:26px 0 10px;display:flex;align-items:center;gap:10px}
+.day h2{font-size:13px;margin:0;font-weight:650;letter-spacing:.6px;color:var(--text-secondary)}
+.day .rule{flex:1;height:1px;background:var(--border)}
+
+.card{background:var(--surface-card);border:1px solid var(--border);border-radius:var(--radius-card);
+  padding:16px 18px;margin-bottom:14px}
+.card.late{border-color:#e7c9c2;background:linear-gradient(0deg,var(--danger-muted),var(--danger-muted)) padding-box,var(--surface-card)}
+.card.today{box-shadow:0 0 0 2px var(--module-3)}
+.card.done{opacity:.6}
+
+.row1{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:7px}
+.date{font-variant-numeric:tabular-nums;font-size:12.5px;color:var(--text-secondary);letter-spacing:.3px}
+.tag{font-size:11.5px;padding:2px 8px;border-radius:99px;background:var(--accent-muted);color:var(--text-secondary)}
+.tag.hot{background:#f3e6d8;color:#8a5a24}
+.tag.done{background:#e6efe4;color:#3f6340}
+h3.title{font-size:15.5px;margin:0 0 9px;font-weight:620;line-height:1.45}
+
+.field{margin:6px 0;font-size:13.2px}
+.field .lb{color:var(--text-tertiary);font-size:11.5px;letter-spacing:.5px;display:block;margin-bottom:2px}
+.warn{color:#8a5a24;background:#faf3ea;border-radius:var(--radius-control);padding:8px 11px;font-size:12.8px;margin:9px 0}
+
+.gates{display:flex;flex-wrap:wrap;gap:6px 16px;margin:12px 0 4px;padding-top:11px;border-top:1px dashed var(--border)}
+.gates label{display:flex;align-items:center;gap:6px;font-size:12.8px;color:var(--text-secondary);cursor:pointer}
+.gates input{accent-color:var(--accent);width:14px;height:14px}
+.pub{margin-left:auto;display:flex;align-items:center;gap:7px;font-size:12.8px;cursor:pointer;
+  border:1px solid var(--border-input);border-radius:99px;padding:4px 11px;background:var(--surface-nested)}
+.pub input{accent-color:var(--module-1)}
+
+.refs{margin-top:11px}
+.refs .lb{font-size:11.5px;color:var(--text-tertiary);letter-spacing:.5px;margin-bottom:5px}
+.win{display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-size:12.4px;margin:2px 0 10px;
+  padding:7px 10px;border-radius:var(--radius-control);background:var(--surface-nested);border:1px solid var(--border)}
+.win b{font-variant-numeric:tabular-nums}
+.win.soon{background:#f3e6d8;border-color:#e6cfae;color:#8a5a24}
+.win.past{background:var(--danger-muted);border-color:#e7c9c2;color:#a8402f}
+.stale{flex:0 0 auto;font-size:11px;padding:1px 6px;border-radius:99px;background:#f6ece9;color:#a8402f}
+.stale.warn{background:#f3e6d8;color:#8a5a24}
+.fresh{flex:0 0 auto;font-size:11px;padding:1px 6px;border-radius:99px;background:#e6efe4;color:#3f6340}
+.newest{flex:0 0 auto;font-size:11px;padding:1px 6px;border-radius:99px;background:var(--accent-muted);color:var(--text-secondary)}
+.pin{flex:0 0 auto;font-size:10.5px;padding:1px 5px;border-radius:4px;background:#e3eaf2;color:#3d5a78;font-weight:600}
+.gocap{border:1px solid var(--border-input);background:var(--surface-card);border-radius:6px;
+  padding:2px 9px;font-size:11.5px;color:var(--text-secondary)}
+.gocap:hover{color:var(--text);border-color:var(--text-tertiary)}
+.ref{display:flex;align-items:flex-start;gap:9px;padding:6px 8px;border-radius:var(--radius-control);
+  font-size:12.9px;border:1px solid transparent}
+.ref .len,.ref .btn,.ref .fresh,.ref .stale,.ref .newest{margin-top:2px}
+.ref:hover{background:var(--surface-nested);border-color:var(--border)}
+.ref .who{color:var(--text-secondary);flex:0 0 auto;max-width:104px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ref .tt{flex:1;min-width:0;color:inherit;text-decoration:none;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;line-height:1.45}
+.ref a.tt:hover{color:var(--module-2);text-decoration:underline}
+.ref .len{color:var(--text-tertiary);font-size:11.5px;font-variant-numeric:tabular-nums;flex:0 0 auto}
+.ref .btn{flex:0 0 auto;border:1px solid var(--border-input);background:var(--surface-card);
+  border-radius:6px;padding:2px 8px;font-size:11.5px;color:var(--text-secondary)}
+.ref .btn:hover{color:var(--text);border-color:var(--text-tertiary)}
+/* ── 视频素材下面的「相关非视频」子集（2026-10-28 号主：照勾选素材那套形式，父行可展开、子集也多选）── */
+.subwrap{margin:0 10px 8px 26px;padding:2px 0 4px 10px;border-left:2px solid var(--border)}
+.ref.sub{font-size:12.3px;padding:5px 6px}
+.ref.sub label{display:flex;gap:7px;align-items:flex-start;flex:1;min-width:0;cursor:pointer}
+.ref.sub label.dis{cursor:not-allowed;opacity:.55}
+.ref.sub .col{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}
+.ref.sub .why{color:var(--text-tertiary);font-size:11.3px;line-height:1.4}
+.ref.sub a.tt{-webkit-line-clamp:1}
+.subhint{color:var(--text-tertiary);font-size:11.5px;padding:3px 8px 3px 4px;line-height:1.5}
+.subhint.bad{color:#a8402f}
+.subhint.ok{color:#3f6340}
+/* ── 排产任务那一格（2026-10-20 第一单）：渠道 / 内容形式 / 已采用 / 主入口 ──
+   颜色一律走变量：这张表嵌在工作台 iframe 里，跟着工作台的主题走，写死 hex 迟早两边不一致 */
+.task{display:flex;flex-wrap:wrap;align-items:center;gap:7px;margin:11px 0 2px;padding:9px 11px;
+  border:1px solid var(--border);border-radius:var(--radius-control);background:var(--surface-nested);font-size:12.4px}
+.task .k{color:var(--text-tertiary);font-size:11.5px;letter-spacing:.5px}
+.chip{border:1px solid var(--border-input);background:var(--surface-card);border-radius:99px;
+  padding:3px 10px;font-size:11.8px;color:var(--text-secondary);cursor:pointer}
+.chip.on{background:var(--text);color:var(--surface-card);border-color:var(--text)}
+.task .go{margin-left:auto;border:1px solid var(--text);background:var(--text);color:var(--surface-card);
+  border-radius:6px;padding:5px 13px;font-size:12.6px;font-weight:600;cursor:pointer}
+.task .go.run{background:transparent;color:var(--text-secondary);border-color:var(--border-input);cursor:default}
+.task .go.fail{background:var(--danger);border-color:var(--danger);color:#fff}
+.adopted{margin-top:7px}
+.adopted .lb{font-size:11.5px;color:var(--text-tertiary);letter-spacing:.5px;margin-bottom:4px}
+.ad{display:flex;align-items:center;gap:8px;padding:4px 8px;border-radius:var(--radius-control);font-size:12.4px}
+.ad .tt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ad .st{flex:0 0 auto;font-size:11px;padding:1px 6px;border-radius:99px;background:var(--accent-muted);color:var(--text-secondary)}
+.ad .st.done{background:#e6efe4;color:#3f6340}
+.ad .st.running{background:#f3e6d8;color:#8a5a24}
+.ad .st.failed{background:#f6ece9;color:#a8402f}
+.ad .btn{flex:0 0 auto;border:1px solid var(--border-input);background:var(--surface-card);
+  border-radius:6px;padding:2px 8px;font-size:11.5px;color:var(--text-secondary);cursor:pointer}
+.taskline{font-size:12.2px;color:var(--text-secondary);margin:4px 8px 0}
+.taskline.err{color:var(--danger)}
+@media (max-width:720px){.task .go{margin-left:0;flex:1 0 100%}}
+.body{margin:2px 8px 10px;padding:11px 13px;background:var(--surface-nested);border:1px solid var(--border);
+  border-radius:var(--radius-tile);font-size:12.9px;color:var(--text);white-space:pre-wrap;
+  word-break:break-word;max-height:230px;overflow:auto}
+.body.err{color:var(--danger)}
+.foot{margin-top:8px;font-size:12.5px;color:var(--text-secondary)}
+.empty{color:var(--text-tertiary);font-size:12.9px;padding:8px 0}
+.loading{padding:40px;text-align:center;color:var(--text-secondary)}
+
+.remind{margin-top:34px;background:var(--surface-card);border:1px solid var(--border);border-radius:var(--radius-card);padding:16px 18px}
+.remind h2{font-size:14px;margin:0 0 10px}
+.remind li{margin:7px 0;font-size:13px;color:var(--text-secondary)}
+.remind li b{color:var(--text);font-weight:600}
+.back{display:inline-block;margin-bottom:14px;font-size:13px;color:var(--text-secondary);text-decoration:none}
+.back:hover{color:var(--text)}
+/* 被工作台用 iframe 嵌进来时：外层已有标题与侧栏，这里就不重复出现 */
+body.in-frame .back{display:none}
+body.in-frame header.top h1{display:none}
+body.in-frame .wrap{padding-top:14px}
+@media (max-width:720px){
+  .wrap{padding:18px 14px 60px}
+  /* 素材行在窄屏必须换行：标题独占一行，日期与按钮排到下一行，否则「复制标题」撑破视口 */
+  .ref{flex-wrap:wrap;row-gap:4px}
+  /* 同一类窄屏溢出，两处（2026-10-20 走查量出来的，不属于第一单范围，但挡了 375px 验收）：
+     公告栏那一行的按钮把文档撑到 448px；已采用那一行有两个按钮，同理 */
+  .nrow{flex-wrap:wrap;row-gap:4px}
+  .ad{flex-wrap:wrap;row-gap:4px}
+  .ref .who{display:none}
+  .ref .tt{flex:1 0 100%;-webkit-line-clamp:3}
+  .ref .len{margin-top:0}
+  .ref .fresh,.ref .stale,.ref .newest{margin-top:0}
+  .win{font-size:12px}
+}
+/* ── 双系列排产（2026-10-22）：S1 26 个位置 + S2 三章模板 + 夜间候选 ──
+   状态徽章的文字与依据全部来自 /api/plan/series（判据在 src/plan_series.py 一份），
+   这里只上色、只排版——页面自己算一遍"发过没有"迟早和日报互相说反话。 */
+.series{background:var(--surface-card);border:1px solid var(--border);border-radius:var(--radius-card);
+  padding:14px 16px 8px;margin:0 0 14px}
+.sr-top{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-bottom:8px}
+.sr-top h2{font-size:14px;margin:0;font-weight:650}
+.sr-run{display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-size:12.5px;color:var(--text-secondary);
+  background:var(--surface-nested);border:1px solid var(--border);border-radius:var(--radius-tile);
+  padding:8px 10px;margin-bottom:10px}
+.sr-run b{color:var(--text)}
+.sr-run input[type=time]{font:inherit;font-size:12.5px;padding:2px 6px;border:1px solid var(--border-input);
+  border-radius:6px;background:var(--surface-card)}
+.sr-run .sep{width:1px;height:16px;background:var(--border)}
+.btn{border:1px solid var(--border-input);background:var(--surface-card);color:var(--text);
+  border-radius:var(--radius-control);padding:5px 11px;font-size:12.5px}
+.btn:hover{border-color:var(--module-2)}
+.btn.pri{background:var(--accent);color:var(--on-accent);border-color:var(--accent)}
+.btn.sm{padding:3px 9px;font-size:12px}
+.btn[disabled]{opacity:.5;cursor:not-allowed}
+.sr-err{color:var(--danger);font-size:12.5px;margin:0 0 8px}
+.sr-ser{border-top:1px solid var(--border);padding:10px 0 4px}
+.sr-ser>summary{display:flex;align-items:center;gap:9px;cursor:pointer;font-size:13.5px;font-weight:650;
+  list-style:none;padding:4px 0}
+.sr-ser>summary::-webkit-details-marker{display:none}
+.sr-ser>summary .car{color:var(--text-tertiary);font-size:11px}
+.sr-ser[open]>summary .car{transform:rotate(90deg)}
+.sr-cnt{font-size:11.5px;font-weight:400;color:var(--text-secondary)}
+.sr-ch{margin:4px 0 10px 10px;padding-left:12px;border-left:2px solid var(--border)}
+.sr-ch>summary{cursor:pointer;font-size:12.5px;color:var(--text-secondary);padding:3px 0;list-style:none}
+.sr-ch>summary::-webkit-details-marker{display:none}
+.sr-ch>summary b{color:var(--text);font-weight:600}
+.sr-ch[open]>summary{margin-bottom:4px}
+.sr-pos{display:flex;flex-wrap:wrap;gap:8px;padding:8px 0;border-top:1px dashed var(--border)}
+.sr-card{flex:1 1 320px;min-width:0;border:1px solid var(--border);border-radius:var(--radius-tile);
+  background:var(--surface-nested);padding:9px 11px}
+.sr-card.has{border-left:4px solid var(--module-2)}
+.sr-card.pub{border-left:4px solid var(--module-1);opacity:.78}
+.sr-card.pend{border-left:4px solid var(--module-3)}
+/* 折叠必须自己写死一条：这台 Chrome 对 `<details>` 关闭时"非 summary 子节点隐藏"的
+   UA 行为在 `.sr-card` 上没生效（探针实测：details.open=false，里面的 .sr-cand 仍是
+   display:block 且占 170px 高，整页 10471px）。判据不能指望默认样式，显式关掉。 */
+.sr-card:not([open])>.sr-in{display:none}
+.sr-card>summary{list-style:none;cursor:pointer}
+.sr-card>summary::-webkit-details-marker{display:none}
+.sr-card>summary .car{color:var(--text-tertiary);font-size:10px;width:9px;display:inline-block;
+  transition:transform .12s}
+.sr-card[open]>summary .car{transform:rotate(90deg)}
+.sr-mini{font-size:11.5px;color:var(--text-secondary);font-variant-numeric:tabular-nums}
+.sr-h{display:flex;flex-wrap:wrap;align-items:center;gap:7px;margin-bottom:3px}
+.sr-pn{font-size:11.5px;font-weight:700;color:var(--module-2);letter-spacing:.4px}
+.sr-tt{font-size:13px;font-weight:600}
+.sr-badge{font-size:11px;padding:1px 7px;border-radius:99px;background:var(--accent-muted);color:var(--text-secondary)}
+.sr-badge.b-candidates{background:#e7eef6;color:#3c5f83}
+.sr-badge.b-adopted{background:#e9f0e6;color:#41693f}
+.sr-badge.b-drafting{background:#f3e6d8;color:#8a5a24}
+.sr-badge.b-draft_done{background:#f3e6d8;color:#8a5a24}
+.sr-badge.b-layout{background:#efe7f4;color:#6b4a86}
+.sr-badge.b-ready{background:#dfeefa;color:#1f6f8b}
+.sr-badge.b-published{background:#e3ece1;color:#3d6a3a}
+.sr-badge.b-pending_review{background:#f7e7c9;color:#8a5a24;font-weight:600}
+.sr-why{font-size:12px;color:var(--text-secondary);margin:2px 0 6px}
+.sr-cand{margin:4px 0 6px}
+.sr-cand label{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px;font-size:12.5px;
+  padding:4px 0;border-top:1px dotted var(--border);cursor:pointer}
+.sr-cand input{margin:0;accent-color:var(--module-2)}
+.sr-cand .src{color:var(--text-tertiary);font-size:11.5px}
+.sr-cand .fb{font-size:11px;padding:0 5px;border-radius:99px;background:var(--accent-muted);color:var(--text-secondary)}
+.sr-cand .fb.f-yes{background:#e3ece1;color:#3d6a3a}
+.sr-cand .fb.f-unknown{background:#f7e7c9;color:#8a5a24}
+/* 视频素材那一行下面挂的「相关非视频」子集（2026-10-28 号主：照勾选素材那套形式，父行可展开、子集也多选）。
+   判据只在后端 src/supplements.py 一份，这里管展开与勾选；子集是懒查的（点开一条算一条）。 */
+.sr-ado-rows{margin:2px 0 6px}
+.sr-ado-rows label{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px;font-size:12.5px;
+  padding:4px 0;border-top:1px dotted var(--border)}
+.sr-ado-rows .src{color:var(--text-tertiary);font-size:11.5px}
+.sr-ado-rows .fb{font-size:11px;padding:0 5px;border-radius:99px;background:var(--accent-muted);
+  color:var(--text-secondary)}
+.sr-ado-rows .fb.f-yes{background:#e3ece1;color:#3d6a3a}
+.sr-more{font:inherit;font-size:11.5px;color:var(--module-2);background:none;border:0;
+  padding:0 0 0 6px;cursor:pointer}
+.sr-sub{margin:0 0 6px 22px;padding:2px 0 2px 9px;border-left:2px solid var(--border)}
+.sr-sub label{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px;font-size:12.2px;
+  padding:3px 0;border-top:1px dotted var(--border);cursor:pointer}
+.sr-sub input{margin:0;accent-color:var(--module-2)}
+.sr-sub .src{color:var(--text-tertiary);font-size:11.3px}
+.sr-subt{font-size:11.5px;color:var(--text-tertiary);padding:3px 0;line-height:1.5}
+.sr-subt.bad{color:#a8402f}
+.sr-subt.warn{color:#8a5a24}
+.sr-ado{font-size:12px;color:var(--text-secondary);margin:2px 0 6px}
+.sr-ado b{color:var(--text)}
+.sr-act{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.sr-note{font-size:11.5px;color:var(--text-tertiary);margin-top:5px}
+.sr-kid{font-size:11.5px;color:var(--text-secondary);margin:3px 0;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.sr-kid select{font-size:12px;max-width:220px}
+.sr-pub{display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:12px;
+  border-top:1px dotted var(--border);margin-top:6px;padding-top:6px}
+.sr-pub input[type=text]{flex:1 1 150px;min-width:0;font:inherit;font-size:12px;padding:3px 7px;
+  border:1px solid var(--border-input);border-radius:6px;background:var(--surface-card)}
+@media (max-width:640px){
+  .sr-card{flex:1 1 100%}
+  .sr-run{font-size:12px}
+  .sr-cand label{font-size:12.5px}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <a class="back" href="/" target="_top">← 回工作台</a>
+  <header class="top">
+    <h1>排产表</h1>
+  </header>
+
+
+  <section class="series" id="series">
+    <div class="sr-top">
+      <h2>两个系列 · 内容位置与今晚候选</h2>
+      <span class="hint" id="sr-meta">正在读服务端看板…</span>
+      <button class="btn sm" id="sr-reload" onclick="loadSeries(true)">重新读看板</button>
+    </div>
+    <div class="sr-run" id="sr-run"></div>
+    <p class="sr-err" id="sr-err" style="display:none"></p>
+    <div id="sr-body"><div class="hint">载入中…</div></div>
+    <div class="sr-note" style="margin:6px 0 4px">
+      位置是<b>阅读次序与内容位置</b>，不是 26 篇交稿配额；匹配到素材<b>不会</b>自动成稿、不会自动出图、不会自动发布。
+      候选由今晚那次只读检索给出，<b>勾哪几条由你定</b>。
+    </div>
+  </section>
+
+  <section class="news" id="newsbox" style="display:none">
+    <div class="news-h">
+      <b>暴雪官方公告 · 一手，可插队</b>
+      <span class="hint" id="newsinfo">查素材库 source=blizzard…</span>
+      <button class="btn" id="news-refresh" onclick="refreshNews()" title="真的去 wow.blizzard.cn 抓一轮再重读库（原来这个钮只重读本地库，上游有新公告也不会进来）">抓上游并刷新</button>
+    </div>
+    <div id="newslist"></div>
+  </section>
+
+
+  <div class="remind">
+    <h2>三条口径纪律（发之前就位，别写完才发现）</h2>
+    <ul>
+      <li><b>天裔 ≠ 哈籁尼尔。</b>天裔＝Skyborne，是「无限」的原创种族；哈籁尼尔＝Haranir，是《至暗之夜》的同盟种族，被暴雪明确排除在「无限」之外。素材库里的中文转述把这俩混过一次，我也跟着判错过一次。<b>凡遇"无限＋精灵种族"先认准英文名。</b></li>
+      <li><b>两源分歧要并排印，别只留最新的数。</b>练级时长 160→200→175 是时序不是矛盾；只印 175 会被读过旧稿的人当场抓到。</li>
+      <li><b>素材时效：不早于节点前 3 天。</b>节点是 10-21，素材就不能早于 10-18。这不是格式要求——过期素材写进稿会被读者当场抓到，而按篇给钱的入口（网易大神）明文"过期内容不计算激励"。<b>窗口没到的素材只是选题依据</b>，到日子再去采集中心拉一遍新的。</li>
+      <li><b>按 <code>game</code> 字段筛素材会漏八成。</b>库里标"无限"的只有 44 条且写成三种，另有 336 条只标"魔兽世界"。要捞全得按标题＋作者＋日期一起。</li>
+    </ul>
+    <div class="foot">选题与依据见 <code>docs/11-05排产表-2026-10-16.md</code>；奖池入口见 <code>docs/图文奖池盘点-2026-10-16.md</code>；节点规律见 <code>docs/你的量是怎么来的-2026-10-16.md</code>。本文件是自包含单页，排产数据嵌在页面脚本的 <code>DATA</code> 常量里，改选题直接改它——<b>不要拆成单独的 json，<code>.gitignore</code> 第 19 行 <code>*.json</code> 会把它挡在版本库外，换机时页面会白屏。</b></div>
+  </div>
+</div>
+
+<!-- 双系列排产那一块的逻辑：判据全在后端 src/plan_series.py，这里只渲染与把勾选交回去。
+     必须在主脚本之前加载——主脚本的 isPub 与「已发布」勾选处理都要调它定义的函数。 -->
+<script src="schedule-series.js"></script>
+<script>
+/* 独立打开 vs 被工作台 iframe 嵌入：嵌进来时收起返回链接与重复标题 */
+if(window.self!==window.top){ document.body.classList.add('in-frame'); }
+function p(n){ return (n<10?'0':'')+n; }
+function D(s){ var a=String(s||'').split('-'); return new Date(+a[0], (+a[1]||1)-1, +a[2]||1); }
+function dayDiff(a,b){ return Math.round((b-a)/86400000); }
+function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){
+  return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+
+/* ── 下面这份 DATA 常量：**页面已经不渲染它了**（2026-10-29 号主去掉「按日期节点排发布」那一整块）。
+   但它仍是那 11 条旧排产题的**权威名单**，服务端两份判据都从这里抠：
+   src/plan_brief.py 的 load_data()（日报与卡片颜色）＋ web/app.py 启动时 plan_series.seed()
+   注册 origin='legacy' 槽位。删了它，那两处会一起读不到名单（plan_brief 会明确报错，不会当"今天没题"）。
+   要改选题：改 docs/11-05排产表-*.md 后重新生成这一段，别在别处抄第二份名单。 ── */
+var DATA = {
+ "meta": {
+  "title": "11-05 排产表",
+  "updated": "2026-10-16",
+  "source_doc": "docs/11-05排产表-2026-10-16.md",
+  "db_scope": "output/video2text.db → videos 表，published_at >= 2026-08-20 共 702 条，其中魔兽/无限 372 条",
+  "detail_api": "/api/videos/{sheet}/{row}",
+  "gate": "每篇四道执行门：勾首发声明 / 正文>100字 / 72小时内不外发（含小红书）/ 一张自己真截图+一句亲历",
+  "live": "素材列表打开页面时按 search 词现查 /api/videos，永远取库里最新的；pinned 是我人工核过的关键素材，实时结果没带出来就补上并标「人工钉」。",
+  "must": "魔兽|无限|时光服|艾泽拉斯|暴雪|雷火|天裔|奥杜尔|达拉然|怀旧",
+  "block": "流放|POE|Poe|poe|暗黑|Diablo|蜘蛛侠|原神|王者|火影|明日方舟|蛋仔|苹果|iPhone|华为|手机"
+ },
+ "items": [
+  {
+   "id": "odur",
+   "date": "2026-10-21",
+   "title": "时光服 P6 奥杜尔：现在进、等等进、还是别进",
+   "decision": "当下（10-08 已开放，本周就是窗口）",
+   "kind": "节点",
+   "hook": "一张「进 / 等 / 别进」分流表 + 你自己的判断；橙片掉率与 H 难度野团坐牢要给出结论",
+   "note": "这是本轮筛素材时捞出来的、不用等 11-05 就能发的稿。",
+   "official": [],
+   "search": [
+    "奥杜尔",
+    "时光服 奥杜尔"
+   ],
+   "since": "2026-08-01",
+   "pinned": [
+    {
+     "db_id": 278599,
+     "sheet": "微信文章",
+     "row": "82",
+     "title": "魔兽世界夜谈：时光服 H灭火削了2轮的公会团还是打不过，野团1把就过，硬是把整个公会打没了",
+     "author": "艾泽拉斯G团日记",
+     "date": "2026-10-15",
+     "tl": 1652
+    },
+    {
+     "db_id": 277247,
+     "sheet": "抖音视频数据",
+     "row": "375",
+     "title": "奥杜尔极限竞速！各路精锐集结，最后CD冲击10人",
+     "author": "尤安的魔兽世界",
+     "date": "2026-10-15",
+     "tl": 171
+    },
+    {
+     "db_id": 271994,
+     "sheet": "抖音视频数据",
+     "row": "198",
+     "title": "卷疯了！首个CD，15人2小时横扫奥杜尔？！",
+     "author": "尤安的魔兽世界",
+     "date": "2026-10-13",
+     "tl": 202
+    },
+    {
+     "db_id": 266472,
+     "sheet": "微信文章",
+     "row": "69",
+     "title": "魔兽时光服P6橙锤出炉，特效远超预期",
+     "author": "艾泽拉斯前哨",
+     "date": "2026-10-12",
+     "tl": 292
+    }
+   ]
+  },
+  {
+   "id": "ban",
+   "date": "2026-10-25",
+   "title": "无限服三条禁令的边界到底在哪：买金封号 / 经济治理 / 禁双开多开",
+   "decision": "开服前人人都要读",
+   "kind": "节点",
+   "hook": "把「允许什么、禁止什么」列成表；给一条你踩线与否的判断",
+   "note": "这就是 10-10 被判「AI 托管」那个选题的官方一手版本，不用再靠转述。",
+   "official": [],
+   "search": [
+    "双开",
+    "RMT",
+    "买金",
+    "经济冻结",
+    "禁闭"
+   ],
+   "since": "2026-08-01",
+   "pinned": [
+    {
+     "db_id": 274684,
+     "sheet": "抖音视频数据",
+     "row": "368",
+     "title": "暴雪彻底打击RMT产业链—临时经济冻结！",
+     "author": "爱你的鹿",
+     "date": "2026-10-14",
+     "tl": 492
+    },
+    {
+     "db_id": 271776,
+     "sheet": "微信文章",
+     "row": "77",
+     "title": "魔兽世界无限国服官方：严禁双开、多开行为",
+     "author": "艾泽拉斯快讯",
+     "date": "2026-10-13",
+     "tl": 3440
+    },
+    {
+     "db_id": 271995,
+     "sheet": "抖音视频数据",
+     "row": "199",
+     "title": "工作室最严厉的父亲！无限服双开也会封号，堪称魔兽史上最严禁令",
+     "author": "尤安的魔兽世界",
+     "date": "2026-10-13",
+     "tl": 217
+    },
+    {
+     "db_id": 265170,
+     "sheet": "抖音视频数据",
+     "row": "1276",
+     "title": "无限服最严禁令！主播五开以身试法，五个388喜提三天禁闭！",
+     "author": "尤安的魔兽世界",
+     "date": "2026-10-11",
+     "tl": 259
+    }
+   ]
+  },
+  {
+   "id": "gift",
+   "date": "2026-11-01",
+   "title": "388 / 218 / 只买月卡：算完只差 95 元，但想玩天裔就必须买 218 以上",
+   "decision": "上线前——最靠前的决策",
+   "kind": "节点",
+   "hook": "「不买也能玩本体」和「不买就没有天裔、没有泽风岛剧情」两句必须并排写；按人分流 A/B/C",
+   "note": "发布前重新核一遍礼包档位数与月卡价格，11-05 前大概率改档。",
+   "official": [
+    {
+     "label": "国际服官网 Forever 页（Skyborne 需 Heroic Pack 原文）",
+     "url": "https://worldofwarcraft.blizzard.com/en-gb/forever"
+    }
+   ],
+   "search": [
+    "388",
+    "天裔礼包",
+    "英雄礼包",
+    "圈钱"
+   ],
+   "since": "2026-08-01",
+   "pinned": [
+    {
+     "db_id": 276020,
+     "sheet": "微信文章",
+     "row": "80",
+     "title": "魔兽世界开始圈钱，“雷克斯”幻化礼包10月16日上架",
+     "author": "艾泽拉斯前哨",
+     "date": "2026-10-14",
+     "tl": 406
+    },
+    {
+     "db_id": 286752,
+     "sheet": "抖音视频数据",
+     "row": "1185",
+     "title": "388买会删档的测试？算完账其实只多花95 《魔兽世界：无限》国服 10 月 6 日开测、11 月 5 日上线，礼包只有两档：\n· 218 英雄礼包：天裔种族 + 泽风岛剧情 + 坐骑/幻化/玩具，没有测试资格，也没有游戏时间\n· 388 史诗礼包：英雄礼包全部 + Beta 测试资格 + 30 天游戏时间 + 额外坐骑/幻化/宠物，好友体验 1 个变 3 个 \n算账：388 − 218 = 170，再扣掉自带的 30 天月卡 75 元，测试资格加额外外观实际多花 95 元。\n但 30 天游戏时间 11 月 5 日才到账，测试期间用不上；测试 10 月 6 日开到 27 日凌晨，官方写明删档。 \n不买礼包也能玩无限本体，有游戏时间就行（国服月卡 75 元 / 30 天）。\n你打算怎么买？评论区打 A（388）/ B（218）/ C（只买月卡）。",
+     "author": "Gearinsight-枫叶",
+     "date": "2026-09-30",
+     "tl": 454
+    },
+    {
+     "db_id": 160755,
+     "sheet": "抖音视频数据",
+     "row": "998",
+     "title": "还未买388的，请观望再定！",
+     "author": "爱你的鹿",
+     "date": "2026-09-18",
+     "tl": 405
+    }
+   ]
+  },
+  {
+   "id": "rule",
+   "date": "2026-11-04",
+   "title": "创角第一题：规则集怎么选（普通 / PvP / 角色扮演 / 专家模式）",
+   "decision": "创角界面第一个决定，比选种族选阵营都早",
+   "kind": "抢首发",
+   "hook": "四个规则集一张表：各自适合什么人、专家模式择期开放这件事要写明",
+   "note": "素材库内命中 0 条（已实测）——官网专页发布才几天，别人也还没做，这是唯一能抢首发的题。稿要 11-04 夜里备好：国际站写 November 4、国服口径 11-05，日期自己确认。",
+   "official": [
+    {
+     "label": "官网专页《\"无限\"，规则集由你定》",
+     "url": "https://wow.blizzard.cn/classic/news/index.html"
+    }
+   ],
+   "search": [
+    "规则集",
+    "专家模式"
+   ],
+   "since": "2026-08-01",
+   "pinned": []
+  },
+  {
+   "id": "sky",
+   "date": "2026-11-05",
+   "title": "天裔到底该不该开：建号自选阵营，SD 版还要等 2027",
+   "decision": "建号那一刻",
+   "kind": "节点",
+   "hook": "给「什么人开、什么人别开」的判断；美服 59% 回帖吐槽可放争议位",
+   "note": "⚠ 口径已核实：天裔＝Skyborne（无限的原创种族），哈籁尼尔＝Haranir（《至暗之夜》同盟种族，被暴雪排除在无限之外的那个）。两个名字别混。id=152881 转写烂到不可用，只当线索别引数据。",
+   "official": [
+    {
+     "label": "官网专页《认识全新种族天裔》",
+     "url": "https://wow.blizzard.cn/news/24302071/"
+    }
+   ],
+   "search": [
+    "天裔",
+    "不会引入新种族",
+    "种族 加强"
+   ],
+   "since": "2026-08-01",
+   "pinned": [
+    {
+     "db_id": 280809,
+     "sheet": "抖音视频数据",
+     "row": "417",
+     "title": "16号蓝帖重磅更新！天裔精灵史诗级加强，强度断层碾压全种族",
+     "author": "尤安的魔兽世界",
+     "date": "2026-10-16",
+     "tl": 194
+    },
+    {
+     "db_id": 276019,
+     "sheet": "微信文章",
+     "row": "79",
+     "title": "暴雪：无限服不会引入新种族！每周一次职业平衡调整，无现代化重制",
+     "author": "魔兽世界情报局",
+     "date": "2026-10-15",
+     "tl": 1712
+    },
+    {
+     "db_id": 242474,
+     "sheet": "抖音视频数据",
+     "row": "1235",
+     "title": "《魔兽：无限》天裔新手村小技巧？沪爷精灵的游戏体验可以很好！",
+     "author": "夏一可死毒舌",
+     "date": "2026-10-06",
+     "tl": 1043
+    },
+    {
+     "db_id": 220532,
+     "sheet": "微信文章",
+     "row": "32",
+     "title": "魔兽无限：联盟天裔20级路线",
+     "author": "重返艾泽拉斯",
+     "date": "2026-09-29",
+     "tl": 472
+    }
+   ]
+  },
+  {
+   "id": "faction",
+   "date": "2026-11-05",
+   "title": "联盟还是部落：无限服的阵营差别比你以为的大",
+   "decision": "建号那一刻（天裔还要额外选支系）",
+   "kind": "节点",
+   "hook": "三行结论表；高阶会能法师、塑风者能萨满这种组合要点出来",
+   "note": "id=230196（夏一可 种族天赋）整条繁体转写，走出口那两道规范化再用。",
+   "official": [],
+   "search": [
+    "联盟 部落",
+    "阵营",
+    "达拉然",
+    "保命神器"
+   ],
+   "since": "2026-08-01",
+   "pinned": [
+    {
+     "db_id": 243724,
+     "sheet": "抖音视频数据",
+     "row": "1241",
+     "title": "魔兽无限最佳任务线，联盟部落两个号才能看完故事！ 《炉石史册：那被遗忘的残躯中不灭的深爱》",
+     "author": "夏一可死毒舌",
+     "date": "2026-10-07",
+     "tl": 3380
+    },
+    {
+     "db_id": 221722,
+     "sheet": "微信文章",
+     "row": "34",
+     "title": "无限服联盟获得新主城，达拉然藏着一个新副本，NPC暗示新内容将至",
+     "author": "魔兽世界情报局",
+     "date": "2026-10-01",
+     "tl": 3453
+    },
+    {
+     "db_id": 271998,
+     "sheet": "抖音视频数据",
+     "row": "202",
+     "title": "部落玩家一定要拿的保命神器！还有10格全能材料包！",
+     "author": "夏一可死毒舌",
+     "date": "2026-10-13",
+     "tl": 848
+    },
+    {
+     "db_id": 204346,
+     "sheet": "微信文章",
+     "row": "5",
+     "title": "魔兽无限：专属圣物，部落独享",
+     "author": "重返艾泽拉斯",
+     "date": "2026-09-27",
+     "tl": 391
+    }
+   ]
+  },
+  {
+   "id": "day1",
+   "date": "2026-11-06",
+   "title": "开服第一天别急着打怪：先做这 3 件",
+   "decision": "首周前 24 小时",
+   "kind": "节点",
+   "hook": "按小时排的路线；营地增益那条要并进来看",
+   "note": "这篇弹药最薄（营地增益只有 252 字），主要靠你自己 Beta 实测那半格补。",
+   "official": [],
+   "search": [
+    "开服",
+    "首日",
+    "营地 增益",
+    "开荒 指南"
+   ],
+   "since": "2026-08-01",
+   "pinned": [
+    {
+     "db_id": 241237,
+     "sheet": "抖音视频数据",
+     "row": "1230",
+     "title": "开服练级必看！5大低等级副本37个任务，保姆级整理全攻略",
+     "author": "尤安的魔兽世界",
+     "date": "2026-10-06",
+     "tl": 131
+    },
+    {
+     "db_id": 252482,
+     "sheet": "抖音视频数据",
+     "row": "1248",
+     "title": "国服特色+1，无限服睡袋任务的飞机已上线！",
+     "author": "尤安的魔兽世界",
+     "date": "2026-10-08",
+     "tl": 183
+    },
+    {
+     "db_id": 252492,
+     "sheet": "微信文章",
+     "row": "60",
+     "title": "奥杜尔首日dps排名：法师三系登顶！刺杀贼成单体王者",
+     "author": "魔兽世界情报局",
+     "date": "2026-10-08",
+     "tl": 1391
+    },
+    {
+     "db_id": 150951,
+     "sheet": "抖音视频数据",
+     "row": "948",
+     "title": "魔兽无限服开服指南，B 测开服后我们到底能玩到什么内容？",
+     "author": "一起玩魔兽(一条大菜狗）",
+     "date": "2026-09-17",
+     "tl": 1570
+    }
+   ]
+  },
+  {
+   "id": "level",
+   "date": "2026-11-07",
+   "title": "练级节奏被改了三次：160 → 200 → 175，暴雪要你用什么姿势玩",
+   "decision": "首周",
+   "kind": "节点",
+   "hook": "三个数字并排印出来（这是时序不是矛盾），给\"按小时怎么排\"的结论",
+   "note": "别只留最新那个数——两源分歧要照印，这是红线里的一类。",
+   "official": [],
+   "search": [
+    "满级",
+    "练级",
+    "副本经验",
+    "升级"
+   ],
+   "since": "2026-08-01",
+   "pinned": [
+    {
+     "db_id": 269061,
+     "sheet": "抖音视频数据",
+     "row": "11",
+     "title": "无限服重大更新，175小时满级，却受到玩家点赞",
+     "author": "一起玩魔兽(一条大菜狗）",
+     "date": "2026-10-12",
+     "tl": 963
+    },
+    {
+     "db_id": 258801,
+     "sheet": "微信文章",
+     "row": "66",
+     "title": "暴雪宣布魔兽世界无限提升20%打本经验，已封禁2100个买G账号，将加入交易警告提示",
+     "author": "艾泽拉斯快讯",
+     "date": "2026-10-09",
+     "tl": 1579
+    },
+    {
+     "db_id": 224118,
+     "sheet": "抖音视频数据",
+     "row": "1196",
+     "title": "无限服升级再降速，满级平均2个月！",
+     "author": "爱你的鹿",
+     "date": "2026-10-02",
+     "tl": 483
+    },
+    {
+     "db_id": 222920,
+     "sheet": "抖音视频数据",
+     "row": "1192",
+     "title": "魔兽世界无限服圣骑士开荒指南，首发三系圣骑士就要这样玩！",
+     "author": "一起玩魔兽(一条大菜狗）",
+     "date": "2026-10-01",
+     "tl": 3513
+    }
+   ]
+  },
+  {
+   "id": "prof",
+   "date": "2026-11-08",
+   "title": "专业怎么选：大增强之后的全职业抄作业",
+   "decision": "首周（20 级就要定）",
+   "kind": "节点",
+   "hook": "抄作业表 + 「珠宝要不要等」的判断",
+   "note": "",
+   "official": [],
+   "search": [
+    "专业",
+    "制造业",
+    "珠宝",
+    "营火"
+   ],
+   "since": "2026-08-01",
+   "pinned": [
+    {
+     "db_id": 265173,
+     "sheet": "抖音视频数据",
+     "row": "1279",
+     "title": "无限专业系统大增强！那么，我们该怎么选？一个视频带你看完",
+     "author": "夏一可死毒舌",
+     "date": "2026-10-11",
+     "tl": 1911
+    },
+    {
+     "db_id": 221725,
+     "sheet": "微信文章",
+     "row": "37",
+     "title": "魔兽世界无限NPC暗示后续将新增珠宝专业",
+     "author": "艾泽拉斯快讯",
+     "date": "2026-09-30",
+     "tl": 3791
+    },
+    {
+     "db_id": 204348,
+     "sheet": "微信文章",
+     "row": "7",
+     "title": "魔兽无限：贸易局和后勤部，商人青睐与专业高度挂钩",
+     "author": "重返艾泽拉斯",
+     "date": "2026-09-22",
+     "tl": 672
+    },
+    {
+     "db_id": 149989,
+     "sheet": "抖音视频数据",
+     "row": "930",
+     "title": "开服前必看！魔兽无限服营地增益BUFF全汇总，选专业不纠结！",
+     "author": "尤安的魔兽世界",
+     "date": "2026-09-21",
+     "tl": 252
+    }
+   ]
+  },
+  {
+   "id": "server",
+   "date": "2026-11-09",
+   "title": "无限 / 时光服 / 正式服：三个服你留哪个",
+   "decision": "首周内",
+   "kind": "节点",
+   "hook": "一列一个服，各写「什么人该留、该删」",
+   "note": "素材最厚的一桶（全库 55 条命中），往下可拆系列。",
+   "official": [],
+   "search": [
+    "正式服",
+    "时光服",
+    "追赶机制",
+    "怀旧服"
+   ],
+   "since": "2026-08-01",
+   "pinned": [
+    {
+     "db_id": 242472,
+     "sheet": "抖音视频数据",
+     "row": "1233",
+     "title": "比怀旧服练级还慢！暴雪承诺无限服绝无追赶机制，无直升",
+     "author": "一起玩魔兽(一条大菜狗）",
+     "date": "2026-10-07",
+     "tl": 1008
+    },
+    {
+     "db_id": 278599,
+     "sheet": "微信文章",
+     "row": "82",
+     "title": "魔兽世界夜谈：时光服 H灭火削了2轮的公会团还是打不过，野团1把就过，硬是把整个公会打没了",
+     "author": "艾泽拉斯G团日记",
+     "date": "2026-10-15",
+     "tl": 1652
+    },
+    {
+     "db_id": 271773,
+     "sheet": "微信文章",
+     "row": "74",
+     "title": "终于来了！魔兽玩家可变身雷克萨！时光服近战猎人或同步推出",
+     "author": "魔兽世界情报局",
+     "date": "2026-10-13",
+     "tl": 1479
+    },
+    {
+     "db_id": 204360,
+     "sheet": "微信文章",
+     "row": "19",
+     "title": "魔兽世界时光服P6前瞻：物理橙锤有死亡裁决",
+     "author": "艾泽拉斯快讯",
+     "date": "2026-09-27",
+     "tl": 3978
+    }
+   ]
+  },
+  {
+   "id": "setup",
+   "date": "2026-11-10",
+   "title": "老电脑带不带得动：一份能照着勾的画面设置清单",
+   "decision": "上线前后都有需求",
+   "kind": "节点",
+   "hook": "可勾的设置项清单，不是配置科普",
+   "note": "10-13 那条 756 展现/32 阅读不是题材差，是发成了告知型——这版必须做成交付物。",
+   "official": [],
+   "search": [
+    "画面 设置",
+    "卡顿",
+    "配置 要求",
+    "帧"
+   ],
+   "since": "2026-08-01",
+   "pinned": [
+    {
+     "db_id": 269064,
+     "sheet": "抖音视频数据",
+     "row": "14",
+     "title": "无限服画面这样设置，清晰不卡顿！老电脑还能再战！",
+     "author": "夏一可死毒舌",
+     "date": "2026-10-12",
+     "tl": 1041
+    },
+    {
+     "db_id": 252480,
+     "sheet": "抖音视频数据",
+     "row": "1246",
+     "title": "无限服必调画面参数！一招让你重见光明",
+     "author": "尤安的魔兽世界",
+     "date": "2026-10-08",
+     "tl": 165
+    },
+    {
+     "db_id": 272139,
+     "sheet": "抖音视频数据",
+     "row": "343",
+     "title": "魔兽无限国服！10档拉满黑科技高帧教程！",
+     "author": "飞行员老王(赛博神医版)",
+     "date": "2026-10-06",
+     "tl": 116
+    }
+   ]
+  }
+ ]
+};
+
+
+
+
+
+
+
+
+/* 点素材 → 工作台素材详情（详情里接着给「整理稿 / 用它生成」那一跳）
+   嵌在 iframe 里就 postMessage 给父窗口；被单独打开时另开一个标签进工作台 */
+function gotoMaterial(r){
+  if(window.self!==window.top){
+    try{ window.parent.postMessage({v2t:'openMaterial', sheet:r.sheet, row:String(r.row)}, window.location.origin); return; }
+    catch(e){ /* 跨域或父窗口不是工作台，退化成新标签 */ }
+  }
+  window.open('/?open='+encodeURIComponent(r.sheet+':'+r.row), '_blank');
+}
+
+
+
+
+
+function copy(txt,btn){
+  var old=btn.textContent;
+  function ok(){ btn.textContent='已复制'; setTimeout(function(){btn.textContent=old;},1200); }
+  if(navigator.clipboard&&navigator.clipboard.writeText){
+    navigator.clipboard.writeText(txt).then(ok,fallback);
+  } else fallback();
+  function fallback(){
+    var ta=document.createElement('textarea'); ta.value=txt; document.body.appendChild(ta);
+    ta.select(); try{ document.execCommand('copy'); ok(); }catch(e){ btn.textContent='复制失败'; }
+    document.body.removeChild(ta);
+  }
+}
+
+
+/* ── 一手公告栏 ──
+   数据是 src/blizzard_news.py 抓进素材库的「暴雪官方」那一档（国服官网公告，零成本、不碰登录态）。
+   为什么单独钉在这里：官方公告是"随时插队的时效料"，11-05 前官方在连发职业解析/副本介绍，
+   谁先转述谁吃头条首发那 72 小时，这类料没有"节点"可言。
+   口径照旧：转述要标"来源：暴雪官方"，一手≠照抄。 */
+var newsRows = null, newsBusy = false, newsSt = null;
+function loadNews(force){
+  var box = document.getElementById('newsbox'), info = document.getElementById('newsinfo');
+  if (!box) return;
+  if (newsRows && !force) { paintNews(); return; }
+  if (info) info.textContent = '查素材库 source=blizzard…';
+  fetch('/api/videos?source=blizzard&page_size=12', {cache:'no-store'})
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      newsRows = d.videos || [];
+      box.style.display = newsRows.length ? '' : 'none';
+      paintNews();
+      newsStatus();
+    })
+    .catch(function (e) {
+      if (info) info.innerHTML = '<b style="color:#a8402f">查不到：' + esc(String((e && e.message) || e))
+        + '</b>';
+    });
+}
+/* 状态那一行说四件事：库里有什么、上一次**真抓上游**是几点、下一次自动抓是什么时候、
+   自动同步总闸开没开。以前这里印的是「抓取 python3 -m src.blizzard_news」，
+   等于把一条没人跑的命令行当成功能——上游连发三批公告、库里停在八天前就是这么来的。 */
+function newsStatus(){
+  return fetch('/api/blizzard/status', {cache:'no-store'}).then(function (r) { return r.json(); })
+    .then(function (d) {
+      newsSt = d;
+      var info = document.getElementById('newsinfo');
+      if (!info || !d || !d.ok) { if (info && d && d.error) info.innerHTML = '<b style="color:#a8402f">状态读不到：' + esc(d.error) + '</b>'; return; }
+      var bits = ['库内 ' + d.rows + ' 条', '最新一条 ' + esc(d.newest || '-')
+        + (d.lag_days === null ? '' : '（' + d.lag_days + '天前）')];
+      bits.push(d.last_run ? ('上次抓取 ' + esc(d.last_run) + '，那轮新增 ' + (d.last_new === null ? '?' : d.last_new) + ' 条')
+                           : '<b>从没通过工作台抓过</b>');
+      if (d.last_error) bits.push('<span style="color:#a8402f">上轮报错：' + esc(d.last_error) + '</span>');
+      var t = d.task || {};
+      bits.push(t.auto_on ? ('自动：每 ' + t.interval_days + ' 天 ' + esc(t.run_at || '') + '（下次 ' + esc(t.next || '-') + '）')
+                          : '<b style="color:#a8402f">自动同步总闸是关的，到点也不会抓</b>');
+      info.innerHTML = bits.join('｜');
+      return d;
+    }).catch(function (e) { return null; });
+}
+function refreshNews(){
+  if (newsBusy) return;
+  newsBusy = true;
+  var btn = document.getElementById('news-refresh'), info = document.getElementById('newsinfo');
+  if (btn) btn.disabled = true;
+  if (info) info.textContent = '正在向 wow.blizzard.cn/news/ 抓一轮（约十秒）…';
+  fetch('/api/blizzard/refresh', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'})
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      if (d && d.error) { newsDone(); if (info) info.innerHTML = '<b style="color:#a8402f">' + esc(d.error) + '</b>'; return; }
+      var tries = 0;
+      var tick = function () {
+        newsStatus().then(function (st) {
+          if (st && st.running) {
+            if (info) info.textContent = '抓取中… ' + esc(st.progress || '');
+            tries += 1;
+            if (tries < 60) setTimeout(tick, 2500); else newsDone();
+            return;
+          }
+          newsDone();
+          loadNews(true);
+        });
+      };
+      setTimeout(tick, 1500);
+    })
+    .catch(function (e) { newsDone(); if (info) info.innerHTML = '<b style="color:#a8402f">抓取发起失败：' + esc(String((e && e.message) || e)) + '</b>'; });
+}
+function newsDone(){ newsBusy = false; var btn = document.getElementById('news-refresh'); if (btn) btn.disabled = false; }
+function paintNews(){
+  var box = document.getElementById('newsbox'), list = document.getElementById('newslist');
+  if (!box || !list || !newsRows) return;
+  list.innerHTML = newsRows.map(function (r, i) {
+    return '<div class="nrow"><span class="who">' + esc(r.create_time || '') + ' · ' + esc(r.author || '')
+      + '</span><a class="tt" href="javascript:void(0)" onclick="openNews(' + i + ')" '
+      + 'title="进素材库详情&#10;' + esc(r.title) + '">' + esc(r.title) + '</a>'
+      + '<span class="who">' + (r.transcript_length || 0) + '字</span>'
+      + '<button class="btn" onclick="openNews(' + i + ')">打开</button>'
+      + '<button class="btn" onclick="copy(newsRows[' + i + '].title, this)">复制标题</button></div>';
+  }).join('');
+}
+function openNews(i){ var r = newsRows && newsRows[i]; if (r) gotoMaterial(r); }
+
+loadNews(false);
+/* 双系列看板（内容位置与今晚候选）：按日期排发布那一整块 2026-10-29 删掉后，
+   这一页就剩它和上面那栏一手公告。放在这里而不是脚本顶部——上面那些 var 只在声明处初始化一次。 */
+loadSeries();
+</script>
+</body>
+</html>
