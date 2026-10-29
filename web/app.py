@@ -3890,6 +3890,176 @@ def api_bilibili_probe():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+def _job_start(store: dict, lock, kind: str, fn) -> bool:
+    """跑一个后台采集任务并把它那份状态写进 store。同一时刻同一档只允许一个：
+    合集入库和补转写都要连打外部接口，并行跑既没意义又更容易撞 B 站风控。"""
+    with lock:
+        if store["running"]:
+            return False
+        store.update({"kind": kind, "running": True, "done": False,
+                      "progress": "排队中…", "error": "", "result": None,
+                      "started_at": time.strftime("%Y-%m-%d %H:%M:%S"), "elapsed": 0})
+
+    def _run():
+        t0 = time.time()
+        try:
+            res = fn(lambda m: store.__setitem__("progress", str(m)))
+            store["result"] = res
+            store["progress"] = "✅ " + str((res or {}).get("note") or "完成")
+        except Exception as e:
+            store["error"] = str(e)[:300]
+            store["progress"] = "❌ 失败：" + store["error"]
+            print("[job:%s] 失败: %s" % (kind, traceback.format_exc()[-800:]), flush=True)
+        finally:
+            store["running"] = False
+            store["done"] = True
+            store["elapsed"] = int(time.time() - t0)
+
+    threading.Thread(target=_run, daemon=True).start()
+    return True
+
+# ── 暴雪官方公告：抓取入口 + 状态（源类定时任务的第一个用户） ──
+# 为什么必须有这一格（2026-10-29）：这条源此前**只有 CLI**（python3 -m src.blizzard_news），
+# sync_tasks 里没有它的任务，界面上那个「刷新」也只重读本地库——于是上游 10-22/10-24/10-27
+# 连发三批公告，库里停在 10-21 整整八天，而页面还写着"抓取 python3 -m src.blizzard_news"。
+_blizzard_job = {"kind": "", "running": False, "done": True, "progress": "", "error": "",
+                 "result": None, "started_at": "", "elapsed": 0}
+_blizzard_job_lock = threading.Lock()
+BLIZZARD_STATE_PATH = ROOT / "output" / "blizzard_state.json"
+# 默认时刻：新建任务时给一次，之后以文件里那份为准（调度器不认这个常量，别把它当配置）
+BLIZZARD_DEFAULT_RUN_AT = "10:10"
+BLIZZARD_FETCH_LIMIT = 12
+
+
+def _blizzard_state() -> dict:
+    try:
+        with open(BLIZZARD_STATE_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _blizzard_state_write(patch: dict) -> dict:
+    """记账。抓一次就写一次，哪怕这轮 0 新增——「上次几点抓的」和「库里最新一条」
+    是两件事，只记后者就会把"抓过但没新东西"说成"八天没抓"。"""
+    st = _blizzard_state()
+    st.update(patch or {})
+    try:
+        with open(BLIZZARD_STATE_PATH, "w", encoding="utf-8") as f:
+            json.dump(st, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print("[blizzard] 状态写不进去（不影响抓取结果）: %s" % e, flush=True)
+    return st
+
+
+def _blizzard_task():
+    """找到（没有就建）这条源类任务。建的时候给一天一次、10:10，避开 07:30–09:30 那批订阅同步。"""
+    cfg = sync_tasks.load()
+    for t in cfg.get("tasks") or []:
+        if str(t.get("kind") or "") == "source" and t.get("source") == "blizzard":
+            return t
+    cfg = sync_tasks.load()
+    t = sync_tasks.new_source_task(cfg, "blizzard", interval_days=1,
+                                   run_at=BLIZZARD_DEFAULT_RUN_AT)
+    if t:
+        sync_tasks.save(cfg)
+        print("[blizzard] 已建源类定时任务 %s（每天 %s）" % (t["key"], t["run_at"]), flush=True)
+    return t
+
+
+def _blizzard_do_refresh(progress=None, task_keys=None):
+    """抓一轮官方公告 + 记账。返回 blizzard_news.sync 的统计。"""
+    from src import blizzard_news
+
+    def say(msg):
+        if progress:
+            progress(msg)
+    res = blizzard_news.sync(DB_PATH, limit=BLIZZARD_FETCH_LIMIT, progress_cb=say)
+    errs = res.get("errors") or []
+    ok = not errs
+    _blizzard_state_write({
+        "last_run": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "last_found": int(res.get("found") or 0),
+        "last_new": int(res.get("new") or 0),
+        "last_error": "；".join([str(e)[:120] for e in errs[:3]]),
+    })
+    if task_keys:
+        note = "列表 %d 条、新增 %d 条" % (int(res.get("found") or 0), int(res.get("new") or 0))
+        sync_tasks.finish_batch(task_keys, ok, note if ok else ("抓取报错：" + note),
+                                now=datetime.now())
+    return res
+
+
+@app.route("/api/blizzard/refresh", methods=["POST"])
+def api_blizzard_refresh():
+    """手动抓一轮暴雪官方公告（排产表那栏的「刷新」就是这个）。"""
+    def _job(progress):
+        progress("读 wow.blizzard.cn/news/ …")
+        # 手动这一跳也要给任务记账：不记的话 last_run 一直空着，定时器下一分钟就认为
+        # "这条从没跑过、现在就该跑"，于是刚手动抓完又自动抓一遍（对官方站是纯骚扰）
+        t = None
+        try:
+            t = _blizzard_task()
+        except Exception:
+            t = None
+        res = _blizzard_do_refresh(progress, task_keys=[t["key"]] if t else None)
+        errs = res.get("errors") or []
+        note = ("新增 %d 条（列表共 %d 条，库里原有的那几条不重抓）"
+                % (int(res.get("new") or 0), int(res.get("found") or 0)))
+        if errs:
+            note += "；有 %d 处报错：%s" % (len(errs), str(errs[0])[:100])
+        return {"ok": not errs, "note": note, "result": res}
+
+    if not _job_start(_blizzard_job, _blizzard_job_lock, "blizzard", _job):
+        return jsonify({"ok": False, "error": "上一次抓取还没跑完，稍等一下"}), 409
+    return jsonify({"ok": True, "started": True})
+
+
+@app.route("/api/blizzard/status")
+def api_blizzard_status():
+    """库内条数 / 最新一条 / 上次抓取时间 / 滞后几天 / 任务设置。全从现数，不抄常量。"""
+    out = {"ok": True, "rows": 0, "newest": "", "lag_days": None,
+           "last_run": "", "last_new": None, "last_error": "", "running": False,
+           "progress": _blizzard_job.get("progress", ""), "task": None}
+    try:
+        conn = content_store.open_readonly(DB_PATH)
+        try:
+            r = conn.execute("SELECT COUNT(*) AS n, MAX(published_at) AS newest "
+                             "FROM videos WHERE source_sheet = ?",
+                             (content_store.OFFICIAL_NEWS_SHEET,)).fetchone()
+            out["rows"] = int(r["n"] or 0)
+            out["newest"] = r["newest"] or ""
+        finally:
+            conn.close()
+    except Exception as e:
+        out["ok"] = False
+        out["error"] = str(e)[:200]
+    st = _blizzard_state()
+    out["last_run"] = st.get("last_run") or ""
+    out["last_new"] = st.get("last_new")
+    out["last_error"] = st.get("last_error") or ""
+    out["running"] = bool(_blizzard_job.get("running"))
+    if out["newest"]:
+        try:
+            d = datetime.strptime(str(out["newest"])[:10], "%Y-%m-%d")
+            out["lag_days"] = (datetime.now() - d).days
+        except Exception:
+            pass
+    try:
+        t = _blizzard_task()
+        if t:
+            nxt = sync_tasks.next_due(t, sync_tasks.load().get("run_at") or "", datetime.now())
+            out["task"] = {"key": t["key"], "interval_days": t["interval_days"],
+                           "run_at": sync_tasks.task_run_at(t), "last_run": t.get("last_run") or "",
+                           "last_status": t.get("last_status") or "",
+                           "next": nxt.strftime("%Y-%m-%d %H:%M") if nxt else "",
+                           "auto_on": bool(sync_tasks.load().get("enabled"))}
+    except Exception as e:
+        out["task_error"] = str(e)[:160]
+    return jsonify(out)
+
+
 @app.route("/api/subscriptions", methods=["POST"])
 def api_subscriptions_add():
     data = request.get_json(force=True)
@@ -4585,6 +4755,36 @@ def _run_sync_batch(sub_ids, task_keys, who="自动同步"):
     threading.Thread(target=wrap, daemon=True).start()
 
 
+def _run_source_task(task: dict):
+    """跑一条源类任务（暴雪官方公告这种"没有订阅记录"的源）。
+
+    和订阅类同一套账：先 touch_running 占时间戳再跑。不占的话一轮要几十秒，
+    跑完才记账的窗口里若界面重写配置或进程重启，这条任务看起来还是"到期"，
+    紧接着又会再跑一轮——对官方站是纯骚扰（订阅那边 10-03 就这么翻过车）。
+    """
+    src = str(task.get("source") or "")
+    key = task.get("key")
+    sync_tasks.touch_running([key])
+    if src == "blizzard":
+        if _blizzard_job.get("running"):
+            _autosync_state["note"] = "暴雪公告上一轮还在抓，本轮顺延（到期时间不重置）"
+            return
+        def _job(progress):
+            res = _blizzard_do_refresh(progress, task_keys=[key])
+            errs = res.get("errors") or []
+            return {"ok": not errs,
+                    "note": "自动抓取：列表 %s 条、新增 %s 条" % (res.get("found"), res.get("new"))}
+        _job_start(_blizzard_job, _blizzard_job_lock, "blizzard", _job)
+        _autosync_state["note"] = "自动任务：暴雪官方公告开始抓"
+        print("[自动任务] 暴雪官方公告 开始抓（key=%s）" % key, flush=True)
+        return
+    # 认不出的源必须记失败，不许静默跳过：源类清单里有 nga_import，但执行体还没人写。
+    # 静默跳过的表现是"任务显示跑过了、数据却一直是旧的"，比报错难查十倍。
+    sync_tasks.finish_batch([key], False, "工作台还不认识这个源：%s（没写执行体）" % src,
+                            now=datetime.now())
+    print("[自动任务] 没有执行体，已记失败: %s" % src, flush=True)
+
+
 def _autosync_tick(now=None):
     """每分钟一次的检查：有没有到期任务，到期的并成一批跑。
 
@@ -4598,6 +4798,13 @@ def _autosync_tick(now=None):
         return
     subs = content_store.list_subscriptions(DB_PATH)
     alive = {s["id"] for s in subs}
+    # 源类任务先走：它不占订阅同步那把闸（抓一次官方公告约十秒，没必要和一轮几十分钟的
+    # 抖音同步互相等），也不许被下面 `if not due: return` 挡掉——那正是暴雪公告八天没跑的原因
+    for t in sync_tasks.due_tasks(cfg, now, alive, kind="source"):
+        try:
+            _run_source_task(t)
+        except Exception as e:
+            print("[自动任务] %s 起不来: %s" % (t.get("source"), e), flush=True)
     due = sync_tasks.due_tasks(cfg, now, alive)
     if not due:
         return
@@ -4656,6 +4863,25 @@ def _task_view(cfg, subs, now):
                             "synced_at": s.get("last_synced_at") or "",
                             "new_count": s.get("last_new_count"),
                             "sync_note": s.get("last_sync_note") or ""})
+        kind = str(t.get("kind") or "subs")
+        if kind == "source":
+            # 源类任务没有订阅成员。不单独走这一支的话，下面那句「成员空就 continue」
+            # 会把它整条藏掉——号主既看不见它、也没法改频率或删掉，而它每天照常在后台跑。
+            nxt = sync_tasks.next_due(t, run_at, now)
+            tasks.append({"key": t["key"], "name": t.get("name") or "",
+                          "kind": "source", "source": t.get("source") or "",
+                          "source_label": sync_tasks.SOURCE_LABELS.get(
+                              t.get("source") or "", t.get("source") or ""),
+                          "interval_days": t.get("interval_days") or 1,
+                          "run_at": sync_tasks.task_run_at(t, run_at),
+                          "members": [], "count": 0, "platforms": [],
+                          "last_run": t.get("last_run") or "",
+                          "last_status": t.get("last_status") or "",
+                          "last_note": t.get("last_note") or "",
+                          "last_new": None,
+                          "next_due": nxt.strftime("%Y-%m-%d %H:%M:%S") if nxt else "",
+                          "due_now": bool(nxt and now >= nxt)})
+            continue
         if not members:
             continue
         nxt = sync_tasks.next_due(t, run_at, now)
@@ -4859,17 +5085,34 @@ def api_sync_tasks_run():
         targets = list(cfg.get("tasks") or [])
     else:
         targets = sync_tasks.due_tasks(cfg, datetime.now(), alive)
+    # 订阅类与源类分开走：源类不占订阅同步那把闸，也不能混进 ids——
+    # 混进去就是"任务数算它一个、实际什么都没跑"，而 ids 为空时整句直接报错，
+    # 源类任务永远手动跑不动。
+    src_targets = [t for t in targets if str(t.get("kind") or "subs") == "source"]
+    sub_targets = [t for t in targets if str(t.get("kind") or "subs") != "source"]
+    started_sources = []
+    for t in src_targets:
+        try:
+            _run_source_task(t)
+            started_sources.append(t.get("name") or t.get("source"))
+        except Exception as e:
+            return jsonify({"error": "源任务 %s 起不来：%s" % (t.get("source"), e)}), 500
     ids: list = []
-    for t in targets:
+    for t in sub_targets:
         for sid in sync_tasks.live_members(t, alive):
             if sid not in ids:
                 ids.append(sid)
     if not ids:
+        if started_sources:
+            return jsonify({"success": True, "ids": [], "sources": started_sources,
+                            "note": "这一轮只有源类任务：%s"
+                                    % "、".join([s or "?" for s in started_sources])})
         return jsonify({"error": "现在没有到期的任务（点「全部跑一遍」可强制跑）"}), 400
     if not _claim_sync():
         return jsonify({"error": "订阅同步进行中，请稍候"}), 409
-    _run_sync_batch(ids, [t["key"] for t in targets], "手动触发自动任务")
-    return jsonify({"success": True, "ids": ids, "tasks": len(targets)})
+    _run_sync_batch(ids, [t["key"] for t in sub_targets], "手动触发自动任务")
+    return jsonify({"success": True, "ids": ids, "tasks": len(sub_targets),
+                    "sources": started_sources})
 
 
 
@@ -5002,6 +5245,15 @@ if __name__ == "__main__":
                 print(f"   [启动] 回填 author_sec_uid/source：{_n} 条")
     except Exception as _e:
         print(f"   [启动] author_sec_uid 回填失败（不影响启动）：{_e}")
+    # 源类定时任务：暴雪官方公告。必须在启动时建好，不能等页面来拉——定时器 60 秒看一眼，
+    # 任务不存在就等于"这条源没人管"，正是它八天没抓的原因。
+    try:
+        _bt = _blizzard_task()
+        if _bt:
+            print("   [启动] 暴雪官方公告定时抓取：%s｜每 %s 天 %s"
+                  % (_bt["key"], _bt.get("interval_days"), _bt.get("run_at")), flush=True)
+    except Exception as _e:
+        print(f"   [启动] 暴雪公告任务建不出来（手动抓仍可用）：{_e}")
     # 自动同步定时器：放在这里而不是模块级，是为了 import app（e2e 脚本）时不会多出一条线程
     try:
         _start_autosync()

@@ -2627,21 +2627,22 @@ function asTaskHtml(t) {
       : (t.last_status === 'running' ? '<span class="as-ok">正在跑…</span>'
         : '<span class="as-idle">还没跑过</span>'));
   const open = !!_asOpenKeys[t.key];
-  const names = t.members.map(m => m.author).join('、');
+  const isSrc = t.kind === 'source';          // 源类任务（如暴雪官方公告）：成员不是一个订阅
+  const names = isSrc ? '抓一次约十秒，只读官网公告列表页' : t.members.map(m => m.author).join('、');
   return `<div class="as-task${t.due_now ? ' due' : ''}">
     <div class="as-task-top">
       <b class="as-name" title="点一下改名" onclick="asRename('${escAttr(t.key)}')">${esc(t.name)}</b>
-      <span class="as-c as-toggle" title="${escAttr(names)}" onclick="asToggleMembers('${escAttr(t.key)}')">
-        ${t.count} 个订阅 ${open ? '▾' : '▸'}</span>
+      <span class="as-c${isSrc ? '' : ' as-toggle'}" title="${escAttr(names)}"${isSrc ? '' : ` onclick="asToggleMembers('${escAttr(t.key)}')`}>
+        ${isSrc ? '源 · 无订阅成员' : `${t.count} 个订阅 ${open ? '▾' : '▸'}`}</span>
       <label class="as-c as-time" title="这条任务几点跑（只改这一条，别的任务不动）">时刻<input type="time" value="${escAttr(t.run_at || '')}" onchange="asSetTaskRunAt('${escAttr(t.key)}', this.value)"></label>
       <select class="as-c" title="改这个任务的频率" onchange="asSetInterval('${escAttr(t.key)}', this.value)">${asFreqOptions(t.interval_days)}</select>
       <span class="as-c">上次 ${esc((t.last_run || '—').slice(5, 16))} ${st}</span>
       <span class="as-c">下次 <b>${esc((t.next_due || '—').slice(5, 16))}</b>${t.due_now ? ' <em class="as-due">该跑了</em>' : ''}</span>
       <span class="as-c as-act" onclick="asRunOne('${escAttr(t.key)}')" title="现在就用这个任务跑一轮，不用等明天">立刻跑</span>
-      <span class="as-c as-act" onclick="asOpenPicker('${escAttr(t.key)}')" title="往这个任务里补订阅">加订阅</span>
+      ${isSrc ? '' : `<span class="as-c as-act" onclick="asOpenPicker('${escAttr(t.key)}')" title="往这个任务里补订阅">加订阅</span>`}
       <span class="as-x" title="删除这个任务（订阅本身不动）" onclick="asDelTask('${escAttr(t.key)}')">✕</span>
     </div>
-    ${open ? '<div class="as-mems">' + t.members.map(m => asMemberHtml(t.key, m)).join('') + '</div>' : ''}
+    ${open && !isSrc ? '<div class="as-mems">' + t.members.map(m => asMemberHtml(t.key, m)).join('') + '</div>' : ''}
   </div>`;
 }
 

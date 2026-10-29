@@ -35,6 +35,13 @@ TIME_FMT = "%Y-%m-%d %H:%M:%S"
 MAX_TASKS = 20
 NAME_MAX = 20
 
+# 源类任务（2026-10-27 号主在 NGA 那份任务书里拍板的机制）：成员不是订阅 id，而是
+# "一个不需要订阅就能抓的源"。暴雪官方公告就是这么一条——它只有 CLI（python3 -m
+# src.blizzard_news），没进定时器，结果上游 10-22/10-24/10-27 连发三批公告，库里停在
+# 10-21 八天没人动。加一类任务比给每个源单写一个线程强：频率、执行时刻、上次跑没跑、
+# 跑成什么样全都复用现有那套账。
+SOURCE_LABELS = {"blizzard": "暴雪官方公告", "nga_import": "NGA 快照导入"}
+
 
 def _blank() -> Dict:
     return {"enabled": False, "run_at": DEFAULT_RUN_AT, "tasks": [],
@@ -65,12 +72,24 @@ def _default_name(sub_ids: List[int]) -> str:
 def _norm_task(t: Dict, run_at_fallback: str = "") -> Optional[Dict]:
     if not isinstance(t, dict):
         return None
-    subs = _clean_ids(t.get("sub_ids"))
-    if not subs:
-        return None
+    kind = str(t.get("kind") or "subs")
+    source = ""
+    if kind == "source":
+        # 源类任务没有订阅成员，认不出 source 键就当这条不存在（宁可丢掉也不留一条没人执行的僵尸任务）
+        source = str(t.get("source") or "")
+        if source not in SOURCE_LABELS:
+            return None
+        subs: List[int] = []
+    else:
+        kind = "subs"
+        subs = _clean_ids(t.get("sub_ids"))
+        if not subs:
+            return None
     name = str(t.get("name") or "").strip()[:NAME_MAX]
     return {"key": str(t.get("key") or _new_key()),
-            "name": name or _default_name(subs),
+            "kind": kind,
+            "source": source,
+            "name": name or (SOURCE_LABELS.get(source) or _default_name(subs)),
             "sub_ids": subs,
             "interval_days": _norm_interval(t.get("interval_days")),
             # 时刻是任务自己的：老数据没有这一格，读的时候按当时那份全局时刻补上（load 里回写一次）
@@ -215,7 +234,12 @@ def save_intent(intent: Dict, alive=None) -> Dict:
                 # 别让它掉回全局那一格——那正是"改一条、三条一起挪"的病根
                 t["run_at"] = old.get("run_at") or ""
             tasks.append(t)
-        cfg["tasks"] = tasks
+        # 界面那份意图只覆盖**订阅类**任务（自动同步面板里看不到源类那几条）。
+        # 整表按意图重写会把源类任务凭空抹掉——暴雪公告那条就是这么差点没的，必须并回来。
+        src_keep = [t for t in (cfg.get("tasks") or [])
+                    if str(t.get("kind") or "subs") == "source"
+                    and t.get("key") not in {x.get("key") for x in tasks}]
+        cfg["tasks"] = tasks + src_keep
         if alive is not None:
             gone = [i for i in all_member_ids(cfg) if i not in alive]
             if gone:
@@ -290,6 +314,25 @@ def new_task(cfg: Dict, sub_ids, interval_days: int = 1, name: str = "",
         return None
     t = {"key": _new_key(), "name": str(name or "").strip()[:NAME_MAX] or _default_name(subs),
          "sub_ids": subs, "interval_days": _norm_interval(interval_days),
+         "run_at": task_run_at({"run_at": run_at}, cfg.get("run_at") or ""),
+         "last_run": "", "last_status": "", "last_note": ""}
+    cfg["tasks"].append(t)
+    return t
+
+
+def new_source_task(cfg: Dict, source: str, interval_days: int = 1,
+                    name: str = "", run_at: str = "") -> Optional[Dict]:
+    """建一条源类任务（如"每天抓一次暴雪官方公告"）。同一个源只留一条，重复建返回已有那条。"""
+    if source not in SOURCE_LABELS:
+        return None
+    for t in cfg.get("tasks") or []:
+        if str(t.get("kind") or "") == "source" and t.get("source") == source:
+            return t
+    if len(cfg.get("tasks") or []) >= MAX_TASKS:
+        return None
+    t = {"key": _new_key(), "kind": "source", "source": source,
+         "name": str(name or "").strip()[:NAME_MAX] or SOURCE_LABELS[source],
+         "sub_ids": [], "interval_days": _norm_interval(interval_days),
          "run_at": task_run_at({"run_at": run_at}, cfg.get("run_at") or ""),
          "last_run": "", "last_status": "", "last_note": ""}
     cfg["tasks"].append(t)
@@ -400,14 +443,21 @@ def is_due(task: Dict, run_at: str, now: datetime) -> bool:
 
 def live_members(task: Dict, alive) -> List[int]:
     """任务里还活着的订阅（订阅被删了就不该再算进这一轮）。"""
+    if str(task.get("kind") or "subs") == "source":
+        return []          # 源类任务的"成员"不是一个订阅，别按成员判它该不该跑
     subs = task.get("sub_ids") or []
     return subs if alive is None else [i for i in subs if i in alive]
 
 
-def due_tasks(cfg: Dict, now: datetime, alive=None) -> List[Dict]:
+def due_tasks(cfg: Dict, now: datetime, alive=None, kind: str = "subs") -> List[Dict]:
+    """到期的任务。默认只返回**订阅类**——现有调用方（自动同步那一轮）拿到结果就直接当
+    订阅 id 批次跑，混进源类任务会跑出一批空成员。源类要单独用 kind="source" 取。
+    """
     out = []
     for t in cfg.get("tasks") or []:
-        if not live_members(t, alive):
+        if str(t.get("kind") or "subs") != (kind or "subs"):
+            continue
+        if kind != "source" and not live_members(t, alive):
             continue
         if is_due(t, cfg.get("run_at") or DEFAULT_RUN_AT, now):
             out.append(t)
