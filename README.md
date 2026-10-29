@@ -1,14 +1,22 @@
 # video2text
 
-抖音视频 -> 标题 + 文案（ASR转写）+ AI优化，一键导出 Excel，并生成可供文章选题使用的视频内容索引。
+素材采集 + 选题索引 + 内容工作台：抖音视频 / 公众号文章 / B站 / 暴雪官方资讯 进来，
+ASR 转写与场景抽帧 → AI 加工成整合稿 → 工作台选题、排产、出图 → **人工发布** → 数据回灌。
+
+CLI（`main.py`）负责"采进来 + 转写 + 建索引"这一截；日常主用是 **Flask 工作台**（下面「工作台」一节）。
+
+**接手先读**：`AGENTS.md`（纪律）→ `docs/AGENT-HANDOFF.md`（工具与流程）→ `PROJECT_STATUS.md`（现状快照）→
+`CHANGELOG_FOR_AI.md`（从顶部读，每处改动为什么改）。本文件只讲怎么跑起来。
 
 ## 功能
 
-- 批量采集抖音视频元数据（标题、作者、发布时间、封面、标签）
-- ASR 转写视频口播文案（faster-whisper）
-- AI 优化文案（可选）
-- 处理结果自动写入 Excel，支持多 Sheet
-- 自动维护 `video_index.json`，用于后续筛选文章题材
+- 批量采集抖音视频元数据（标题、作者、发布时间、封面、标签），风控拦截时用真实 Chromium 兜底抓详情
+- ASR 转写口播（faster-whisper，带时间戳）+ **场景抽帧**（帧带时间戳与就近口播，存 `output/assets/frames/`）
+- AI 加工：标题/摘要/关键词/分类，以及**整合稿**（一篇稿可由多条素材合成）
+- 转写质量兜底：术语表 initial_prompt、繁简与错字对确定性回改
+- 处理结果自动写入 Excel（多 Sheet），自动维护 `video_index.json` 供选题筛选
+- 工作台：素材库、选题雷达（渠道策略权威源下发）、订阅与自动同步、排产板、出图、质检、发布台账
+- 出图两条路：HTML 卡片信息图（模板 + 三轴）与 **AI 海报**（拆解 → 免费看版面 → 出图；攻略页 0 元）
 
 ## 快速开始
 
@@ -118,46 +126,75 @@ python scripts/list_candidates.py --topic "流放2攻略"
 
 所有输出文件（处理完成的 Excel、生成的报告 Word 等）统一放在 `output/` 目录，不提交 Git。
 
-## 头条图文生成
+## 工作台（日常主用）
 
-整合稿（toutiao_mix）→ 整理稿页「🔥 生成头条图文」→ 4 张 9:16 竖版卡片信息图 + 微头条文案，产物落 `output/toutiao/<summary_id>/`（不提交 Git），前端经 `/api/toutiao/*` 轮询与取图。
+```bash
+bash run_web.sh                    # 或 cd web && python3 app.py
+# 打开 http://127.0.0.1:15801
+```
 
-- 版式：金渐变衬线大标题 + 插画主视觉（底缘渐隐）+ 圆环图标三面板 + 双金边横幅，无页码无来源行（参照 2026-09-24 参考图）
-- 题材与皮双选择：题材决定 LLM 卡片文案点明的游戏，并映射插画素材文件夹 `output/toutiao/<题材>图片素材/`（封面自动取竖构图、内容页取横构图轮换，素材更新后下次生成即生效）；皮决定整套配色与背景——wow 蓝黑金 / d4 烬红 / poe 青铜 / poe2 墨玉绿 / 自定义（素材库放 `<名称>_bg.jpg`）
-- 生成弹框可编辑标题：自动代入整理稿标题，留空则按整合稿自动生成
-- LLM 卡片化失败时本地模板兜底出图（固定标签解析），保证始终有产物
+- **无热重载**：改完任何 `.py` 必须重启。按占用端口的 PID 杀旧再起（`lsof -nP -i :15801` 取 PID），
+  Qoder 里直接跑 `/workbench-restart`；**禁用 `pkill -f "web/app.py"`**（匹配不到真实命令行，会造成旧进程占端口、新进程静默退出）。
+- 主要页面：素材库 / 整理稿（含「AI 海报」弹窗）/ 选题雷达 / 订阅与自动同步 / 排产板（`web/static/schedule.html`）/ 运营台账 / 海报成品页。
+- 异步任务一律"启动 + `/api/*/status` 轮询"；详情接口单次约 5 秒（每次整表读 Excel），**慢不等于坏了**。
+
+## 出图两条路
+
+### A. HTML 卡片信息图（`src/graphics/`）
+
+整合稿（`toutiao_mix`）→ 整理稿页「生成头条图文」→ 9:16 竖版卡片 + 微头条文案，产物落 `output/toutiao/<summary_id>/`。
+模板库 + **三轴**（配色 / 字体 / 版式）两渠道共用；题材决定文案点明的游戏与插画素材文件夹，皮决定整套配色与背景。
+改三轴前必读 `.agents/memories/40-graphics-variants.md`（三轮"选了不生效"的静默失效复盘），改完跑 `/graphics-verify`。
+
+### B. AI 海报（`src/ai_poster.py` + `src/poster_typeset.py`）
+
+弹窗三步：**① 拆文案**（模型定几页、每页讲什么、绑哪张画面）→ **② 看版面 · 免费**（与出图同一个排版函数，花钱前先看）→ **③ 出图**。
+
+- **攻略页那一档 0 元**：画面用素材真帧、底图是这套皮肤的固定渐变、中文由程序写真字体（不存在错字）。
+  三套皮（深墨绿 / 米白 / 暗蓝夜色）按整理稿 id 轮换，免得十篇一个脸。
+- 硬口径：一页 1 张图、**每页必须有一张关键帧**、整组同一编号只用一次、两页之间差 12 秒以上；
+  印之前逐张再核对一次——虚的、带作者字幕的不许上版，被拦下就当场换一张并写明换成了哪张。
+- 出图那一档（叫模型画底图，0.5 元/张）**2026-10-29 已撤**：不再自带默认模型名，没底图就明着拒绝并说给出路。
+  要模型画的画面走「③b 豆包 · 回传底图」（复制提示词去豆包，回来传上，0 元）；确实要恢复就在
+  `config/config.env.local` 加回 `AI_MODEL_IMAGE=模型名`。
+- 成品落 `output/poster/<整理稿id>/`（`poster_p1.png…` + `manifest.json` + `plan.json` 文案备份，重启后弹窗还能接回来）。
+- 出图前后有四道机器闸：骨架稿、待核数字不许当卖点、建议玩家能不能照做、编辑证据链（问题/新增/依据 + 逐张画面依据）。
+  闸的结论都写进成品清单与结果那句话里，**"图出了"和"能发了"是两件事**。
 
 ## 项目结构
 
 ```text
 video2text/
-├── main.py                 # CLI 主程序（采集 + ASR + 索引更新）
-├── requirements.txt        # 依赖钉版清单
+├── main.py                 # CLI：采集 + ASR + 索引更新
+├── requirements.txt        # 依赖钉版（Python 3.9）
 ├── run_web.sh              # 工作台启动脚本（端口 15801，无热重载）
-├── scripts/
-│   ├── list_candidates.py      # 从索引中列出文章候选
-│   ├── check_variant_tokens.py # 三轴 × 全模板 token 静态检查
-│   ├── e2e_toutiao_variants.py # 头条图文 e2e（18 用例 A–R）
-│   └── e2e_wechat_variants.py  # 公众号图文 e2e（14 用例 W1–W14）
-├── .qoder/skills/          # Qoder 项目技能（workbench-restart / graphics-verify）
-├── src/                    # 核心模块
-│   ├── content_store.py    # SQLite + AI 加工 + 渠道策略权威源
-│   ├── material_store.py   # 素材导出（Excel/SQLite/JSONL/图片）
-│   ├── wechat_fetcher.py   # 公众号文章抓取（WeWe RSS）
-│   ├── fetch_user_videos.py# 批量获取用户视频
-│   ├── browser_fetch.py    # 抖音风控兜底（Chromium 抓视频详情）
-│   ├── video_extractor.py  # 视频下载
-│   ├── ffmpeg_probe.py     # 音视频流探测
-│   ├── toutiao_graphics.py # 头条渠道薄封装（转发 src/graphics）
-│   └── graphics/           # 图文渲染内核（templates/variants/skins/channels）
-├── web/                    # Flask 工作台（app.py + templates/index.html）
+├── AGENTS.md / PROJECT_STATUS.md / CHANGELOG_FOR_AI.md   # 规则 / 现状 / 改动史
+├── docs/                   # 带日期的调研与排产文档；docs/归档/ = 已走完的方案（别照着动手）
+├── scripts/                # 14 条 e2e 门禁 + agent/（界面走查、选项审计、隔离测试服务）+ 数据脚本
+│   ├── list_candidates.py · check_variant_tokens.py · check_douyin_cookie.py
+│   ├── e2e_toutiao_variants.py · e2e_wechat_variants.py · e2e_poster_layouts.py · e2e_guide_frames.py
+│   └── e2e_guide_gate（事实闸）· e2e_action_gate · e2e_provenance · e2e_frame_judge ·
+│       e2e_ai_poster · e2e_plan_brief/series/tasks · e2e_sync_tasks
+├── .qoder/skills/          # 13 个：workbench-restart · graphics-verify · article-audit/humanize · media-*（9 角色）
+├── src/                    # 38 个模块，分组看：
+│   ├── content_store.py    #   SQLite + AI 加工 + 渠道策略权威源 + 选题雷达聚合
+│   ├── 采集源              #   fetch_user_videos · browser_fetch · wechat_fetcher · bilibili_fetcher ·
+│   │                       #   douyin_notes · blizzard_news · nga_forum
+│   ├── frame_pool.py       #   场景抽帧 + 判帧 + 出图前核对（清晰度/裁字幕/内容框裁）
+│   ├── graphics/           #   HTML 卡片渲染内核（templates/variants/skins/css_engine/renderer/channels）
+│   ├── 海报线              #   ai_poster · poster_typeset · poster_templates · poster_breakdown
+│   ├── 四道闸              #   draft_gate(graphics/gate) · fact_gate · action_gate · guide_provenance
+│   ├── 排产与台账          #   plan_brief · plan_series · plan_tasks · ops_store · toutiao_stats ·
+│   │                       #   review_store · sync_tasks · ai_quota
+│   └── 质量与素材          #   draft_audit · humanize · term_check/asr_fix · material_store · topic_pack
+├── web/                    # 工作台：app.py（124 路由）+ templates/index.html + static/schedule.html
 ├── vendor/douyin_parse/    # 内置解析器（已 gitignore）
-├── config/                 # 配置模板（config.env.local 已 gitignore）
-├── logs/ output/ temp/     # 运行产物（已 gitignore）
-└── video_index.json        # 视频索引（已 gitignore）
+├── config/                 # 配置模板（config.env / config.env.local 存 Cookie 与 key，永不入库）
+└── logs/ output/ temp/     # 运行产物（已 gitignore；成品、帧池、索引都在这里）
 ```
 
-注：`src/link_resolver.py`、`src/asr.py`、`src/ai_optimizer.py` 已于 2026-09-01 删除，功能由 `main.py` / `content_store.py` 承担。
+注：`src/link_resolver.py`、`src/asr.py`、`src/ai_optimizer.py` 已于 2026-09-01 删除，功能由 `main.py` / `content_store.py` 承担；
+Dify 知识库同步已于 2026-09-30 整体下线（一条素材都没真发布过，写稿质量不达标）。
 
 ## 视频索引
 
@@ -174,7 +211,10 @@ video2text/
 
 ## 注意事项
 
-- 请勿将 `config.env.local`、`output/`、`*.xlsx`、`*.docx`、`video_index.json` 提交到 Git
-- 抖音 Cookie 有时效性，过期后需重新获取
-- ASR 使用 CPU 推理，建议 base 模型（Mac 实测可用）
-- 游戏攻略类视频 ASR 容易把专有名词识别错，写稿前必须人工或联网核查关键机制、数值和版本时间
+- **这个仓库是公开的**：`config/config.env*`（Cookie / API Key）、`output/`、`temp/`、`*.xlsx`、`*.docx`、
+  `*.db`、`video_index.json` 等运行数据与产物一律不入库、不打印值；换机时手动迁移（清单见 media-workbench `docs/DEV-SYNC.md`）
+- 抖音 Cookie 有时效性，过期后需重新获取；先跑 `python3 scripts/check_douyin_cookie.py` 自检再判是不是链路坏了
+- ASR 走 CPU 推理，Mac 实测 base 够用；`OMP_NUM_THREADS` 不设会明显慢
+- 游戏攻略类视频 ASR 容易把专有名词识别错：写稿前关键机制、数值、版本时间必须人工或联网核查
+- 平台页面**只读**：不许在工作台里自动点发布/删除/改稿，也不许对平台发写请求；发布永远是人工点
+- 多个 AI 会话可能同时在改这个仓库：动手前先看 `git status`，只提自己的文件与 hunk，push 前先 fetch

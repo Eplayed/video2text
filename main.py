@@ -67,6 +67,11 @@ except ImportError:
 # ── 路径配置 ──
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from src.path_config import find_parser_dir, get_cookie_path
+from src import ai_quota as _ai_quota
+
+# 与工作台同一套 SDK 边界：额度记账 + 会思考的模型关掉思考。
+# 以前只有 web/app.py 装，CLI 这条路既不记账、也会在快速档换成思考型模型后一路等到超时。
+_ai_quota.seed_from_env()
 
 # ── Excel 列索引（1-based）───────────────────────────────────────
 COL = {
@@ -267,6 +272,43 @@ def _asr_normalize(segs):
         return (0, 0)
 
 
+def transcribe_audio(audio_path: str, model_size: str = "small",
+                     language: str = "zh", tag: str = "") -> tuple:
+    """已有音频文件 → (转写文本, 带时间戳的分句)。失败时文本是 "[转写失败] …"。
+
+    为什么要单独拆这一层：B 站那条链路只下音频（一个合集 122 小时，下整片没有意义），
+    抖音那条是下整片再抽音频。模型调用加上出口那两道规范化（繁转简、术语表回改）
+    两边必须共用同一份——抄两遍就会漂移，"485 条转写里 276 条出来是繁体"就是这么来的。
+    """
+    log = tag or "ASR"
+    segs = []
+    try:
+        hot = _asr_hotwords()
+        if HAS_FASTER_WHISPER:
+            model = _get_asr_model(model_size)
+            segments, _info = model.transcribe(
+                audio_path, language=language,
+                vad_filter=True, beam_size=1, initial_prompt=hot or None
+            )
+            # 时间戳必须留一份：帧池要拿「这一帧前后在说什么」去对图和论点，
+            # 原来这里 "".join(s.text) 把 start/end 丢了，图注就只能靠编
+            segs = [{"start": float(getattr(s, "start", 0) or 0),
+                     "end": float(getattr(s, "end", 0) or 0),
+                     "text": str(getattr(s, "text", "") or "")} for s in segments]
+        else:
+            model = _get_asr_model(model_size)
+            result = model.transcribe(audio_path, language=language,
+                                      initial_prompt=hot or None)
+            segs = [{"start": 0.0, "end": 0.0, "text": (result.get("text") or "").strip()}]
+        trad, fixed = _asr_normalize(segs)
+        text = "".join(s["text"] for s in segs)
+        if trad or fixed:
+            print("[%s] 转写规范化：繁转简 %d 字、误写回改 %d 处" % (log, trad, fixed))
+        return text, segs
+    except Exception as e:
+        return "[转写失败] %s" % e, segs
+
+
 def asr_transcribe(video_url: str, model_size: str = "small",
                     language: str = "zh", aweme_id: str = "",
                     tag: str = "") -> str:
@@ -322,51 +364,27 @@ def asr_transcribe(video_url: str, model_size: str = "small",
     if not os.path.exists(audio_path):
         return "[音频提取失败] 文件不存在"
 
-    # 转写
-    segs = []
-    try:
-        hot = _asr_hotwords()
-        if HAS_FASTER_WHISPER:
-            model = _get_asr_model(model_size)
-            segments, info = model.transcribe(
-                audio_path, language=language,
-                vad_filter=True, beam_size=1, initial_prompt=hot or None
-            )
-            # 时间戳必须留一份：帧池要拿"这一帧前后在说什么"去对图和论点，
-            # 原来这里 "".join(s.text) 把 start/end 丢了，图注就只能靠编
-            segs = [{"start": float(getattr(s, "start", 0) or 0),
-                     "end": float(getattr(s, "end", 0) or 0),
-                     "text": str(getattr(s, "text", "") or "")} for s in segments]
-        else:
-            model = _get_asr_model(model_size)
-            result = model.transcribe(audio_path, language=language,
-                                      initial_prompt=hot or None)
-            segs = [{"start": 0.0, "end": 0.0, "text": (result.get("text") or "").strip()}]
-        trad, fixed = _asr_normalize(segs)
-        text = "".join(s["text"] for s in segs)
-        if trad or fixed:
-            print("[%s] 转写规范化：繁转简 %d 字、误写回改 %d 处" % (log, trad, fixed))
-    except Exception as e:
-        return f"[转写失败] {e}"
-    finally:
-        # 抽帧必须在删视频之前：视频删了就再也补不回这条素材的画面
-        if aweme_id and os.path.exists(video_path):
+    # 转写（模型调用与出口规范化见 transcribe_audio，抖音/B 站共用那一份）
+    text, segs = transcribe_audio(audio_path, model_size, language, log)
+
+    # 抽帧必须在删视频之前：视频删了就再也补不回这条素材的画面
+    if aweme_id and os.path.exists(video_path):
+        try:
             try:
-                try:
-                    from src import frame_pool
-                except ImportError:
-                    import frame_pool
-                fp = frame_pool.build(video_path, aweme_id, segments=segs)
-                print(f"[{log}] 帧池：{fp['usable']}/{len(fp['frames'])} 张可用")
-            except Exception as fpe:
-                # 帧池失败不影响转写本身（文案比图先到库里）
-                print(f"[{log}] 帧池失败（不影响转写）: {fpe}")
-        # 清理临时文件
-        for f in [video_path, audio_path]:
-            if os.path.exists(f):
-                os.remove(f)
-        if os.path.exists(tmp_dir):
-            os.rmdir(tmp_dir)
+                from src import frame_pool
+            except ImportError:
+                import frame_pool
+            fp = frame_pool.build(video_path, aweme_id, segments=segs)
+            print(f"[{log}] 帧池：{fp['usable']}/{len(fp['frames'])} 张可用")
+        except Exception as fpe:
+            # 帧池失败不影响转写本身（文案比图先到库里）
+            print(f"[{log}] 帧池失败（不影响转写）: {fpe}")
+    # 清理临时文件
+    for f in [video_path, audio_path]:
+        if os.path.exists(f):
+            os.remove(f)
+    if os.path.exists(tmp_dir):
+        os.rmdir(tmp_dir)
 
     return text
 
@@ -559,7 +577,15 @@ def main():
     else:
         default_api_key = config_get(config, "OPENAI_API_KEY") or config_get(config, "AI_API_KEY")
         default_api_base = config_get(config, "AI_API_BASE", "https://api.openai.com/v1")
-        default_model = config_get(config, "AI_MODEL", "gpt-4o-mini")
+        # 命令行这条路也要走候选池：以前只有工作台解析池子，CLI 直接读 AI_MODEL，
+        # 号主改完配置以为哪儿都不再碰那档见底的模型，其实 CLI 加工还在用它。
+        # `--ai-model` 显式给了就以它为准（人手动指定的优先级最高）。
+        try:
+            from src import ai_models
+            default_model = ai_models.resolve("main")[0] or config_get(config, "AI_MODEL", "gpt-4o-mini")
+        except Exception as e:                                  # noqa: BLE001
+            print(f"[AI] 候选池没解析成（退回配置里写死的 AI_MODEL）：{e}")
+            default_model = config_get(config, "AI_MODEL", "gpt-4o-mini")
 
     ai_config = {
         "method": ai_method,

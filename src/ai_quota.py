@@ -186,6 +186,29 @@ def install() -> Dict[str, Any]:
     return _INSTALLED
 
 
+def seed_from_env() -> Dict[str, Any]:
+    """按配置里的模型档位装上三层钩子（记账 → 关思考 → 自动换档），给所有入口共用。
+
+    为什么要有这个：以前只有 `web/app.py` 装钩子，`main.py` 与 `scripts/e2e_ai_poster.py`
+    直接 import src 模块去调模型——那两条路**不记账**，而且快速档换成会思考的模型后
+    不关思考就会一路等到超时。装钩子这件事一旦只在一处做，别处就会静默走旧行为。
+    顺序（后装的在外层）：记账在最里、关思考居中、自动换档在最外——
+    换档改的是 model 名，必须让里面两层都看到**换完之后**的那个模型，否则记账会记到死模型上。
+    """
+    install()
+    try:
+        from . import ai_thinking
+        ai_thinking.install()
+    except Exception:                                      # noqa: BLE001
+        pass                      # 关思考装不上最多是慢，不该把记账也带崩
+    try:
+        from . import ai_failover
+        ai_failover.install()
+    except Exception:                                       # noqa: BLE001
+        pass                      # 换档装不上就是撞墙不自动跳，仍不该带崩记账
+    return installed()
+
+
 def installed() -> Dict[str, Any]:
     return dict(_INSTALLED)
 
