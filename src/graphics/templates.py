@@ -1599,6 +1599,68 @@ def _list_html_quest(card, css, hero_uri, ctx):
     banner, hero_uri, steps, note_html)
 
 
+# ── 文字攻略页（独立页型，不进 _TEMPLATES：它不是渠道可选模板，是图组里的插页） ──
+# 2026-11-03 双渠道合并样稿验证过（output/样稿-双渠道-1103）：整页有格式的文字卡，
+# 小标题＋编号步骤＋留白，一页只讲清一个动作，出处钉在页脚。kind="text" 的卡片走这里。
+_TEXT_CSS_BASE = """
+*{margin:0;padding:0;box-sizing:border-box}
+.page{width:%(W)dpx;min-height:%(H)dpx;background:#F7F3EA;color:#2B2620;
+ font-family:"PingFang SC","Hiragino Sans GB","Heiti SC",sans-serif;
+ display:flex;flex-direction:column;padding:%(PAD)dpx %(PADX)dpx}
+.kicker{font-size:%(KICK)dpx;letter-spacing:.35em;color:#9A6B15;font-weight:600}
+.kicker:after{content:"";display:block;width:64px;height:4px;background:#C89B42;margin-top:14px;border-radius:2px}
+h1{font-size:%(H1)dpx;font-weight:800;margin-top:%(H1MT)dpx;letter-spacing:-.01em}
+.sub{font-size:%(SUB)dpx;color:#6B6255;margin-top:14px}
+.pre{margin-top:%(PREMT)dpx;background:#fff;border-left:8px solid #C89B42;border-radius:0 14px 14px 0;
+ padding:%(PREPAD)dpx;font-size:%(PRE)dpx;line-height:1.6;color:#5A5142}
+.body{flex:1;display:flex;flex-direction:column;justify-content:space-evenly;margin-top:8px}
+.step{display:flex;align-items:flex-start}
+.num{flex:0 0 auto;width:%(NUM)dpx;height:%(NUM)dpx;border-radius:50px;background:#2B2620;color:#F7F3EA;
+ font-size:%(NUMF)dpx;font-weight:700;display:flex;align-items:center;justify-content:center;margin-right:%(NUMMR)dpx;margin-top:4px}
+.step h3{font-size:%(STH)dpx;font-weight:700;line-height:1.35}
+.step p{font-size:%(STP)dpx;line-height:%(STPLH)s;color:#4A4237;margin-top:10px}
+.ftr{margin-top:auto;border-top:2px solid #E4DCCB;padding-top:%(FTPT)dpx;
+ font-size:%(FT)dpx;color:#8A7F6D;line-height:1.55}
+.ftr b{color:#9A6B15;font-weight:600}
+"""
+
+
+def text_page_html(card, brand, idx, total, canvas_w, canvas_h):
+    """文字攻略页：标题＋副题＋前提框＋编号步骤＋页脚出处。
+
+    密度两档：3:4（canvas_h≤1600，公众号图片消息）用紧凑档——实测 9:16 档在 1440 高下
+    六条溢出画布（标题被截、末条叠页脚），紧凑档四步验证可通过（样稿第二轮）。
+    """
+    compact = canvas_h <= 1600
+    scale = dict(
+        W=canvas_w, H=canvas_h,
+        PAD=64 if compact else 96, PADX=64 if compact else 84,
+        KICK=24 if compact else 28, H1=48 if compact else 62, H1MT=18 if compact else 26,
+        SUB=25 if compact else 30, PREMT=24 if compact else 40,
+        PREPAD=22 if compact else 30, PRE=25 if compact else 29,
+        NUM=44 if compact else 52, NUMF=24 if compact else 28, NUMMR=24 if compact else 30,
+        STH=31 if compact else 37, STP=26 if compact else 29, STPLH="1.55" if compact else "1.7",
+        FTPT=20 if compact else 26, FT=21 if compact else 23,
+    )
+    steps_html = ""
+    for i, st in enumerate(card.get("steps") or [], 1):
+        steps_html += ('<div class="step"><div class="num">%d</div><div><h3>%s</h3><p>%s</p></div></div>'
+                       % (i, _esc(st.get("h") or ""), _esc(st.get("p") or "")))
+    css = _TEXT_CSS_BASE % scale
+    footer = _esc(card.get("footer") or "")
+    page_line = "%s · 第 %d/%d 页" % (_esc(brand or "图文"), idx, total)
+    return ('<!DOCTYPE html><html><head><meta charset="utf-8"><style>%s</style></head>'
+            '<body><div class="wrap" style="display:flex"><div class="page">'
+            '<div class="kicker">文字攻略 · 一页一个动作</div>'
+            '<h1>%s</h1><div class="sub">%s</div>'
+            '<div class="pre">%s</div>'
+            '<div class="body">%s</div>'
+            '<div class="ftr"><b>%s</b><br>%s</div>'
+            '</div></div></body></html>'
+            % (css, _esc(card.get("title") or ""), _esc(card.get("subtitle") or ""),
+               _esc(card.get("precondition") or ""), steps_html, footer, page_line))
+
+
 # ── 模板注册表 ──
 _TEMPLATES = {
     "classic": {"label": "经典卡片", "css": _CSS_CLASSIC,

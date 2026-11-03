@@ -160,9 +160,17 @@ def sanitize_cards(cards):
         if isinstance(note, dict) and not str(note.get("text") or "").strip():
             cleaned.pop("note", None)
         cards[i] = cleaned
-    # 内页条目被清空后整卡丢弃，避免渲染出一张近乎空白的图（至少保留一张卡）
-    kept = [c for c in cards
-            if isinstance(c, dict) and (c.get("kind") == "cover" or c.get("items"))]
+    # 内页条目被清空后整卡丢弃，避免渲染出一张近乎空白的图（至少保留一张卡）；
+    # kind="text"（文字攻略页）没有 items，按 steps 判断——空步骤的文字页同样不保
+    def _keep(c):
+        if not isinstance(c, dict):
+            return False
+        if c.get("kind") == "cover":
+            return True
+        if c.get("kind") == "text":
+            return bool(c.get("steps"))
+        return bool(c.get("items"))
+    kept = [c for c in cards if _keep(c)]
     if kept and len(kept) != len(cards):
         cards[:] = kept
     return cards

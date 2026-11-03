@@ -232,17 +232,20 @@ def _fallback_cards(summary):
     return {"cards": cards, "copy_text": copy_text}
 
 
-def _page_css(tpl_key, palette_key, font_key, layout_key, skin_key, skin_uri):
+def _page_css(tpl_key, palette_key, font_key, layout_key, skin_key, skin_uri, canvas=None):
     """按「模板×配色×字体×版式」拼一份完整 CSS。
 
     包级和按卡覆盖共用这一个函数，不是顺手抽的：本项目在「配色/版式选了不生效」上翻过三次车，
     两条路径各写一遍 CSS 拼装迟早会漂移，所以只留一处。
+    canvas: (宽, 高)，None＝头条默认 1080x1920。公众号图片消息并入本渲染循环后传 (1080, 1440)——
+    CSS 里的画布尺寸与截图视口必须同源，否则出 3:4 的图配 9:16 的版式。
     """
     pal = variants.resolve_palette(skin_key, palette_key, tpl_key)
     extra_tokens = dict(css_engine._tpl_tokens(tpl_key, skin_key))
     extra_tokens.update(variants.palette_tokens(tpl_key, palette_key))
     css = css_engine._build_css(templates._TEMPLATES[tpl_key]["css"], pal, skin_uri,
-                                _ASSETS_DIR, extra_tokens, CANVAS_W, CANVAS_H)
+                                _ASSETS_DIR, extra_tokens,
+                                *(canvas or (CANVAS_W, CANVAS_H)))
     layout_extra = variants.layout_css(tpl_key, layout_key)
     if layout_extra:
         css += "\n/* layout:%s */\n%s" % (layout_key, layout_extra)
@@ -250,7 +253,7 @@ def _page_css(tpl_key, palette_key, font_key, layout_key, skin_key, skin_uri):
     return variants.apply_font(css, font_key, tpl_key)
 
 
-def _card_style(card, tpl_key, palette_key, cache, skin_key, skin_uri, font_key, layout_key):
+def _card_style(card, tpl_key, palette_key, cache, skin_key, skin_uri, font_key, layout_key, canvas=None):
     """解析单张卡实际用什么模板/配色，返回 (tpl_key, palette_key, css, 追溯 dict 或 None)。
 
     为什么要按卡：2026-10-09 拿小红书后台数据对了一遍，同一题材里「梯队/排行/对比表」那类
@@ -267,7 +270,7 @@ def _card_style(card, tpl_key, palette_key, cache, skin_key, skin_uri, font_key,
     use_pal = want_pal if want_pal in variants.PALETTE_KEYS else palette_key
     key = (use_tpl, use_pal)
     if key not in cache:
-        cache[key] = _page_css(use_tpl, use_pal, font_key, layout_key, skin_key, skin_uri)
+        cache[key] = _page_css(use_tpl, use_pal, font_key, layout_key, skin_key, skin_uri, canvas=canvas)
     trace = None
     if want_tpl or want_pal:
         trace = {"tpl": use_tpl, "palette": use_pal}
@@ -291,6 +294,10 @@ def render_cards(cards, out_dir, st):
     font_key, layout_key = st["font_key"], st["layout_key"]
     skin_key, skin_uri = st["skin_key"], st["skin_uri"]
     theme_imgs, cover_img, rng = st["theme_imgs"], st["cover_img"], st["rng"]
+    # 画布与 URL 前缀可由调用方钉死（公众号图片消息并入本循环后传 3:4 与 /media/wechat）；
+    # 不传＝头条默认，行为与合并前逐字节一致。
+    canvas_w, canvas_h = st.get("canvas") or (CANVAS_W, CANVAS_H)
+    url_prefix = st.get("url_prefix") or ("/media/toutiao/%d" % st.get("summary_id", 0))
     # 头条成品图不渲染「提醒」块（2026-09-29 用户要求「图文中移除提醒」），有皮肤垫图时背景统一走 skin。
     # 这两条写在渲染入口、不写在 generate_graphics 里：首次出图和「改了文案重出图」必须同一条路，
     # 否则重出那一次会漏剔除，同一份 cards 两次渲染结果不一样。
@@ -307,7 +314,10 @@ def render_cards(cards, out_dir, st):
     blob = "\n".join([str(c.get("title") or "") + str(c.get("subtitle") or "") for c in cards if isinstance(c, dict)]
                      + [str(it.get("name") or "") + str(it.get("desc") or "")
                         for c in cards if isinstance(c, dict)
-                        for it in (c.get("items") or []) + (c.get("hooks") or [])])
+                        for it in (c.get("items") or []) + (c.get("hooks") or [])]
+                     + [str(s.get("h") or "") + str(s.get("p") or "")
+                        for c in cards if isinstance(c, dict) and c.get("kind") == "text"
+                        for s in (c.get("steps") or [])])
     term_report = term_check.check(blob)
     total = len(cards)
     images = []
@@ -316,45 +326,53 @@ def render_cards(cards, out_dir, st):
 
     with sync_playwright() as p:
         browser = p.chromium.launch()
-        page = browser.new_page(viewport={"width": CANVAS_W, "height": CANVAS_H})
+        page = browser.new_page(viewport={"width": canvas_w, "height": canvas_h})
         brand = st["brand"]
         cover_ratio = skins._img_ratio(cover_img) if cover_img is not None else None
         # 本包已用素材（封面 + 各页横带），随机选图时作为排除集，避免同图重复出现
         used_assets = [cover_img] if cover_img is not None else []
         for idx, card in enumerate(cards, 1):
             kind = card.get("kind") or "list"
-            c_tpl_key, c_pal_key, c_css, c_trace = _card_style(
-                card, tpl_key, palette_key, st["css_cache"], skin_key, skin_uri,
-                font_key, layout_key)
-            c_tpl = templates._TEMPLATES[c_tpl_key]
-            if c_trace:
-                entry = {"idx": idx, "tpl": c_tpl_key, "palette": c_pal_key}
-                entry.update({k: v for k, v in c_trace.items() if k in
-                              ("tpl_rejected", "palette_rejected", "palette_noop")})
-                card_styles.append(entry)
-            ctx = {"brand": brand, "idx": idx, "total": total, "skin_key": skin_key,
-                   "canvas_h": CANVAS_H, "cover_ratio": cover_ratio}
-            if kind == "cover" and idx == 1:
-                hero = skins._hero_uri(card, cover_img, skin_uri, _ASSETS_DIR)
-                html = c_tpl["cover"](card, c_css, hero, ctx)
+            if kind == "text":
+                # 文字攻略页（整页有格式文字卡，2026-11-03 双渠道合并样稿验证过的页型）：
+                # 自带全套 CSS，不取横带/图标，走模板内核的独立页型渲染。
+                html = templates.text_page_html(card, brand, idx, total, canvas_w, canvas_h)
             else:
-                # 取图方式跟着这张卡的实际模板走：guide 是用户上传的有序攻略图，必须确定取；
-                # 其他模板才走随机不重复那套。混版式时若还按包级 tpl_key 判断会拿错图。
-                if c_tpl_key == "guide":
-                    band = theme_imgs[(idx - 1) % len(theme_imgs)] if theme_imgs else None
+                c_tpl_key, c_pal_key, c_css, c_trace = _card_style(
+                    card, tpl_key, palette_key, st["css_cache"], skin_key, skin_uri,
+                    font_key, layout_key, canvas=(canvas_w, canvas_h))
+                c_tpl = templates._TEMPLATES[c_tpl_key]
+                if c_trace:
+                    entry = {"idx": idx, "tpl": c_tpl_key, "palette": c_pal_key}
+                    entry.update({k: v for k, v in c_trace.items() if k in
+                                  ("tpl_rejected", "palette_rejected", "palette_noop")})
+                    card_styles.append(entry)
+                ctx = {"brand": brand, "idx": idx, "total": total, "skin_key": skin_key,
+                       "canvas_h": canvas_h, "cover_ratio": cover_ratio}
+                if kind == "cover" and idx == 1:
+                    hero = skins._hero_uri(card, cover_img, skin_uri, _ASSETS_DIR)
+                    html = c_tpl["cover"](card, c_css, hero, ctx)
                 else:
-                    band = skins._pick_band_image(theme_imgs, idx, rng, exclude=used_assets)
-                    if band is not None:
-                        used_assets.append(band)
-                hero = skins._hero_uri(card, band, skin_uri, _ASSETS_DIR)
-                html = c_tpl["list"](card, c_css, hero, ctx)
+                    # 取图方式跟着这张卡的实际模板走：guide 是用户上传的有序攻略图，必须确定取；
+                    # 其他模板才走随机不重复那套。混版式时若还按包级 tpl_key 判断会拿错图。
+                    if c_tpl_key == "guide":
+                        band = theme_imgs[(idx - 1) % len(theme_imgs)] if theme_imgs else None
+                    else:
+                        band = skins._pick_band_image(theme_imgs, idx, rng, exclude=used_assets)
+                        if band is not None:
+                            used_assets.append(band)
+                    hero = skins._hero_uri(card, band, skin_uri, _ASSETS_DIR)
+                    html = c_tpl["list"](card, c_css, hero, ctx)
             png_path = out_dir / ("img%d.png" % idx)
-            renderer.render_html(page, html, png_path, CANVAS_W, CANVAS_H)
+            renderer.render_html(page, html, png_path, canvas_w, canvas_h)
             # 回归脚本要看「CSS 到底变了没有」，只有它们置了这个开关才留中间 HTML
             if os.environ.get("V2T_KEEP_RENDER_HTML"):
                 (out_dir / ("img%d.html" % idx)).write_text(html, encoding="utf-8")
             images.append({"file": png_path.name, "label": "图%d" % idx,
-                           "url": "/media/toutiao/%d/%s" % (st["summary_id"], png_path.name)})
+                           "url": "%s/%s" % (url_prefix, png_path.name)})
+            # 每出一张回调一次：界面那根进度条要的是**真实步数**（第几张/共几张），不是估的百分比
+            if st.get("on_card"):
+                st["on_card"](idx, total)
         browser.close()
     return images, used_assets, card_styles, icon_report, term_report
 
@@ -384,9 +402,10 @@ def generate_graphics(summary, ai_config, progress_cb=None, theme="", skin="wow"
     out_dir = OUTPUT_DIR / str(summary_id)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    def _pg(msg):
+    def _pg(msg, done=None, total=None):
+        # done/total 拿不到就留 None（界面画流动条），也不编一个假百分比
         if progress_cb:
-            progress_cb(msg)
+            progress_cb(msg, done, total)
 
     skin_key, skin_uri = skins.resolve_skin(skin, _ASSETS_DIR)
     palette_key, font_key = variants.resolve_keys(palette, font)
@@ -439,7 +458,8 @@ def generate_graphics(summary, ai_config, progress_cb=None, theme="", skin="wow"
         "layout_key": layout_key, "skin_key": skin_key, "skin_uri": skin_uri,
         "theme_imgs": theme_imgs, "cover_img": cover_img, "rng": rng,
         "brand": (theme or "").strip()[:12], "summary_id": summary_id,
-        "css_cache": css_cache})
+        "css_cache": css_cache,
+        "on_card": lambda i, n: _pg("渲染第 %d/%d 张信息图..." % (i, n), i, n)})
 
     manifest = {
         "id": summary_id,
