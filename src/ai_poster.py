@@ -239,6 +239,52 @@ PUBLISH_CHANNELS = {"toutiao": "头条", "xhs": "小红书", "wechat": "公众�
 WECHAT_FORMS = {"newspic": "图片消息", "article": "文章配图"}
 
 
+def _specific_source(url) -> bool:
+    """出处算不算「具体一手帖」：判据与 claim_check.evidence_ok 同源——
+
+    要能点开、路径要带条目 id 或帖号；通用新闻首页/列表页（`.../news/` 这种）
+    不构成逐条核验凭据。来源说明里只有前者可以写「已核」。
+    """
+    s = str(url or "").strip()
+    if not re.search(r"https?://", s, re.I):
+        return False
+    path = re.sub(r"^https?://", "", s).strip("/")
+    seg = [x for x in path.split("/") if x]
+    return len(seg) > 1 and not re.search(r"/news/?$|/news/?\?", path)
+
+
+def _source_in_registry(url) -> str:
+    """出处对得上登记表自己的来源时，返回登记的发布日期（对不上返回空串）。
+
+    与 claim_check.evidence_ok 同口径：官网公告页（`.../news/2430407` 这种）虽然带
+    条目 id，但**不是登记表登记的那个开发说明帖**——旧稿的德莱尼更正记的就是这种
+    出处，只能标「已更正」，不能标「已核」。
+    """
+    from . import claim_check
+    reg = claim_check.load()
+    meta = reg.get("meta") or {}
+    wants = [str(meta.get("source_url") or "")]
+    wants += [str(e.get("source_url") or "") for e in reg.get("claims") or []]
+    got = re.sub(r"^https?://", "", str(url or "")).strip("/")
+    for w in wants:
+        w = w.strip()
+        if not w:
+            continue
+        key = re.sub(r"^https?://", "", w).strip("/")
+        tail = re.sub(r"^\d+", "", key.split("/")[-1]) or key
+        if tail[:24] in got:
+            d = str(meta.get("source_date") or "").strip()
+            return d[:10] if d else ""
+    return ""
+
+
+def _risk_preview(raw, n=14) -> str:
+    """台账条目给人看的短预览：108 的核查清单是表格，原样截 14 字会把竖线一起印出来。"""
+    s = re.sub(r"\s+", " ", str(raw or "").replace("|", " ")).strip()
+    s = re.sub(r"^【[^】]*】\s*", "", s)          # 「【继承·未核】」这类内部标记不进公开说明
+    return s[:n]
+
+
 def compose_source_note(ctx, fallback=""):
     """来源那一行由**代码**拼，不让模型写日期。
 
@@ -246,6 +292,10 @@ def compose_source_note(ctx, fallback=""):
     成品却写「数据口径截至10月29日」——读者一句"你这啥时候的信息"就问穿了。
     三个日期各说各的：**素材发布日**（连来源号与一手/第三方一起）、**本稿生成日**、
     **事实核验情况**（没核就明写没核，不许写成"已核到某日"）。
+
+    台账已结项的记录分两档（2026-11-02 复验阻塞①）：出处是**具体一手帖**的才算
+    「已核」；只给通用新闻首页或没写出处的，是"发现旧稿错配后删改更正"的记录
+    （比如德莱尼那条），写「已更正」，**不得计入已核**。
     """
     mats = (ctx or {}).get("materials") or []
     if not mats:
@@ -264,13 +314,22 @@ def compose_source_note(ctx, fallback=""):
     resolved = (ctx or {}).get("resolved") or []
     if open_r:
         line += "｜未逐项核验 %d 条（%s）" % (
-            len(open_r), "、".join(str(r)[:14] for r in open_r[:2]))
-    if resolved:
+            len(open_r), "、".join(_risk_preview(r) for r in open_r[:2]))
+    # 「已核」必须同时满足：具体一手帖 URL ＋ 对得上登记表登记的那个来源（带登记日期）。
+    # 对不上的（旧稿德莱尼更正记的是官网公告页）标「已更正」，不得计入已核。
+    verified, corrected = [], []
+    for r in resolved:
+        d = _source_in_registry(r.get("source")) if _specific_source(r.get("source")) else ""
+        (verified if d else corrected).append((r, d))
+    if verified:
         line += "｜已核 %d 条：%s" % (
-            len(resolved), "；".join("%s（出处：%s）" % (str(r.get("raw"))[:14],
-                                                  str(r.get("source"))[:28]) for r in resolved[:2]))
-    else:
-        line += "｜事实核验：无（不得写成已核到某日）"
+            len(verified), "；".join("%s（出处：%s，%s 核）" % (
+                _risk_preview(r.get("raw")), str(r.get("source"))[:40], d)
+                                     for r, d in verified[:2]))
+    if corrected:
+        line += "｜已更正 %d 条（旧稿错配已删改，未按已核计）" % len(corrected)
+    if not verified:
+        line += "｜机制数值逐条核验：见发布页事实闸记录"
     return line + "｜本稿生成于 %s" % ((ctx or {}).get("generated_at") or "日期未知")
 
 
@@ -680,6 +739,8 @@ _PLAN_PROMPT = """你是自媒体图文编辑。下面这份素材多半**已经
 铁律一·内容纪律（转载整理模式）：
 - 只能用素材里出现过的事实与数字，严禁编造、严禁夸大；素材没写的不要写。
 - 全程转述口吻，禁用第一人称（我实测 / 我用过）。
+- 种族名与职业名**只能用**这一份里的写法：__NAMES__。名单里没有的种族/职业一律不提，
+  宁可写"这个种族"也**不许自己安一个名字**——安出来的名字读者一眼就看出是编的。
 __META__
 - 素材可能是从中间断开的残句（缺标点、句子被截断）。遇到这种情况要**跨段把一句话说完整**
   再落卡片，绝不允许一张卡片只承接半句话。
@@ -797,6 +858,29 @@ def risks_prompt_block(summary):
 
 def _clip(text, limit):
     return re.sub(r"\s+", "", str(text or ""))[:limit]
+
+
+_SENT_END = "。！？；"
+_DANGLING = "，、：；,.;:"
+_BOUND = _SENT_END + _DANGLING
+
+
+def _clip_d(text, limit):
+    """说明类字段裁切：硬切会把句子切成半截，那半截会直接印进成品。
+
+    11-02 实测：模型写 47 字、上限 40，成品上留下「…后期不带宠收益归」——
+    那张已经发到头条了。所以超上限时退到**最后一个**标点（句末、分句都算），
+    尾巴整段丢掉；连 8 字以上的标点都没有，才照旧硬切。
+    不补句号：卡片说明本来可以不带句末标点，替它补一个等于替人把话说完。
+    """
+    s = re.sub(r"\s+", "", str(text or ""))
+    if len(s) <= limit:
+        return s
+    cut = s[:limit]
+    keep = max([cut.rfind(ch) + 1 for ch in _BOUND] + [0])
+    if keep < 8:
+        return cut.rstrip(_DANGLING)
+    return cut[:keep].rstrip(_DANGLING)
 
 
 def _clip_ws(text, limit):
@@ -1129,13 +1213,13 @@ def guide_clip(page, lim):
     for c in _as_list(page.get("contrast"))[:3]:
         if isinstance(c, dict) and (c.get("t") or c.get("d")):
             con.append({"t": _clip_ws(c.get("t"), 8),
-                        "d": _clip(c.get("d"), lim["cardD"])})
+                        "d": _clip_d(c.get("d"), lim["cardD"])})
     if con:
         out["contrast"] = con
     wn = page.get("warn")
     if isinstance(wn, dict) and (wn.get("t") or wn.get("d")):
         out["warn"] = {"t": _clip_ws(wn.get("t"), 12),
-                       "d": _clip(wn.get("d"), lim["cardD"] * 2)}
+                       "d": _clip_d(wn.get("d"), lim["cardD"] * 2)}
     ak = page.get("ask")
     if isinstance(ak, dict) and str(ak.get("q") or "").strip():
         opts = []
@@ -1349,7 +1433,12 @@ def normalize_page(item, lim, style_key, has_photo, idx, first_title="",
     for c in _as_list(item.get("cards"))[:CARD_MAX]:
         if not isinstance(c, dict):
             continue
-        t, d = _clip(c.get("t"), lim["cardT"]), _clip(c.get("d"), lim["cardD"])
+        t, d = _clip(c.get("t"), lim["cardT"]), _clip_d(c.get("d"), lim["cardD"])
+        full = re.sub(r"\s+", "", str(c.get("d") or ""))
+        if len(full) > lim["cardD"]:
+            notes.append("卡片「%s」说明写了 %d 字（上限 %d），图上只印到句子收尾，"
+                         "尾巴「%s」没印上去 —— 要它就在②那一步改短整句再重出"
+                         % (t or full[:6], len(full), lim["cardD"], full[len(d):][:20]))
         if t or d:
             cards.append({"t": t, "d": d, "v": _clip_ws(c.get("v"), CARD_VIS_MAX)})
     title = _clip(item.get("title") or (first_title if idx == 1 else ""), lim["title"])
@@ -1556,8 +1645,46 @@ def build_page_plan(summary, ai_config, page_index, pages, spine="", theme="",
     return page, lint_plan(one, lim), notes
 
 
+def _names_hint(summary, source_text=""):
+    """提示词里那份"能用的种族/职业名"。名单读不到就退成一句纪律，不假装有成文名单。"""
+    try:
+        from . import term_check
+        hint = term_check.roster_hint(str(source_text or "") + "\n"
+                                      + str((summary or {}).get("content") or ""))
+    except Exception:                                     # noqa: BLE001
+        hint = ""
+    return hint or "（名单没同步：只用素材里出现过的写法，素材没提的种族/职业一律不写）"
+
+
+def roster_scan_text(plan, pub):
+    """专名闸只看**会印到图上/发出去的正文**，不看核查留痕那几栏。
+
+    为什么必须排除：来源说明、风险核查表、术语修正记录这些位置天生要引用错名才能说清
+    "哪个词是错的"（如「"德莱尼" → 天裔」）。拿它们当成品判，等于罚诚实标注——
+    机制门在这同一类上已经错过两次（10-30/31 误伤"译名核对"提示）。
+    """
+    bits = []
+    if isinstance(plan, dict):
+        for key in ("title", "subtitle", "footer", "scene"):
+            if plan.get(key):
+                bits.append(str(plan.get(key)))
+        pages = plan_pages(plan) or []
+        for pg in pages:
+            for _label, txt in ink_texts(pg):
+                if txt:
+                    bits.append(str(txt))
+    if isinstance(pub, dict):
+        for k in ("copy_text", "digest", "keyword_reply", "xhs_copy"):
+            if pub.get(k):
+                bits.append(str(pub.get(k)))
+        for k in ("tt_titles", "xhs_titles"):
+            bits += [str(t) for t in (pub.get(k) or []) if t]
+        bits += [str(t) for t in (pub.get("xhs_tags") or []) if t]
+    return "\n".join(bits)
+
+
 def build_text_plan(summary, ai_config, theme="", title="", style_key="", text_mode=DEFAULT_TEXT_MODE,
-                    has_photo=False, page_hint=0, frames=None):
+                    has_photo=False, page_hint=0, frames=None, source_text=""):
     """调 LLM 产出文案计划 + 发布文案，并逐字段裁到字数线内。
 
     返回 (plan, publish, violations, notes)：plan 是要画进图里的文字（超预算先经 fit_plan
@@ -1596,6 +1723,7 @@ def build_text_plan(summary, ai_config, theme="", title="", style_key="", text_m
               .replace("__RISKS__", risks_prompt_block(summary))
               .replace("__CONTENT__", (summary.get("content") or "")[:8000])
               .replace("__META__", META_RULE)
+              .replace("__NAMES__", _names_hint(summary, source_text))
               + guide_rules_text(frames, lim["total"]))
     resp = client.chat.completions.create(
         model=model or "qwen-plus",
@@ -1607,7 +1735,7 @@ def build_text_plan(summary, ai_config, theme="", title="", style_key="", text_m
     for c in _as_list(data.get("cards"))[:CARD_MAX]:
         if not isinstance(c, dict):
             continue
-        t, d = _clip(c.get("t"), lim["cardT"]), _clip(c.get("d"), lim["cardD"])
+        t, d = _clip(c.get("t"), lim["cardT"]), _clip_d(c.get("d"), lim["cardD"])
         if t or d:
             cards.append({"t": t, "d": d, "v": _clip_ws(c.get("v"), CARD_VIS_MAX)})
     valid = set(STYLE_PRESETS) | set(_user_presets())
@@ -1900,7 +2028,13 @@ def fit_plan(plan, limit=None, lim=None):
     if not plan.get("style_key"):
         plan["style_key"] = DEFAULT_STYLE_KEY
     for c in plan.get("cards") or []:
-        c["t"], c["d"] = _clip(c.get("t"), lim["cardT"]), _clip(c.get("d"), lim["cardD"])
+        c["t"] = _clip(c.get("t"), lim["cardT"])
+        full = re.sub(r"\s+", "", str(c.get("d") or ""))
+        c["d"] = _clip_d(full, lim["cardD"])
+        if len(full) > lim["cardD"]:
+            notes.append("卡片「%s」说明写了 %d 字（上限 %d），图上只印到句子收尾，"
+                         "尾巴「%s」没印上去" % (c.get("t") or full[:6], len(full),
+                                              lim["cardD"], full[len(c["d"]):][:20]))
         c["v"] = _clip_ws(c.get("v"), CARD_VIS_MAX)
     if start <= limit:
         return plan, notes
@@ -1915,7 +2049,7 @@ def fit_plan(plan, limit=None, lim=None):
         if not cands:
             break
         c = max(cands, key=lambda x: len(x["d"]))
-        c["d"] = c["d"][:max(10, len(c["d"]) - over)]
+        c["d"] = _clip_d(c["d"], max(10, len(c["d"]) - over))
         notes.append("截短卡片「%s」的说明" % c.get("t"))
     for key, label in (("subtitle", "副标题"), ("footer", "尾注")):
         over = plan_chars(plan) - limit
@@ -2727,6 +2861,48 @@ def choose_candidate(summary_id, index):
     return m
 
 
+def evaluate_claims(plan, pub, summary=None, asr_text=None):
+    """出图前那道机制断言闸的判定（③ 重判用，与界面状态共用同一份判据）。
+
+    返回 check_fields 的结果（hard/soft/checked/skipped/entry_problems），外加三样：
+      unjudged  适用范围内整项没判（登记表读不到/不合格/校对异常）——出图必须暂停待发资格，
+                不许让 hard=[] 被当成"核验通过"；
+      mech      未核机制断言逐条清单（「免疫所有控制」类不落数值的主张，check_fields
+                没数可对账不会报 hard）——同样暂停待发资格，补登记或删句；
+      uncovered scope 外（登记表只管魔兽无限服种族机制）——不拦，但写明由人工逐项核对来源。
+    """
+    claims = {"hard": [], "soft": [], "checked": 0, "skipped": "", "entry_problems": [],
+              "unjudged": "", "uncovered": False, "mech": []}
+    try:
+        from . import claim_check
+        reg = claim_check.load()
+        src_txt = asr_text or (summary or {}).get("transcript") or ""
+        scope = "%s\n%s\n%s" % (src_txt,
+                                (summary or {}).get("title") or "",
+                                json.dumps([plan, pub], ensure_ascii=False))
+        if not reg.get("claims"):
+            claims["skipped"] = "机制断言登记表读不到（config/wow_claims.json），这一项没判"
+            claims["unjudged"] = claims["skipped"]
+        elif not claim_check.in_scope(scope, reg):
+            claims["skipped"] = ("登记表只覆盖魔兽无限服的种族机制，这篇未覆盖——"
+                                 "机制类说法由人工逐项核对官方来源，不等于查过没问题")
+            claims["uncovered"] = True
+        else:
+            fields = claim_check.claim_fields(plan, pub)
+            claims = claim_check.check_fields(fields)
+            claims.setdefault("unjudged", "")
+            claims.setdefault("uncovered", False)
+            claims["mech"] = claim_check.mechanism_gaps(fields, asr_text=src_txt, reg=reg)
+            if claims.get("skipped"):
+                # check_fields 只在登记表自身不合格时给 skipped：这就是"整项没判"
+                claims["unjudged"] = claims["skipped"]
+    except Exception as e:                              # noqa: BLE001
+        msg = "机制断言核对没跑成：%s" % str(e)[:60]
+        claims = {"hard": [], "soft": [], "checked": 0, "entry_problems": [],
+                  "skipped": msg, "unjudged": msg, "uncovered": False, "mech": []}
+    return claims
+
+
 def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
                     progress_cb=None, do_verify=True, plan=None, publish=None, force=False,
                     copies=1, do_review=True, text_mode=DEFAULT_TEXT_MODE, photo=None,
@@ -2787,7 +2963,8 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
     if plan is None:
         _pg("LLM 拆解海报文案...")
         plan, llm_publish, bad, notes = build_text_plan(summary, ai_config, theme=theme,
-                                                        title=title, text_mode=text_mode)
+                                                        title=title, text_mode=text_mode,
+                                                        source_text=asr_text)
     else:
         # 手改过的文案不做自动压缩：那是用户显式输入，超线就明确报错让他自己删
         llm_publish, bad, notes = None, lint_plan(plan, lim), []
@@ -2809,11 +2986,55 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
         extra_items=(fact_ctx or {}).get("open_items"),
         official_blobs=(fact_ctx or {}).get("official_blobs"))
     fact_gaps = fact_gate.guide_gaps(plan) if plan_is_guide(plan) else []
+    # ── 实体专名核对（11-02 号主拍的）──────────────────────────────────────
+    # 种族与职业这两类，官网是**一次列全的完整枚举**，所以"枚举里没有"在这一类上算硬证据：
+    # 成品里出现了素材与枚举都没有的名字，就是模型自己安的（实测抓到「德莱尼主动技能…」，
+    # 口播 0 次、补充资料 0 次、官网名单 0 次，评论第一句就是"哪来的德莱尼"）。
+    # 判据只有 `term_check.roster_check` 那一份，海报与图文卡两条线共用，这里不抄第二份。
+    try:
+        from . import term_check
+        ros = term_check.roster_check(roster_scan_text(plan, pub),
+                                      str(asr_text or summary.get("transcript") or ""))
+    except Exception as e:                              # noqa: BLE001
+        ros = {"suspect": [], "ok": [], "skipped": "核对没跑成：%s" % str(e)[:60]}
+    for s in ros.get("suspect") or []:
+        fact_hard.append("成品里的%s「%s」本篇素材里没出现、官网种族/职业名单里也没有——"
+                         "这是模型安的名字：删掉，或换成素材/名单里真有的那个"
+                         % (s.get("kind") or "专名", s.get("name") or ""))
+    # ── 机制断言逐条对（11-02 wow-forever 复核交接）────────────────────────────
+    # 专名闸证明的是"这个种族名存在"，证明不了"这个技能属于这个种族"；老事实闸认的是
+    # "上游标过待核的 token 有没有印到卖点"，而"矮人接手移速""亡灵急速 3%→2%"是**归属错了**，
+    # token 本身没被标过。这一道判的是同一句里的 主体＋技能＋数值＋条件＋带日期出处。
+    # 判据与登记表都在 `claim_check`（表里每条要带官方原句与日期，原句还得能在快照里逐字找到），
+    # 这里只接线，不再抄第二份。③ 出图前用**当前文本+当前素材+最新登记**重判（2026-11-02 三步闸），
+    # 适用范围内整项没判（登记缺失/读不到/校对异常）→ unjudged，暂停待发资格。
+    claims = evaluate_claims(plan, pub, summary=summary, asr_text=asr_text)
+    for m in claims.get("hard") or []:
+        fact_hard.append(m)
+    fact_soft.extend(claims.get("soft") or [])
     if fact_gaps:
         fact_soft.append("按攻略发就得让人照做，这几段现在没有明确内容：%s；"
                          "补不齐就把标题改成「介绍/观察」，别逼模型编步骤"
                          % "、".join(fact_gaps))
     fact_gate_state = {"risk_items": [it["raw"] for it in risk_all],
+                       "roster": {"suspect": ros.get("suspect") or [],
+                                  "ok": ros.get("ok") or [],
+                                  # 名单没同步/没交素材原文时这道闸是"没判"，界面上要看得见，
+                                  # 不能让它长得像"查过、没问题"
+                                  "skipped": ros.get("skipped") or ""},
+                       "claims": {"checked": claims.get("checked") or 0,
+                                  "hard": claims.get("hard") or [],
+                                  "soft": claims.get("soft") or [],
+                                  "skipped": claims.get("skipped") or "",
+                                  # 适用范围内整项没判（登记缺失/不合格/校对异常）：
+                                  # 界面要显示"事实未判"，不能长得像查过没问题
+                                  "unjudged": claims.get("unjudged") or "",
+                                  "uncovered": bool(claims.get("uncovered")),
+                                  # 未核机制断言逐条清单（「免疫所有控制」类），
+                                  # 界面红条与清单都要看得见，不能混进 soft 被过滤掉
+                                  "mech": claims.get("mech") or [],
+                                  # 登记表自己合不合格（原句抄错/缺日期）也要露出来
+                                  "registry_problems": claims.get("entry_problems") or []},
                        "inherited": [it["raw"] for it in risk_all
                                      if str(it.get("raw") or "").startswith("【继承")
                                      or it.get("status") == "open"],
@@ -2828,10 +3049,24 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
         err.fact_hard = list(fact_hard)      # 前端按条开输入框，不能只给一句话
         raise err
     if fact_hard:
-        fact_override = fact_gate.check_override(fact_hard, fact_evidence, fact_checked_by)
+        # 机制断言那几条走 `claim_check` 的加严判据：出处必须是登记里那条自己的具体页面、
+        # 还得带日期——给个官网新闻首页不算核过（11-02 复核点名的正是这个）
+        from . import claim_check as _cc
+        fact_override = fact_gate.check_override(fact_hard, fact_evidence, fact_checked_by,
+                                                 extra=_cc.evidence_validator())
         fact_gate_state["override"] = fact_override
     # 「有图」≠「能发」：放行没有逐条凭据时，这张只能当草稿看（界面读 publishable）
     fact_blocks = bool(fact_hard) and not (fact_override or {}).get("complete")
+    # ③ 三步事实闸（2026-11-02）：适用范围内整项没判（登记缺失/读不到/校对异常）
+    # 不能当"核验通过"——暂停待发资格，界面显示「事实未判」。hard=[] 不再被误读成绿灯。
+    claims_unjudged = str(claims.get("unjudged") or "")
+    if claims_unjudged:
+        fact_blocks = True
+    # 未核机制断言（11-02 复验漏口一）：「免疫所有控制」类主张没数可对账、check_fields
+    # 不报 hard，必须单独暂停——同卡别句的已核出处盖不住它
+    claims_mech = claims.get("mech") or []
+    if claims_mech:
+        fact_blocks = True
     # ── 编辑证据链（2026-10-21 原创增量改造，只管 头条 + 攻略页 这一条）──────────────
     # 事实闸管的是"没核过的数别当卖点"，判帧管的是"画面上有没有别人压的字"——
     # 两件都不等于"这篇有没有独立价值、借来的文字和画面能不能这么用"。那一层由
@@ -3291,7 +3526,10 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
         "draft_override": overrode,
         # 事实闸的结果必须落盘：放行过哪几条、当时看到的是什么，事后要能查（不许只活在会话里）
         "fact_gate": fact_gate_state,
-        # 「有图」≠「能发」：待核卖点没有逐条凭据时这张只是草稿（2026-10-21 Codex P1）
+        # 「有图」≠「能发」：待核卖点没有逐条凭据时这张只是草稿（2026-10-21 Codex P1）。
+        # publishable=true **仅表示机器门通过**（事实闸凭据齐+行动依据+字数）——凭据可以是
+        # 机器按登记表预填的（见 fact_gate.override.checked_by 的预填标注），不等于人工核验过；
+        # 人工确认另记在 human_review，绑 package_hash，改稿即失效（2026-11-02 复验阻塞②）。
         "publishable": not fact_blocks,
         # 编辑证据链（原创增量）：状态、逐条缺项、以及"这不是原创认证"那句原话都要落盘
         "provenance": prov_state,
@@ -3323,6 +3561,18 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
                           % (len(ov.get("rows") or []), ov.get("checked_by") or "未填"))
     for msg in fact_gate_state.get("soft") or []:
         issues.append("warn: " + msg)
+    # ③ 事实未判 / 未覆盖（2026-11-02 三步闸）：适用范围内没判要顶到 error 档——
+    # publishable 已在 fact_blocks 处翻成 False，这里保证清单上也有一句说得清出路的话
+    if claims_unjudged:
+        issues.append("error: 事实未判 —— " + claims_unjudged
+                      + "（适用范围内的机制断言这一项没判，不能当已核；待发资格已暂停）")
+    elif claims_mech:
+        issues.append("error: 未核机制断言 —— " + claims_mech[0]
+                      + ("（等共 %d 条）" % len(claims_mech) if len(claims_mech) > 1 else "")
+                      + "（同卡别句的已核出处盖不住它；待发资格已暂停）")
+    elif claims.get("uncovered"):
+        issues.append("warn: 登记表未覆盖这篇的题材——机制类说法由人工逐项核对官方来源，"
+                      "本工具不宣称全题材自动防瞎编")
     # 没判过帧的配图：出图照出，但清单上必须写"未判，需人眼看"（2026-10-21 Codex P0）
     unjudged = unjudged_photos(plan)
     manifest["photos_unjudged"] = unjudged
@@ -3370,6 +3620,20 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
     rr = release_review.status(str(out_dir), publish_channel, pkg_hash)
     manifest["package_hash"] = pkg_hash
     manifest["release_review"] = dict(rr, checklist=release_review.checklist_hint(publish_channel))
+    # ── 自动预填与人工核验分开记（2026-11-02 复验阻塞②）────────────────────────
+    # 机器能记"凭据齐全"，记不了"人看过"：fact_gate.override.checked_by 只认**实际核验人**，
+    # 机器按登记表预填凭据时必须写「机器预填…待人工确认」，不得预写任何人的名字。
+    # 人工确认单独落在 review.json（release_review.record），绑的就是当前 package_hash——
+    # 改稿（文字或任一页图）哈希就变，旧确认自动作废；重出包时这里恒为未确认。
+    manifest["human_review"] = {
+        "fact_confirmed": bool(rr.get("reviewed") and rr.get("hash_matches")),
+        "confirmed_by": rr.get("reviewer") or "",
+        "confirmed_at": rr.get("at") or "",
+        "package_hash": pkg_hash,
+        "how": "发布区「签发放行」（POST /api/poster/review，reviewer 必填）",
+        "note": "fact_gate.override.checked_by 是机器预填标注时不构成人工核验；"
+                "publishable=true 仅表示机器门通过，不等于可直接发布",
+    }
     if release_review.blocks_publish(publish_channel, rr):
         manifest["publishable"] = False
         issues.append("info: 小红书这一档要最终人工放行才算待发；"

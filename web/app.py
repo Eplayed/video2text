@@ -41,6 +41,11 @@ PARSER_DIR    = Path(find_parser_dir())
 # 视频和图文两种素材，来源栏要能分开看（号主 2026-10-16 拍板单列一档）。
 DB_ONLY_SHEETS = {"微信文章": "wechat", "B站视频": "bilibili", "抖音图文": "douyin_note",
                   "暴雪官方": "blizzard"}
+
+# 转写档位只在这一处定。10-12 实测 base→small 错字 11→3（见 main.py --asr-model 注释），
+# 当时只改了手动采集那两条路，**订阅同步那条一直写死 base**——于是每天新进来的素材
+# 反而是全库最差的一档，而它正是当晚排产匹配与整理稿吃的料。三条路共用这一份。
+ASR_MODEL_DEFAULT = "small"
 # B 站每轮最多翻多少条：首次订阅即"只入最近 20 条"，之后每轮也只拉新增（列表从新往老翻，
 # 整页都是已入库的就停）。存量大 UP 主不要一次全量回填——几百条字幕连打会撞风控。
 BILI_SYNC_LIMIT = 20
@@ -1293,7 +1298,7 @@ def api_process():
     data = request.get_json(force=True)
     links_text = data.get("links", "").strip()
     cookie = data.get("cookie", "").strip()
-    asr_model = data.get("asr_model", "small")   # 10-12 从 base 提到 small，理由见 main.py --asr-model 注释
+    asr_model = data.get("asr_model") or ASR_MODEL_DEFAULT   # 档位单一来源，见常量那一段注释
 
     if not links_text:
         return jsonify({"error": "请输入抖音链接"}), 400
@@ -1504,7 +1509,7 @@ def api_fetch_and_process():
     cookie = data.get("cookie", "").strip()
     max_pages = int(data.get("max_pages", 10))
     max_videos = int(data.get("max_videos") or 0)
-    asr_model = data.get("asr_model", "small")   # 10-12 从 base 提到 small，理由见 main.py --asr-model 注释
+    asr_model = data.get("asr_model") or ASR_MODEL_DEFAULT   # 档位单一来源，见常量那一段注释
     # 前端预览阶段已抓取的视频列表（可选，传入则跳过重复抓取）
     preset_videos = data.get("videos") or []
 
@@ -4020,9 +4025,14 @@ def _fact_ctx(summary):
     try:
         with _db_lock:
             risk_ledger.ensure(DB_PATH)
-            open_items = risk_ledger.open_items(DB_PATH, ids)
+            # 表头/分隔线不是待核事实（2026-11-02 复验：108 台账里落过「| 核查项 |…」
+            # 这类脏行，来源说明里因此出现"未逐项核验 54 条"）。入项过滤只防新数据，
+            # 库里已落的脏行在读取侧用同一判据滤掉。
+            open_items = [i for i in risk_ledger.open_items(DB_PATH, ids)
+                          if not fact_gate.is_table_noise(i.get("raw"))]
             resolved = [r for r in risk_ledger.all_items(DB_PATH, ids)
-                        if r.get("status") == "resolved"]
+                        if r.get("status") == "resolved"
+                        and not fact_gate.is_table_noise(r.get("raw"))]
             con = sqlite3.connect(str(DB_PATH))
             con.row_factory = sqlite3.Row
             ph = ",".join("?" for _ in FIRST_PARTY_SHEETS)
@@ -4030,12 +4040,113 @@ def _fact_ctx(summary):
                 "SELECT transcript FROM videos WHERE source_sheet IN (%s)"
                 " AND COALESCE(transcript,'')<>''" % ph, FIRST_PARTY_SHEETS)]
             con.close()
+        # 官网资料库里那一段段**官方原文**（种族介绍整段、特长原句）也进对照面：
+        # 「这句官方里到底有没有」以前只能拿库里抓到的公告比，公告列表里没有专页就查不到
+        # （11-02 那篇的「天穹视界：移动速度提高10%」正是官网专页写的，库里那 27 条公告没有）
+        try:
+            from src import term_check as _tc
+            blobs += _tc.official_blobs()
+        except Exception as e:                              # noqa: BLE001
+            print("[事实上下文] 官网资料库没并进一手文本（这一项按缺席判）:", e, flush=True)
     except Exception as e:                                  # noqa: BLE001
         print("[事实上下文] 台账/一手文本读取失败:", e, flush=True)
     return {"materials": materials, "open_items": open_items, "resolved": resolved,
             "official_blobs": blobs,
             "open_risks": [str(i.get("raw") or "") for i in open_items],
             "generated_at": datetime.now().strftime("%Y-%m-%d")}
+
+
+def _material_text(summary):
+    """这篇稿的**素材原文**拼一起（采用的一条条 + 勾着的补充料）。
+
+    白名单必须是"素材说过什么"，不能拿整理稿或成品自己当依据——模型把名字写错之后，
+    错名字会顺着整理稿一路"有据"下去（11-02 那张「德莱尼」卡片就是这么发出去的）。
+    """
+    ids = []
+    try:
+        ids += [int(x) for x in (json.loads(summary.get("source_video_ids") or "[]") or [])]
+    except (TypeError, ValueError):
+        pass
+    try:
+        if summary.get("video_id"):
+            ids.insert(0, int(summary["video_id"]))
+    except (TypeError, ValueError):
+        pass
+    try:
+        from src import plan_tasks as _pt
+        tk = _pt.task_of_summary(DB_PATH, summary.get("id")) or {}
+        ids += [int(x) for x in (tk.get("supplement_ids") or [])]
+    except Exception:                                     # noqa: BLE001
+        pass
+    want = [i for i in dict.fromkeys(ids) if i]
+    if not want:
+        return str(summary.get("transcript") or "")
+    try:
+        rows = content_store.get_videos_by_ids(DB_PATH, want)
+    except Exception as e:                                # noqa: BLE001
+        print("[素材原文] 取失败:", e, flush=True)
+        return str(summary.get("transcript") or "")
+    return "\n".join(str(r.get("transcript") or "") for r in rows)
+
+
+def _poster_fact_status(plan, publish, asr_text):
+    """①/② 与出图同一道闸的本地事实状态（0 模型、不花钱）。
+
+    判据全在 `src/claim_check.py`（同一份登记表、同一套归属/数值/条件规则），
+    这里只把「每条结论的官方依据／只有素材说法／待核／没判」翻译给界面。
+    """
+    fields = []                                           # 异常时保持空，专名层按缺席跳过
+    try:
+        from src import claim_check
+        fields = claim_check.claim_fields(plan or {}, publish or {})
+        st = claim_check.fact_status_fields(fields, asr_text=asr_text or "")
+    except Exception as e:                                # noqa: BLE001
+        st = {"scope": "error", "note": "事实状态没算出来（按没判看，别当已核）：%s" % str(e)[:80],
+              "fields": []}
+    # 凭空专名（①层也要拦，2026-11-02 反例「德莱尼」）：claim_check 只对登记表，
+    # 「素材与官方名单都没有的名字」由 term_check.roster_check 判——与③出图同一份判据。
+    # fact_status_fields 已把字段切成逐断言（每条带 text），按句匹配，不再按字段 zip
+    try:
+        from src import term_check
+        kept = [str(t or "") for _l, t in fields if str(t or "").strip()]
+        ros = term_check.roster_check(" ".join(kept), asr_text or "")
+        sus = [(str(s.get("kind") or "专名"), str(s.get("name") or ""))
+               for s in ros.get("suspect") or []]
+        if sus:
+            for f in st.get("fields") or []:
+                if f.get("state") in ("blocked", "unjudged"):
+                    continue
+                txt = str(f.get("text") or "")
+                if not txt:
+                    continue
+                for kind, nm in sus:
+                    if nm and nm in txt:
+                        f["state"] = "blocked"
+                        f["detail"] = ("素材与官方名单里都没有%s「%s」——这是模型安的名字："
+                                       "删掉，或换成真有的那个%s"
+                                       % (kind, nm, ("；原判定：" + f["detail"]) if f.get("detail") else ""))
+                        break
+    except Exception as e:                                # noqa: BLE001
+        print("[事实状态] 专名核对没并进拆解态（这一项按缺席判）:", e, flush=True)
+    st["generated_at"] = datetime.now().strftime("%H:%M:%S")
+    return st
+
+
+def _fact_status_summary(st):
+    """事实状态压成一句给人看的话（进度条与界面共用同一份口径）。"""
+    if not isinstance(st, dict):
+        return ""
+    scope = st.get("scope")
+    if scope == "in":
+        cnt = {}
+        for f in st.get("fields") or []:
+            cnt[f.get("state")] = cnt.get(f.get("state"), 0) + 1
+        names = {"verified": "有官方依据", "source_only": "只有素材说法",
+                 "pending": "待核", "blocked": "拦截", "unjudged": "没判"}
+        parts = ["%s %d 条" % (names[k], cnt[k]) for k in
+                 ("blocked", "unjudged", "pending", "source_only", "verified") if cnt.get(k)]
+        return "；".join(parts) if parts else ""
+    return str(st.get("note") or "")[:120]
 
 
 def _guide_materials(summary):
@@ -4087,8 +4198,10 @@ def _guide_materials(summary):
 def _guide_frames_for(summary, cfg, progress=None, may_judge=True):
     """这篇稿所有采用素材里"能当攻略证据的干净帧"，合起来给拆解层。
 
-    三条口径：
+    四条口径：
       · 判帧要花钱 → 每条素材最多判 `GUIDE_JUDGE_CAP` 张、整组最多带 `GUIDE_FRAME_TOTAL_CAP` 张；
+      · **判满一屏还是 0 张能用的素材不再自动加判**（B 站那批实测：角落真人小窗/贴纸、
+        B 站水印、花字压正中，判多少张都是扔）——要接着判得人点界面上那颗「先看图确认」；
       · 合并后**全局重编号**（F1…Fn），模型只许点这个编号；每张留着自己是哪条素材的
         （`video_id`/`aweme_id`/`file` 路径里有），画面使用依据与回读校验都还指得回去；
       · 没有帧池（老素材、原片已删）就跳过那一条，不抛错——不能因为一条没图就把整条产线卡住。
@@ -4101,6 +4214,7 @@ def _guide_frames_for(summary, cfg, progress=None, may_judge=True):
     except ImportError:
         import frame_pool
     merged = []
+    skipped_judge = []      # 判满一屏却 0 张能用的素材：这一档不再自动加判，理由要念得出来
     for m in _guide_materials(summary):
         if len(merged) >= GUIDE_FRAME_TOTAL_CAP:
             break
@@ -4110,6 +4224,15 @@ def _guide_frames_for(summary, cfg, progress=None, may_judge=True):
         try:
             meta = frame_pool.load(aid)
             if not meta:
+                continue
+            frames = meta.get("frames") or []
+            judged_n = sum(1 for f in frames if f.get("checked") or f.get("judge_failed"))
+            if not frame_pool.usable(meta) and may_judge and judged_n >= GUIDE_JUDGE_CAP:
+                # 已经判满一屏（8 张）还一张没留下 = 这条素材的画面**系统性**不合格
+                # （B 站那批实测：角落真人小窗/贴纸、B 站水印、花字压在正中，裁一条边救不回来）。
+                # 自动档再判下去只是把同一笔钱花第二遍，所以停手；人要点界面上那颗
+                # 「先看图确认」才继续判剩下的 —— 花钱这件事保留在人的手上。
+                skipped_judge.append((aid, judged_n))
                 continue
             if not meta.get("checked") and may_judge:
                 # 只有拆解那一步允许新判帧（花钱）；出图补图这一路不许顺手花这笔钱
@@ -4126,6 +4249,9 @@ def _guide_frames_for(summary, cfg, progress=None, may_judge=True):
             merged.append(dict(it, video_id=m["video_id"], aweme_id=aid))
     for n, it in enumerate(merged, 1):
         it["i"] = n
+    for aid, jn in skipped_judge:
+        print("[guide] %s 判过 %d 张、0 张能用 → 这一档不再自动加判（同样的钱不花第二遍；"
+              "要接着判请点界面上那颗「先看图确认」）" % (aid, jn), flush=True)
     if merged:
         print("[guide] 这篇稿可用真帧 %d 张，来自素材 %s"
               % (len(merged), sorted({x["video_id"] for x in merged})), flush=True)
@@ -4163,16 +4289,22 @@ def api_poster_plan():
         cfg = _fast_config()
         frames = _guide_frames_for(summary, cfg)
         _poster_status["progress"] = "LLM 拆解海报文案（模型：%s）..." % (cfg.get("model") or "?")
+        asr_text = _material_text(summary)   # ① 拆完就对当前 plan+publish 跑同一道本地闸
         plan, publish, bad, notes = ai_poster.build_text_plan(summary, cfg, theme=theme, title=title,
                                                               style_key=style_key, text_mode=text_mode,
                                                               has_photo=has_photo, page_hint=page_hint,
-                                                              frames=frames)
+                                                              frames=frames,
+                                                              source_text=asr_text)
         # 骨架稿不在这里拦：拆解本身就能判断这份素材有没有料，拦在这里会让人白等一次拆解。
         # 只把风险随结果一起回给前端，出图那一步再决定是否放行。
         warning = "；".join(ai_poster.draft_gate.draft_blockers(summary))
+        # ① 三步事实闸（2026-11-02）：拆文案完成≠事实已核，逐条状态随结果一起回
+        fact_status = _poster_fact_status(plan, publish, asr_text)
+        fact_line = _fact_status_summary(fact_status)
         _poster_status["plan"] = {"plan": plan, "publish": publish, "violations": bad,
                                   "notes": notes, "chars": ai_poster.plan_chars(plan),
                                   "publish_channel": publish_channel, "form": pk_form,
+                                  "fact_status": fact_status,
                                   # 整组都是攻略页时界面不该再摆"去豆包画无字底图"那一块：
                                   # 这一档的画面是素材真帧，传一张底图回来反而把真帧盖掉
                                   "guide_only": ai_poster.guide_only_plan(plan),
@@ -4188,7 +4320,8 @@ def api_poster_plan():
         _poster_status["progress"] = ("✅ 文案已拆解（合计 %d 字 · 模型 %s）"
                                       % (ai_poster.plan_chars(plan), cfg.get("model") or "?")
                                       + ("；自动压缩：" + "、".join(notes) if notes else "")
-                                      + ("，⚠️ " + "；".join(bad) if bad else ""))
+                                      + ("，⚠️ " + "；".join(bad) if bad else "")
+                                      + ("；事实状态：" + (fact_line or "这一版没有机制断言可核")))
 
     if not _poster_start("plan", fn, summary["id"]):
         return jsonify({"error": "已有海报任务正在运行"}), 400
@@ -4258,12 +4391,16 @@ def api_poster_plan_page():
             text_mode=text_mode, has_photo=has_photo, frames=frames)
         prev = _poster_status.get("plan") or {}
         merged = _merge_page_into_group(prev.get("plan"), idx, page)
+        # ① 单页重拆也是一次文案变更：对并回后的整组重跑本地事实闸（0 模型）
+        fact_status = _poster_fact_status(merged or page, prev.get("publish") or {},
+                                          _material_text(summary))
         _poster_status["plan"] = {"page": page, "index": idx, "violations": bad,
                                   "notes": notes, "chars": ai_poster.plan_chars(page),
                                   "model": cfg.get("model") or "",
                                   # 整组那份就地换掉这一页一起留着：只重拆一页不该把"上次拆好的
                                   # 文案"冲成只剩一页，否则关掉弹窗再打开什么都没了（只能重拆花钱）
                                   "plan": merged, "publish": prev.get("publish"),
+                                  "fact_status": fact_status,
                                   # 渠道同理：单页重拆不冲掉上次选的发布渠道（重开弹窗要恢复）
                                   "publish_channel": prev.get("publish_channel") or "toutiao",
                                   "form": prev.get("form") or "",
@@ -4333,13 +4470,7 @@ def api_poster_generate():
         except Exception:
             prov = {}
         # 行动依据闸要比对原转写：多源稿不能只看主素材那一条，把所有来源的转写拼起来
-        asr_text = ""
-        try:
-            ids = [int(x) for x in (json.loads(summary.get("source_video_ids") or "[]") or [])]
-            rows = content_store.get_videos_by_ids(DB_PATH, ids or [summary["video_id"]])
-            asr_text = "\n".join(str(r.get("transcript") or "") for r in rows)
-        except Exception:
-            asr_text = str(summary.get("transcript") or "")
+        asr_text = _material_text(summary)   # 专名核对与提示词名单都吃这一份，别两处各查一遍
         # 出图前那道核对会把"太虚/字幕压中间"的那张拦掉，拦完这一页不能就空着
         # （号主 10-23：② 看版面有图、③ 出来第 3 页没图）。这里把可用帧名单带进出图层，
         # 让它当场换一张再核一遍。**只读已判过的，不新判帧——这一档 0 元。**
@@ -4560,6 +4691,16 @@ def api_poster_review_sign():
     manifest["release_review"] = dict(
         release_review.status(str(fp.parent), chan, h),
         checklist=release_review.checklist_hint(chan))
+    # 人工确认落地（2026-11-02 复验阻塞②）：human_review 与 review.json 同步——
+    # 它签的就是当前这一版哈希；重出包时 ai_poster 会整块重置为未确认。
+    if isinstance(manifest.get("human_review"), dict):
+        st = manifest["release_review"]
+        manifest["human_review"].update({
+            "fact_confirmed": bool(st.get("reviewed") and st.get("hash_matches")),
+            "confirmed_by": st.get("reviewer") or "",
+            "confirmed_at": st.get("at") or "",
+            "package_hash": h,
+        })
     if chan == "xhs" and manifest.get("publishable") is not False:
         pass                                   # 出图时的硬伤仍然算数，这里只补"已放行"这件事
     fp.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -4578,6 +4719,11 @@ def api_poster_preview():
     if not plan or not ai_poster.plan_has_text(plan):
         return jsonify({"error": "还没有可预览的文案，先点「① AI 拆解文案」"}), 400
     ratio = str(data.get("ratio") or "9:16").strip()[:5]
+    # ② 三步事实闸：预览只证明"版面合格"，事实状态单独一条随响应回给界面
+    summary = _poster_get_summary(data.get("summary_id"))
+    fact_status = None
+    if summary:
+        fact_status = _poster_fact_status(plan, data.get("publish") or {}, _material_text(summary))
     # 草稿预览：派生规则只有 normalize() 一份，前端只传表单原值
     if isinstance(data.get("draft"), dict) and data.get("draft"):
         from src import poster_breakdown
@@ -4603,9 +4749,27 @@ def api_poster_preview():
         return jsonify({"url": first["url"], "check": first["check"],
                         "chars": ai_poster.plan_chars(plan),
                         "page_count": len(items), "pages": items,
+                        "fact_status": fact_status,
                         "cost_yuan": 0})
     except Exception as e:
         return jsonify({"error": str(e)[:300]}), 500
+
+
+@app.route("/api/poster/fact_status", methods=["POST"])
+def api_poster_fact_status():
+    """编辑文案后的本地事实重判（② 三步事实闸，2026-11-02）：0 模型、不花钱。
+
+    每次改卡片/标题/配文，前端把当前整组文本发过来，这里用与拆解（①）、
+    预览（②）、出图（③）**同一套判据**（src/claim_check.py）重新逐条判——
+    旧的绿灯由前端先作废，这里的响应才是新的判定。
+    """
+    data = request.get_json(force=True) or {}
+    summary = _poster_get_summary(data.get("summary_id"))
+    plan = data.get("plan") if isinstance(data.get("plan"), dict) else None
+    if not summary or not plan:
+        return jsonify({"error": "缺 summary_id 或 plan，没法重判"}), 400
+    publish = data.get("publish") if isinstance(data.get("publish"), dict) else {}
+    return jsonify(_poster_fact_status(plan, publish, _material_text(summary)))
 
 
 def _prune_previews(out_dir, keep=48):
@@ -5611,68 +5775,477 @@ def api_bilibili_collection():
     return jsonify({"ok": True, "started": True, "bvid": bvid, "limit": limit})
 
 
+BILI_FRAME_MAX_MIN = 20     # 抽关键帧的条长上限：这批新料实测平均 290 秒，20 分钟盖住绝大多数
+
+
+def _bili_transcribe_job(progress, author: str, limit: int, model_size: str,
+                         max_minutes: int, frame_max_min: int, cookie: str,
+                         mode: str = "asr") -> dict:
+    """B 站这一轮真正干的事：`mode="asr"` 走「转写（短片顺带抽帧）」，
+    `mode="frames"` 只给**已有正文**的素材补关键帧。手动那颗与订阅抓完的自动接续共用。
+
+    短素材下整片、转写完接着抽帧（0 元，判帧推迟到出图）；更长的仍然只下音频——
+    一个合集 122 小时，整片下下来盘子先爆，而那种长录像本来也进不了图文。
+    抽帧失败不撤正文：正文已经到手，备注里写明这一条没抽到帧就行。
+    """
+    frames_only = (mode == "frames")
+    had_pool = 0            # 已有帧池被跳过的条数：挑窗口时就数，别等到循环里
+    if frames_only:
+        try:
+            from src import frame_pool as _fp
+        except ImportError:
+            import frame_pool as _fp
+        cap = max(1, int(limit or 20))
+        # 先多捞一屏、再挑没帧池的。只按 limit 取"最新 N 条有正文的"的话，
+        # 新料都在池子里，积压的老料永远排在窗口外面——11-02 早上实测到的就是
+        # 「0/0 条抽出 0 张；20 条已有帧池，没重下」，看着像跑过，其实一条没补。
+        window = content_store.pending_bili_frames(
+            DB_PATH, limit=cap * 6, season_author=author, max_seconds=max_minutes * 60)
+        rows = []
+        for r in window:
+            if len(rows) >= cap:
+                break
+            if (_fp.load(r["aweme_id"]) or {}).get("frames"):
+                had_pool += 1
+                continue
+            rows.append(r)
+        if not rows:
+            return {"ok": True, "done": 0, "frames": 0, "had_pool": had_pool,
+                    "note": "这个号有正文的素材都已有帧池（查了 %d 条），没有要补的"
+                            % len(window)}
+    else:
+        rows = content_store.pending_bili_transcripts(
+            DB_PATH, limit=limit, season_author=author, max_seconds=max_minutes * 60)
+    if not rows:
+        return {"ok": True, "note": "没有可转写的 B 站素材（正文都已有，或都超过 %d 分钟）"
+                % max_minutes}
+    audio_min = sum(int(r.get("duration_sec") or 0) for r in rows) / 60.0
+    # 本机 faster-whisper 实测约 5.5 倍实时（见记忆/README），先给预计时间再开跑，
+    # 别让他自己发现"做不完"
+    progress("%s %d 条、共 %.1f 小时片长，预计约 %.0f 分钟（跳过超 %d 分钟的长录像）…"
+             % ("补帧" if frames_only else "转写", len(rows), audio_min / 60.0,
+                audio_min / 5.5 if not frames_only else audio_min / 20.0, max_minutes))
+    done = 0
+    chars = 0
+    failed = []
+    fr_rows = 0
+    fr_frames = 0
+    no_fr = 0
+    disk_skip = 0
+    work = str(OUTPUT_DIR / "bili_asr_tmp")
+    from src.bilibili_fetcher import (MIN_FREE_GB as _MIN_FREE_GB,
+                                      extract_frames_only, free_gb as _free_gb,
+                                      may_download_video as _may_dl,
+                                      sweep_stale_tmp as _sweep,
+                                      transcribe_bvid as _audio_asr,
+                                      transcribe_with_frames as _chain_asr)
+    # 先扫残片：上一轮作业被 kill 时 `finally` 那句 os.remove 根本没跑，半截 wav/mp4 会一直躺着
+    swept, swept_bytes = _sweep(work)
+    t0 = time.time()
+    for i, r in enumerate(rows, 1):
+        mins = int(time.time() - t0) // 60
+        dur = int(r.get("duration_sec") or 0)
+        want_fr = int(frame_max_min or 0) > 0 and dur <= int(frame_max_min) * 60
+        dl_ok, dl_why = True, ""
+        if want_fr or frames_only:
+            # 每下一条都重新问一次空闲：盘子是此刻的事实，别的程序也在写
+            dl_ok, dl_why = _may_dl(_free_gb(work), dur)
+            if not dl_ok:
+                want_fr = False
+                disk_skip += 1
+        progress("%s %d/%d：%s（%d 分钟长，%s，已用 %d 分 %d 秒）"
+                 % ("补帧" if frames_only else "转写", i, len(rows), r["aweme_id"], dur // 60,
+                    "含抽帧" if want_fr else ("太长只转写" if not frames_only else "只抽帧"),
+                    mins, int(time.time() - t0) % 60))
+        text = note_err = ""
+        frames = 0
+        try:
+            if frames_only:
+                if not dl_ok:
+                    failed.append("%s: 盘子不够没下整片（%s）" % (r["aweme_id"], dl_why))
+                    continue
+                try:
+                    from src import frame_pool as _fp
+                except ImportError:
+                    import frame_pool as _fp
+                if (_fp.load(r["aweme_id"]) or {}).get("frames"):
+                    had_pool += 1        # 已经有池就不重下一遍（下整片是带宽与盘子的事）
+                    continue
+                frames, note_err = extract_frames_only(r["aweme_id"], cookie=cookie,
+                                                       workdir=work)
+            elif want_fr:
+                text, note_err, frames = _chain_asr(r["aweme_id"], cookie=cookie,
+                                                    model_size=model_size, workdir=work)
+            else:
+                text, note_err = _audio_asr(r["aweme_id"], cookie=cookie,
+                                            model_size=model_size, workdir=work)
+                if want_fr is False and dl_ok and not frames_only:
+                    no_fr += 1           # 纯粹因为太长才不抽帧的，跟"盘子不够"分开报
+        except Exception as e:
+            note_err = "作业异常：%s" % str(e)[:80]
+        if text:
+            with _db_lock:
+                ok = content_store.set_video_transcript(DB_PATH, r["id"], text)
+            if ok:
+                done += 1
+                chars += len(text)
+        if frames:
+            fr_rows += 1
+            fr_frames += frames
+        if note_err:
+            # 抽帧失败但正文落库的那种，不能算成"这条没做出来"
+            failed.append("%s: %s%s" % (r["aweme_id"], note_err[:60],
+                                         "（正文已落库）" if text else ""))
+        elif want_fr and not frames and not frames_only:
+            failed.append("%s: 转写完成但一帧都没抽出" % r["aweme_id"])
+    spent = int(time.time() - t0)
+    if frames_only:
+        note = ("补关键帧：%d/%d 条抽出 %d 张（0 元，判帧等到出图那次再花；这一档不重跑转写，"
+                "所以帧上没带时间戳的锚）" % (fr_rows, len(rows), fr_frames))
+        if had_pool:
+            note += "；%d 条已有帧池，没重下" % had_pool
+    else:
+        note = ("补转写完成：%d/%d 条有正文（平均 %d 字），用时 %d 分 %d 秒"
+                % (done, len(rows), (chars // done) if done else 0, spent // 60, spent % 60))
+        if fr_rows or no_fr:
+            note += "；关键帧 %d 条 / %d 张（0 元，判帧等到出图那次再花）" % (fr_rows, fr_frames)
+            if no_fr:
+                note += "，另有 %d 条超 %d 分钟只转写没抽帧" % (no_fr, frame_max_min)
+    if disk_skip:
+        note += "；%d 条因为空闲不够没下整片（底线 %.0fGB）" % (disk_skip, _MIN_FREE_GB)
+    if swept:
+        note += "；顺手清掉上轮被 kill 留下的残片 %d 个 / %.0fMB" % (swept, swept_bytes / 1e6)
+    if failed:
+        note += "；问题 %d 条（%s）" % (len(failed), "；".join(failed[:3]))
+    return {"ok": True, "note": note, "done": done, "failed": failed,
+            "frame_rows": fr_rows, "frames": fr_frames, "had_pool": had_pool,
+            "disk_skip": disk_skip, "swept": swept,
+            "audio_hours": round(audio_min / 60.0, 2), "seconds": spent}
+
+
+# ── B 站自动链：窗口、上限、落盘队列（号主 11-02 拍：吃 CPU 的都排后半夜）──────
+BILI_CHAIN_WINDOW = ("01:50", "07:00")   # 只有这段时间允许起自动转写/抽帧作业
+BILI_CHAIN_DAILY_CAP = 100              # 一晚最多转这么多条：实测 2.5 分钟/条，100 条约 4.2 小时，
+                                        # 仍在 5 小时 10 分的窗口里（60 条是当初保守拍的，
+                                        # 结果是当天没新料的那晚也啃不动积压）
+BILI_FRESH_RESERVE = 40                 # 积压补啃必须给"当天新料"留的额度（两个号各 20 是实测 inflow）
+BILI_DRAIN_FROM = "05:30"               # 积压只啃窗口尾段：01:50 就开啃会把 02:00 那轮新料挤到明天
+BILI_MIN_PER_CLIP = 3                   # 每条占多少分钟机器时间（实测 2.5，往上取整留余量）
+BILI_ASR_MAX_MIN = 45                   # 超过这个条长的直播录像不自动下，额度不许记在空账上
+BILI_CHAIN_STATE = ROOT / "config" / "bili_chain_state.json"
+
+
+def _bili_in_window(now=None) -> bool:
+    """现在该不该跑自动链（窗口 01:50–07:00，不跨零点）。
+
+    为什么还要这一档：AC 电源下系统是"空闲 1 分钟就休眠"，整夜不睡现在只是
+    UU 远程那条 PreventUserIdleSystemSleep 顶着的（11-02 实测连顶 19 小时 59 分）。
+    机器会不会醒我们控制不了，但"跑到一半撞上他白天用机器"这条能控制。
+    """
+    now = plan_series.cn_now(now)
+    lo, hi = BILI_CHAIN_WINDOW
+    return lo <= now.strftime("%H:%M") < hi
+
+
+def _bili_chain_read() -> dict:
+    """状态文件原样读出来（坏文件当空）。队列和"今晚起过没起过"都存在这一份里。"""
+    try:
+        with open(BILI_CHAIN_STATE, encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {"queue": data}
+    except Exception:
+        return {}
+
+
+def _bili_chain_write(data: dict) -> None:
+    try:
+        data["updated_at"] = plan_series.cn_now().strftime("%Y-%m-%d %H:%M:%S")
+        with open(BILI_CHAIN_STATE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+    except Exception as e:
+        # 落不了盘也要继续跑（只是重启会丢排队），省盘子的事不该卡住采集
+        print("[B 站自动链] 状态没落盘（%s）：重启会丢排队" % str(e)[:60], flush=True)
+
+
+def _bili_chain_load() -> list:
+    """读待转写队列 [[作者, 条数], …]（只装"这一轮抓到新料"的号）。"""
+    q = _bili_chain_read().get("queue")
+    out = []
+    for item in (q or []):
+        if isinstance(item, (list, tuple)) and len(item) == 2:
+            a, n = str(item[0] or "").strip(), int(item[1] or 0)
+            if a and n > 0:
+                out.append((a, n))
+    return out
+
+
+def _bili_chain_save(queue) -> None:
+    data = _bili_chain_read()
+    data["queue"] = [[a, int(n)] for a, n in queue]
+    _bili_chain_write(data)
+
+
+def _bili_chain_night(now=None) -> str:
+    return plan_series.cn_now(now).strftime("%Y-%m-%d")
+
+
+def _bili_chain_spent(now=None) -> int:
+    """今晚已经派下去多少条（跨作业累计，隔天自动归零）。"""
+    data = _bili_chain_read()
+    if data.get("night") != _bili_chain_night(now):
+        return 0
+    return int(data.get("spent") or 0)
+
+
+def _bili_chain_budget(now=None) -> int:
+    return max(0, BILI_CHAIN_DAILY_CAP - _bili_chain_spent(now))
+
+
+def _bili_chain_spend(n, now=None) -> None:
+    data = _bili_chain_read()
+    night = _bili_chain_night(now)
+    base = int(data.get("spent") or 0) if data.get("night") == night else 0
+    data["night"] = night
+    data["spent"] = base + max(0, int(n or 0))
+    _bili_chain_write(data)
+
+
+def _bili_chain_drained_today(now=None) -> bool:
+    return _bili_chain_read().get("drain_on") == _bili_chain_night(now)
+
+
+def _bili_chain_mark_drained(now=None) -> None:
+    """记下"今晚已经啃过一轮积压"。
+
+    有了积压补啃，窗口尾段每分钟都能凑出"还有号没转完"的理由；不记这一档，
+    一晚上限就成了摆设——啃完一轮再起一轮，最后就是跑到天亮跟他抢机器。
+    """
+    data = _bili_chain_read()
+    data["drain_on"] = _bili_chain_night(now)
+    _bili_chain_write(data)
+
+
+def _bili_chain_drain_budget(now=None) -> int:
+    """积压那一档能用多少条：既不能吃掉新料的预备量，也不能吃不掉窗口关闭前的时间。
+
+    两个上界取小的：
+      · `今晚剩余额度 - BILI_FRESH_RESERVE`：02:00 那轮新料万一来晚了，也得有额度接它——
+        号主点名过的正是"新料整天没转写"，积压再急也不能把它挤掉；
+      · `(窗口关闭 - 现在) / 每条实测分钟`：05:30 起一单啃 60 条要跑到 08:00 之后，
+        那就是白天跟他抢机器，"后半夜"这条线是号主拍的，不许越。
+    """
+    now = plan_series.cn_now(now)
+    rows_left = _bili_chain_budget(now) - BILI_FRESH_RESERVE
+    hh, mm = [int(x) for x in BILI_CHAIN_WINDOW[1].split(":")]
+    end = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+    mins_left = int((end - now).total_seconds() // 60)
+    return max(0, min(rows_left, mins_left // BILI_MIN_PER_CLIP))
+
+
+def _bili_chain_backlog():
+    """库里还有正文空着的 B 站素材吗 → (按最新积压排的 [(号, 条数)], {号: 条数})。
+
+    条数只算**这一档真转得动**的（≤ `BILI_ASR_MAX_MIN` 分钟）：长录像根本不下，
+    按它排队等于把额度记在空账上。
+    """
+    rows = content_store.bili_pending_authors(DB_PATH, max_seconds=BILI_ASR_MAX_MIN * 60)
+    order = [((r.get("author") or "").strip(), int(r.get("n") or 0)) for r in rows]
+    order = [(a, n) for a, n in order if a and n > 0]
+    return order, {a: n for a, n in order}
+
+
+def _bili_chain_limits(queue, drain=(), pending=None, budget=None):
+    """一晚的额度怎么分：新料先给够，剩下的额度按"谁的积压最年轻"分给别的号。
+
+    改这条是因为实测到的空转：老写法把额度在队列里平摊（`CAP // len(queue)` 再取较大值），
+    于是**队列里有几个号就把额度吃干净**，当天没更新的号永远排不到——11-02 实测
+    好赛雷切片 324 条积压整晚没动过一次，而同晚的额度还剩一大截。
+    新写法按真实待转写条数给：先按本轮新增数保新料（排产表当天进位靠这个），
+    再把剩下的额度按积压排序分出去；`budget` 是"这一轮能派多少条"，一晚上限的账在
+    `_bili_chain_budget` 那边记，别在这里数第二遍。
+    `pending` 缺某号时退回队列里的条数，别让"数没数出来"变成"这条链不跑"。
+    """
+    pending = pending or {}
+    budget = BILI_CHAIN_DAILY_CAP if budget is None else int(budget)
+    limits = {}
+    for a, n in queue:
+        take = min(max(1, int(n or 0)), max(0, budget))
+        if take > 0:
+            limits[a] = limits.get(a, 0) + take
+            budget -= take
+    for a, _n in list(queue) + list(drain):
+        if budget <= 0:
+            break
+        need = int(pending.get(a) or 0) - limits.get(a, 0)
+        if need <= 0:
+            continue
+        take = min(need, budget)
+        limits[a] = limits.get(a, 0) + take
+        budget -= take
+    return limits
+
+
+def _bili_chain_queue(author: str, n_new: int) -> str:
+    """订阅抓到新料先记账（落盘），收尾或夜里窗口内再起作业。
+
+    11-02 早上实测到的卡点：一个号一个作业，而 B 站任务槽同时只容一个——
+    Tony兔兔鸡 07:31 起作业跑到 08:17，漫步魔兽 07:40 来起作业时撞槽，
+    回执老实写着"本地转写没接上…排在下一轮"，于是**那个号整天的素材都没转写**。
+    排队而不是并行：机器就 8 核，两个 whisper 同时跑只会一起变慢。
+    同一个号再来一轮只取较大值：转写档挑的是"还空着的行"，条数是上限不是增量，
+    叠加成 40、60 只会让一晚的额度被同一个号吃掉。
+    """
+    if int(n_new or 0) <= 0:
+        return ""
+    queue = _bili_chain_load()
+    for i, (a, n) in enumerate(queue):
+        if a == author:
+            queue[i] = (a, max(int(n), int(n_new)))
+            break
+    else:
+        queue.append((author, int(n_new)))
+    _bili_chain_save(queue)
+    return "已排进 B 站自动链队列（%d 条，窗口 %s–%s）" % (
+        n_new, BILI_CHAIN_WINDOW[0], BILI_CHAIN_WINDOW[1])
+
+
+def _bili_chain_run(progress, plan):
+    """一个作业按号排队跑完：每个号先转写（短片顺带抽帧），再补一轮"有正文没帧"的老料。"""
+    from src.bilibili_fetcher import load_cookie
+    try:
+        ck, _where = load_cookie()
+    except Exception:
+        ck = ""
+    parts = []
+    tot_done = 0
+    tot_frames = 0
+    for author, lim in plan:
+        a = _bili_transcribe_job(progress, author, int(lim), ASR_MODEL_DEFAULT,
+                                 BILI_ASR_MAX_MIN, BILI_FRAME_MAX_MIN, ck, mode="asr")
+        b = _bili_transcribe_job(progress, author, int(lim), ASR_MODEL_DEFAULT,
+                                 BILI_ASR_MAX_MIN, BILI_FRAME_MAX_MIN, ck, mode="frames")
+        tot_done += a.get("done") or 0
+        tot_frames += (a.get("frames") or 0) + (b.get("frames") or 0)
+        parts.append("【%s】%s｜%s" % (author, a.get("note") or "", b.get("note") or ""))
+    return {"ok": True, "note": " ‖ ".join(parts), "done": tot_done,
+            "frames": tot_frames, "accounts": len(plan)}
+
+
+def _bili_chain_flush(now=None, budget=None, at="") -> str:
+    """起作业的唯一出口：同步收尾、工作台启动续跑、窗口尾段那一眼都走这里。
+
+    不并进同步那一轮里跑的原因：订阅同步与微信/暴雪共用同一把 running 锁，
+    B 站这批实测 45 分钟，串在里面会把后面那几档一起拖过点。
+    几种"没跑"都要说出口并**保留队列**：不在窗口、今晚额度用完、槽被占、抢不到槽——
+    只有真起成功了才清账，否则排队的号就地蒸发（11-02 那天就是这么丢的）。
+    队列空的也要能起：当天没新料的号，积压靠 `_bili_chain_backlog()` 补进来。
+    `budget` 是这一轮能派下去的条数（默认今晚剩余额度；积压那一档由调用方收紧）。
+    """
+    queue = _bili_chain_load()
+    backlog, pending = _bili_chain_backlog()
+    in_q = set(a for a, _n in queue)
+    drain = [(a, n) for a, n in backlog if a not in in_q]
+    if not queue and not drain:
+        return ""
+    left = _bili_chain_budget(now) if budget is None else int(budget)
+    limits = _bili_chain_limits(queue, drain, pending, left)
+    total = sum(limits.values())
+    who_plan = "，".join(x for x in (
+        "、".join("%s %d 条（新）" % (a, limits[a])
+                  for a, _n in queue if limits.get(a)),
+        "、".join("%s %d 条（积压）" % (a, limits[a])
+                  for a, _n in drain if limits.get(a))) if x)
+    # 没起成的那几种要说得出**排着的是谁**，所以按原始排队数报，不能报分摊后的 0 条
+    who_all = "、".join(["%s %d 条（新）" % (a, n) for a, n in queue]
+                        + ["%s %d 条（积压）" % (a, n) for a, n in drain])
+    starved = [a for a, _n in drain if not limits.get(a)]
+    clock = plan_series.cn_now(now).strftime("%H:%M")
+    if not _bili_in_window(now):
+        return ("[B 站自动链] 攒下 %s，现在 %s 不在窗口 %s–%s 内，留在队列里等夜里一起转%s"
+                % (who_all, clock, BILI_CHAIN_WINDOW[0], BILI_CHAIN_WINDOW[1],
+                   "；%s 排不到额度" % "、".join(starved) if starved else ""))
+    if total <= 0:
+        return ("[B 站自动链] 今晚的额度用完（上限 %d 条、已派 %d 条），本轮 %s 留在队列里等明晚；"
+                "新料的预备量 %d 条不许让积压动"
+                % (BILI_CHAIN_DAILY_CAP, _bili_chain_spent(now), who_all,
+                   BILI_FRESH_RESERVE))
+    if _bili_job.get("running"):
+        return ("[B 站自动链] 本轮没起来（作业槽被占：%s）——本轮 %d 条留在队列里，"
+                "窗口内下一轮再跑，也可以在「数据与同步」里手动补"
+                % (_bili_job.get("kind") or "?", total))
+    plan = [(a, limits[a]) for a in [x for x, _y in queue] + [x for x, _y in drain]
+            if limits.get(a)]
+    if not _bili_job_start("asr-auto", lambda p: _bili_chain_run(p, plan)):
+        return "[B 站自动链] 任务槽抢不到，%d 条留在队列里" % total
+    _bili_chain_save([])
+    _bili_chain_spend(total, now)
+    if any(limits.get(a) for a, _n in drain):
+        _bili_chain_mark_drained(now)
+    return ("[B 站自动链] %s已起作业：%s（本轮 %d 条，今晚额度剩 %d 条 / 上限 %d 条，"
+            "窗口 %s–%s，超 %d 分钟的只转写、抽帧 0 元）%s"
+            % (at, who_plan or "积压素材", total, _bili_chain_budget(now), BILI_CHAIN_DAILY_CAP,
+               BILI_CHAIN_WINDOW[0], BILI_CHAIN_WINDOW[1], BILI_ASR_MAX_MIN,
+               "；积压排不到的号 %s（额度被新料占满）" % "、".join(starved) if starved else ""))
+
+
+def _bili_chain_tick(now=None) -> str:
+    """窗口尾段那一眼：当天没新料的号也要有人啃，但绝不在白天、绝不挤掉新料。
+
+    旧的唯一触发点是"订阅同步那一轮收尾"，而它要求当天真的抓到新料：同步睡过点、
+    工作台早上才起来，或者某个号这周一条没发（11-02 实测 好赛雷切片 324 条就是这么搁着的），
+    当晚就一次都不跑。积压本来就在库里，起不起作业不该取决于今天有没有新料。
+    四条收口：只在窗口内、只在 `BILI_DRAIN_FROM`（05:30）之后、一晚只啃一轮，
+    且额度必须给新料留下 `BILI_FRESH_RESERVE`，还要跑得过窗口关闭前的时间。
+    """
+    if _bili_chain_drained_today(now):
+        return ""
+    if not _bili_in_window(now) or _bili_job.get("running"):
+        return ""
+    cn = plan_series.cn_now(now)
+    if cn.strftime("%H:%M") < BILI_DRAIN_FROM:
+        return ""
+    budget = _bili_chain_drain_budget(cn)
+    if budget <= 0:
+        return ""
+    note = _bili_chain_flush(cn, budget=budget, at="积压补啃（%s 起）：" % BILI_DRAIN_FROM)
+    if not note:
+        # 库里真的一条积压都没有：也记上今晚的账，免得后面每分钟都去查一遍库。
+        # 记了不影响同步那条路——那条直接调 `_bili_chain_flush`，不看这一档。
+        _bili_chain_mark_drained(cn)
+    return note
+
+
 @app.route("/api/bilibili/asr", methods=["POST"])
 def api_bilibili_asr():
-    """给正文还空着的 B 站素材补 ASR。body: {limit?, author?, model?}
+    """给正文还空着的 B 站素材补 ASR（顺带抽关键帧）。body: {limit?, author?, model?, max_minutes?, frames_max_minutes?, mode?}
 
-    只下音频不下整片（一个合集 122.7 小时，整片几十 GB 没意义）。这一步很慢且吃 CPU，
-    所以限量、给进度、且同一时刻只跑一个任务。
+    这一步很慢且吃 CPU，所以限量、给进度、且同一时刻只跑一个任务。
+    短素材下整片→转写→抽帧→删片；长录像仍然只下音频（一个合集 122.7 小时，整片几十 GB 没意义）。
+    `mode="frames"` 是另一档：只给**已有正文**的素材补关键帧，不重跑转写。
     """
-    from src.bilibili_fetcher import transcribe_bvid, load_cookie
     data = request.get_json(force=True, silent=True) or {}
     limit = max(1, int(data.get("limit") or 20))
     author = (data.get("author") or "").strip()
     model_size = (data.get("model") or "base").strip()
+    mode = (data.get("mode") or "asr").strip()
     # 条长上限：这个合集里最长的一条是 4 小时 20 分的直播录像，不截一刀的话"补 20 条"
     # 里随便一条就能吃掉一小时机器时间，而号主看到的只是"卡在进度上没动"
     max_minutes = int(data.get("max_minutes") or 45)
+    frame_max = int(data.get("frames_max_minutes")
+                    if data.get("frames_max_minutes") is not None else BILI_FRAME_MAX_MIN)
     try:
         cookie, _where = load_cookie()
     except Exception:
         cookie = ""
 
     def _job(progress):
-        rows = content_store.pending_bili_transcripts(
-            DB_PATH, limit=limit, season_author=author, max_seconds=max_minutes * 60)
-        if not rows:
-            return {"ok": True, "note": "没有可转写的 B 站素材（正文都已有，或都超过 %d 分钟）"
-                    % max_minutes}
-        audio_min = sum(int(r.get("duration_sec") or 0) for r in rows) / 60.0
-        # 本机 faster-whisper base 实测约 5.5 倍实时（见记忆/README），先给预计时间再开跑，
-        # 别让他自己发现"做不完"
-        progress("本轮 %d 条、共 %.1f 小时音频，预计约 %.0f 分钟（跳过超 %d 分钟的长录像）…"
-                 % (len(rows), audio_min / 60.0, audio_min / 5.5, max_minutes))
-        done = 0
-        chars = 0
-        failed = []
-        work = str(OUTPUT_DIR / "bili_asr_tmp")
-        t0 = time.time()
-        for i, r in enumerate(rows, 1):
-            mins = int(time.time() - t0) // 60
-            progress("转写 %d/%d：%s（%d 分钟长，已用 %d 分 %d 秒）"
-                     % (i, len(rows), r["aweme_id"], int(r.get("duration_sec") or 0) // 60,
-                        mins, int(time.time() - t0) % 60))
-            text, err = transcribe_bvid(r["aweme_id"], cookie=cookie,
-                                        model_size=model_size, workdir=work)
-            if err:
-                failed.append("%s: %s" % (r["aweme_id"], err[:60]))
-                continue
-            with _db_lock:
-                ok = content_store.set_video_transcript(DB_PATH, r["id"], text)
-            if ok:
-                done += 1
-                chars += len(text)
-        spent = int(time.time() - t0)
-        note = ("补转写完成：%d/%d 条有正文（平均 %d 字），用时 %d 分 %d 秒"
-                % (done, len(rows), (chars // done) if done else 0, spent // 60, spent % 60))
-        if failed:
-            note += "；失败 %d 条（%s）" % (len(failed), "；".join(failed[:3]))
-        return {"ok": True, "note": note, "done": done, "failed": failed,
-                "audio_hours": round(audio_min / 60.0, 2), "seconds": spent}
+        return _bili_transcribe_job(progress, author, limit, model_size,
+                                    max_minutes, frame_max, cookie, mode=mode)
 
-    if not _bili_job_start("asr", _job):
+    if not _bili_job_start("asr" if mode != "frames" else "frames", _job):
         return jsonify({"ok": False, "error": "已有一个 B 站采集任务在跑，等它结束再点"}), 409
-    return jsonify({"ok": True, "started": True, "limit": limit, "model": model_size})
+    return jsonify({"ok": True, "started": True, "limit": limit, "model": model_size,
+                    "mode": mode, "frames_max_minutes": frame_max})
 
 
 @app.route("/api/bilibili/job")
@@ -6149,6 +6722,8 @@ def _do_subscription_sync(sub_id=None, sub_ids=None, cookie=None):
     import time
     _sub_status.update(running=True, done=False, error="", progress="准备同步...",
                        result=None, new_items=[])
+    # 队列不落在这轮内存里：它写在 config/bili_chain_state.json，
+    # 傍晚补抓攒下的号要活到下一夜 02:20 才被转写，重启也不能丢（11-02 丢过一次）
     try:
         with _db_lock:
             subs = content_store.list_subscriptions(DB_PATH)
@@ -6277,18 +6852,23 @@ def _do_subscription_sync(sub_id=None, sub_ids=None, cookie=None):
                                 category=sub.get("category") or "",
                                 game=sub.get("game") or "")
                         new_rows += [(i.get("source_sheet"), i.get("source_row")) for i in inserted]
+                        shown_author = name
+                        if not sub.get("author"):
+                            # 添加订阅时昵称没取到（card 接口会被风控），这轮从稿件 owner 补上，
+                            # 免得列表长期显示"UP 123456"、按作者筛选也永远命不中
+                            shown_author = res.get("author") or name
+                        # 抓完就自动接上本地转写 + 抽关键帧（号主 11-01：这应该是一系列操作，
+                        # 不是分开的两步）。放在回执之前，是因为这句必须出现在他看得见的那一行里，
+                        # 不能只留在后台日志。
+                        auto_note = _bili_chain_queue(shown_author, len(inserted))
                         # 字幕情况直接写进同步备注：用户看一行就知道这批素材能不能直接用
                         n_sub = sum(1 for v in inserted if v.get("subs_status") in ("字幕", "AI字幕"))
                         n_none = len(inserted) - n_sub
                         cat_note = (f"，已按订阅标记分类「{sub['category']}」"
                                     if sub.get("category") and inserted else "")
                         note = (f"新增 {len(inserted)} 条（有字幕 {n_sub} / 无正文 {n_none}）"
-                                f"{cat_note}{extra}")
-                        shown_author = name
-                        if not sub.get("author"):
-                            # 添加订阅时昵称没取到（card 接口会被风控），这轮从稿件 owner 补上，
-                            # 免得列表长期显示"UP 123456"、按作者筛选也永远命不中
-                            shown_author = res.get("author") or name
+                                f"{cat_note}{extra}"
+                                + (("；" + auto_note) if auto_note else ""))
                         with _db_lock:
                             content_store.update_subscription_sync(
                                 DB_PATH, sub["id"], len(inserted), note, author=shown_author)
@@ -6429,7 +7009,11 @@ def _do_subscription_sync(sub_id=None, sub_ids=None, cookie=None):
                                 f"[抖音 {si}/{len(douyin_subs)}] {name}: 处理 {i+1}/{len(videos)} "
                                 f"{v.get('aweme_id','')}..."
                             )
-                            ok = collector.process_row(ws, row, cookie, "base", ai_config, parser)
+                            # 档位跟手动采集同一份（以前这里写死 base，见 ASR_MODEL_DEFAULT 注释）
+                            # expect_sec_uid：订阅只收这个号自己的作品，别人的一条不转写（11-01 推荐位混入）
+                            ok = collector.process_row(ws, row, cookie, ASR_MODEL_DEFAULT,
+                                                       ai_config, parser,
+                                                       expect_sec_uid=sub["sec_uid"])
                             if not new_author:
                                 new_author = str(ws.cell(row, 4).value or "").strip()
                             wb.save(str(EXCEL_PATH))
@@ -6531,6 +7115,10 @@ def _do_subscription_sync(sub_id=None, sub_ids=None, cookie=None):
         elif new_rows and _cls.get("skipped") == "ai_not_configured":
             summary.append(f"本轮新增 {len(new_rows)} 条未打标（AI 未配置）")
 
+        # B 站自动链收尾：本轮攒下的号一次起成一个作业（一个号一个作业会撞槽，见 _bili_chain_queue）
+        _chain_note = _bili_chain_flush()
+        if _chain_note:
+            summary.append(_chain_note)
         _sub_status["result"] = summary
         _sub_status["progress"] = "✅ 订阅同步完成：" + "；".join(summary)
     except Exception as e:
@@ -6599,6 +7187,45 @@ def _run_sync_batch(sub_ids, task_keys, who="自动同步"):
     threading.Thread(target=wrap, daemon=True).start()
 
 
+NGA_DEFAULT_RUN_AT = "10:40"     # launchd 那侧 08:40/20:40 抓，10:40 这一轮吃得到当天那份
+
+
+def _nga_task():
+    """找到（没有就建）「NGA 快照导入」这条源类任务。
+
+    采集**不在本仓库**：wow-forever 的 launchd 每天 08:40/20:40 抓板块落 `~/.nga/data/`，
+    这边只把它的快照读进素材库（`src/nga_import.py`）。快照目录是空的就不建任务——
+    建一条天天红的比不建更糟，界面会一直显示这个源在失败。
+    """
+    from src import nga_import
+    cfg = sync_tasks.load()
+    for t in cfg.get("tasks") or []:
+        if str(t.get("kind") or "") == "source" and t.get("source") == "nga_import":
+            return t
+    if not nga_import.board_files(nga_import.DATA_DIR_DEFAULT):
+        return None
+    t = sync_tasks.new_source_task(cfg, "nga_import", interval_days=1,
+                                   run_at=NGA_DEFAULT_RUN_AT)
+    if t:
+        sync_tasks.save(cfg)
+        print("[nga] 已建源类定时任务 %s（每天 %s，只读本地快照不联网）"
+              % (t["key"], t["run_at"]), flush=True)
+    return t
+
+
+def _nga_do_import():
+    """跑一轮导入。返回 (ok, 给人看的一句话)。"""
+    from src import nga_import
+    res = nga_import.sync(DB_PATH, quiet=True)
+    if res.get("error"):
+        return False, "NGA 导入失败：%s" % res["error"]
+    if res.get("skipped"):
+        return True, res["skipped"]
+    return True, ("读 %s→%s 快照｜摊平 %s 条、库里已有 %s｜新增入库 %s 条（无正文 %s）"
+                  % (res.get("from"), res.get("to"), res.get("found"),
+                     res.get("alreadyInDb"), res.get("new"), res.get("noBody")))
+
+
 def _run_source_task(task: dict):
     """跑一条源类任务（暴雪官方公告这种"没有订阅记录"的源）。
 
@@ -6622,8 +7249,20 @@ def _run_source_task(task: dict):
         _autosync_state["note"] = "自动任务：暴雪官方公告开始抓"
         print("[自动任务] 暴雪官方公告 开始抓（key=%s）" % key, flush=True)
         return
-    # 认不出的源必须记失败，不许静默跳过：源类清单里有 nga_import，但执行体还没人写。
-    # 静默跳过的表现是"任务显示跑过了、数据却一直是旧的"，比报错难查十倍。
+    if src == "nga_import":
+        # 只读本地快照目录（采集在 wow-forever 的 launchd 里），不联网、不起浏览器，
+        # 所以直接在定时器线程里跑完再记账——套暴雪那套后台线程只会多一处状态要维护。
+        try:
+            ok, note = _nga_do_import()
+        except Exception as e:
+            ok, note = False, "NGA 导入异常：%s" % str(e)[:160]
+        sync_tasks.finish_batch([key], ok, ("自动导入：" if ok else "") + note,
+                                now=datetime.now())
+        _autosync_state["note"] = "自动任务：NGA 快照导入%s" % ("完成" if ok else "失败")
+        print("[自动任务] NGA 快照导入（key=%s）%s ｜ %s" % (key, ok, note), flush=True)
+        return
+    # 认不出的源必须记失败，不许静默跳过：静默跳过的表现是"任务显示跑过了、
+    # 数据却一直是旧的"，比报错难查十倍。
     sync_tasks.finish_batch([key], False, "工作台还不认识这个源：%s（没写执行体）" % src,
                             now=datetime.now())
     print("[自动任务] 没有执行体，已记失败: %s" % src, flush=True)
@@ -6678,6 +7317,12 @@ def _autosync_loop():
         except Exception as e:
             # 这一层绝不能抛出去：线程死了自动同步就静默停摆，表现和"没配"一模一样
             print("[自动同步] 本轮检查异常（下一轮继续）: %s" % e, flush=True)
+        try:
+            note = _bili_chain_tick()
+            if note:
+                print(note, flush=True)
+        except Exception as e:
+            print("[B 站自动链] 这一眼没看成（下一轮继续）: %s" % e, flush=True)
 
 
 def _start_autosync():
@@ -6708,15 +7353,23 @@ def _planmatch_tick(now=None):
         _planmatch_state["note"] = "到期判断失败（下一轮继续）：%s" % str(e)[:120]
         return
     if not due.get("due"):
-        return
+        # 定时那轮没到点/已经跑过，不代表表就该停在旧素材上：`run_at` 之后入的料
+        # （B 站自动链跑到窗口关闭、NGA 09:05、傍晚补抓 18:30）当天进不了表，
+        # 要等第二天那一轮，看着就是"表好几天不动"。判据与节流在 `plan_series.fresh_run`。
+        fr = plan_series.fresh_run(DB_PATH, now)
+        if not fr.get("due"):
+            return
+        kind, why, catchup = "fresh", fr.get("why"), []
+    else:
+        kind, why, catchup = "night", due.get("why"), due.get("catchup")
     _planmatch_state["running"] = True
-    _planmatch_state["note"] = "开始匹配：%s" % due.get("why")
-    print("[夜间匹配] %s" % due.get("why"), flush=True)
+    _planmatch_state["note"] = "开始匹配：%s" % why
+    print("[夜间匹配] %s" % why, flush=True)
 
     def wrap():
         try:
-            st = plan_series.run_match(DB_PATH, now=now, kind="night",
-                                       actor="定时器%s" % ("（补跑）" if due.get("catchup") else ""))
+            st = plan_series.run_match(DB_PATH, now=now, kind=kind,
+                                       actor="定时器%s" % ("（补跑）" if catchup else ""))
             _planmatch_state["note"] = "匹配结束：新增 %s 条候选、重复命中 %s 条、跳过 %s 格" % (
                 st.get("added"), st.get("seen"), st.get("skipped_n"))
             print("[夜间匹配] %s" % _planmatch_state["note"], flush=True)
@@ -6740,7 +7393,10 @@ def _planmatch_loop():
             print("[夜间匹配] 中断核对：%d 轮 running 标为 failed" % n, flush=True)
     except Exception as e:
         print("[夜间匹配] 中断核对失败（不影响本轮）：%s" % e, flush=True)
-    print("[夜间匹配] 定时器已启动（每 60 秒检查一次，默认 22:00 北京时间）", flush=True)
+    # 时刻从配置读，别把"22:00"抄进文案：11-02 挪到 06:30 之后文案还在说 22:00，
+    # 下一个人照这句去查账会以为匹配根本没挪（会变的数不抄进不变的地方，这条已经犯过五次）
+    print("[夜间匹配] 定时器已启动（每 60 秒检查一次，计划时刻 %s 北京时间）"
+          % plan_series.load_cfg().get("run_at"), flush=True)
     while True:
         time.sleep(60)
         try:
@@ -7183,11 +7839,32 @@ if __name__ == "__main__":
                   % (_bt["key"], _bt.get("interval_days"), _bt.get("run_at")), flush=True)
     except Exception as _e:
         print(f"   [启动] 暴雪公告任务建不出来（手动抓仍可用）：{_e}")
+    # NGA 板块快照导入：同样是"任务不存在就等于这条源没人管"。10-27 那次是手工导的
+    # （库里 1105 条），之后三天 375 条新帖一直躺在 ~/.nga/data 没进来。
+    try:
+        _nt = _nga_task()
+        if _nt:
+            print("   [启动] NGA 快照导入定时：%s｜每 %s 天 %s"
+                  % (_nt["key"], _nt.get("interval_days"), _nt.get("run_at")), flush=True)
+        else:
+            print("   [启动] NGA 快照导入：~/.nga/data 里没有快照文件，不建定时任务"
+                  "（采集那侧没跑，建了只会天天红）", flush=True)
+    except Exception as _e:
+        print(f"   [启动] NGA 导入任务建不出来（手动跑 CLI 仍可用）：{_e}")
     # 自动同步定时器：放在这里而不是模块级，是为了 import app（e2e 脚本）时不会多出一条线程
     try:
         _start_autosync()
     except Exception as _e:
         print(f"   [启动] 自动同步定时器启动失败（手动同步不受影响）：{_e}")
+    # B 站自动链续跑：队列落在 config/bili_chain_state.json 里，重启不该把排队的号蒸发掉。
+    # 11-02 那天我为了改代码重启过一次工作台，正好压在一趟转写上——那种丢法必须由这里兜住。
+    # 不在夜里窗口内时它只会念一句"留着等夜里"，不会白天起来抢 CPU。
+    try:
+        _resume = _bili_chain_flush()
+        if _resume:
+            print("   [启动] %s" % _resume, flush=True)
+    except Exception as _e:
+        print(f"   [启动] B 站自动链续跑失败（同步与手动补转写不受影响）：{_e}")
     # 双系列排产：先把位置注册到位，再开夜间匹配的定时器。
     # 为什么注册要放在启动里而不是等页面来拉：定时器 60 秒看一眼，若此刻 `plan_slots` 还是空的，
     # 它会"成功跑完一轮 0 个位置"并把今晚的账记掉——页面再打开时，当晚就不会再匹配了。

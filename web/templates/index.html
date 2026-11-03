@@ -2994,7 +2994,7 @@ function asTaskHtml(t) {
   return `<div class="as-task${t.due_now ? ' due' : ''}">
     <div class="as-task-top">
       <b class="as-name" title="点一下改名" onclick="asRename('${escAttr(t.key)}')">${esc(t.name)}</b>
-      <span class="as-c${isSrc ? '' : ' as-toggle'}" title="${escAttr(names)}"${isSrc ? '' : ` onclick="asToggleMembers('${escAttr(t.key)}')`}>
+      <span class="as-c${isSrc ? '' : ' as-toggle'}" title="${escAttr(names)}"${isSrc ? '' : ` onclick="asToggleMembers('${escAttr(t.key)}')"`}>
         ${isSrc ? '源 · 无订阅成员' : `${t.count} 个订阅 ${open ? '▾' : '▸'}`}</span>
       <label class="as-c as-time" title="这条任务几点跑（只改这一条，别的任务不动）">时刻<input type="time" value="${escAttr(t.run_at || '')}" onchange="asSetTaskRunAt('${escAttr(t.key)}', this.value)"></label>
       <select class="as-c" title="改这个任务的频率" onchange="asSetInterval('${escAttr(t.key)}', this.value)">${asFreqOptions(t.interval_days)}</select>
@@ -3904,7 +3904,10 @@ function pkRenderFramesHint() {
       box.innerHTML = '这条素材抽了 ' + f.total + ' 帧，判下来一张都不能用——最多的一种原因是'
         + '<b>「' + esc(why) + '」</b>'
         + '<span style="color:var(--text-tertiary)">；这一档宁可不配图，也不放一张带别人字幕或别人版式的图。'
-        + '换一条素材，或这一版走普通图文（不用真帧）</span>';
+        + '换一条素材，或 <a href="javascript:void(0)" onclick="pkUseGuideLayout()"'
+        + ' title="攻略版面缺哪个就不画哪个：这一版每页只有文字，出图 0 元"'
+        + '>这一版走纯文字攻略页</a>（不配画面、0 元）'
+        + (_pkGuideNote ? '<br><b>' + esc(_pkGuideNote) + '</b>' : '') + '</span>';
       return;
     }
     // 素材本来就不是视频（NGA 帖／微信文章／暴雪公告）：没有视频可下载，"补画面"点了必失败，
@@ -4038,17 +4041,26 @@ async function pkUseGuideLayout() {
   pkRenderFramesHint();
   const n = _pkPages.length;
   if (!n) return;
-  // 探测过且确实一张干净帧都没有，就别再重拆了（拆回来也是没图）；没探测到就照常问模型，
-  // 帧清单在后端，前端这个数只是提示，不能拿它当闸。
-  if (_pkFrames && !(_pkFrames.usable || 0)) {
-    alert('整组 ' + n + ' 页已切成攻略版面，但这条素材没有可用画面（一张干净帧都没有）——'
-        + '这一档宁可不配图，也不会拿带字幕的帧上去。');
-    return;
-  }
-  if (!confirm('整组 ' + n + ' 页都改成攻略版面（出图 0 元），然后逐页重拆把真帧配回来。\n'
-      + '重拆会把每页现在的标题与要点换成模型新写的一份——你已经手改过的话先别点，'
-      + '可以只点某一页的「只重拆这一页」。\n每页约 20-30 秒，只花模型那几厘。继续？')) {
-    setStatus('done', '整组已切成攻略版面，没重拆：这一版会排成攻略页但没有真帧');
+  // 探测过且确实一张干净帧都没有，后端交出去的帧清单就是空的（拆回来也没图可绑）；
+  // 没探测到就照常问模型——帧清单在后端，前端这个数只是提示，不能拿它当闸。
+  const noFrames = !!(_pkFrames && !(_pkFrames.usable || 0));
+  // 没画面 ≠ 这一版废了：攻略版面缺哪个零件就不画哪个，纯文字攻略页照样出图（0 元）。
+  // 但"栏目名/大字数字/对照/警示"这些零件只有重拆才会写出来，所以问一句，
+  // 别替他决定"这一版就是几张卡片套了层攻略皮"（11-02 号主就是要出这一版）。
+  if (!confirm(noFrames
+        ? '这条素材没有可用画面（判下来一张都不合格），整组 ' + n + ' 页已切成攻略版面。\n'
+          + '· 不重拆也能直接出图：纯文字攻略页、0 元，只是栏目名/大字数字/对照/警示这些零件不会补上；\n'
+          + '· 重拆会把每页现在的标题与要点换成模型新写的一份（你已经手改过的话先别点，可以只点某一页的「只重拆这一页」），'
+          + '每页约 20-30 秒、只花模型那几厘，不会再花钱判帧（没图可判）。\n要重拆吗？'
+        : '整组 ' + n + ' 页都改成攻略版面（出图 0 元），然后逐页重拆把真帧配回来。\n'
+          + '重拆会把每页现在的标题与要点换成模型新写的一份——你已经手改过的话先别点，'
+          + '可以只点某一页的「只重拆这一页」。\n每页约 20-30 秒，只花模型那几厘。继续？')) {
+    _pkGuideNote = noFrames
+      ? '整组 ' + n + ' 页已是攻略版面、没重拆：这一版是纯文字攻略页（出图 0 元），'
+        + '栏目名/大字/对照/警示这些零件要重拆才会有。'
+      : '整组已切成攻略版面，没重拆：这一版会排成攻略页但没有真帧';
+    pkRenderFramesHint();
+    setStatus('done', _pkGuideNote);
     return;
   }
   _pkGuideChain = []; _pkGuideNote = '';
@@ -4445,6 +4457,8 @@ function pkRenderPlan(plan, publish, cur) {
   // 它常常选回插画档，于是"0 元"变成"1.5 元"而没人说一声（号主 10-13：不知道哪个是哪个）
   const wasGuide = pkGuideChrome();
   plan = plan || {}; publish = publish || {};
+  // 新一轮拆解＝旧的事实判定全部作废（三步事实闸 2026-11-02）：容器随表单重建，状态清零
+  _pkFact = {sig: '', data: null, timer: null};
   _pkLastPlan = plan; _pkLastPublish = publish;
   if (cur === undefined || !_pkPages.length) {
     // 归一：后端可能给 pages[]（多页），也可能给平铺的一份（单页/历史素材）
@@ -4528,6 +4542,7 @@ function pkRenderPlan(plan, publish, cur) {
     + `<div class="pk-row" id="pk-style-free-row" style="display:${pkStyleKey() === 'auto' ? 'flex' : 'none'}">`
     + `<span class="pk-tag">自由风格</span><input id="pk-style" value="${esc(plan.style || '')}" maxlength="120" placeholder="仅「自由发挥」时生效：配色 / 材质 / 装饰一句话"></div>`
     + '<div class="pk-count" id="pk-count"></div>'
+    + '<div id="pk-fact"></div>'
     + '<details class="pk-guide" id="pk-srcpanel" style="margin:8px 0 10px">'
     + '<summary>对照整理稿原文 · 看哪句被改写了</summary><div id="pk-srcbox"></div></details>';
   // 发布页文案：不进图，所以不占 80 字预算，但同样是 AI 起草、人可改。
@@ -4817,9 +4832,112 @@ function pkReadPayload() {
                         footer: _pkFoot || first.footer || '',
                         scene: first.scene || ''}, tag);
 }
+// ── 三步事实闸（2026-11-02）：①拆文案 ②看版面 ③出图共用同一道本地闸 ─────────
+// 判据全在后端 src/claim_check.py（同一份登记表、同一套归属/数值/条件规则），
+// 这里只做两件事：把逐条状态摆出来，以及**任何一次文案改动立即作废旧判定**再防抖重判
+//（重判走 /api/poster/fact_status，本地比对登记表，0 模型、不花钱）。
+// 编辑竞态（11-02 复验漏口二）：每次输入递增代次＋取消在途防抖＋**立即清掉旧判定**；
+// 请求带发出时的完整 plan＋publish 签名，响应只在「代次相同＋当前文本签名＝请求签名」
+// 时才落界面——旧响应晚到、只改配文都进不来；接口失败保持「没判」，不许恢复旧绿。
+let _pkFact = {sig: '', data: null, timer: null, gen: 0};
+function pkFactSig(plan, publish) {
+  return JSON.stringify(plan || {}) + '|' + JSON.stringify(publish || pkReadPublish());
+}
+function pkFactCurSig() {
+  return document.getElementById('pk-title') ? pkFactSig(pkReadPayload(), pkReadPublish()) : '';
+}
+function pkFactLabel(state) {
+  return {verified: '有官方具体来源', source_only: '只有素材说法', pending: '待核',
+          blocked: '拦截', unjudged: '没判', uncovered: '未覆盖',
+          visual: '画面提示', general: '非机制句'}[state] || String(state || '');
+}
+function pkFactRender() {
+  const box = document.getElementById('pk-fact');
+  if (!box) return;
+  const d = _pkFact.data;
+  if (!d) { box.innerHTML = ''; return; }
+  let h = '<div class="pk-sub">事实状态（与出图同一道闸 · 本地比对，不花钱）</div>';
+  if (d.scope === 'in') {
+    const cnt = {};
+    (d.fields || []).forEach(f => { cnt[f.state] = (cnt[f.state] || 0) + 1; });
+    // 未核机制断言（f.mech）单独点名：它不是普通待核，出图前会暂停待发资格
+    const mechN = (d.fields || []).filter(f => f.mech && f.state === 'pending').length;
+    const order = ['blocked', 'unjudged', 'pending', 'source_only', 'verified', 'general', 'visual'];
+    const stop = (cnt.blocked || 0) + (cnt.unjudged || 0) + mechN;
+    h += '<div class="pk-verify ' + (stop ? 'fail' : (cnt.pending || cnt.source_only ? 'mild' : 'pass')) + '">'
+      + (stop ? '⛔ 事实闸没过，出图会拦／待发资格暂停：' : '')
+      + (mechN ? '未核机制断言 ' + mechN + ' 条　·　' : '')
+      + order.filter(k => cnt[k]).map(k => pkFactLabel(k) + ' ' + cnt[k] + ' 条').join('　·　')
+      + '</div>';
+    const shown = (d.fields || []).filter(f => f.state !== 'general' && f.state !== 'visual');
+    if (shown.length) {
+      h += '<details class="pk-guide" style="margin:6px 0"><summary>逐条看依据／待核原因</summary>'
+        + shown.map(f => '<div class="pk-verify '
+            + (f.state === 'blocked' || f.state === 'unjudged' || (f.mech && f.state === 'pending') ? 'fail'
+              : (f.state === 'verified' ? 'pass' : 'mild'))
+            + '" style="text-align:left"><b>'
+            + (f.mech && f.state === 'pending' ? '⛔ 未核机制断言' : pkFactLabel(f.state))
+            + '</b>　' + esc(f.label)
+            + (f.detail ? ' — ' + esc(f.detail) : '') + '</div>').join('') + '</details>';
+    }
+  } else {
+    h += '<div class="pk-verify ' + (d.scope === 'no_registry' || d.scope === 'error' ? 'fail' : 'mild') + '">'
+      + (d.scope === 'error' ? '<b>⛔ 没判</b>：' : '')
+      + esc(d.note || '') + '</div>';
+  }
+  box.innerHTML = h;
+}
+function pkFactSet(data, sig) {
+  _pkFact.data = data;
+  _pkFact.sig = (sig !== undefined && sig !== null) ? sig : pkFactCurSig();
+  pkFactRender();
+}
+function pkFactDrop() {
+  // 编辑即清旧判定：旧绿当场撤下，摆「没判」，直到重判成功才允许再亮
+  _pkFact.data = null;
+  const box = document.getElementById('pk-fact');
+  if (box) box.innerHTML = '<div class="pk-verify fail">✎ 文案已改动，上面那次事实判定作废——'
+    + '当前<b>没有判定（没判）</b>，正在重判…</div>';
+}
+function pkFactInvalidate() {
+  // ② 任何一次输入：真改了才递增代次＋取消在途防抖＋立即清旧判定；防抖后带完整签名重判。
+  //（签名没变就不动代次——换页签/重画也会调到这，不能把在途的重判响应误杀成永久没判）
+  const plan = document.getElementById('pk-title') ? pkReadPayload() : null;
+  if (!plan) return;
+  const sig = pkFactSig(plan, pkReadPublish());
+  if (sig === _pkFact.sig && _pkFact.data) return;
+  _pkFact.gen = (_pkFact.gen || 0) + 1;
+  if (_pkFact.timer) { clearTimeout(_pkFact.timer); _pkFact.timer = null; }
+  pkFactDrop();
+  _pkFact.timer = setTimeout(async function () {
+    _pkFact.timer = null;
+    const gen = _pkFact.gen;
+    const plan2 = pkReadPayload();
+    const publish2 = pkReadPublish();
+    const sig2 = pkFactSig(plan2, publish2);       // 请求带发出时的完整 plan＋publish 签名
+    let r = null, netErr = '';
+    try {
+      const resp = await fetch('/api/poster/fact_status', {method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({summary_id: _pkId, plan: plan2, publish: publish2})});
+      if (!resp.ok) netErr = 'HTTP ' + resp.status;
+      else r = await resp.json();
+    } catch (e) { netErr = e.message; }
+    if (_pkFact.gen !== gen) return;               // 期间又有编辑：这份旧响应整份作废
+    if (netErr || !r || r.error) {
+      // 接口失败＝没判：摆红档「没判」，不许把旧绿摆回来
+      pkFactSet({scope: 'error', note: '事实重判没跑成（'
+        + (netErr || (r && r.error) || '未知错误') + '），当前按「没判」看，别当已核', fields: []}, sig2);
+      return;
+    }
+    if (pkFactSig(pkReadPayload(), pkReadPublish()) !== sig2) return; // 当前文本已又变过：丢弃
+    pkFactSet(r, sig2);
+  }, 700);
+}
 function pkCount() {
   const el = document.getElementById('pk-count');
   if (!el) return;
+  pkFactInvalidate();            // ② 任何一次输入都先当"旧判定作废"处理（没真改会在里面自动退出）
   const p = pkReadPlan();
   const multi = _pkPages.length > 1;
   // 校验整组时要拿"表单里正在改的这一页"替掉数组里那份，否则改了半天校验的还是旧值
@@ -4838,7 +4956,9 @@ function pkCount() {
         + (over.length ? '　⚠️ 第 ' + over.join('、') + ' 页放不下' : '');
   }
   el.className = 'pk-count ' + (bad.length ? 'bad' : 'ok');
-  el.textContent = txt + (bad.length ? '　⚠️ ' + bad.join('；') : '　✅ 可出图');
+  // 「可出图」改成「版面合格」（2026-11-02 三步事实闸）：这一格只判版面/字数，
+  // 说得对不对看下面那格事实状态——两件事混在一句话里，绿灯就成了"内容也对了"
+  el.textContent = txt + (bad.length ? '　⚠️ ' + bad.join('；') : '　✅ 版面合格（仅版面/字数，事实状态见下）');
 }
 async function posterPlan() {
   if (!_pkId) { alert('请先选择整合稿'); return; }
@@ -5202,14 +5322,21 @@ async function posterPreview() {
   _pkPreviewClicks++;          // 每次免费重排都计数（含换布局/切页自动重排），当"改了几次才满意"用
   box.innerHTML = '<div class="pk-verify mild">⏳ 正在按当前文案排'
     + (_pkPages.length > 1 ? '整组 ' + _pkPages.length + ' 页' : '一张') + '免费预览…</div>';
-  const body = {plan: pkReadPayload(), ratio: document.getElementById('pk-ratio').value};
+  const body = {plan: pkReadPayload(), ratio: document.getElementById('pk-ratio').value,
+                summary_id: _pkId, publish: pkReadPublish()};
   if (_pkPhoto) body.photo = _pkPhoto.ref;
+  const fsig = pkFactSig(body.plan, body.publish);   // 发出时的完整签名（11-02 竞态守卫）
   let r;
   try {
     r = await fetch('/api/poster/preview', {method: 'POST',
       headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)}).then(x => x.json());
   } catch (e) { r = {error: e.message}; }
   if (r.error) { box.innerHTML = '<div class="pk-verify fail">✗ ' + esc(r.error) + '</div>'; return; }
+  // ② 看版面只证明「版面合格」：事实状态单独一条随预览一起刷新（同一套判据重判）；
+  // 响应回来先对当前签名——预览期间又改了文案的话，这份旧状态不能落界面
+  if (r.fact_status && pkFactSig(pkReadPayload(), pkReadPublish()) === fsig) {
+    pkFactSet(r.fact_status, fsig);
+  }
   _pkPreviewPages = (r.pages && r.pages.length) ? r.pages
     : [{url: r.url, check: r.check || {}, page: 1}];
   _pkPreviewChars = r.chars || 0;
@@ -5431,6 +5558,15 @@ async function posterGenerate(force) {
   if (plan) {
     const bad = pkProblems(plan);
     if (bad.length && !confirm('文案不合格（' + bad.join('；') + '）。\n后端会直接拒绝出图，仍要提交？')) return;
+    // ②/③ 三步事实闸（2026-11-02）：版面合格≠说得对。事实没过先说清，
+    // 别等后端拦完人才知道；没判的那档后端照样出图，但会把待发资格暂停。
+    // 未核机制断言（f.mech）也算停发档：同卡别句的已核出处盖不住它（11-02 复验漏口一）
+    const fd = _pkFact.data;
+    if (fd && fd.scope === 'in') {
+      const stop = (fd.fields || []).filter(f => f.state === 'blocked' || f.state === 'unjudged' || f.mech);
+      if (stop.length && !confirm('事实状态有 ' + stop.length + ' 条拦截/没判/未核机制断言——'
+          + '后端会拦下出图，或把这张标成不可发布，仍要提交？')) return;
+    }
   }
   const multi = !!(plan && plan.pages && plan.pages.length > 1);
   const npages = multi ? plan.pages.length : 1;
@@ -5458,11 +5594,24 @@ async function posterGenerate(force) {
   let tip;
   const ev = force ? pkFactEvidence() : [];
   if (force && ev.length) {
-    // 事实闸放行：确认框里就把"每条有没有出处"摊开，别让人在没填的情况下点出"已核实"
+    // **凭据没填全就别发起这次任务**（号主 10-30：点了「带这些凭据出图」还是"失败"）。
+    // 空着出处去点那颗按钮，跑完只会得到"图出了但整张不可发布"+ 同一段闸口原话，
+    // 看着像闸坏了。当场点名缺哪一格，比让他猜 20-60 秒便宜得多。
+    const gaps = [];
+    ev.forEach(function (e, i) {
+      if (!e.source) gaps.push('第' + (i + 1) + '条没填出处');
+      if (!e.result) gaps.push('第' + (i + 1) + '条没填核验结论');
+    });
+    if (!pkFactBy()) gaps.push('没填核验人（事后要能问到人）');
+    if (gaps.length) {
+      alert('凭据没填全，这一次不出图：\n· ' + gaps.join('\n· ')
+            + '\n\n真核过了就逐条填上——出处要能定位（链接／哪篇公告／哪一版游戏内实测）；'
+            + '还没核过就关掉这一版，把那条说法删掉或改成不误导的写法再出图。');
+      return;
+    }
     tip = '事实闸拦下的 ' + ev.length + ' 条待核事实，这次带凭据出图：\n'
-        + ev.map(e => '· ' + String(e.item).slice(0, 26) + ' → '
-             + (e.source && e.result ? '出处已填、结论已填' : (e.source ? '缺结论' : '缺出处'))).join('\n')
-        + '\n缺任何一项的那条会记成「未核」，图照样出但整张标不可发布。确认？';
+        + ev.map(e => '· ' + String(e.item).slice(0, 26) + ' → 出处与结论都已填').join('\n')
+        + '\n凭据会写进成品留档（核验人：' + (pkFactBy() || '未填') + '）。确认？';
   } else if (force) {
     tip = '这条整合稿被判定为规则版骨架。\n确认你已人工复核过拆解出的文案、仍要出图？';
   } else if (pkGuideChrome()) {
@@ -5557,8 +5706,8 @@ function pollPoster(stage, task) {
         const hard = st.fact_hard || [];
         override = hard.length
           ? '<div class="pk-verify mild pk-fact" style="margin-top:8px;text-align:left">'
-            + '<div style="margin-bottom:6px">逐条填「出处 + 核验结论」再出图。凭据写进成品留档；'
-            + '缺任何一条，图照样出，但整张标 <b>不可发布</b>。</div>'
+            + '<div style="margin-bottom:6px">逐条填三格：出处（能定位：链接／哪篇公告／哪一版游戏内实测）'
+            + '＋核验结论＋核验人。<b>缺任何一格这次不会去出图</b>；填全了凭据就写进成品留档。</div>'
             + hard.map((h, i) => '<div style="margin:0 0 8px">'
                 + '<div class="q">第' + (i + 1) + '条：' + esc(h) + '</div>'
                 + '<input class="pke-src" data-i="' + i + '" '
@@ -5589,6 +5738,8 @@ function pollPoster(stage, task) {
         st.plan.page.layout_key = 'guide';
       }
       pkApplyPage(st.plan.page, idx, st.plan.notes || []);
+      // 单页重拆也是文案变更：后端已对并回后的整组重判，直接摆上（pkApplyPage 不清 _pkFact）
+      if (st.plan.fact_status) pkFactSet(st.plan.fact_status, pkFactSig(pkReadPayload(), pkReadPublish()));
       if (!inChain) {
         if (_pkGuideChain.length) {
           setStatus('running', '整组攻略页：第 ' + idx + ' 页已配完，接着配第 '
@@ -5613,6 +5764,8 @@ function pollPoster(stage, task) {
       _pkBases = [];                                 // 文案换了，之前回传的图就不作数了
       pkRenderManual();
       pkRenderPlan(st.plan.plan, st.plan.publish);
+      // ① 拆文案完成≠事实已核（必须在 pkRenderPlan 之后摆：重渲染会把旧状态清零）
+      if (st.plan.fact_status) pkFactSet(st.plan.fact_status, pkFactSig(pkReadPayload(), pkReadPublish()));
       _pkPreviewPages = [];              // 结构换了，上一轮的预览图作废
       // 拆完就自动摊开原文对照：这一步的价值就是让人立刻看出哪句不是原文里的
       if (stage === 'plan') {
@@ -5713,7 +5866,27 @@ async function renderPosterResult(id) {
   const ovRows = (ov.rows || []).map(r => '<br>· ' + esc(String(r.item || '').slice(0, 46))
       + (r.ok ? (' ← 出处：' + esc(r.source) + '｜结论：' + esc(r.result)) : ' ← <b>这条没填凭据</b>')).join('');
   // 「放行」不等于「能发」：凭据齐不齐决定这一格是绿的还是红的（2026-10-21 Codex P1）
-  const factHtml = ((fg.hard || []).length
+  // ③ 出图前重判的结果（2026-11-02 三步事实闸）：适用范围内没判＝事实未判，
+  // 待发资格已被后端暂停（publishable=false）；scope 外写明由人工核对，不宣称自动防瞎编。
+  const cs = fg.claims || {};
+  const claimHead =
+      (cs.unjudged
+        ? '<div class="pk-verify fail"><b>⛔ 事实未判，待发资格已暂停</b>：' + esc(cs.unjudged) + '</div>'
+        : '')
+    + ((cs.mech || []).length
+        ? '<div class="pk-verify fail"><b>⛔ 未核机制断言，待发资格已暂停</b>：'
+          + esc(cs.mech[0]) + ((cs.mech.length > 1) ? '（等共 ' + cs.mech.length + ' 条）' : '') + '</div>'
+        : '')
+    + (cs.uncovered
+        ? '<div class="pk-verify mild">登记表未覆盖这篇的题材：机制类说法由人工逐项核对官方来源'
+          + '（本工具不宣称全题材自动防瞎编）。</div>'
+        : '')
+    + (m.publishable === false && !cs.unjudged && !(cs.mech || []).length
+        && !((fg.hard || []).length && !(ov.complete))
+        ? '<div class="pk-verify fail"><b>⛔ 不可发布</b>：机器门未通过（凭据缺失或存在硬伤），这张只能当草稿。</div>'
+        : '');
+  const factHtml = claimHead
+    + ((fg.hard || []).length
       ? '<div class="pk-verify ' + (ov.complete ? 'mild' : 'fail') + '">'
         + (ov.complete
             ? ('✅ 待核事实 ' + fg.hard.length + ' 条已逐条留凭据（核验人：'
@@ -7752,7 +7925,10 @@ async function ptRefresh(keepResp) {
   // 生成完状态从 pending 变 done，那一版就冻结了——不重取的话面板会继续显示可勾选的框，
   // 界面就又在对已开工的版本说"你还能改"。
   if (_pt.task && (_pt.task.video_ids || []).length) {
-    const key = _pt.task.id + ':' + _pt.task.status + ':' + (_pt.task.summary_id || 0);
+    // 键里必须带上**素材清单本身**：pending 那一版就地换素材时，任务 id、状态、稿 id 全都不变，
+    // 只带这三样就会继续显示上一条素材的补充料（号主 10-30：换了素材，之前勾的子集没取消）。
+    const key = _pt.task.id + ':' + _pt.task.status + ':' + (_pt.task.summary_id || 0)
+      + ':' + (_pt.task.video_ids || []).join(',');
     if (_pt.supFor !== key) { _pt.supFor = key; _pt.sup = null;
                               _pt.supOpen = false; _pt.supSel = null; ptLoadSup(); }
   }
