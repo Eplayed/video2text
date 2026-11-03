@@ -3563,7 +3563,7 @@ def api_wechat_preview():
     data = request.get_json(force=True) or {}
     try:
         out = wechat_graphics.render_preview(
-            template=str(data.get("template") or "wechat"),
+            template=str(data.get("template") or "classic"),
             palette=(data.get("palette") or None),
             font=(data.get("font") or None),
             layout=(data.get("layout") or None),
@@ -3607,9 +3607,9 @@ def api_wechat_generate():
     author_draft = str(data.get("author_draft") or "").strip()
     theme = str(data.get("theme") or "").strip()[:30]    # 题材（进 LLM prompt，如「AI工具实测」）
     title = str(data.get("title") or "").strip()[:60]    # 图文标题（空则用整合稿标题）
-    template = str(data.get("template") or "wechat").strip()[:20]  # 限白名单，越界适配器内回落 wechat
+    template = str(data.get("template") or "classic").strip()[:20]  # 限白名单，越界适配器内回落 classic
     # 变体三轴（闭集，与头条线同一套预设；空/未知一律回落默认＝现状零行为变化）
-    palette = str(data.get("palette") or "").strip()[:20]  # 配色预设键（默认 gold_night＝微信绿信号格）
+    palette = str(data.get("palette") or "").strip()[:20]  # 配色预设键（默认 gold_night＝头条同款暗金）
     font = str(data.get("font") or "").strip()[:20]        # 字体预设键（默认 serif）
     layout = str(data.get("layout") or "").strip()[:20]    # 版式预设键（默认 default；可传 random）
     shots = []  # 真实截图（弹窗上传，复制进包并标 source=real_screenshot）
