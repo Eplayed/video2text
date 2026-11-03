@@ -3689,10 +3689,13 @@ async function pkHydrate(id) {
   try { st = await fetch('/api/poster/status?summary_id=' + encodeURIComponent(id)).then(r => r.json()); }
   catch (e) { return; }
   if (_pkId !== id || st.running || st.summary_id !== id) return;
-  if (st.error) {
-    document.getElementById('pk-result').innerHTML = '<div class="pk-verify fail">✗ 上一次任务失败：'
-      + esc(String(st.error).split('\n')[0]) + '</div>';
-    return;
+  // 上次失败不再提前 return（2026-11-03）：原来一句「上一次任务失败」就把版面吞了，
+  // 人对着"先把这些卖点改掉"却没有任何可改的东西，点③还会静默重跑一次拆解、
+  // 再被拦一次（每次拦的句子还不一样）。现在错误照显示（带逐条出口），版面照恢复。
+  const errMsg = st.error ? String(st.error).split('\n')[0] : '';
+  if (errMsg) {
+    document.getElementById('pk-result').innerHTML =
+      pkFactFailHtml(errMsg, st.fact_hard || []);
   }
   if (st.plan && st.plan.plan) {
     _pkManualRaw = st.plan.manual_prompts || [];   // 每页一份"拿去豆包手动出图"的材料
@@ -3707,10 +3710,12 @@ async function pkHydrate(id) {
     pkRenderManual();
     pkRenderPlan(st.plan.plan, st.plan.publish);
   }
-  if (st.package && st.package.id === id) { renderPosterResult(id); return; }
+  if (st.package && st.package.id === id && !errMsg) { renderPosterResult(id); return; }
   if (st.plan && st.plan.plan) {
-    document.getElementById('pk-result').innerHTML = '<div class="pk-verify pass">✅ 这是上一次拆好的文案，改完直接点「③ 花钱出图」。'
-      + '下面的「对照整理稿原文」已经展开。</div>';
+    if (!errMsg) {
+      document.getElementById('pk-result').innerHTML = '<div class="pk-verify pass">✅ 这是上一次拆好的文案，改完直接点「③ 花钱出图」。'
+        + '下面的「对照整理稿原文」已经展开。</div>';
+    }
     const d = document.getElementById('pk-srcpanel');
     if (d) d.open = true;
     pkLoadSource();
@@ -4879,7 +4884,8 @@ function pkFactRender() {
             + '" style="text-align:left"><b>'
             + (f.mech && f.state === 'pending' ? '⛔ 未核机制断言' : pkFactLabel(f.state))
             + '</b>　' + esc(f.label)
-            + (f.detail ? ' — ' + esc(f.detail) : '') + '</div>').join('') + '</details>';
+            + (f.detail ? ' — ' + esc(f.detail) : '')
+            + pkJumpBtnHtml((f.label || '') + ' ' + (f.detail || '')) + '</div>').join('') + '</details>';
     }
   } else {
     h += '<div class="pk-verify ' + (d.scope === 'no_registry' || d.scope === 'error' ? 'fail' : 'mild') + '">'
@@ -5552,6 +5558,57 @@ function pkFactBy() {
   return el ? (el.value || '').trim() : '';
 }
 
+// ── 事实闸拦下来的出口统一一份（2026-11-03）────────────────────────────
+// 第一性原理：拦只是闸在工作，"拦完之后人有没有路"才是流程能不能走通。
+// 以前点③被拦（pollPoster）有一份逐条凭据表单，重开弹窗（pkHydrate）却只有一句
+// 「上一次任务失败」就 return——版面整个不渲染，人对着"先把这些卖点改掉"
+// 却没有任何可改的东西。两处共用这一份，写两遍迟早一个有一个没有。
+function pkJumpBtnHtml(text) {
+  // 被点名的条目多半带着「第X页·卡片Y」：给一颗直达的按钮，滚过去把光标放进那张卡。
+  // 解析不出位置（比如拦的是配文）就不给按钮，别放一颗点了没反应的。
+  const m = /第\s*(\d+)\s*页[·•]?\s*卡片\s*(\d+)/.exec(String(text || ''));
+  if (!m) return '';
+  return '<div style="margin:2px 0 4px"><button class="btn ghost sm" onclick="pkJumpCard('
+    + m[1] + ',' + m[2] + ')" title="翻到被点名的那一页，把光标放到那张卡片上">✎ 去改这句</button></div>';
+}
+function pkJumpCard(pg, card) {
+  const i = (pg || 1) - 1;
+  const multi = _pkPages.length > 1;
+  if (multi && i !== _pkCur && i >= 0 && i < _pkPages.length) pkSwitchPage(i);
+  setTimeout(function () {
+    const el = document.getElementById('pk-ct-' + ((card || 1) - 1))
+      || document.getElementById('pk-cd-' + ((card || 1) - 1));
+    if (!el) return;
+    if (el.scrollIntoView) el.scrollIntoView({block: 'center', behavior: 'smooth'});
+    el.focus();
+  }, multi ? 400 : 0);
+}
+function pkFactFailHtml(msg, hard) {
+  let override;
+  if (hard && hard.length) {
+    override = '<div class="pk-verify mild pk-fact" style="margin-top:8px;text-align:left">'
+      + '<div style="margin-bottom:6px">逐条填三格：出处（能定位：链接／哪篇公告／哪一版游戏内实测）'
+      + '＋核验结论＋核验人。<b>缺任何一格这次不会去出图</b>；填全了凭据就写进成品留档。'
+      + '没核过就走每条旁边的「✎ 去改这句」，把那句卖点改掉再出图。</div>'
+      + hard.map(function (h, i) {
+          return '<div style="margin:0 0 8px">'
+            + '<div class="q">第' + (i + 1) + '条：' + esc(h) + '</div>'
+            + pkJumpBtnHtml(h)
+            + '<input class="pke-src" data-i="' + i + '" '
+            + 'placeholder="出处：官方公告链接／游戏内实测位置／第几条素材">'
+            + '<input class="pke-res" data-i="' + i + '" '
+            + 'placeholder="核验结论：核出来到底是什么（一句话）"></div>';
+        }).join('')
+      + '<input id="pke-by" placeholder="核验人（事后要能问到人）">'
+      + '<div style="margin-top:8px"><button class="btn ghost sm" onclick="posterGenerate(true)">'
+      + '带这些凭据出图</button></div></div>';
+  } else {
+    override = '<div class="pk-verify mild" style="margin-top:8px">后端没回逐条清单（'
+      + '这是旧服务，刷新或重启后再试）。</div>';
+  }
+  return '<div class="pk-verify fail">✗ ' + esc(msg) + '</div>' + override;
+}
+
 async function posterGenerate(force) {
   if (!_pkId) { alert('请先选择整合稿'); return; }
   const hasPlan = !!document.getElementById('pk-title');
@@ -5702,29 +5759,19 @@ function pollPoster(stage, task) {
       const factHit = msg.indexOf('待核事实进了成品') >= 0;
       // 放行不再是"一句我核过了"：每条待核都要填出处与结论（2026-10-21 Codex P1）。
       // 缺凭据照样出图，但整张标不可发布——所以这里连按钮的名字都不许写"已核实"。
-      let override = '';
+      // 出口统一走 pkFactFailHtml（2026-11-03）：逐条凭据三格 + 每条「✎ 去改这句」，
+      // 与重开弹窗（pkHydrate）那一份同源，不再各写各的。
+      let body;
       if (factHit) {
-        const hard = st.fact_hard || [];
-        override = hard.length
-          ? '<div class="pk-verify mild pk-fact" style="margin-top:8px;text-align:left">'
-            + '<div style="margin-bottom:6px">逐条填三格：出处（能定位：链接／哪篇公告／哪一版游戏内实测）'
-            + '＋核验结论＋核验人。<b>缺任何一格这次不会去出图</b>；填全了凭据就写进成品留档。</div>'
-            + hard.map((h, i) => '<div style="margin:0 0 8px">'
-                + '<div class="q">第' + (i + 1) + '条：' + esc(h) + '</div>'
-                + '<input class="pke-src" data-i="' + i + '" '
-                + 'placeholder="出处：官方公告链接／游戏内实测位置／第几条素材">'
-                + '<input class="pke-res" data-i="' + i + '" '
-                + 'placeholder="核验结论：核出来到底是什么（一句话）"></div>').join('')
-            + '<input id="pke-by" placeholder="核验人（事后要能问到人）">'
-            + '<div style="margin-top:8px"><button class="btn ghost sm" onclick="posterGenerate(true)">'
-            + '带这些凭据出图</button></div></div>'
-          : '<div class="pk-verify mild" style="margin-top:8px">后端没回逐条清单（'
-            + '这是旧服务，刷新或重启后再试）。</div>';
-      } else if (msg.indexOf('整合稿不合格') >= 0) {
-        override = '<div style="margin-top:8px"><button class="btn ghost sm" onclick="posterGenerate(true)">'
-          + '仍然出图（我已人工复核文案）</button></div>';
+        body = pkFactFailHtml(msg, st.fact_hard || []);
+      } else {
+        const override = (msg.indexOf('整合稿不合格') >= 0)
+          ? '<div style="margin-top:8px"><button class="btn ghost sm" onclick="posterGenerate(true)">'
+            + '仍然出图（我已人工复核文案）</button></div>'
+          : '';
+        body = `<div class="pk-verify fail">✗ ${esc(msg)}</div>` + override;
       }
-      box.innerHTML = `<div class="pk-verify fail">✗ ${esc(msg)}</div>` + override;
+      box.innerHTML = body;
       setStatus('error', '海报任务失败'); return;
     }
     setStatus('done', st.progress || '完成');
