@@ -5165,8 +5165,12 @@ def api_poster_frames_build():
             return jsonify({"error": "这篇稿没有采用编号 %s 的素材，补不了它的画面" % want_vid}), 400
     else:
         aweme_id = str(summary.get("aweme_id") or "").strip()
-    if not aweme_id or not aweme_id.isdigit():
-        return jsonify({"error": "这条不是抖音视频（没有 aweme_id），补不了画面"}), 400
+    # B 站素材的池子键是 BV 号（bilibili_fetcher 用 bvid 建的），不是纯数字——
+    # 原来这里一刀切 isdigit()，B 站素材点「先看图确认」当场被拒：
+    # 帧抽了、判了 8 张全废，剩下的想补判却永远进不来（2026-11-03 号主问
+    # "B 站 UP 主怎么没有关键帧"，根子就在这道闸）。
+    if not aweme_id or not (aweme_id.isdigit() or aweme_id.upper().startswith("BV")):
+        return jsonify({"error": "这条不是抖音/B站视频（没有可判帧的素材号），补不了画面"}), 400
     job = _frames_job(sid)
     if job.get("running"):
         return jsonify({"started": False, "reason": "already_running",
