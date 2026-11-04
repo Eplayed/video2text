@@ -1382,7 +1382,9 @@ def normalize_page(item, lim, style_key, has_photo, idx, first_title="",
             continue
         t, d = _keep_text(c.get("t")), _keep_text(c.get("d"))
         if t or d:
-            cards.append({"t": t, "d": d, "v": str(c.get("v") or "").strip()})
+            cards.append({"t": t, "d": d, "v": str(c.get("v") or "").strip(),
+                          "point_ids": [str(x) for x in (c.get("point_ids") or [])]
+                          if isinstance(c.get("point_ids"), list) else []})
     title = _keep_text(item.get("title") or (first_title if idx == 1 else ""))
     lay, note = _page_layout(item.get("layout_key"), style_key, has_photo, idx)
     if note:
@@ -1525,7 +1527,7 @@ def page_plan_prompt(page_index, pages, spine, style_key, has_photo, theme, lim,
            .replace("__CT__", str(lim["cardT"])).replace("__CD__", str(lim["cardD"]))
            .replace("__TOTAL__", str(lim["total"]))
            .replace("__GUIDE_SHAPE__", guide_shape_prompt(frames))
-           .replace("__CONTENT__", (content or "")[:8000])
+           .replace("__CONTENT__", content or "")
            .replace("__META__", META_RULE)
            + guide_rules_text(frames, lim["total"]))
     if frames and used:
@@ -1539,7 +1541,8 @@ def page_plan_prompt(page_index, pages, spine, style_key, has_photo, theme, lim,
 
 
 def build_page_plan(summary, ai_config, page_index, pages, spine="", theme="",
-                    style_key="", text_mode=DEFAULT_TEXT_MODE, has_photo=False, frames=None):
+                    style_key="", text_mode=DEFAULT_TEXT_MODE, has_photo=False, frames=None,
+                    mother=None):
     """只重拆一页，返回 (page, violations, notes)。其他页由调用方原样留着。
 
     整组「换一套」会把人手动改过的别的页一起冲掉，这条就是给"这一页不满意"准备的出口。
@@ -1561,8 +1564,15 @@ def build_page_plan(summary, ai_config, page_index, pages, spine="", theme="",
     if page_index > len(pages):
         page_index = len(pages)
     key = style_key if style_key in (set(STYLE_PRESETS) | set(_user_presets())) else DEFAULT_STYLE_KEY
+    content = (summary.get("content") or "")[:8000]
+    if mother:
+        from . import guide_mother
+        content = guide_mother.mother_prompt(mother)
     prompt = page_plan_prompt(page_index, pages, spine, key, has_photo, theme, lim,
-                              content=summary.get("content") or "", frames=frames)
+                              content=content, frames=frames)
+    if mother:
+        prompt += ("\n本次只用上面带 point_id 的原意母稿。每张卡片输出 point_ids 数组；"
+                   "逐字保持原句的主体、数量、条件与否定词。别的页已覆盖的点不要重复编造。")
     client = openai.OpenAI(api_key=api_key, base_url=api_base or "https://api.openai.com/v1",
                            timeout=300, max_retries=1)
     resp = client.chat.completions.create(
@@ -1626,7 +1636,7 @@ def roster_scan_text(plan, pub):
 
 
 def build_text_plan(summary, ai_config, theme="", title="", style_key="", text_mode=DEFAULT_TEXT_MODE,
-                    has_photo=False, page_hint=0, frames=None, source_text=""):
+                    has_photo=False, page_hint=0, frames=None, source_text="", mother=None):
     """调 LLM 产出文案计划 + 发布文案，并逐字段裁到字数线内。
 
     返回 (plan, publish, violations, notes)：plan 是要画进图里的文字（超预算先经 fit_plan
@@ -1652,6 +1662,17 @@ def build_text_plan(summary, ai_config, theme="", title="", style_key="", text_m
     lim = limits_for(text_mode)
     client = openai.OpenAI(api_key=api_key, base_url=api_base or "https://api.openai.com/v1",
                            timeout=300, max_retries=1)
+    mother_rules = ""
+    content = (summary.get("content") or "")[:8000]
+    if mother:
+        from . import guide_mother
+        content = guide_mother.mother_prompt(mother)
+        mother_rules = ("\n【原意母稿约束】下方每条有稳定 point_id 和原文 quote。"
+                        "请只用这些点写图文，必保点全部落在图上卡片里；"
+                        "每张实质卡片输出 point_ids 数组，列出真正支撑该句的 ID。"
+                        "单页与 pages 内的 cards 都要带 point_ids；"
+                        "不许只挂 ID 却改掉主体、数量、条件、顺序或否定词。"
+                        "首屏给 core_answer 与必要条件；不把旧整理稿作为事实来源。")
     prompt = (_PLAN_PROMPT
               .replace("__THEME__", (theme or "未指定，按素材自判").strip())
               .replace("__STYLES__", style_plan_prompt(frames))
@@ -1662,11 +1683,16 @@ def build_text_plan(summary, ai_config, theme="", title="", style_key="", text_m
               .replace("__STYLE_FIXED__", style_fixed_prompt(style_key))
               .replace("__LAYOUT__", layout_plan_prompt(has_photo, page_hint, bool(frames)))
               .replace("__GUIDE_SHAPE__", guide_shape_prompt(frames))
-              .replace("__RISKS__", risks_prompt_block(summary))
-              .replace("__CONTENT__", (summary.get("content") or "")[:8000])
+              .replace("__RISKS__", ("原意母稿模式：待核风险只以原转写和已定位要点为准，"
+                                     "不要引用旧整理稿；转写不清的专名不要补全。\n\n"
+                                     if mother else risks_prompt_block(summary)))
+              .replace("__CONTENT__", content)
               .replace("__META__", META_RULE)
               .replace("__NAMES__", _names_hint(summary, source_text))
-              + guide_rules_text(frames, lim["total"]))
+              + guide_rules_text(frames, lim["total"]) + mother_rules)
+    if mother:
+        prompt = prompt.replace('"v": "这一条画什么"}',
+                                '"v": "这一条画什么", "point_ids": ["逐字复制的母稿 point_id"]}')
     resp = client.chat.completions.create(
         model=model or "qwen-plus",
         messages=[{"role": "user", "content": prompt}],
@@ -1679,7 +1705,9 @@ def build_text_plan(summary, ai_config, theme="", title="", style_key="", text_m
             continue
         t, d = _keep_text(c.get("t")), _keep_text(c.get("d"))
         if t or d:
-            cards.append({"t": t, "d": d, "v": str(c.get("v") or "").strip()})
+            cards.append({"t": t, "d": d, "v": str(c.get("v") or "").strip(),
+                          "point_ids": [str(x) for x in (c.get("point_ids") or [])]
+                          if isinstance(c.get("point_ids"), list) else []})
     valid = set(STYLE_PRESETS) | set(_user_presets())
     key = str(style_key if style_key in valid else data.get("style_key") or "").strip()
     if key not in valid:
@@ -1694,6 +1722,9 @@ def build_text_plan(summary, ai_config, theme="", title="", style_key="", text_m
             "scene": _clip_ws(data.get("scene"), SCENE_MAX),
             "style_key": key,
             "style": str(data.get("style") or "").strip()[:120]}
+    if mother:
+        plan["source_revision"] = mother["source_revision"]
+        plan["mother_revision"] = mother["mother_revision"]
     plan, notes = fit_plan(plan, lim["total"], lim)
     pages, why, pnotes = _pages_from_data(data, lim, key, has_photo, plan.get("title") or "",
                                           page_hint)
@@ -2850,12 +2881,11 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
                     copies=1, do_review=True, text_mode=DEFAULT_TEXT_MODE, photo=None,
                     preview_clicks=0, bases=None, publish_channel="toutiao", form="newspic",
                     fact_evidence=None, fact_checked_by="", provenance=None, asr_text=None,
-                    frame_items=None, fact_ctx=None):
+                    frame_items=None, fact_ctx=None, output_dir=None):
     """整理稿 → 海报一张。返回 manifest dict（已落盘 output/poster/<summary_id>/）。
 
-    plan / publish 非空时跳过 LLM 拆解（前端审改过文案再出图走这条）：plan 是要画进图的
-    文字仍过字数硬门禁，publish 是发布页文案只做软校验。两者都不落模型自由发挥——
-    模型只负责画字与排版，写什么由拆解那一步定、由人改。
+    必须传入已拆并审过的 plan；拆文案只在 build_text_plan 发生。
+    这条函数只负责核查与出图，不能在调用方漏传 plan 时暗中再调用收费文本模型。
 
     photo 非空（图片字节）时走"真图主视觉"这条：用户上传的那张图顶掉整块插画区，
     标题压在图上、卡片往下让。这条**根本不调出图模型**，所以 0 元、几秒钟出，
@@ -2874,6 +2904,8 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
     copies=2/3 时一次出多张候选（poster_1.png…），自动把回读最干净的一张复制成 poster.png
     当默认，人工可在前端改选。AI 出图有方差，并行挑比反复重出省时间。
     """
+    if not isinstance(plan, dict) or not plan:
+        raise PosterError("缺少已拆文案：先完成①拆文案；出图不会暗中重拆")
     _require_ai(ai_config)
     if ratio not in SIZES:
         ratio = "9:16"
@@ -2894,7 +2926,7 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
         raise PosterError("整合稿不合格：" + "；".join(blockers)
                           + "。若你已复核过拆解出的文案，可点「仍然出图」放行。")
     summary_id = int(summary["id"])
-    out_dir = OUTPUT_DIR / str(summary_id)
+    out_dir = Path(output_dir) if output_dir is not None else OUTPUT_DIR / str(summary_id)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     def _pg(msg):
@@ -2902,17 +2934,12 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
             progress_cb(msg)
 
     started = datetime.now()
-    if plan is None:
-        _pg("LLM 拆解海报文案...")
-        plan, llm_publish, bad, notes = build_text_plan(summary, ai_config, theme=theme,
-                                                        title=title, text_mode=text_mode,
-                                                        source_text=asr_text)
-    else:
-        # 手改过的文案不做自动压缩：那是用户显式输入，超线就明确报错让他自己删
-        llm_publish, bad, notes = None, lint_plan(plan, lim), []
+    # 手改过的文案不做自动压缩：超线就明确报错让人自己删。
+    bad = lint_plan(plan, lim)
+    notes = []
     if bad:
         raise PosterError("文案不合格：" + "；".join(bad))
-    pub = _clip_publish(publish or llm_publish or {}, plan)
+    pub = _clip_publish(publish or {}, plan)
     # ── 事实闸（2026-10-21 号主抽查 87/85/83 之后加的）────────────────────────
     # 拦的是"上游已经标过待核的东西被升格成卖点"这一件确定性的事：整理稿【风险核查】点名的
     # 数字/名词，原样出现在图上任何一处文字或配文里 → 不出图。

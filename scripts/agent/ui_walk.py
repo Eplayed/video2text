@@ -7,13 +7,14 @@
 不传 --plan 就复用后台上一次的结果（重启过工作台就没有了）。
 """
 import json
+import os
 import sys
 import time
 import urllib.request
 
 from playwright.sync_api import sync_playwright
 
-BASE = "http://127.0.0.1:15801"
+BASE = os.environ.get("V2T_WALK_BASE", "http://127.0.0.1:15801")
 SID = int(sys.argv[1]) if len(sys.argv) > 1 else 83
 THEME = sys.argv[2] if len(sys.argv) > 2 and not sys.argv[2].startswith("--") else "走查"
 PLAN = "--plan" in sys.argv

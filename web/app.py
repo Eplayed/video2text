@@ -1856,6 +1856,30 @@ def api_topic_pack_reveal():
 ARTICLE_DIR_NAME = "文章"
 
 
+def _mother_package_current(manifest):
+    """新图文签审只认当前原文/母稿；旧包没有修订字段时保持只读兼容。"""
+    revision = (manifest or {}).get("mother_revision") or (
+        (manifest or {}).get("plan") or {}).get("mother_revision")
+    if not revision:
+        return True
+    try:
+        from src import guide_mother
+        sid = int(manifest.get("summary_id") or manifest.get("id") or 0)
+        mother = guide_mother.load_mother(DB_PATH, sid)
+        _sources, source_rev = guide_mother.source_snapshot(DB_PATH, sid)
+        return (mother.get("status") == "complete" and mother.get("mother_revision") == revision
+                and mother.get("source_revision") == source_rev)
+    except Exception:
+        return False
+
+
+def _mother_stale_state(state):
+    state = dict(state)
+    state.update({"status": "stale", "label": "原文或母稿已变化，需重生成",
+                  "can_publish": False, "needs_audit": True})
+    return state
+
+
 def _review_target(kind: str, ref_id: str):
     """解析审核对象 → (正文, 对照素材, 标题, 落盘路径)。找不到就抛错。
 
@@ -1875,7 +1899,11 @@ def _review_target(kind: str, ref_id: str):
         try:
             summary = content_store.get_summary(DB_PATH, int(sid))
             sources = (summary or {}).get("content") or ""
-        except (TypeError, ValueError):
+            if data.get("mother_revision") or (data.get("plan") or {}).get("mother_revision"):
+                from src import guide_mother
+                raw_sources, _revision = guide_mother.source_snapshot(DB_PATH, int(sid))
+                sources = "\n".join(item["text"] for item in raw_sources)
+        except Exception:
             sources = ""
         label = "头条" if kind == "toutiao" else "公众号"
         return prose, sources, (data.get("title") or "%s图文 #%s" % (label, ref_id)), str(mpath)
@@ -1914,7 +1942,10 @@ def api_review_items():
                 continue
             items.append({"kind": kind, "kind_label": review_store.KINDS.get(kind, kind),
                           "ref_id": d.name, "title": title,
-                          "state": review_store.state(DB_PATH, kind, d.name, content)})
+                          "state": (_mother_stale_state(review_store.state(DB_PATH, kind, d.name, content))
+                                    if not _mother_package_current(json.loads(
+                                        (d / "manifest.json").read_text(encoding="utf-8")))
+                                    else review_store.state(DB_PATH, kind, d.name, content))})
     art_root = OUTPUT_DIR / ARTICLE_DIR_NAME
     if art_root.is_dir():
         for f in sorted(art_root.glob("*.md"), reverse=True):
@@ -1935,8 +1966,12 @@ def api_review_get(kind, ref_id):
         content, _src, title, path = _review_target(kind, ref_id)
     except (ValueError, json.JSONDecodeError) as e:
         return jsonify({"error": str(e)}), 404
+    state = review_store.state(DB_PATH, kind, ref_id, content)
+    if kind in review_store.PACK_KINDS and not _mother_package_current(
+            json.loads(Path(path).read_text(encoding="utf-8"))):
+        state = _mother_stale_state(state)
     return jsonify({"kind": kind, "ref_id": ref_id, "title": title, "path": path,
-                    "state": review_store.state(DB_PATH, kind, ref_id, content)})
+                    "state": state})
 
 
 @app.route("/api/review/<kind>/<path:ref_id>/audit", methods=["POST"])
@@ -1946,6 +1981,9 @@ def api_review_audit(kind, ref_id):
         content, sources, _title, path = _review_target(kind, ref_id)
     except (ValueError, json.JSONDecodeError) as e:
         return jsonify({"error": str(e)}), 404
+    if kind in review_store.PACK_KINDS and not _mother_package_current(
+            json.loads(Path(path).read_text(encoding="utf-8"))):
+        return jsonify({"error": "原文或母稿已变化，请先重生成当前图文包"}), 409
     try:
         if kind in review_store.PACK_KINDS:
             data = json.loads(open(path, encoding="utf-8").read())
@@ -1965,6 +2003,9 @@ def api_review_approve(kind, ref_id):
     """人工放行。有 FAIL 时必须写理由（理由落库，不写就 400）。"""
     try:
         content, _s, _t, _p = _review_target(kind, ref_id)
+        if kind in review_store.PACK_KINDS and not _mother_package_current(
+                json.loads(Path(_p).read_text(encoding="utf-8"))):
+            return jsonify({"error": "原文或母稿已变化，旧审核不能放行"}), 409
         reason = (request.get_json(silent=True) or {}).get("reason", "")
         st = review_store.approve(DB_PATH, kind, ref_id, content, reason)
     except ValueError as e:
@@ -1979,6 +2020,9 @@ def api_review_publish(kind, ref_id):
     """标记已发布。审核没过直接 400——发布本身仍在平台手工完成，这里不碰任何发布通道。"""
     try:
         content, _s, _t, _p = _review_target(kind, ref_id)
+        if kind in review_store.PACK_KINDS and not _mother_package_current(
+                json.loads(Path(_p).read_text(encoding="utf-8"))):
+            return jsonify({"error": "原文或母稿已变化，旧图文包不能登记可发布"}), 409
         st = review_store.mark_published(DB_PATH, kind, ref_id, content)
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
@@ -3637,12 +3681,40 @@ def api_wechat_generate():
 
     def run():
         try:
+            from src import guide_mother
             cb = _run_progress_cb(_wx_task_status)
-            package = wechat_graphics.generate_graphics(summary, _fast_config(), author_draft=author_draft,
-                                                        progress_cb=cb, theme=theme, title=title,
-                                                        template=template, real_screenshots=shots,
-                                                        palette=palette or None, font=font or None,
-                                                        layout=layout or None, ref_token=ref_token)
+            cfg = _fast_config()
+            mother = None
+            mother_source_text = ""
+            if not author_draft:
+                _wx_task_status["progress"] = "从原始转写提取原意母稿..."
+                mother = guide_mother.ensure_mother(DB_PATH, summary["id"], cfg,
+                                                    progress=lambda msg: _wx_task_status.update({"progress": msg}))
+                mother_sources, mother_source_rev = guide_mother.source_snapshot(DB_PATH, summary["id"])
+                if mother_source_rev != mother["source_revision"]:
+                    raise guide_mother.MotherError("原文在生成期间更新，请重新提取母稿")
+                mother_source_text = "\n".join(s["text"] for s in mother_sources)
+            if mother:
+                import shutil
+                stage_root = wechat_graphics.OUTPUT_DIR.parent / (
+                    "_wechat-pending-%d-%s" % (summary["id"], uuid.uuid4().hex))
+            else:
+                stage_root = None
+            try:
+                package = wechat_graphics.generate_graphics(summary, cfg, author_draft=author_draft,
+                                                            progress_cb=cb, theme=theme, title=title,
+                                                            template=template, real_screenshots=shots,
+                                                            palette=palette or None, font=font or None,
+                                                            layout=layout or None, ref_token=ref_token,
+                                                            mother=mother, source_text=mother_source_text,
+                                                            output_root=stage_root)
+                if mother:
+                    _poster_promote_staged(summary["id"], stage_root / str(summary["id"]),
+                                           mother["source_revision"], mother["mother_revision"],
+                                           target=wechat_graphics.OUTPUT_DIR / str(summary["id"]))
+            finally:
+                if stage_root is not None and stage_root.exists():
+                    shutil.rmtree(stage_root)
             _wx_task_status["package"] = {"id": package["id"], "title": package["title"], "images": len(package["images"])}
             errs = [i for i in (package.get("lint") or []) if i.startswith("error")]
             suffix = "，⚠️ lint 有 %d 条 error 需处理" % len(errs) if errs else ""
@@ -3650,6 +3722,9 @@ def api_wechat_generate():
         except GraphicsGateError as e:
             _wx_task_status["error"] = str(e)          # 门禁拒绝：一行说清，不刷 traceback
             _wx_task_status["progress"] = "生成失败"
+        except guide_mother.MotherError as e:
+            _wx_task_status["error"] = str(e)
+            _wx_task_status["progress"] = "原意母稿未完成"
         except Exception:
             _wx_task_status["error"] = traceback.format_exc()
             _wx_task_status["progress"] = "生成失败"
@@ -3876,6 +3951,42 @@ def _poster_load_plan(sid):
         return None
 
 
+def _poster_promote_staged(sid, stage, source_revision, mother_revision, target=None):
+    """原文持锁复核后再替换成品目录；迟到的任务只能留下草稿。"""
+    import shutil
+    from src import guide_mother
+    target = Path(target) if target is not None else ai_poster.OUTPUT_DIR / str(int(sid))
+    target.parent.mkdir(parents=True, exist_ok=True)
+    backup = target.parent / ("_previous-%d-%s" % (int(sid), uuid.uuid4().hex))
+    conn = content_store.connect(DB_PATH)
+    moved_old = False
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        current_source, current_mother = guide_mother.current_revisions(conn, sid)
+        if current_source != source_revision or current_mother != mother_revision:
+            raise ai_poster.PosterError("出图期间原文或母稿已变化，本次旧结果未覆盖现有成品")
+        if target.exists():
+            old_plan = target / "plan.json"
+            if old_plan.is_file() and not (stage / "plan.json").exists():
+                shutil.copyfile(old_plan, stage / "plan.json")
+            os.replace(str(target), str(backup))
+            moved_old = True
+        try:
+            os.replace(str(stage), str(target))
+        except Exception:
+            if moved_old:
+                os.replace(str(backup), str(target))
+                moved_old = False
+            raise
+        conn.commit()
+    finally:
+        conn.close()
+        if backup.exists() and not target.exists():
+            os.replace(str(backup), str(target))
+        if backup.exists() and target.exists():
+            shutil.rmtree(backup)
+
+
 def _humanize_llm_error(full_tb: str) -> str:
     """把 LLM 端抛回来的堆栈翻成一句人话（完整堆栈已经进日志，不丢）。
 
@@ -3914,18 +4025,30 @@ def _humanize_llm_error(full_tb: str) -> str:
     return "任务失败：%s" % " ⏎ ".join(tail)
 
 
-def _poster_start(stage, fn, summary_id=0):
+def _poster_start(stage, fn, summary_id=0, plan_snapshot=None):
     """海报任务统一壳。拆解与出图都是几十秒到几分钟的活，必须后台跑 + 前端轮询。"""
     global _poster_task_seq
     if _poster_status["running"]:
         return 0
+    saved = None
+    if stage == "poster":
+        previous = (_poster_status.get("plan") if _poster_status.get("summary_id") == int(summary_id or 0)
+                    else None) or _poster_load_plan(summary_id)
+        saved = dict(previous or {})
+        if plan_snapshot:
+            saved.update(plan_snapshot)
+        if not isinstance(saved.get("plan"), dict):
+            saved = None
     _poster_task_seq += 1
     _poster_status.update({"running": True, "done": False, "progress": "任务排队中...", "error": "",
                            "stage": stage, "task_id": _poster_task_seq,
                            "summary_id": int(summary_id or 0),
                            "fact_hard": [],        # 上一任务拦下的清单不能留给下一次点按钮
                            "package": None if stage == "plan" else _poster_status["package"],
-                           "plan": None if stage == "poster" else _poster_status["plan"]})
+                           "plan": saved if stage == "poster" else _poster_status["plan"]})
+    if stage == "poster" and saved:
+        # 本次人工改稿先落盘。即使事实闸拒绝、浏览器刷新或服务重启，仍回到刚提交的文案。
+        _poster_save_plan(summary_id, saved)
 
     def wrapper():
         try:
@@ -4258,6 +4381,21 @@ def _guide_frames_for(summary, cfg, progress=None, may_judge=True):
     return merged
 
 
+@app.route("/api/poster/source/<int:summary_id>")
+def api_poster_source(summary_id):
+    """编辑页展示原始转写和已定位母稿；不把旧整理稿冒充一手来源。"""
+    from src import guide_mother
+    try:
+        sources, revision = guide_mother.source_snapshot(DB_PATH, summary_id)
+        mother = guide_mother.load_mother(DB_PATH, summary_id)
+    except guide_mother.MotherError as exc:
+        return jsonify({"error": str(exc)}), 404
+    return jsonify({"summary_id": int(summary_id), "source_revision": revision,
+                    "sources": [{"video_id": int(s["video_id"]), "title": s["title"],
+                                 "transcript": s["text"]} for s in sources],
+                    "mother": mother if mother.get("source_revision") == revision else {}})
+
+
 @app.route("/api/poster/plan", methods=["POST"])
 def api_poster_plan():
     """只拆解不出图：产出可编辑的文案计划，先审文案再花钱出图。"""
@@ -4286,7 +4424,14 @@ def api_poster_plan():
         page_hint = 0
 
     def fn():
+        from src import guide_mother
         cfg = _fast_config()
+        _poster_status["progress"] = "从原始转写提取原意母稿..."
+        mother = guide_mother.ensure_mother(DB_PATH, summary["id"], cfg,
+                                            progress=lambda msg: _poster_status.update({"progress": msg}))
+        mother_sources, mother_source_rev = guide_mother.source_snapshot(DB_PATH, summary["id"])
+        if mother_source_rev != mother["source_revision"]:
+            raise guide_mother.MotherError("原文在拆稿期间更新，请重新提取母稿")
         frames = _guide_frames_for(summary, cfg)
         _poster_status["progress"] = "LLM 拆解海报文案（模型：%s）..." % (cfg.get("model") or "?")
         asr_text = _material_text(summary)   # ① 拆完就对当前 plan+publish 跑同一道本地闸
@@ -4294,7 +4439,11 @@ def api_poster_plan():
                                                               style_key=style_key, text_mode=text_mode,
                                                               has_photo=has_photo, page_hint=page_hint,
                                                               frames=frames,
-                                                              source_text=asr_text)
+                                                              source_text=asr_text, mother=mother)
+        fidelity = guide_mother.audit_output(
+            mother, plan, publish, cfg,
+            source_text="\n".join(s["text"] for s in mother_sources))
+        bad = list(bad) + guide_mother.audit_problems(fidelity)
         # 骨架稿不在这里拦：拆解本身就能判断这份素材有没有料，拦在这里会让人白等一次拆解。
         # 只把风险随结果一起回给前端，出图那一步再决定是否放行。
         warning = "；".join(ai_poster.draft_gate.draft_blockers(summary))
@@ -4305,6 +4454,7 @@ def api_poster_plan():
                                   "notes": notes, "chars": ai_poster.plan_chars(plan),
                                   "publish_channel": publish_channel, "form": pk_form,
                                   "fact_status": fact_status,
+                                  "fidelity": fidelity,
                                   # 整组都是攻略页时界面不该再摆"去豆包画无字底图"那一块：
                                   # 这一档的画面是素材真帧，传一张底图回来反而把真帧盖掉
                                   "guide_only": ai_poster.guide_only_plan(plan),
@@ -4381,16 +4531,29 @@ def api_poster_plan_page():
     spine = str(data.get("spine") or "").strip()[:40]
 
     def fn():
+        from src import guide_mother
         cfg = _fast_config()
+        mother = guide_mother.ensure_mother(DB_PATH, summary["id"], cfg,
+                                            progress=lambda msg: _poster_status.update({"progress": msg}))
+        mother_sources, mother_source_rev = guide_mother.source_snapshot(DB_PATH, summary["id"])
+        if mother_source_rev != mother["source_revision"]:
+            raise guide_mother.MotherError("原文在重拆期间更新，请重新提取母稿")
         # 这一页重拆也要带着真帧清单：不带给它，模型不敢给 photos 编号，
         # 重拆一次就把原来那页的证据图悄悄丢了（攻略页最伤的一种"字还在图没了"）
         frames = _guide_frames_for(summary, cfg)
         _poster_status["progress"] = "只重拆第 %d 页（模型：%s）..." % (idx, cfg.get("model") or "?")
         page, bad, notes = ai_poster.build_page_plan(
             summary, cfg, idx, pages, spine=spine, theme=theme, style_key=style_key,
-            text_mode=text_mode, has_photo=has_photo, frames=frames)
+            text_mode=text_mode, has_photo=has_photo, frames=frames, mother=mother)
         prev = _poster_status.get("plan") or {}
         merged = _merge_page_into_group(prev.get("plan"), idx, page)
+        if merged:
+            merged["source_revision"] = mother["source_revision"]
+            merged["mother_revision"] = mother["mother_revision"]
+        fidelity = guide_mother.audit_output(
+            mother, merged or page, prev.get("publish") or {}, cfg,
+            source_text="\n".join(s["text"] for s in mother_sources))
+        bad = list(bad) + guide_mother.audit_problems(fidelity)
         # ① 单页重拆也是一次文案变更：对并回后的整组重跑本地事实闸（0 模型）
         fact_status = _poster_fact_status(merged or page, prev.get("publish") or {},
                                           _material_text(summary))
@@ -4401,6 +4564,7 @@ def api_poster_plan_page():
                                   # 文案"冲成只剩一页，否则关掉弹窗再打开什么都没了（只能重拆花钱）
                                   "plan": merged, "publish": prev.get("publish"),
                                   "fact_status": fact_status,
+                                  "fidelity": fidelity,
                                   # 渠道同理：单页重拆不冲掉上次选的发布渠道（重开弹窗要恢复）
                                   "publish_channel": prev.get("publish_channel") or "toutiao",
                                   "form": prev.get("form") or "",
@@ -4419,7 +4583,7 @@ def api_poster_plan_page():
 
 @app.route("/api/poster/generate", methods=["POST"])
 def api_poster_generate():
-    """出图。plan 非空＝用前端审改过的文案（不再调 LLM），留空＝现场拆解。"""
+    """出图只用已拆并审过的 plan；空 plan 要回到拆文案，不暗中收费重拆。"""
     data = request.get_json(force=True) or {}
     summary = _poster_get_summary(data.get("summary_id"))
     if not summary:
@@ -4434,6 +4598,17 @@ def api_poster_generate():
     pk_form = str(data.get("form") or "newspic").strip()[:10]
     plan = data.get("plan") if isinstance(data.get("plan"), dict) else None
     publish = data.get("publish") if isinstance(data.get("publish"), dict) else None
+    if not plan:
+        return jsonify({"error": "还没有可编辑的文案，请先点①拆文案；③不会暗中重新拆解或花额度"}), 400
+    from src import guide_mother
+    try:
+        mother = guide_mother.load_mother(DB_PATH, summary["id"])
+        _sources, source_revision = guide_mother.source_snapshot(DB_PATH, summary["id"])
+    except guide_mother.MotherError as exc:
+        return jsonify({"error": str(exc)}), 400
+    if (mother.get("status") != "complete" or plan.get("mother_revision") != mother.get("mother_revision")
+            or plan.get("source_revision") != source_revision):
+        return jsonify({"error": "原文或母稿版本已变化；请重新拆文案并核对，不沿用旧审核"}), 409
     force = bool(data.get("force"))      # 骨架稿人工复核后的显式放行
     # 事实闸放行必须带**逐条凭据**（2026-10-21 Codex P1）：这里不再只收一个 true。
     fact_evidence = data.get("fact_evidence")
@@ -4463,6 +4638,19 @@ def api_poster_generate():
     def fn():
         def cb(msg):
             _poster_status["progress"] = msg
+        # 在任何画图请求前对当前编辑稿重新核对；上次 PASS 不跨编辑或源版本沿用。
+        current = guide_mother.load_mother(DB_PATH, summary["id"])
+        _sources, current_source = guide_mother.source_snapshot(DB_PATH, summary["id"])
+        if (current.get("mother_revision") != plan.get("mother_revision")
+                or current_source != plan.get("source_revision")):
+            raise ai_poster.PosterError("原始转写或母稿已更新，请重新拆稿")
+        fidelity = guide_mother.audit_output(
+            current, plan, publish or {}, _fast_config(),
+            source_text="\n".join(s["text"] for s in _sources))
+        if not fidelity["ready"]:
+            raise ai_poster.PosterError("原意核对未通过：%s；草稿已保留，请按原文修改后重试" %
+                                        "；".join(guide_mother.audit_problems(fidelity)[:8]))
+        plan["fidelity"] = fidelity
         # 编辑证据链按整理稿倒查（表/模块都是我这轮的，函数内 import 少碰别人那片导入区）
         try:
             from src import guide_provenance
@@ -4473,18 +4661,26 @@ def api_poster_generate():
         asr_text = _material_text(summary)   # 专名核对与提示词名单都吃这一份，别两处各查一遍
         # 出图前仍重判已选帧；不合格时留下缺图记录，不换一张不相关的画面冒充证据。
         frame_items = _guide_frames_for(summary, _fast_config(), may_judge=False)
-        manifest = ai_poster.generate_poster(summary, _fast_config(), theme=theme, title=title,
-                                             ratio=ratio, progress_cb=cb, plan=plan,
-                                             publish=publish, force=force, copies=copies,
-                                             do_review=do_review, text_mode=text_mode,
-                                             photo=photo, preview_clicks=clicks,
-                                             bases=bases or None,
-                                             publish_channel=publish_channel, form=pk_form,
-                                             fact_evidence=fact_evidence,
-                                             fact_checked_by=fact_checked_by,
-                                             fact_ctx=_fact_ctx(summary),
-                                             provenance=prov, asr_text=asr_text,
-                                             frame_items=frame_items)
+        import shutil
+        stage = ai_poster.OUTPUT_DIR / ("_pending-%d-%s" % (summary["id"], uuid.uuid4().hex))
+        try:
+            manifest = ai_poster.generate_poster(summary, _fast_config(), theme=theme, title=title,
+                                                 ratio=ratio, progress_cb=cb, plan=plan,
+                                                 publish=publish, force=force, copies=copies,
+                                                 do_review=do_review, text_mode=text_mode,
+                                                 photo=photo, preview_clicks=clicks,
+                                                 bases=bases or None,
+                                                 publish_channel=publish_channel, form=pk_form,
+                                                 fact_evidence=fact_evidence,
+                                                 fact_checked_by=fact_checked_by,
+                                                 fact_ctx=_fact_ctx(summary),
+                                                 provenance=prov, asr_text=asr_text,
+                                                 frame_items=frame_items, output_dir=stage)
+            _poster_promote_staged(summary["id"], stage, plan["source_revision"],
+                                   plan["mother_revision"])
+        finally:
+            if stage.exists():
+                shutil.rmtree(stage)
         v = manifest.get("verify") or {}
         rv = manifest.get("review") or {}
         ts_chk = manifest.get("typeset") or {}
@@ -4547,7 +4743,9 @@ def api_poster_generate():
                 "" if v.get("ok") else "，⚠️ 图面文字校验未通过，发布前人眼复核",
                 rfb, block + ev)
 
-    if not _poster_start("poster", fn, summary["id"]):
+    snapshot = {"plan": plan, "publish": publish or {},
+                "publish_channel": publish_channel, "form": pk_form}
+    if not _poster_start("poster", fn, summary["id"], plan_snapshot=snapshot):
         return jsonify({"error": "已有海报任务正在运行"}), 400
     return jsonify({"status": "started", "summary_id": summary["id"],
                     "task_id": _poster_status["task_id"]})
@@ -4660,6 +4858,9 @@ def api_poster_review_status():
     manifest = json.loads(fp.read_text(encoding="utf-8"))
     h = manifest.get("package_hash") or ""
     st = release_review.status(str(fp.parent), chan, h)
+    if not _mother_package_current(manifest):
+        st = dict(st, reviewed=False, hash_matches=False,
+                  stale=True, reason="原文或母稿已变化，旧放行失效")
     return jsonify(dict(st, package_hash=h, channel=chan,
                         checklist=release_review.checklist_hint(chan)))
 
@@ -4681,6 +4882,8 @@ def api_poster_review_sign():
     if not fp.exists():
         return jsonify({"error": "这一版还没有成品，没什么可放行的"}), 404
     manifest = json.loads(fp.read_text(encoding="utf-8"))
+    if not _mother_package_current(manifest):
+        return jsonify({"error": "原文或母稿已变化，请重生成后再签审"}), 409
     h = manifest.get("package_hash") or ""
     out = release_review.record(str(fp.parent), chan, h, data.get("reviewer") or "",
                                 data.get("note") or "")
@@ -4895,15 +5098,18 @@ def api_poster_status():
         sid = int(sid) if sid else 0
     except (TypeError, ValueError):
         sid = 0
-    if sid and not st.get("running") and st.get("summary_id") != sid:
+    if sid and not st.get("running") and (st.get("summary_id") != sid or not st.get("plan")):
         saved = _poster_load_plan(sid)
         if saved:
+            same_task = st.get("summary_id") == sid
             st["summary_id"] = sid
             st["plan"] = saved
-            st["package"] = None        # 那份成品属于另一条，不许贴到这里（串号那次就是这毛病）
-            st["error"] = ""
+            if not same_task:
+                st["package"] = None    # 那份成品属于另一条，不许贴到这里
+                st["error"] = ""
             st["done"] = True
-            st["progress"] = "这条的文案是从成品包里的备份接回来的（服务重启过也能接着改）"
+            if not same_task:
+                st["progress"] = "这条的文案是从成品包里的备份接回来的（服务重启过也能接着改）"
     return jsonify(st)
 
 

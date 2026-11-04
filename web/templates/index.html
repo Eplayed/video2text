@@ -3709,12 +3709,14 @@ async function pkHydrate(id) {
     pkApplyModeChrome();                           // ③b 那颗按钮的显隐跟着这个标记走
     pkRenderManual();
     pkRenderPlan(st.plan.plan, st.plan.publish);
+    pkSetFidelity(st.plan.fidelity);
   }
   if (st.package && st.package.id === id && !errMsg) { renderPosterResult(id); return; }
   if (st.plan && st.plan.plan) {
     if (!errMsg) {
-      document.getElementById('pk-result').innerHTML = '<div class="pk-verify pass">✅ 这是上一次拆好的文案，改完直接点「③ 花钱出图」。'
-        + '下面的「对照整理稿原文」已经展开。</div>';
+      document.getElementById('pk-result').innerHTML = '<div class="pk-verify mild">这是上一次拆好的草稿。'
+        + '请先看原意核对与下方原始转写，确认后再出图。</div>';
+      pkSetFidelity(st.plan.fidelity);
     }
     const d = document.getElementById('pk-srcpanel');
     if (d) d.open = true;
@@ -4164,6 +4166,59 @@ function pkStyle(key) {
 }
 let _pkLimitsByMode = null;
 let _pkLastPlan = null, _pkLastPublish = null;
+let _pkFidelity = null;
+function pkFidelityHtml(f) {
+  if (!f) return '<div id="pk-fidelity" class="pk-verify mild">原意核对待运行；出图前会按当前编辑稿重新检查。</div>';
+  const coverage = f.coverage || {}, semantic = f.semantic || {};
+  const issues = (coverage.issues || []).concat(semantic.issues || []);
+  const ok = !!f.ready;
+  return '<div id="pk-fidelity" class="pk-verify ' + (ok ? 'pass' : 'fail') + '">'
+    + (ok ? '✅ 原意覆盖与忠实性已按这版文案核对；编辑后需重判。'
+          : '⛔ 原意核对未通过：覆盖 ' + esc(coverage.status || '未判')
+            + '，忠实性 ' + esc(semantic.status || '未判')
+            + '。请对照原始转写改稿，当前不能出图。')
+    + (issues.length ? '<ul>' + issues.slice(0, 8).map(x => '<li>'
+      + esc((x.point_id ? ((((_pkSource || {}).mother || {}).points || []).find(p => p.point_id === x.point_id) || {}).display_text || x.point_id : '')
+        + (x.point_id ? '：' : '') + (x.text || '') + (x.problem || '待核'))
+      + '</li>').join('') + '</ul>' : '') + '</div>';
+}
+function pkSetFidelity(f) {
+  _pkFidelity = f || null;
+  const box = document.getElementById('pk-result');
+  if (!box) return;
+  const old = document.getElementById('pk-fidelity');
+  if (old) old.remove();
+  box.insertAdjacentHTML('beforeend', pkFidelityHtml(f));
+}
+async function pkTogglePointPicker(i) {
+  const box = document.getElementById('pk-points-' + i);
+  if (!box) return;
+  if (box.innerHTML) { box.innerHTML = ''; return; }
+  await pkLoadSource();
+  const points = (((_pkSource || {}).mother || {}).points || []);
+  if (!points.length) {
+    box.textContent = '尚无当前原文的已定位要点；请先拆文案。';
+    return;
+  }
+  const card = (((_pkPages[_pkCur] || {}).cards || [])[i] || {});
+  const picked = card.point_ids || [];
+  box.innerHTML = '<div style="max-height:210px;overflow:auto;padding:6px;border:1px solid #ddd;border-radius:6px">'
+    + '<div>勾选这张卡片实际写到的原文要点；勾选不会替你补正文。</div>'
+    + points.map(p => '<label style="display:block;margin:5px 0"><input type="checkbox" '
+      + (picked.indexOf(p.point_id) >= 0 ? 'checked ' : '')
+      + 'onchange="pkPickPoint(' + i + ',\'' + p.point_id + '\',this.checked)"> '
+      + esc((p.priority === 'must' ? '必保 · ' : '') + (p.display_text || p.quote || ''))
+      + '</label>').join('') + '</div>';
+}
+function pkPickPoint(i, pointId, checked) {
+  const pg = _pkPages[_pkCur];
+  if (!pg) return;
+  while (pg.cards.length <= i) pg.cards.push({t: '', d: '', v: '', point_ids: []});
+  const card = pg.cards[i];
+  const ids = Array.isArray(card.point_ids) ? card.point_ids.slice() : [];
+  card.point_ids = checked ? [...new Set(ids.concat(pointId))] : ids.filter(x => x !== pointId);
+  pkSetFidelity(null);
+}
 // 多页：表单永远只编辑"当前这一页"，其余页存在这个数组里，切页时先把手上的写回再换。
 // 这么做是为了复用整套已有控件（字数统计、卡片输入、校验），不再写第二份表单。
 const PK_PAGE_MAX = 6;
@@ -4489,7 +4544,8 @@ function pkRenderPlan(plan, publish, cur) {
       subtitle: p.subtitle || '', footer: p.footer || plan.footer || '',
       scene: p.scene || plan.scene || '',
       cards: (p.cards || [])
-              .map(c => ({t: c.t || '', d: c.d || '', v: c.v || ''}))
+              .map(c => ({t: c.t || '', d: c.d || '', v: c.v || '',
+                          point_ids: Array.isArray(c.point_ids) ? c.point_ids.slice() : []}))
     }, p));
     if (!_pkPages.length) _pkPages = [{role: '', layout_key: '', title: '', subtitle: '',
                                        footer: '', scene: '', cards: []}];
@@ -4550,7 +4606,10 @@ function pkRenderPlan(plan, publish, cur) {
       + `<input id="pk-ct-${i}" value="${esc(c.t || '')}" maxlength="${PK_LIMITS.cardT}" placeholder="标题 ≤6 字" oninput="pkCount()">`
       + `<input id="pk-cd-${i}" value="${esc(c.d || '')}" maxlength="${PK_LIMITS.cardD}" placeholder="说明 ≤16 字" oninput="pkCount()"></div>`
       + `<div class="pk-row pk-row-sub"><span class="pk-tag">配图</span>`
-      + `<input id="pk-cv-${i}" class="pk-vis" value="${esc(c.v || '')}" maxlength="${PK_LIMITS.cardVis}" placeholder="这一条画什么（不进图，要有形体：仪表/岔路/警示牌）"></div>`;
+      + `<input id="pk-cv-${i}" class="pk-vis" value="${esc(c.v || '')}" maxlength="${PK_LIMITS.cardVis}" placeholder="这一条画什么（不进图，要有形体：仪表/岔路/警示牌）"></div>`
+      + `<div class="pk-row pk-row-sub"><span class="pk-tag">依据</span>`
+      + `<button type="button" class="btn ghost sm" onclick="pkTogglePointPicker(${i})">关联原文要点 · ${(c.point_ids || []).length} 条</button>`
+      + `<div id="pk-points-${i}" style="flex:1"></div></div>`;
   });
   if (rows.length < PK_LIMITS.cardMax) {
     html += '<div class="pk-row"><span class="pk-tag"></span>'
@@ -4565,7 +4624,7 @@ function pkRenderPlan(plan, publish, cur) {
     + '<div class="pk-count" id="pk-count"></div>'
     + '<div id="pk-fact"></div>'
     + '<details class="pk-guide" id="pk-srcpanel" style="margin:8px 0 10px">'
-    + '<summary>对照整理稿原文 · 看哪句被改写了</summary><div id="pk-srcbox"></div></details>';
+    + '<summary>对照原始转写 · 看主体、条件与数字</summary><div id="pk-srcbox"></div></details>';
   // 发布页文案：不进图，所以不占 80 字预算，但同样是 AI 起草、人可改。
   // 按渠道分支渲染（小红书无关键词回复/公众号分两种形态），单独一个渲染函数，
   // 切渠道时只重画这一块、别的表单不动。
@@ -4584,7 +4643,9 @@ function pkReadPlan() {
   const cards = [];
   for (let i = 0; i < document.querySelectorAll('[id^="pk-ct-"]').length; i++) {
     const t = g('pk-ct-' + i), d = g('pk-cd-' + i);
-    if (t || d) cards.push({t: t, d: d, v: g('pk-cv-' + i)});
+    const old = ((_pkPages[_pkCur] || {}).cards || [])[i] || {};
+    if (t || d) cards.push({t: t, d: d, v: g('pk-cv-' + i),
+                            point_ids: Array.isArray(old.point_ids) ? old.point_ids.slice() : []});
   }
   return {title: g('pk-title'), subtitle: g('pk-subtitle'), cards: cards,
           footer: g('pk-footer'), style: g('pk-style'), spine: g('pk-spine'),
@@ -4790,7 +4851,9 @@ function pkFlushForm() {
   const cards = [];
   for (let i = 0; i < document.querySelectorAll('[id^="pk-ct-"]').length; i++) {
     const t = g('pk-ct-' + i), d = g('pk-cd-' + i);
-    if (t || d) cards.push({t: t, d: d, v: g('pk-cv-' + i)});
+    const old = ((_pkPages[_pkCur] || {}).cards || [])[i] || {};
+    if (t || d) cards.push({t: t, d: d, v: g('pk-cv-' + i),
+                            point_ids: Array.isArray(old.point_ids) ? old.point_ids.slice() : []});
   }
   const pg = _pkPages[_pkCur];
   if (pg) {
@@ -4844,6 +4907,8 @@ function pkReadPayload() {
   const tag = {};
   if (_pkRec) tag.recommended = _pkRec;
   if (_pkWhy) tag.why = _pkWhy;
+  if (_pkLastPlan && _pkLastPlan.source_revision) tag.source_revision = _pkLastPlan.source_revision;
+  if (_pkLastPlan && _pkLastPlan.mother_revision) tag.mother_revision = _pkLastPlan.mother_revision;
   if (_pkPages.length < 2) return Object.assign(pkCarryGuide(pkReadPlan(), _pkPages[0] || {}), tag);
   pkFlushForm();
   const first = _pkPages[0];
@@ -5503,6 +5568,14 @@ async function provLoad(id) {
 document.addEventListener('input', function (e) {
   var t = e.target;
   if (!t || !t.getAttribute) return;
+  if (t.closest && t.closest('#pk-plan')) {
+    var fidelityBox = document.getElementById('pk-fidelity');
+    if (fidelityBox) {
+      _pkFidelity = null;
+      fidelityBox.className = 'pk-verify mild';
+      fidelityBox.textContent = '文案已修改，上次原意核对作废；出图前会按当前文字重新检查。';
+    }
+  }
   var k = t.getAttribute('data-k'), i = t.getAttribute('data-i'), f = t.getAttribute('data-f');
   if ((k === 'claims' || k === 'materials') && i !== null && f) {
     var arr = _prov[k] && _prov[k][parseInt(i, 10)];
@@ -5638,18 +5711,24 @@ async function posterGenerate(force) {
   if (!_pkId) { alert('请先选择整合稿'); return; }
   const hasPlan = !!document.getElementById('pk-title');
   const plan = hasPlan ? pkReadPayload() : null;
-  if (plan) {
-    const bad = pkProblems(plan);
-    if (bad.length && !confirm('文案不合格（' + bad.join('；') + '）。\n后端会直接拒绝出图，仍要提交？')) return;
-    // ②/③ 三步事实闸（2026-11-02）：版面合格≠说得对。事实没过先说清，
-    // 别等后端拦完人才知道；没判的那档后端照样出图，但会把待发资格暂停。
-    // 未核机制断言（f.mech）也算停发档：同卡别句的已核出处盖不住它（11-02 复验漏口一）
-    const fd = _pkFact.data;
-    if (fd && fd.scope === 'in') {
-      const stop = (fd.fields || []).filter(f => f.state === 'blocked' || f.state === 'unjudged' || f.mech);
-      if (stop.length && !confirm('事实状态有 ' + stop.length + ' 条拦截/没判/未核机制断言——'
-          + '后端会拦下出图，或把这张标成不可发布，仍要提交？')) return;
-    }
+  if (!plan) {
+    setStatus('error', '还没有可编辑的文案，请先点①拆文案；③不会暗中重新拆解');
+    document.getElementById('pk-result').innerHTML = '<div class="pk-verify fail">先点①拆文案，拿到可编辑的内容后再出图。这次没有发起任务。</div>';
+    return;
+  }
+  const bad = pkProblems(plan);
+  if (bad.length) {
+    setStatus('error', '文案不合格：' + bad.join('；'));
+    document.getElementById('pk-result').innerHTML = '<div class="pk-verify fail">先在上面的编辑框修好：'
+      + bad.map(esc).join('；') + '。这次没有发起出图任务。</div>';
+    return;
+  }
+  // ②/③ 三步事实闸（2026-11-02）：版面合格≠说得对。事实没过先说清。
+  const fd = _pkFact.data;
+  if (fd && fd.scope === 'in') {
+    const stop = (fd.fields || []).filter(f => f.state === 'blocked' || f.state === 'unjudged' || f.mech);
+    if (stop.length && !confirm('事实状态有 ' + stop.length + ' 条拦截/没判/未核机制断言——'
+        + '后端会拦下出图，或把这张标成不可发布，仍要提交？')) return;
   }
   const multi = !!(plan && plan.pages && plan.pages.length > 1);
   const npages = multi ? plan.pages.length : 1;
@@ -5729,7 +5808,7 @@ async function posterGenerate(force) {
   const body = {summary_id: _pkId, ratio: document.getElementById('pk-ratio').value,
                 theme: document.getElementById('pk-theme').value.trim(),
                 publish_channel: _pkChannel, form: _pkForm,
-                plan: plan, publish: plan ? pkReadPublish() : null,
+                plan: plan, publish: pkReadPublish(),
                 force: !!force, copies: copies, review: review, text_mode: pkTextMode(),
                 preview_clicks: _pkPreviewClicks};
   if (_pkPhoto) body.photo = _pkPhoto.ref;
@@ -5811,6 +5890,7 @@ function pollPoster(stage, task) {
         st.plan.page.layout_key = 'guide';
       }
       pkApplyPage(st.plan.page, idx, st.plan.notes || []);
+      pkSetFidelity(st.plan.fidelity);
       // 单页重拆也是文案变更：后端已对并回后的整组重判，直接摆上（pkApplyPage 不清 _pkFact）
       if (st.plan.fact_status) pkFactSet(st.plan.fact_status, pkFactSig(pkReadPayload(), pkReadPublish()));
       if (!inChain) {
@@ -5852,7 +5932,8 @@ function pollPoster(stage, task) {
     if (stage === 'poster' && st.package && st.package.id) { renderPosterResult(st.package.id); return; }
     const warn = (stage === 'plan' && st.plan && st.plan.draft_warning)
       ? `<div class="pk-verify mild">⚠️ ${esc(st.plan.draft_warning)}——文案照拆不误，但出图那一步会先拦你一次，复核后点「仍然出图」放行。</div>` : '';
-    box.innerHTML = `<div class="pk-verify pass">✅ ${esc(st.progress || '文案已就绪，可编辑后出图')}</div>` + warn;
+    box.innerHTML = `<div class="pk-verify ${st.plan && st.plan.fidelity && !st.plan.fidelity.ready ? 'fail' : 'pass'}">${esc(st.progress || '文案已就绪，可编辑后出图')}</div>` + warn;
+    if (st.plan && st.plan.plan) pkSetFidelity(st.plan.fidelity);
   };
   setTimeout(poll, 1200);
 }
@@ -6606,7 +6687,7 @@ function gotoPosterPage(id) {
   if (id) openPosterDetail(id);
 }
 
-// ── 文案对照整理稿原文 ──
+// ── 文案对照原始转写 ──
 // 拆得准不准，光看拆解框看不出来——得跟原文并排对，尤其看数字是不是原文给的。
 let _pkSource = null;
 async function pkLoadSource() {
@@ -6616,11 +6697,14 @@ async function pkLoadSource() {
   if (_pkSource && _pkSource.id === _pkId) { pkRenderSource(); return; }
   box.innerHTML = '<div class="pk-src">原文加载中…</div>';
   let d;
-  try { d = await fetch('/api/content/summaries/' + _pkId).then(r => r.json()); }
+  try { d = await fetch('/api/poster/source/' + _pkId).then(r => r.json()); }
   catch (e) { box.innerHTML = '<div class="pk-src">原文读取失败：' + esc(e.message) + '</div>'; return; }
   if (!d || d.error) { box.innerHTML = '<div class="pk-src">' + esc((d && d.error) || '原文读取失败') + '</div>'; return; }
-  _pkSource = {id: _pkId, content: d.content || '', title: d.title || '', model: d.model || ''};
+  _pkSource = {id: _pkId,
+    content: (d.sources || []).map(s => '【素材 ' + s.video_id + '】\n' + (s.transcript || '')).join('\n\n'),
+    mother: d.mother || {}, source_revision: d.source_revision || ''};
   pkRenderSource();
+  if (_pkFidelity) pkSetFidelity(_pkFidelity);
 }
 function pkRenderSource() {
   const box = document.getElementById('pk-srcbox');
@@ -6658,16 +6742,16 @@ function pkRenderSource() {
   const hasPlan = !!(plan.title || (plan.cards || []).length);
   if (!hasPlan) {
     box.innerHTML = '<div class="pk-src">' + esc(src.slice(0, 4000)) + (src.length > 4000 ? '…（原文 ' + src.length + ' 字，往下滚动看这一段就够）' : '') + '</div>'
-      + '<div class="pk-diff">这是这次出图的依据（整理稿原文）。点「① AI 拆解文案」后回到这里，'
-      + '会把你写进图里的词在原文中逐字标出来，对不上的当场报。<span style="color:var(--text-tertiary)">　原文由 ' + esc(_pkSource.model || '?') + ' 整理。</span></div>';
+      + '<div class="pk-diff">这是这次出图的依据（原始转写）。点「① AI 拆解文案」后回到这里，'
+      + '会把图上文字与原始转写做字面对照；完整判断看上方原意核对。</div>';
     return;
   }
-  box.innerHTML = '<div class="pk-src">' + (html || '（这份整理稿正文是空的）') + '</div>'
+  box.innerHTML = '<div class="pk-src">' + (html || '（原始转写为空）') + '</div>'
     + '<div class="pk-diff">'
     + (miss.length ? '<span class="miss">⚠️ 原文里找不到这些卡片标题（模型改写或编造）：</span>' + miss.map(esc).join('、') + '<br>' : '')
     + (badNums.length ? '<span class="miss">⚠️ 原文里没有这些数字：</span>' + badNums.map(esc).join('、') + '<br>' : '')
-    + (!miss.length && !badNums.length ? '<span class="hit">✅ 卡片标题与图上数字都能在原文里逐字找到</span>' : '')
-    + '<span style="color:var(--text-tertiary)">　亮底色的片段＝拆解文案里出现过、且原文里也有的词。原文由 ' + esc(_pkSource.model || '?') + ' 整理。</span></div>';
+    + (!miss.length && !badNums.length ? '<span class="hit">字面上能找到标题与数字；主体和条件仍看原意核对</span>' : '')
+    + '<span style="color:var(--text-tertiary)">　亮底色只表示字面相同，不代表语义已核。</span></div>';
 }
 function pkSrcToggle() {
   const d = document.getElementById('pk-srcpanel');

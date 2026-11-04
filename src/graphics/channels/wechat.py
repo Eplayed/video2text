@@ -261,7 +261,7 @@ _SOURCE_BLOCK_REPOST = """最高优先约束——转载整理模式（无作者
 （本篇为转载整理，无作者亲测底稿）"""
 
 
-def _build_cards_prompt(summary, author_draft, theme="", template="classic"):
+def _build_cards_prompt(summary, author_draft, theme="", template="classic", mother=None):
     """构造公众号卡片化 prompt。schema 段与底稿/整合稿用 replace 注入，不走 str.format。"""
     schema = ('{\n  "cards": [\n'
               '    {"kind": "cover", "title": "...", "subtitle": "...", '
@@ -272,6 +272,13 @@ def _build_cards_prompt(summary, author_draft, theme="", template="classic"):
               '    {"kind": "text", "title": "...", "subtitle": "...", "precondition": "...", '
               '"steps": [{"h": "...", "p": "..."}], "footer": "..."}\n  ],\n'
               '  "copy_text": "...",\n  "digest": "...",\n  "keyword_reply": "...",\n  "source_note": "..."\n}')
+    if mother:
+        schema = schema.replace('"bg": "neutral"}',
+                                '"bg": "neutral", "point_ids": ["逐字复制的母稿 point_id"]}')
+        schema = schema.replace('"tag": "..."}]}',
+                                '"tag": "..."}], "point_ids": ["逐字复制的母稿 point_id"]}')
+        schema = schema.replace('"footer": "..."}',
+                                '"footer": "...", "point_ids": ["逐字复制的母稿 point_id"]}')
     date_str = datetime.now().strftime("%m月%d日")
     theme_line = ("本篇题材：%s。封面标题与 copy_text 要点明题材，让读者一眼知道讲的是什么。" % theme) if theme else "本篇题材：未指定，按素材内容自行判断并在标题点明。"
     title_line = ""
@@ -293,11 +300,19 @@ def _build_cards_prompt(summary, author_draft, theme="", template="classic"):
               .replace("__SOURCE_BLOCK__", source_block))
     # 底稿与 content 放最后替换，避免正文里的花括号被误伤
     prompt = prompt.replace("{draft}", (author_draft or "").strip()[:3000])
-    prompt = prompt.replace("{content}", (summary.get("content") or "")[:12000])
+    content = (summary.get("content") or "")[:12000]
+    if mother:
+        from src import guide_mother
+        content = guide_mother.mother_prompt(mother)
+        prompt += ("\n【原意母稿约束】上面的整合稿正文已替换成逐字可定位的原意点。"
+                   "只用这些点写卡片；每张卡片（含封面）增加 point_ids 数组，"
+                   "列出真正支撑本张标题、条目和配文的 ID。所有 must 点必须出现在卡片。"
+                   "不得改变主体数量、谁取得点数、适用阶段、条件或否定词。")
+    prompt = prompt.replace("{content}", content)
     return prompt
 
 
-def _llm_cards(summary, author_draft, ai_config, theme="", template="classic"):
+def _llm_cards(summary, author_draft, ai_config, theme="", template="classic", mother=None):
     """调 LLM 把素材转卡片 JSON。
 
     未配置 AI → 返回 None，由调用方走本地兜底（项目纪律：不阻断，e2e 也依赖这条路径）。
@@ -314,7 +329,7 @@ def _llm_cards(summary, author_draft, ai_config, theme="", template="classic"):
             base_url=ai_config.get("api_base") or "https://api.openai.com/v1",
             timeout=300, max_retries=1,
         )
-        prompt = _build_cards_prompt(summary, author_draft, theme, template)
+        prompt = _build_cards_prompt(summary, author_draft, theme, template, mother=mother)
         resp = client.chat.completions.create(
             model=ai_config.get("model") or "gpt-4o-mini",
             messages=[{"role": "user", "content": prompt}],
@@ -525,7 +540,8 @@ def lint_package(manifest, out_dir):
 
 def generate_graphics(summary, ai_config, author_draft="", progress_cb=None,
                       theme="", skin="", title="", template=TEMPLATE_DEFAULT, real_screenshots=None,
-                      palette=None, font=None, layout=None, ref_token=""):
+                      palette=None, font=None, layout=None, ref_token="", mother=None,
+                      source_text="", output_root=None):
     """主入口：wechat_material 整合稿 → manifest dict（落盘 output/wechat/<summary_id>/）。
 
     2026-11-03 合并后：渲染统一走头条循环（toutiao.render_cards），模板白名单与头条同源、
@@ -556,7 +572,8 @@ def generate_graphics(summary, ai_config, author_draft="", progress_cb=None,
     if (title or "").strip():
         summary = dict(summary)
         summary["title"] = title.strip()[:60]
-    out_dir = OUTPUT_DIR / str(summary_id)
+    package_root = Path(output_root) if output_root is not None else OUTPUT_DIR
+    out_dir = package_root / str(summary_id)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     def _pg(msg, done=None, total=None):
@@ -585,7 +602,8 @@ def generate_graphics(summary, ai_config, author_draft="", progress_cb=None,
     tpl = templates._TEMPLATES[tpl_key]
 
     _pg("LLM 卡片化素材（模板：%s）..." % tpl["label"])
-    data = _llm_cards(summary, draft, ai_config, theme, tpl_key)
+    data = (_llm_cards(summary, draft, ai_config, theme, tpl_key, mother=mother)
+            if mother else _llm_cards(summary, draft, ai_config, theme, tpl_key))
     model = "local-template"
     if data:
         model = ai_config.get("model") or "llm"
@@ -617,6 +635,26 @@ def generate_graphics(summary, ai_config, author_draft="", progress_cb=None,
         if card.get("kind") == "text" and len(card.get("steps") or []) > 4:
             raise gate.GraphicsGateError("第 %d 张步骤卡有 %d 步，单卡最多 4 步；请拆卡"
                                          % (i, len(card.get("steps") or [])))
+    fidelity = {}
+    if mother:
+        from src import guide_mother
+        check_plan = guide_mother.wechat_plan(cards, mother)
+        fidelity = guide_mother.audit_output(mother, check_plan,
+                                              {"copy_text": data.get("copy_text") or "",
+                                               "digest": data.get("digest") or ""}, ai_config,
+                                              source_text=source_text)
+        if not fidelity["ready"]:
+            draft_dir = OUTPUT_DIR / "_drafts" / str(summary_id)
+            draft_dir.mkdir(parents=True, exist_ok=True)
+            draft_key = hashlib.sha256(json.dumps(
+                [mother["mother_revision"], cards, data.get("copy_text")],
+                ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()[:16]
+            draft_file = draft_dir / (draft_key + ".json")
+            draft_file.write_text(json.dumps({"cards": cards, "copy_text": data.get("copy_text") or "",
+                                             "digest": data.get("digest") or "", "fidelity": fidelity},
+                                            ensure_ascii=False, indent=2), encoding="utf-8")
+            raise gate.GraphicsGateError("公众号原意核对未通过：%s；卡片草稿已保留在 %s" %
+                                         ("；".join(guide_mother.audit_problems(fidelity)[:8]), draft_file))
     # 文字攻略页机制断言闸：出图前对当前文本重判，hard 拒绝出图（样稿纪律落成代码）
     claims = _claims_gate(summary, cards)
     total = len(cards)
@@ -682,7 +720,10 @@ def generate_graphics(summary, ai_config, author_draft="", progress_cb=None,
         "checklist": list(_CHECKLIST),
         "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
-    manifest["lint"] = lint_package(manifest, OUTPUT_DIR)
+    if mother:
+        manifest.update({"fidelity": fidelity, "source_revision": mother["source_revision"],
+                         "mother_revision": mother["mother_revision"]})
+    manifest["lint"] = lint_package(manifest, package_root)
 
     # 导出包：manifest + 卡片图 + 真实截图 + 文案文件（人工上传素材库时直接取用）
     (out_dir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
