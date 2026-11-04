@@ -63,6 +63,39 @@ app = Flask(__name__, static_folder="static", static_url_path="/static")
 # JSON 规范默认就是 UTF-8，浏览器 response.json() 与 Python json.load 都直接吃。
 app.json.ensure_ascii = False
 
+
+def _original_graphics_enabled():
+    """新图文产线灰度开关；只停止新任务，历史草稿与成品仍可读取。"""
+    return os.environ.get("V2T_ORIGINAL_GRAPHICS", "on").strip().lower() != "off"
+
+
+def _original_graphics_disabled():
+    return jsonify({"error": "新图文原意保留模式已暂停；已保存草稿和历史包仍可查看，"
+                             "新任务不会转入旧裁剪流程"}), 409
+
+
+def _graphics_manifest_view(manifest):
+    """只在接口响应标注旧包边界，不迁移或回写 manifest。"""
+    data = dict(manifest)
+    plan = data.get("plan") if isinstance(data.get("plan"), dict) else {}
+    source_revision = data.get("source_revision") or plan.get("source_revision")
+    mother_revision = data.get("mother_revision") or plan.get("mother_revision")
+    fidelity = data.get("fidelity") or plan.get("fidelity") or {}
+    if not isinstance(fidelity, dict):
+        fidelity = {}
+    if source_revision and mother_revision and fidelity.get("ready"):
+        data["generation_mode"] = "original_fidelity_v1"
+    else:
+        data["generation_mode"] = "legacy"
+        data["validation_label"] = "旧版，未做新版校验"
+    return data
+
+
+@app.route("/api/graphics/original-mode")
+def api_original_graphics_mode():
+    return jsonify({"enabled": _original_graphics_enabled(),
+                    "mode": "original_fidelity_v1", "env": "V2T_ORIGINAL_GRAPHICS"})
+
 # 免费额度记账挂在 openai SDK 的边界上（一次包住全部调用点，理由见 src/ai_quota.py）。
 # 挂不上不拦启动，但 /api/ai/quota 会带着 last_error，界面会明说"额度没在记账"。
 # seed_from_env() 会连带装上"会思考的模型关掉思考"那一层（src/ai_thinking.py），
@@ -3342,6 +3375,8 @@ def api_toutiao_guide_upload():
 @app.route("/api/toutiao/generate", methods=["POST"])
 def api_toutiao_generate():
     """从 toutiao_mix 整理稿生成头条图文（4 张信息图 + 微头条文案）。"""
+    if not _original_graphics_enabled():
+        return _original_graphics_disabled()
     data = request.get_json(force=True)
     summary_id = data.get("summary_id")
     theme = str(data.get("theme") or "").strip()[:30]   # 图文卡片化题材（进 LLM prompt）
@@ -3436,7 +3471,7 @@ def api_toutiao_templates():
 @app.route("/api/toutiao/list")
 def api_toutiao_list():
     try:
-        items = toutiao_graphics.list_packages()
+        items = [_graphics_manifest_view(p) for p in toutiao_graphics.list_packages()]
         rows, meta = toutiao_stats.load_snapshot()
         matched = [p for p in items if (p.get("performance") or {}).get("matched")]
         app.logger.info("图文列表 %d 组，其中已匹配平台数据 %d 组", len(items), len(matched))
@@ -3510,7 +3545,7 @@ def api_toutiao_detail(summary_id):
     package = toutiao_graphics.get_package(summary_id)
     if not package:
         return jsonify({"error": "头条图文不存在"}), 404
-    return jsonify(package)
+    return jsonify(_graphics_manifest_view(package))
 
 
 @app.route("/api/toutiao/<int:summary_id>/reveal", methods=["POST"])
@@ -3646,6 +3681,8 @@ def api_wechat_ref_upload():
 def api_wechat_generate():
     """从 wechat_material 整合稿生成公众号图片消息卡片包。
     底稿可选：填了走亲测模式（实测口吻），留空走转载模式（把他人已总结内容整理成图文）。"""
+    if not _original_graphics_enabled():
+        return _original_graphics_disabled()
     data = request.get_json(force=True)
     summary_id = data.get("summary_id")
     author_draft = str(data.get("author_draft") or "").strip()
@@ -4027,7 +4064,7 @@ def api_wechat_article_save(summary_id):
 @app.route("/api/wechat/list")
 def api_wechat_list():
     try:
-        items = wechat_graphics.list_packages()
+        items = [_graphics_manifest_view(p) for p in wechat_graphics.list_packages()]
         return jsonify({"items": items, "total": len(items)})
     except Exception as e:
         return jsonify({"error": str(e), "items": [], "total": 0}), 500
@@ -4038,7 +4075,7 @@ def api_wechat_detail(summary_id):
     package = wechat_graphics.get_package(summary_id)
     if not package:
         return jsonify({"error": "公众号图文不存在"}), 404
-    return jsonify(package)
+    return jsonify(_graphics_manifest_view(package))
 
 
 @app.route("/api/wechat/<int:summary_id>/reveal", methods=["POST"])
@@ -4577,6 +4614,8 @@ def api_poster_source(summary_id):
 @app.route("/api/poster/plan", methods=["POST"])
 def api_poster_plan():
     """只拆解不出图：产出可编辑的文案计划，先审文案再花钱出图。"""
+    if not _original_graphics_enabled():
+        return _original_graphics_disabled()
     data = request.get_json(force=True) or {}
     summary = _poster_get_summary(data.get("summary_id"))
     if not summary:
@@ -4689,6 +4728,8 @@ def api_poster_plan_page():
     前端把当前整组结构一起传过来，后端只交第 k 页给模型，并把别的页已讲的要点作为
     "别重复"清单塞进提示词；回来的也只有一页，别的页由前端原样留着。
     """
+    if not _original_graphics_enabled():
+        return _original_graphics_disabled()
     data = request.get_json(force=True) or {}
     summary = _poster_get_summary(data.get("summary_id"))
     if not summary:
@@ -4762,6 +4803,8 @@ def api_poster_plan_page():
 @app.route("/api/poster/generate", methods=["POST"])
 def api_poster_generate():
     """出图只用已拆并审过的 plan；空 plan 要回到拆文案，不暗中收费重拆。"""
+    if not _original_graphics_enabled():
+        return _original_graphics_disabled()
     data = request.get_json(force=True) or {}
     summary = _poster_get_summary(data.get("summary_id"))
     if not summary:
@@ -5661,6 +5704,7 @@ def api_poster_list():
     try:
         items = []
         for i in ai_poster.list_packages():
+            view = _graphics_manifest_view(i)
             rv = i.get("review") or {}
             items.append({"id": i.get("id"), "summary_id": i.get("summary_id") or i.get("id"),
                           "title": i.get("title"), "url": i.get("url"),
@@ -5682,7 +5726,9 @@ def api_poster_list():
                           "verify_ok": (i.get("verify") or {}).get("ok"),
                           "review_score": rv.get("score"), "review_full": rv.get("full"),
                           "review_ok": rv.get("ok"),
-                          "created_at": i.get("created_at")})
+                          "created_at": i.get("created_at"),
+                          "generation_mode": view["generation_mode"],
+                          "validation_label": view.get("validation_label") or ""})
         return jsonify({"items": items, "total": len(items)})
     except Exception as e:
         return jsonify({"error": str(e), "items": [], "total": 0}), 500
@@ -5693,7 +5739,7 @@ def api_poster_detail(summary_id):
     manifest = ai_poster.get_package(summary_id)
     if not manifest:
         return jsonify({"error": "海报不存在"}), 404
-    return jsonify(manifest)
+    return jsonify(_graphics_manifest_view(manifest))
 
 
 @app.route("/api/poster/<int:summary_id>/pick", methods=["POST"])

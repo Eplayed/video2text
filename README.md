@@ -137,6 +137,7 @@ bash run_web.sh                    # 或 cd web && python3 app.py
   Qoder 里直接跑 `/workbench-restart`；**禁用 `pkill -f "web/app.py"`**（匹配不到真实命令行，会造成旧进程占端口、新进程静默退出）。
 - 主要页面：素材库 / 整理稿（含「AI 海报」弹窗）/ 选题雷达 / 订阅与自动同步 / 排产板（`web/static/schedule.html`）/ 运营台账 / 海报成品页。
 - 异步任务一律"启动 + `/api/*/status` 轮询"；详情接口单次约 5 秒（每次整表读 Excel），**慢不等于坏了**。
+- 新图文原意保留模式默认开启。需要暂停新图文生成时，在启动工作台的进程环境设置 `V2T_ORIGINAL_GRAPHICS=off` 并按端口 PID 重启；`GET /api/graphics/original-mode` 返回当前 `enabled` 布尔值。关闭时 AI 海报拆稿/单页重拆/出图、公众号与头条卡片新生成均返回 409，不转入旧裁剪流程；已有草稿与历史包仍可读取。公众号整篇文章与采集不受此开关影响。恢复时移除该环境变量或设为 `on`，再重启工作台。
 
 ## 出图两条路
 

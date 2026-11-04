@@ -3333,7 +3333,8 @@ async function openToutiaoDetail(id) {
     const p = await fetch('/api/toutiao/' + id).then(r=>r.json());
     if (p.error) { alert(p.error); return showToutiaoList(); }
     document.getElementById('tt-detail-title').textContent = p.title || '头条图文';
-    document.getElementById('tt-img-count').textContent = '配图 · ' + (p.images||[]).length + ' 张（点击图片可放大）';
+    document.getElementById('tt-img-count').textContent = '配图 · ' + (p.images||[]).length + ' 张（点击图片可放大）'
+      + (p.validation_label ? ' · ' + p.validation_label : '');
     document.getElementById('tt-img-stack').innerHTML = (p.images||[]).map((im,i) => `
       <div class="tt-img"><span class="lb">图${i+1}</span><img src="${esc(thumbOf(im.url, 720))}" alt="${esc(im.label||'')}" loading="lazy" onclick="window.open('${esc(im.url)}','_blank')"></div>`).join('');
     document.getElementById('tt-copy-area').value = p.copy_text || '';
@@ -6724,9 +6725,10 @@ async function openPosterDetail(id) {
                                           lay: p.layout_label || ''}))
     : ((m.copies > 1 && (m.candidates || []).length > 1) ? m.candidates
        : [{url: m.url, index: m.chosen || 1, verify: m.verify, review: m.review}]);
-  document.getElementById('pk-detail-img-label').textContent = multi
+  document.getElementById('pk-detail-img-label').textContent = (multi
     ? ('成品一组 · ' + imgs.length + ' 页（发布时按这个顺序一次带走）')
-    : ('成品图 · ' + imgs.length + ' 张（点图放大）');
+    : ('成品图 · ' + imgs.length + ' 张（点图放大）'))
+    + (m.validation_label ? ' · ' + m.validation_label : '');
   document.getElementById('pk-img-stack').innerHTML = imgs.map(c => {
     const on = !multi && c.index === (m.chosen || 1);
     const cv = c.verify || {};
@@ -6982,7 +6984,8 @@ async function openWechatDetail(id) {
     const inCard = imgs.filter(im => im.hero).length;
     document.getElementById('wx-img-count').textContent =
       '卡片 · ' + imgs.length + ' 张（' + (inCard ? inCard + ' 张用了你传的真图 · ' : '')
-      + '原图 ' + shots + ' 张 · 点击放大）';
+      + '原图 ' + shots + ' 张 · 点击放大）'
+      + (p.validation_label ? ' · ' + p.validation_label : '');
     document.getElementById('wx-img-stack').innerHTML = imgs.map((im, i) => {
       const real = im.source === 'real_screenshot';
       // 卡片上标出用的是哪张用户图，发布时能一眼对上号
