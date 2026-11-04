@@ -280,19 +280,46 @@ def _output_text(plan, publish):
         for card in pg.get("cards") or []:
             parts.extend(str(card.get(k) or "") for k in ("t", "d"))
     parts.extend(str((publish or {}).get(k) or "") for k in ("copy_text", "digest", "xhs_copy"))
+    for key in ("tt_titles", "xhs_titles"):
+        parts.extend(str(x) for x in (publish or {}).get(key) or [] if x)
     return "\n".join(x for x in parts if x)
 
 
-def _model_compare(mother, output, ai_config, source_text="", mappings=None):
+def _field_texts(plan, publish):
+    """每个读者可见的标题/配文单独列项，审核结果可精确定位到字段。"""
+    fields = {}
+    for index, pg in enumerate(plan.get("pages") or [plan], 1):
+        for key in ("title", "subtitle"):
+            value = str(pg.get(key) or "").strip()
+            if value:
+                fields["page_%d.%s" % (index, key)] = value
+    for key in ("copy_text", "digest", "xhs_copy"):
+        value = str((publish or {}).get(key) or "").strip()
+        if value:
+            sentences = [part.strip() for part in re.split(r"(?<=[。！？!?；;])|\n+", value)
+                         if part.strip()]
+            for index, sentence in enumerate(sentences, 1):
+                fields["publish.%s.%d" % (key, index)] = sentence
+    for key in ("tt_titles", "xhs_titles"):
+        for index, value in enumerate((publish or {}).get(key) or [], 1):
+            if str(value).strip():
+                fields["publish.%s_%d" % (key, index)] = str(value).strip()
+    return fields
+
+
+def _model_compare(mother, output, ai_config, source_text="", mappings=None, fields=None):
     prompt = """你是独立校对员。逐句比较【源文引文】与【待发布文案】，专查主体数量、谁做了什么、条件、先后、概率、否定词。
 源文引文逐字来自原始转写；不得引用或相信待发布文案自己声称的出处。不要补游戏常识。
 若有任何变义、无源断言，或卡片挂的 point_id 实际不支持卡片文字，issues 逐条列待发布文案的原句、问题、对应引文；不得用免责声明抵消错误。
-输出 JSON：{"issues":[{"text":"待发布文案原句","problem":"具体变义","source_quote":"对应源文原句"}]}。没有问题才返回空数组。
+对【逐项字段】中的每一项给出支撑它的 point_id 列表。纯导航标签可填 navigation=true，但包含数字、主体、条件或结论的字段不得标为导航。只列真实支持该句的点，不能为凑齐而乱挂 ID。
+输出 JSON：{"issues":[{"text":"待发布文案原句","problem":"具体变义","source_quote":"对应源文原句"}],"field_sources":{"page_1.title":{"point_ids":["现有ID"],"navigation":false}}}。field_sources 必须覆盖逐项字段全部键；没有问题才返回空 issues。
 【原始转写】%s
 【已定位要点】%s
 【卡片与来源映射】%s
+【逐项字段】%s
 【待发布文案】%s""" % (source_text or "（仅有已定位要点）", mother_prompt(mother),
-                   json.dumps(mappings or [], ensure_ascii=False), output)
+                   json.dumps(mappings or [], ensure_ascii=False),
+                   json.dumps(fields or {}, ensure_ascii=False), output)
     return _client_json(ai_config, prompt)
 
 
@@ -344,20 +371,41 @@ def audit_output(mother, plan, publish, ai_config, checker=None, source_text="")
     coverage_issues = ([{"point_id": pid, "problem": "必保点未映射到图上卡片"} for pid in missing]
                        + [{"point_id": pid, "problem": "引用了不存在的母稿点"} for pid in unknown])
     output = _output_text(plan, publish)
+    fields = _field_texts(plan, publish)
     revision = _digest([mother["mother_revision"], output, sorted(used), _digest(source_text)])
     semantic = {"status": "unknown", "issues": [], "input_revision": revision}
     try:
         result = (checker(mother, output, ai_config, source_text) if checker
-                  else _model_compare(mother, output, ai_config, source_text, mappings))
+                  else _model_compare(mother, output, ai_config, source_text, mappings, fields))
         issues = result.get("issues") if isinstance(result, dict) else None
         if not isinstance(issues, list):
             raise MotherError("忠实性校对未返回 issues 数组")
+        field_sources = result.get("field_sources") if isinstance(result, dict) else None
+        if checker is None or field_sources is not None:
+            if not isinstance(field_sources, dict):
+                raise MotherError("校对未返回标题与配文来源映射")
+            for field, value in fields.items():
+                entry = field_sources.get(field)
+                if not isinstance(entry, dict):
+                    coverage_issues.append({"field": field, "problem": "标题或配文缺来源映射"})
+                    continue
+                refs = entry.get("point_ids") or []
+                if not isinstance(refs, list):
+                    refs = []
+                invalid = [str(pid) for pid in refs if str(pid) not in points]
+                if invalid:
+                    coverage_issues.append({"field": field, "problem": "引用了不存在的母稿点：%s" % ",".join(invalid)})
+                if not refs and not (entry.get("navigation") and not re.search(r"\d|[一二三四五六七八九十两]个", value)):
+                    coverage_issues.append({"field": field, "problem": "实质标题或配文没有对应母稿点"})
+            semantic["field_sources"] = {k: field_sources.get(k) for k in fields}
         semantic["issues"] = _local_semantic_issues(output, source_text) + issues
         semantic["status"] = "fail" if semantic["issues"] else "pass"
     except Exception as exc:
         semantic["issues"] = [{"problem": "忠实性校对未完成：%s" % str(exc)[:200]}]
     coverage = {"status": "fail" if coverage_issues else "pass",
                 "issues": coverage_issues, "input_revision": revision}
+    if semantic.get("field_sources") is not None:
+        coverage["field_sources"] = semantic["field_sources"]
     return {"coverage": coverage, "semantic": semantic,
             "source_revision": mother["source_revision"],
             "mother_revision": mother["mother_revision"],
@@ -367,7 +415,7 @@ def audit_output(mother, plan, publish, ai_config, checker=None, source_text="")
 def audit_problems(check):
     problems = []
     for item in (check.get("coverage") or {}).get("issues") or []:
-        problems.append("原意覆盖：%s（%s）" % (item.get("point_id") or "?", item.get("problem") or ""))
+        problems.append("原意覆盖：%s（%s）" % (item.get("field") or item.get("point_id") or "?", item.get("problem") or ""))
     for item in (check.get("semantic") or {}).get("issues") or []:
         problems.append("原意忠实性：%s%s" % (item.get("text") or "",
                                          item.get("problem") or "未判"))

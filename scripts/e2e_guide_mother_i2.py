@@ -87,6 +87,24 @@ def main():
         ok = guide_mother.audit_output(mother, plan, {}, {"api_key": "fake"},
                                        checker=lambda *_: {"issues": []})
         check("必保点齐且语义复核完成才就绪", ok["ready"])
+        publish = {"copy_text": "保留条件", "tt_titles": ["两个小号拿点数"]}
+        fields = {"page_1.title": {"point_ids": [pid], "navigation": False},
+                  "publish.copy_text.1": {"point_ids": [pid], "navigation": False},
+                  "publish.tt_titles_1": {"point_ids": [pid], "navigation": False}}
+        mapped = guide_mother.audit_output(
+            mother, plan, publish, {"api_key": "fake"},
+            checker=lambda *_: {"issues": [], "field_sources": fields})
+        check("标题和配文逐项有来源映射才放行", mapped["ready"]
+              and mapped["semantic"]["field_sources"]["publish.tt_titles_1"]["point_ids"] == [pid])
+        absent = guide_mother.audit_output(
+            mother, plan, publish, {"api_key": "fake"},
+            checker=lambda *_: {"issues": [], "field_sources": {"page_1.title": fields["page_1.title"]}})
+        check("标题候选或配文漏映射单独阻断", not absent["ready"]
+              and any(x.get("field") == "publish.tt_titles_1" for x in absent["coverage"]["issues"]))
+        check("改标题后审核输入版本变化", guide_mother.audit_output(
+            mother, plan, dict(publish, tt_titles=["三个小号拿点数"]), {"api_key": "fake"},
+            checker=lambda *_: {"issues": [], "field_sources": fields})["coverage"]["input_revision"]
+            != mapped["coverage"]["input_revision"])
         sample_source = ("两个小号升专业后拿到11点。后续有两条路线，省钱路线再建第三个小号，"
                          "三个小号补最后5点。第一个小号先当材料仓库，随后也拿到点数。")
         sample = {"title": "三个小号凑齐11点", "cards": [

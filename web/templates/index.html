@@ -4179,8 +4179,42 @@ function pkFidelityHtml(f) {
             + '。请对照原始转写改稿，当前不能出图。')
     + (issues.length ? '<ul>' + issues.slice(0, 8).map(x => '<li>'
       + esc((x.point_id ? ((((_pkSource || {}).mother || {}).points || []).find(p => p.point_id === x.point_id) || {}).display_text || x.point_id : '')
-        + (x.point_id ? '：' : '') + (x.text || '') + (x.problem || '待核'))
+        + (x.point_id ? '：' : '') + (x.field ? x.field + '：' : '') + (x.text || '') + (x.problem || '待核'))
+      + ((x.point_id || x.field) && /^[\w.]+$/.test(x.point_id || x.field)
+        ? ' <button type="button" class="btn ghost sm" onclick="pkFocusFidelityIssue(\''
+          + (x.point_id || x.field) + '\')">定位</button>' : '')
       + '</li>').join('') + '</ul>' : '') + '</div>';
+}
+async function pkFocusFidelityIssue(ref) {
+  if (ref.indexOf('page_') === 0) {
+    const match = /^page_(\d+)\.(title|subtitle)$/.exec(ref);
+    if (match) {
+      const index = Number(match[1]) - 1;
+      if (index >= 0 && index < _pkPages.length && index !== _pkCur) {
+        pkFlushForm(); pkRenderPlan(_pkLastPlan, _pkLastPublish, index);
+        pkSetFidelity(_pkFidelity);
+      }
+      const input = document.getElementById(match[2] === 'title' ? 'pk-title' : 'pk-subtitle');
+      if (input) { input.scrollIntoView({block:'center'}); input.focus(); }
+    }
+    return;
+  }
+  if (ref.indexOf('publish.') === 0) {
+    const key = ref.slice(8).replace(/\.\d+$/, '');
+    if ((key === 'xhs_copy' || key.indexOf('xhs_titles_') === 0) && _pkChannel !== 'xhs') pkSetChannel('xhs');
+    if (key.indexOf('tt_titles_') === 0 && _pkChannel === 'xhs') pkSetChannel('toutiao');
+    const id = key === 'copy_text' || key === 'xhs_copy' ? 'pk-copy'
+      : key === 'digest' ? 'pk-digest' : /^tt_titles_\d+$/.test(key)
+      ? 'pk-title-tt-' + (Number(key.split('_').pop()) - 1)
+      : /^xhs_titles_\d+$/.test(key) ? 'pk-title-xhs-' + (Number(key.split('_').pop()) - 1) : '';
+    const input = id && document.getElementById(id);
+    if (input) { input.scrollIntoView({block:'center'}); input.focus(); }
+    return;
+  }
+  const panel = document.getElementById('pk-srcpanel');
+  if (panel) panel.open = true;
+  await pkLoadSource();
+  pkFocusMotherPoint(ref);
 }
 function pkSetFidelity(f) {
   _pkFidelity = f || null;
@@ -6740,18 +6774,43 @@ function pkRenderSource() {
   const nums = (planText.match(/\d[\d.,]{1,}/g) || []).filter((v, i, a) => a.indexOf(v) === i);
   const badNums = nums.filter(n => src.indexOf(n) < 0);
   const hasPlan = !!(plan.title || (plan.cards || []).length);
+  const motherHead = pkMotherSummaryHtml();
   if (!hasPlan) {
-    box.innerHTML = '<div class="pk-src">' + esc(src.slice(0, 4000)) + (src.length > 4000 ? '…（原文 ' + src.length + ' 字，往下滚动看这一段就够）' : '') + '</div>'
+    box.innerHTML = motherHead + '<div class="pk-src">' + esc(src.slice(0, 4000)) + (src.length > 4000 ? '…（原文 ' + src.length + ' 字，往下滚动看这一段就够）' : '') + '</div>'
       + '<div class="pk-diff">这是这次出图的依据（原始转写）。点「① AI 拆解文案」后回到这里，'
       + '会把图上文字与原始转写做字面对照；完整判断看上方原意核对。</div>';
     return;
   }
-  box.innerHTML = '<div class="pk-src">' + (html || '（原始转写为空）') + '</div>'
+  box.innerHTML = motherHead + '<div class="pk-src">' + (html || '（原始转写为空）') + '</div>'
     + '<div class="pk-diff">'
     + (miss.length ? '<span class="miss">⚠️ 原文里找不到这些卡片标题（模型改写或编造）：</span>' + miss.map(esc).join('、') + '<br>' : '')
     + (badNums.length ? '<span class="miss">⚠️ 原文里没有这些数字：</span>' + badNums.map(esc).join('、') + '<br>' : '')
     + (!miss.length && !badNums.length ? '<span class="hit">字面上能找到标题与数字；主体和条件仍看原意核对</span>' : '')
     + '<span style="color:var(--text-tertiary)">　亮底色只表示字面相同，不代表语义已核。</span></div>';
+}
+function pkMotherSummaryHtml() {
+  const mother = (_pkSource || {}).mother || {};
+  const points = mother.points || [];
+  if (!points.length) return '<div class="pk-diff">原意母稿未完成，当前没有可核对的要点。</div>';
+  const must = points.filter(p => p.priority === 'must');
+  const used = new Set();
+  _pkPages.forEach(pg => (pg.cards || []).forEach(c => (c.point_ids || []).forEach(id => used.add(id))));
+  const missing = must.filter(p => !used.has(p.point_id));
+  return '<div class="pk-diff"><b>核心答案：</b>' + esc(mother.core_answer || '请看原文要点')
+    + '<br>必保信息已关联 ' + (must.length - missing.length) + '/' + must.length + ' 条。'
+    + (missing.length ? '<br><b>还没落到卡片：</b>' + missing.slice(0, 8).map(p =>
+        '<button type="button" class="btn ghost sm" onclick="pkFocusMotherPoint(\'' + p.point_id + '\')">'
+        + esc((p.display_text || p.quote || '').slice(0, 26)) + '</button>').join(' ') : '')
+    + '<div id="pk-source-focus"></div></div>';
+}
+function pkFocusMotherPoint(id) {
+  const point = (((_pkSource || {}).mother || {}).points || []).find(p => p.point_id === id);
+  const box = document.getElementById('pk-source-focus');
+  if (!point || !box) return;
+  box.innerHTML = '<b>原句：</b>' + esc(point.quote || '')
+    + '<br><small>素材 ' + esc(String((point.source_ref || {}).video_id || '')) + '，原文字符位置 '
+    + esc(String((point.source_ref || {}).start || 0)) + '</small>';
+  box.scrollIntoView({block:'center', behavior:'smooth'});
 }
 function pkSrcToggle() {
   const d = document.getElementById('pk-srcpanel');

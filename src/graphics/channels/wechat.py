@@ -285,11 +285,19 @@ def _build_cards_prompt(summary, author_draft, theme="", template="classic", mot
     if (summary.get("title") or "").strip():
         title_line = ("推荐标题（来自素材/用户指定）：%s。第 1 张 cover 卡的 title 优先采用它，"
                       "可微调语气与字数但必须保留核心词，不要另起炉灶。" % summary["title"].strip())
+    if mother:
+        title_line = "封面标题只取原意母稿中可定位的核心答案；旧整合稿标题不作事实依据。"
     tpl_key = template if template in TEMPLATE_WHITELIST else "classic"
     tpl = templates._TEMPLATES[tpl_key]
     is_repost = not (author_draft or "").strip()
     source_block = _SOURCE_BLOCK_REPOST if is_repost else _SOURCE_BLOCK_TESTED
+    if mother:
+        source_block = ("最高优先约束——原意母稿模式：只从下方逐字定位到原始转写的要点制作卡片。"
+                        "旧整合稿不作事实依据；保留原句中的主体、数量、阶段、条件和不确定性。"
+                        "不得把视频口播说成官方公告，也不得补游戏常识。")
     compliance = _COMPLIANCE_NOTE_REPOST if is_repost else _COMPLIANCE_NOTE
+    if mother:
+        compliance = ""
     prompt = (_CARDS_PROMPT
               .replace("{schema_placeholder}", schema)
               .replace("{{DATE}}", date_str)
@@ -304,10 +312,19 @@ def _build_cards_prompt(summary, author_draft, theme="", template="classic", mot
     if mother:
         from src import guide_mother
         content = guide_mother.mother_prompt(mother)
+        prompt = prompt.replace("整合稿：\n{content}", "原意母稿：\n{content}")
+        prompt = prompt.replace("需要提醒读者时，只能写读者视角的话（如「工具功能与价格可能调整，以官方最新说明为准」）。",
+                                "提醒只写原始转写中确有的条件或限制，不添加与题材无关的免责声明。")
+        prompt = prompt.replace("末尾按需附「」，", "末尾无需附 AI 声明或侵权声明，")
+        prompt = prompt.replace("如「回复 工具清单 领取完整实测列表」；素材里没有可推关键词就留空字符串",
+                                "源文没有可提供的清单就留空字符串")
+        prompt = re.sub(r"来源说明一句话（≤50字，含数据口径截至[^）]+）",
+                        "来源说明一句话（≤50字，只写来源归属，不补核验日期）", prompt)
         prompt += ("\n【原意母稿约束】上面的整合稿正文已替换成逐字可定位的原意点。"
                    "只用这些点写卡片；每张卡片（含封面）增加 point_ids 数组，"
                    "列出真正支撑本张标题、条目和配文的 ID。所有 must 点必须出现在卡片。"
-                   "不得改变主体数量、谁取得点数、适用阶段、条件或否定词。")
+                   "不得改变主体数量、谁取得点数、适用阶段、条件或否定词。"
+                   "原文给出具体专名时逐个保留，不压成泛称；原文只列流派时不要写成推荐。")
     prompt = prompt.replace("{content}", content)
     return prompt
 
