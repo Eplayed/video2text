@@ -3972,6 +3972,23 @@ def _poster_load_plan(sid):
         return None
 
 
+def _poster_fidelity(sid, mother, plan, publish, cfg, source_text):
+    """只复用服务端已通过且输入逐字相同的审核；客户端自带的 PASS 不算。"""
+    from src import guide_mother
+    revision = guide_mother.audit_revision(mother, plan, publish, source_text)
+    saved = _poster_load_plan(sid) or {}
+    check = saved.get("fidelity") or {}
+    if (check.get("ready") and (check.get("coverage") or {}).get("input_revision") == revision
+            and (check.get("semantic") or {}).get("input_revision") == revision
+            and check.get("source_revision") == mother.get("source_revision")
+            and check.get("mother_revision") == mother.get("mother_revision")):
+        return check, True
+    check = guide_mother.audit_output(mother, plan, publish, cfg, source_text=source_text)
+    saved.update({"plan": plan, "publish": publish, "fidelity": check})
+    _poster_save_plan(sid, saved)
+    return check, False
+
+
 def _poster_promote_staged(sid, stage, source_revision, mother_revision, target=None):
     """原文持锁复核后再替换成品目录；迟到的任务只能留下草稿。"""
     import shutil
@@ -4665,9 +4682,9 @@ def api_poster_generate():
         if (current.get("mother_revision") != plan.get("mother_revision")
                 or current_source != plan.get("source_revision")):
             raise ai_poster.PosterError("原始转写或母稿已更新，请重新拆稿")
-        fidelity = guide_mother.audit_output(
-            current, plan, publish or {}, _fast_config(),
-            source_text="\n".join(s["text"] for s in _sources))
+        fidelity, _reused = _poster_fidelity(
+            summary["id"], current, plan, publish or {}, _fast_config(),
+            "\n".join(s["text"] for s in _sources))
         if not fidelity["ready"]:
             raise ai_poster.PosterError("原意核对未通过：%s；草稿已保留，请按原文修改后重试" %
                                         "；".join(guide_mother.audit_problems(fidelity)[:8]))

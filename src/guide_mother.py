@@ -372,7 +372,7 @@ def audit_output(mother, plan, publish, ai_config, checker=None, source_text="")
                        + [{"point_id": pid, "problem": "引用了不存在的母稿点"} for pid in unknown])
     output = _output_text(plan, publish)
     fields = _field_texts(plan, publish)
-    revision = _digest([mother["mother_revision"], output, sorted(used), _digest(source_text)])
+    revision = audit_revision(mother, plan, publish, source_text)
     semantic = {"status": "unknown", "issues": [], "input_revision": revision}
     try:
         result = (checker(mother, output, ai_config, source_text) if checker
@@ -410,6 +410,16 @@ def audit_output(mother, plan, publish, ai_config, checker=None, source_text="")
             "source_revision": mother["source_revision"],
             "mother_revision": mother["mother_revision"],
             "ready": coverage["status"] == "pass" and semantic["status"] == "pass"}
+
+
+def audit_revision(mother, plan, publish, source_text=""):
+    """审核输入只包括读者可见的事实文字、映射 ID、原文版本；换皮不改变它。"""
+    used = set()
+    for page in plan.get("pages") or [plan]:
+        for card in page.get("cards") or []:
+            used.update(str(x) for x in (card.get("point_ids") or []))
+    return _digest([mother["mother_revision"], _output_text(plan, publish),
+                    sorted(used), _digest(source_text)])
 
 
 def audit_problems(check):
