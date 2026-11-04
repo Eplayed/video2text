@@ -3998,7 +3998,7 @@ function pkRenderFramesHint() {
       + (_pkStripOpen ? '收起' : '看这 ' + items.length + ' 张') + '</button>';
   }
   html += isGuide
-    ? '<br>这一组 <b>' + np + ' 页</b>，<b>每页 1 张</b>上面的画面当证据（哪页漏了会自动补一张）；'
+    ? '<br>这一组 <b>' + np + ' 页</b>，每页最多用 1 张相关画面作证据；没有相关画面可以保留文字页；'
         + '<b>出图 0 元</b>（这一档不叫 AI 画底图）'
     : '<br>出图出的是<b>页</b>：这一版 <b>' + np + ' 页</b>，底图由 AI 现画（'
         + (np * 0.5).toFixed(1) + ' 元），<b>不会用到上面那些画面</b>。'
@@ -4279,7 +4279,7 @@ function pkRenderPublish() {
     html += '<div class="pk-hint">小红书档：配文这一格是<b>小红书那一份</b>（不带尾注、不带关键词回复）——'
           + '正文里的 AI 自证句和「回复 XX 获取」就是那次「AI 托管」判决的旁证。'
           + '发布时在发布页【笔记内容声明】勾选「笔记含AI合成内容」。</div>'
-      + `<div class="pk-row"><span class="pk-tag">配文</span><textarea id="pk-copy" data-key="xhs_copy" class="pk-ta" placeholder="第一句给结论 + 要点 3-5 条（每条「· 」开头）+ 收尾一句。可以写「我」但只用在整理动作上，不许编游戏内亲测">${esc(pub.xhs_copy || '')}</textarea></div>`
+      + `<div class="pk-row"><span class="pk-tag">配文</span><textarea id="pk-copy" data-key="xhs_copy" class="pk-ta" placeholder="先给核心信息，按素材写清要点和条件；不许编游戏内亲测">${esc(pub.xhs_copy || '')}</textarea></div>`
       + `<div class="pk-row"><span class="pk-tag">话题标签</span><input id="pk-tags" value="${esc((pub.xhs_tags || []).join(' '))}" placeholder="5-8 个，空格隔开：#魔兽世界 #天裔"></div>`
       + `<div class="pk-row"><span class="pk-tag">摘要</span><textarea id="pk-digest" class="pk-ta" style="min-height:44px" placeholder="≤120 字">${esc(pub.digest || '')}</textarea></div>`
       + `<div class="pk-row"><span class="pk-tag">来源说明</span><input id="pk-src" value="${esc(pub.source_note || '')}" maxlength="50" placeholder="≤50 字，含数据口径日期"></div>`;
@@ -4293,7 +4293,7 @@ function pkRenderPublish() {
     if (_pkChannel === 'wechat') {
       html += '<div class="pk-hint">公众号 · 图片消息档：图传微信素材库→发图片消息（无原创按钮），配文保留文末尾注，发布前勾「内容由 AI 生成」。</div>';
     }
-    html += `<div class="pk-row"><span class="pk-tag">配文</span><textarea id="pk-copy" data-key="copy_text" class="pk-ta" placeholder="120-260 字：钩子开头 + 要点 3-5 条 + 收尾引导">${esc(pub.copy_text || '')}</textarea></div>`
+    html += `<div class="pk-row"><span class="pk-tag">配文</span><textarea id="pk-copy" data-key="copy_text" class="pk-ta" placeholder="开头给核心信息，保留必要条件；按内容分行">${esc(pub.copy_text || '')}</textarea></div>`
       + `<div class="pk-row"><span class="pk-tag">摘要</span><textarea id="pk-digest" class="pk-ta" style="min-height:44px" placeholder="≤120 字，公众号发布页用">${esc(pub.digest || '')}</textarea></div>`
       + `<div class="pk-row"><span class="pk-tag">关键词回复</span><input id="pk-kw" value="${esc(pub.keyword_reply || '')}" maxlength="30" placeholder="≤30 字，留空则不配"></div>`
       + `<div class="pk-row"><span class="pk-tag">来源说明</span><input id="pk-src" value="${esc(pub.source_note || '')}" maxlength="50" placeholder="≤50 字，含数据口径日期"></div>`;
@@ -4303,7 +4303,8 @@ function pkRenderPublish() {
 function pkNormalizeFooters() {
   if (!_pkPages.length) return;
   for (let i = 0; i < _pkPages.length; i++) {
-    _pkPages[i].footer = i === _pkPages.length - 1 ? (_pkFoot || '') : '';
+    if (i === _pkPages.length - 1) _pkPages[i].footer = _pkFoot || _pkPages[i].footer || '';
+    else if (_pkPages[i].footer === _pkFoot) _pkPages[i].footer = '';
   }
 }
 // 攻略页那五样零件（栏目名/真帧/大字数字/对照/警示/互动）是后端算好塞进 plan 的，
@@ -4422,24 +4423,25 @@ function pkPagesOf(p) {
 }
 function pkProblems(p) {
   const pages = pkPagesOf(p);
-  if (pages.length > 1) {
-    const bad = [];
-    if (pages.length > PK_PAGE_MAX) bad.push('最多 ' + PK_PAGE_MAX + ' 页');
-    // 多页时每页卡片下限放宽到 1（跟后端 lint_plan 一致）：末页常常只有一条结论，
-    // 按单页那套"至少 3 张"去判会把能发的稿子误报成不合格
-    pages.forEach((pg, i) => {
-      const m = [];
-      if (!pg.title) m.push('主标题为空');
-      if (!(pg.cards || []).length) m.push('这页还是空的，出图时会被丢掉');
-      if (pkChars(pg) > PK_LIMITS.total) m.push('超 ' + PK_LIMITS.total + ' 字');
-      m.forEach(x => bad.push('第 ' + (i + 1) + ' 页：' + x));
-    });
-    return bad;
-  }
   const bad = [];
-  if (!p.title) bad.push('主标题不能为空');
-  if ((p.cards || []).length < PK_LIMITS.cardMin) bad.push('卡片至少 ' + PK_LIMITS.cardMin + ' 张');
-  if (pkChars(p) > PK_LIMITS.total) bad.push('合计超 ' + PK_LIMITS.total + ' 字');
+  if (pages.length > PK_PAGE_MAX) bad.push('共 ' + pages.length + ' 页，最多 ' + PK_PAGE_MAX + ' 页；请拆成两组');
+  pages.forEach((pg, i) => {
+    const at = pages.length > 1 ? '第 ' + (i + 1) + ' 页：' : '';
+    if (!pg.title) bad.push(at + '主标题为空');
+    if (!(pg.cards || []).length && !pg.ask && !pg.warn && !pg.bignum && !pg.contrast && !pg.photos) {
+      bad.push(at + '没有正文内容');
+    }
+    if ((pg.cards || []).length > PK_LIMITS.cardMax) bad.push(at + '卡片 ' + pg.cards.length + ' 张，超过 ' + PK_LIMITS.cardMax + ' 张');
+    if (pkChars(pg) > PK_LIMITS.total) bad.push(at + '合计超 ' + PK_LIMITS.total + ' 字');
+    [['title', '主标题', PK_LIMITS.title], ['subtitle', '副标题', PK_LIMITS.subtitle],
+     ['footer', '尾注', PK_LIMITS.footer]].forEach(x => {
+      if ((pg[x[0]] || '').length > x[2]) bad.push(at + x[1] + '超 ' + x[2] + ' 字');
+    });
+    (pg.cards || []).forEach((c, j) => {
+      if ((c.t || '').length > PK_LIMITS.cardT) bad.push(at + '卡片' + (j + 1) + '标题超 ' + PK_LIMITS.cardT + ' 字');
+      if ((c.d || '').length > PK_LIMITS.cardD) bad.push(at + '卡片' + (j + 1) + '说明超 ' + PK_LIMITS.cardD + ' 字');
+    });
+  });
   return bad;
 }
 function _pkRow(tag, id, val, max, ph) {
@@ -4482,18 +4484,18 @@ function pkRenderPlan(plan, publish, cur) {
   if (cur === undefined || !_pkPages.length) {
     // 归一：后端可能给 pages[]（多页），也可能给平铺的一份（单页/历史素材）
     const raw = (plan.pages && plan.pages.length) ? plan.pages : [plan];
-    _pkPages = raw.slice(0, PK_PAGE_MAX).map(p => pkCarryGuide({
+    _pkPages = raw.map(p => pkCarryGuide({
       role: p.role || '', layout_key: p.layout_key || '', title: p.title || '',
-      subtitle: p.subtitle || '', footer: plan.footer || p.footer || '',
+      subtitle: p.subtitle || '', footer: p.footer || plan.footer || '',
       scene: p.scene || plan.scene || '',
-      cards: (p.cards || []).slice(0, PK_LIMITS.cardMax)
+      cards: (p.cards || [])
               .map(c => ({t: c.t || '', d: c.d || '', v: c.v || ''}))
     }, p));
     if (!_pkPages.length) _pkPages = [{role: '', layout_key: '', title: '', subtitle: '',
                                        footer: '', scene: '', cards: []}];
     _pkCur = 0;
     // 整组那句合规声明收进 _pkFoot（只有一句话，改哪页都是改它），页面数组里只留末页那份
-    _pkFoot = plan.footer || (_pkPages[_pkPages.length - 1] || {}).footer || '';
+    _pkFoot = (_pkPages[_pkPages.length - 1] || {}).footer || plan.footer || '';
   } else {
     _pkCur = Math.max(0, Math.min(_pkPages.length - 1, cur));
     if (!_pkFoot) { _pkFoot = (_pkPages[_pkPages.length - 1] || {}).footer || ''; }
@@ -4524,7 +4526,7 @@ function pkRenderPlan(plan, publish, cur) {
             ? '：这条素材能用的画面一共 ' + usable + ' 张，一页一张撑不满 '
               + _pkPagesWanted + ' 页'
             : '：模型按要点数只给到 ' + _pkPages.length + ' 页')
-        + '。要硬凑到 ' + _pkPagesWanted + ' 页就点「＋ 加一页」自己加（画面不够的那页会补一张挨着的帧）。';
+        + '。请按内容调整页数；没有相关画面的页可以保留文字页。';
     } else {
       _pkPagesNote = '';
       sel.value = hit ? got : '0';
@@ -4541,7 +4543,7 @@ function pkRenderPlan(plan, publish, cur) {
     + _pkRow('副标题', 'pk-subtitle', pg.subtitle, PK_LIMITS.subtitle, '≤10 字，可留空');
   // 空页也要给一行可写的要点：以前「＋ 加一页」摊出来的页一张卡片都没有，
   // 表单里连输入框都不渲染，用户只能填标题、没法补要点，预览自然永远等不到第 3 张图
-  const rows = (pg.cards || []).slice(0, PK_LIMITS.cardMax);
+  const rows = (pg.cards || []).slice();
   if (!rows.length) rows.push({t: '', d: '', v: ''});
   rows.forEach((c, i) => {
     html += `<div class="pk-row"><span class="pk-tag">卡片${i + 1}</span>`
@@ -4580,7 +4582,7 @@ function pkRenderPlan(plan, publish, cur) {
 function pkReadPlan() {
   const g = id => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
   const cards = [];
-  for (let i = 0; i < PK_LIMITS.cardMax; i++) {
+  for (let i = 0; i < document.querySelectorAll('[id^="pk-ct-"]').length; i++) {
     const t = g('pk-ct-' + i), d = g('pk-cd-' + i);
     if (t || d) cards.push({t: t, d: d, v: g('pk-cv-' + i)});
   }
@@ -4640,7 +4642,6 @@ function pkRecHtml() {
     + ' · ' + esc(lays) + '</b>'
     + (_pkWhy ? '<span class="why">' + esc(_pkWhy) + '</span>' : '')
     + (parts.length ? '<span class="chg">已改成：' + esc(parts.join('、')) + '</span>' : '')
-    + (_pkPages.length > 1 ? '<button type="button" class="btn ghost sm" onclick="pkFlatten()">合成 1 页</button>' : '')
     + (_pkPlanBusy
         ? '<button type="button" class="btn ghost sm" disabled>正在重拆 · '
           + esc(_elapsedText(Date.now() - (_pkPlanT0 || Date.now()))) + '…（约 30 秒）</button>'
@@ -4658,6 +4659,10 @@ function pkFlatten() {
   pkFlushForm();
   const all = [];
   _pkPages.forEach(p => { (p.cards || []).forEach(c => all.push(c)); });
+  if (all.length > PK_LIMITS.cardMax || _pkPages.slice(1).some(p => p.subtitle || p.footer || p.warn || p.contrast || p.bignum || p.ask || p.photos)) {
+    alert('这一组有多页独立内容，合成单页会丢信息；请逐页整理后再出图。');
+    return;
+  }
   const keep = all.slice(0, PK_LIMITS.cardMax), lost = all.slice(PK_LIMITS.cardMax);
   const msg = '合成 1 页：一页最多 ' + PK_LIMITS.cardMax + ' 条，整组现在有 ' + all.length + ' 条。\n'
     + (lost.length ? ('多出的 ' + lost.length + ' 条（' + lost.map(c => c.t || c.d).join('、')
@@ -4767,9 +4772,9 @@ function pkApplyPage(page, idx, notes) {
   page.footer = _pkFoot || _pkPages[i].footer || page.footer;
   _pkPages[i] = page;
   if (_pkLastPlan) {
-    _pkLastPlan.pages = _pkPages.map(p => ({role: p.role, layout_key: p.layout_key,
+    _pkLastPlan.pages = _pkPages.map(p => pkCarryGuide({role: p.role, layout_key: p.layout_key,
                                             title: p.title, subtitle: p.subtitle,
-                                            scene: p.scene, footer: p.footer, cards: p.cards}));
+                                            scene: p.scene, footer: p.footer, cards: p.cards}, p));
     if (i === 0) {
       _pkLastPlan.title = page.title; _pkLastPlan.subtitle = page.subtitle;
       _pkLastPlan.cards = page.cards; _pkLastPlan.scene = page.scene;
@@ -4783,7 +4788,7 @@ function pkApplyPage(page, idx, notes) {
 function pkFlushForm() {
   const g = id => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
   const cards = [];
-  for (let i = 0; i < PK_LIMITS.cardMax; i++) {
+  for (let i = 0; i < document.querySelectorAll('[id^="pk-ct-"]').length; i++) {
     const t = g('pk-ct-' + i), d = g('pk-cd-' + i);
     if (t || d) cards.push({t: t, d: d, v: g('pk-cv-' + i)});
   }

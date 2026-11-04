@@ -127,8 +127,9 @@ def main():
     ck("空页丢掉、其余保留", len(ai_poster.plan_pages(hybrid)) == 2)
     many = dict(one, pages=[{"title": "P%d" % i, "cards": one["cards"][:2]}
                             for i in range(ai_poster.PAGE_MAX + 2)])
-    ck("超过 PAGE_MAX 的页被截断（上限跟着表走，不抄死数字）",
-       len(ai_poster.plan_pages(many)) == ai_poster.PAGE_MAX)
+    ck("超过 PAGE_MAX 的页全部保留并明确报错",
+       len(ai_poster.plan_pages(many)) == ai_poster.PAGE_MAX + 2
+       and any("页数" in x for x in ai_poster.lint_plan(many, ai_poster.limits_for("typeset"))))
     ck("每页没写 footer 时继承顶层那一句，但整组只在末页印一次（10-13 收口）",
        (ai_poster.plan_pages(hybrid)[-1].get("footer") or "") == one["footer"]
        and not (ai_poster.plan_pages(hybrid)[0].get("footer") or ""),
@@ -571,14 +572,14 @@ def main():
            "warn": {"t": "别按这页加点", "d": "素材只给了名字"},
            "ask": {"q": "你先点哪棵？", "options": ["专业", "冒险", "不点"]}}]
     bn = ai_poster.bind_frames(pg, fake)
-    ck("一页只放 1 张是硬上限：模型给两张，第二张直接切掉并说清为什么",
-       len(pg[0]["photos"]) == 1 and any("一页只放 1 张" in x for x in bn), "；".join(bn))
+    ck("一页给两张时保留选择并在容量门禁阻断",
+       len(pg[0]["photos"]) == 1 and any("超过一页 1 张上限" in x for x in bn), "；".join(bn))
     bogus = [{"title": "乙", "cards": [{"t": "a", "d": "b"}], "photos": [{"frame": "F99"}]}]
     bn2 = ai_poster.bind_frames(bogus, fake)
     ck("模型点了不存在的编号 → 丢掉那张图并留一句人话（不静默出空位）",
        any("F99" in x for x in bn2), "；".join(bn2))
-    ck("但这一页不许空着：从清单里另挑一张补上（号主 10-23：必须有图片）",
-       bool(bogus[0].get("photos")) and any(x.get("auto") for x in bogus[0]["photos"]),
+    ck("编号无效时不拿无关帧补图",
+       not bogus[0].get("photos"),
        str(bogus[0].get("photos")))
     ck("图注由代码按那一帧自己的记录写，不是模型编的",
        pg[0]["photos"][0]["caption"] == "角色旁有半透明小熊",
@@ -593,9 +594,12 @@ def main():
     ck("攻略页零件过一遍清洗后形状可用（kicker/bignum/warn/ask 都在）",
        pg[0].get("kicker") and pg[0]["bignum"]["v"] == "3 棵"
        and pg[0]["warn"]["t"] and len(pg[0]["ask"]["options"]) == 3)
-    ck("选项最多三项，模型给多了会被裁（版面放不下）",
-       len(ai_poster.guide_clip({"ask": {"q": "问", "options": ["a", "b", "c", "d", "e"]}},
-                                ai_poster.TS_LIMITS)["ask"]["options"]) == 3)
+    _many_opts = ai_poster.guide_clip({"ask": {"q": "问", "options": ["a", "b", "c", "d", "e"]}},
+                                      ai_poster.TS_LIMITS)["ask"]["options"]
+    ck("选项超三项保留原文并由容量门禁报错",
+       len(_many_opts) == 5 and any("互动选项" in n for n in ai_poster.lint_plan(
+           {"title": "选择", "layout_key": "guide", "ask": {"q": "问", "options": _many_opts}},
+           ai_poster.limits_for("typeset"))))
     # 栏目名是"一整套"的记号：模型只写在其中一页，其余页得由代码补上，
     # 否则第 2、3 页左上角空着，五页看着像五张不相干的图（2026-10-12 实测就是这样）
     pgk = [{"title": "甲", "cards": [{"t": "a", "d": "b"}]},

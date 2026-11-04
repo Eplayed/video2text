@@ -208,7 +208,7 @@ def render_preview(template=TEMPLATE_DEFAULT, palette=None, font=None, layout=No
 
 
 # ── LLM 卡片化（公众号版） ──
-_CARDS_PROMPT = """你是公众号图片消息（newspic）排版师。把下面的素材排成 6-8 张竖版卡片（1080x1440，比例 3:4），供直接渲染出图。直接输出 JSON，不要思考过程、不要解释。
+_CARDS_PROMPT = """你是公众号图片消息（newspic）排版师。把下面的素材按信息量排成竖版卡片（1080x1440，比例 3:4），供直接渲染出图。直接输出 JSON，不要思考过程、不要解释。
 
 __THEME_LINE__
 __TITLE_LINE__
@@ -217,27 +217,27 @@ __TEMPLATE_LINE__
 __SOURCE_BLOCK__
 
 要求：
-- 第 1 张 kind="cover"：title 大标题（≤18字，尽量含数字）；subtitle 一句话（≤20字，可空）；timeline_label 固定填「本期看点」；timeline 一句话看点（≤22字）；timeline_note（≤28字，可空）；hooks 3-4 条，每条 t（≤14字）+ d（≤20字）
-- 其余大部分 kind="list"：title（≤14字）；section（条目分组名，≤6字）；icon 单字（如 测/坑/省/比）；items 3-5 条，每条 name（≤8字）+ desc（≤30字）+ tag（≤4字，可空）。3:4 画布单卡最多 5 条，多了会溢出画布
-- 图组里排 1-2 张 kind="text" 文字攻略页（整页有格式的文字卡，一页只讲清一个动作）：
+- 第 1 张 kind="cover"：title 大标题（≤18字，素材确有关键数值才写数值）；subtitle 一句话（≤20字，可空）；timeline_label 可填「本期看点」；timeline 一句话看点（≤22字）；timeline_note（≤28字，可空）；hooks 按内容填写，每条 t（≤14字）+ d（≤20字）
+- 后续按内容选择 kind="list"：title（≤14字）；section（条目分组名，≤6字）；icon 单字（如 测/坑/省/比）；items 按需分卡，每条 name（≤8字）+ desc（≤30字）+ tag（≤4字，可空）。3:4 画布单卡最多 5 条，超出就加页，不删条目
+- 只有操作步骤需要整页展开时才用 kind="text" 文字攻略页，一页只讲清一个动作：
   title（≤14字）；subtitle（≤24字）；precondition（≤40字，读者要先知道的前提，口语化不写机器腔如「本文适用版本快照」）；
   steps 3-4 条，每条 h（≤10字小标题）+ p（≤55字，一到两句）；footer（≤30字，数值/机制的出处，如「数值出处：官方说明 2026-10-26」）。
   steps 里出现的每个数值、机制名都必须能在整合稿里找到出处，严禁编造、凑整或挪用其他条目的数字；概括性说法要能落到具体条目，不许含糊带过
 - 禁止输出 note 字段（成品图不再渲染「提醒」块）
 - bg 只允许 "neutral"；禁止输出 faction/faction_text 等游戏阵营字段
-- 每张卡内容留呼吸感：条目宁少勿多，desc 一句话讲完，超长会被截断
+- 每张卡内容留呼吸感；保留主体、条件和否定词。说明超长时拆页，不截断原意
 - 所有文字精简口语化，一律纯文本，禁用 markdown 符号（* # ` > 等）
 - 成品文案纪律（重要）：卡片文字是直接发布给读者看的成品，不是给编辑看的审校稿。
   严禁出现素材缺口说明与审核提示，例如「口播未给」「视频里没讲」「素材未提」「整合稿没写」
   「ASR/转写」「待核实」「请人工核对」「本地模板生成」「详见正文」「无」这类字样。
-  素材信息不足时，直接少写一条或把该字段留空字符串，绝不写占位说明来交代缺口。
+  素材信息不足时，不添加新事实；已有核心信息和条件仍须保留，不能为了版面删条目。
   需要提醒读者时，只能写读者视角的话（如「工具功能与价格可能调整，以官方最新说明为准」）。
-- copy_text：图片消息配文，纯文本，结构 = 钩子开头（1-2句）+ 要点 4-6 条（每条一行）+ 收尾引导（1句，可引导关键词回复）+ 空行 + 「__COMPLIANCE__」，全文 200-320 字
+- copy_text：图片消息配文，纯文本，开头直接给核心信息，再写必要要点与条件；不强制钩子或互动；末尾按需附「__COMPLIANCE__」，全文以完整表达为先
 - digest：公众号摘要（≤120字），单独成段可读懂，不写「见图」类字样
 - keyword_reply：关注后自动回复引导语（≤30字，如「回复 工具清单 领取完整实测列表」；素材里没有可推关键词就留空字符串）
 - source_note：来源说明一句话（≤50字，含数据口径截至{{DATE}}）
 
-输出 JSON（cards 数组 6-8 个对象，第一个 kind 为 cover，其余为 list 与至多 2 个 kind="text"；copy_text/digest/keyword_reply/source_note 为字符串）：
+输出 JSON（cards 数组按内容量确定，第一个 kind 为 cover，其余按需为 list 或 text；copy_text/digest/keyword_reply/source_note 为字符串）。卡片数量受生成接口容量限制，装不下就指出缺口，不要丢条目：
 {schema_placeholder}
 
 整合稿：
@@ -327,7 +327,7 @@ def _llm_cards(summary, author_draft, ai_config, theme="", template="classic"):
         raise gate.GraphicsGateError("卡片化模型调用失败（模型 %s）：%s"
                                      % (ai_config.get("model") or "?", gate.brief_error(e)))
     cards = (data or {}).get("cards") or []
-    if len(cards) < 2 or not (data or {}).get("copy_text"):
+    if not cards or not (data or {}).get("copy_text"):
         raise gate.GraphicsGateError("模型返回的卡片不合格（cards=%d、copy_text 缺失），已拒绝出图"
                                      % len(cards))
     return data
@@ -482,10 +482,6 @@ def lint_package(manifest, out_dir):
     expect_canvas = "%dx%d" % (CANVAS_W, CANVAS_H)
     if manifest.get("canvas") != expect_canvas:
         issues.append("error: 画布 %s 非 3:4（应为 %s）" % (manifest.get("canvas"), expect_canvas))
-    if len(cards) < CARD_TARGET_MIN:
-        issues.append("warn: 仅 %d 张卡，低于目标下限 %d 张" % (len(cards), CARD_TARGET_MIN))
-    elif len(cards) > CARD_TARGET_MAX:
-        issues.append("warn: %d 张卡，超目标上限 %d 张（平台硬上限 %d）" % (len(cards), CARD_TARGET_MAX, MAX_IMAGES))
     for i, card in enumerate(cards, 1):
         t = card.get("title") or ""
         if len(t) > TITLE_MAX:
@@ -598,10 +594,29 @@ def generate_graphics(summary, ai_config, author_draft="", progress_cb=None,
         data = _fallback_cards(summary, draft)
 
     cards = data.get("cards") or []
+    raw_counts = [(len(c.get("items") or []), len(c.get("steps") or []))
+                  for c in cards if isinstance(c, dict)]
     # 渲染前清洗：剔除「素材未提」「请人工核对」等编辑向元语言（成品图直接面向读者）
     cards = ir.sanitize_cards(cards)
+    if model != "local-template":
+        clean_counts = [(len(c.get("items") or []), len(c.get("steps") or []))
+                        for c in cards if isinstance(c, dict)]
+        if raw_counts != clean_counts:
+            raise gate.GraphicsGateError("卡片清洗发现内容被删除；原始结果未出图，请回到拆稿核对缺口")
     if len(cards) > MAX_IMAGES:
-        cards = cards[:MAX_IMAGES]  # 平台硬上限截断，lint 会再报
+        raise gate.GraphicsGateError(
+            "卡片 %d 张，超过图片消息 %d 张上限；原始卡片未裁剪，请调整后重试"
+            % (len(cards), MAX_IMAGES))
+    if len(cards) + len(shots) > MAX_IMAGES:
+        raise gate.GraphicsGateError("卡片与截图合计 %d 张，超过平台 %d 张上限；请拆成两组"
+                                     % (len(cards) + len(shots), MAX_IMAGES))
+    for i, card in enumerate(cards, 1):
+        if (card.get("kind") or "list") == "list" and len(card.get("items") or []) > 5:
+            raise gate.GraphicsGateError("第 %d 张列表卡有 %d 条，单卡最多 5 条；请拆卡"
+                                         % (i, len(card.get("items") or [])))
+        if card.get("kind") == "text" and len(card.get("steps") or []) > 4:
+            raise gate.GraphicsGateError("第 %d 张步骤卡有 %d 步，单卡最多 4 步；请拆卡"
+                                         % (i, len(card.get("steps") or [])))
     # 文字攻略页机制断言闸：出图前对当前文本重判，hard 拒绝出图（样稿纪律落成代码）
     claims = _claims_gate(summary, cards)
     total = len(cards)

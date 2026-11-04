@@ -328,6 +328,12 @@ def _fit_lines(text, face, size, max_w, max_lines, min_size=15, max_h=None,
     return f, lines[:max_lines] if lines else lines, min_size
 
 
+def _text_lost(original, lines):
+    """渲染前核对拟印的行是否包含原文全部非空白字符。"""
+    clean = lambda value: re.sub(r"\s+", "", str(value or ""))
+    return clean(original) != clean("".join(lines or []))
+
+
 def _draw_text(draw, xy, text, font, fill, stroke=None, stroke_w=0):
     if stroke and stroke_w:
         draw.text(xy, text, font=font, fill=fill, stroke_width=stroke_w, stroke_fill=stroke)
@@ -916,6 +922,36 @@ def typeset_guide(base_png, plan, ratio="9:16", skin=None, page=None):
     warn = plan.get("warn") if isinstance(plan.get("warn"), dict) else None
     ask = plan.get("ask") if isinstance(plan.get("ask"), dict) else None
 
+    def check_fit(label, value, face, size, width, lines, min_size):
+        if not value:
+            return
+        _, fitted, _ = _fit_lines(value, face, size, width, lines, min_size=min_size)
+        if _text_lost(value, fitted):
+            problems.append("%s放不下，文字未完整上版" % label)
+
+    check_fit("栏目名", kicker, skin["body_face"], max(15, int(H * 0.0195)), inner,
+              1, max(15, int(H * 0.0195)))
+    if bignum:
+        check_fit("大数字", bignum.get("v"), skin["title_face"], int(H * 0.072), inner,
+                  1, int(H * 0.040))
+        check_fit("数字说明", bignum.get("label"), skin["body_face"], max(15, int(H * 0.021)),
+                  inner, 1, max(15, int(H * 0.021)))
+        check_fit("数字备注", bignum.get("note"), skin["body_face"], int(H * 0.0205),
+                  inner, 2, int(H * 0.0165))
+    for i, c in enumerate(cards, 1):
+        check_fit("第 %d 张卡片标题" % i, c.get("t"), skin["title_face"],
+                  int(H * 0.0255), inner, 1, int(H * 0.019))
+        check_fit("第 %d 张卡片说明" % i, c.get("d"), skin["body_face"],
+                  int(H * 0.0235), inner, 4, int(H * 0.0235))
+    for i, c in enumerate(contrast, 1):
+        check_fit("第 %d 条对照" % i, c.get("d"), skin["body_face"],
+                  int(H * 0.0205), inner - int(H * 0.14), 3, int(H * 0.0165))
+    if warn:
+        check_fit("提醒", warn.get("d"), skin["body_face"], int(H * 0.0205),
+                  inner - int(H * 0.06), 4, int(H * 0.0165))
+    check_fit("脚注", footer, skin["body_face"], int(H * 0.0165), inner,
+              2, int(H * 0.0135))
+
     # ── 第一遍：逐块量高（只算不画）──
     y = int(H * 0.030)
     f_kick = _font(skin["body_face"], max(15, int(H * 0.0195)))
@@ -958,8 +994,8 @@ def typeset_guide(base_png, plan, ratio="9:16", skin=None, page=None):
         if (c.get("t") or "").strip():
             h += int(H * 0.0255 * 1.42)
         if (c.get("d") or "").strip():
-            _, ls, s = _fit_lines(c.get("d"), skin["body_face"], int(H * 0.0205),
-                                  inner, 4, min_size=int(H * 0.0165))
+            _, ls, s = _fit_lines(c.get("d"), skin["body_face"], int(H * 0.0235),
+                                  inner, 4, min_size=int(H * 0.0235))
             h += len(ls) * int(s * 1.32)
         return h + int(H * 0.010)
     card_hs = [card_need(c) for c in cards]
@@ -1020,8 +1056,9 @@ def typeset_guide(base_png, plan, ratio="9:16", skin=None, page=None):
     # 让这一页看起来是"居中排满"，不是"排到一半没词了"。
     left = max(0, room - photo_used - sp * n_sp)
     n_gap = max(0, len(card_hs) - 1)
-    card_sp = min(int(left / n_gap), int(H * 0.020)) if n_gap else 0
-    head_pad = min(int((left - card_sp * n_gap) / 2.0), int(H * 0.060))
+    # 纯文字页没有图片占位：把余高分给段落间距，避免正文挤在上三分之一。
+    card_sp = min(int(left / n_gap), int(H * (0.070 if not photos else 0.020))) if n_gap else 0
+    head_pad = min(int((left - card_sp * n_gap) / 2.0), int(H * (0.100 if not photos else 0.060)))
 
     # ── 第二遍：从上往下画 ──
     if kicker or _pg_txt:
@@ -1110,8 +1147,8 @@ def typeset_guide(base_png, plan, ratio="9:16", skin=None, page=None):
             _draw_text(draw, (m, y), tfl[0], tf, gold)
             y += int(ts * 1.42)
         if cd:
-            df, dfl, ds = _fit_lines(cd, skin["body_face"], int(H * 0.0205), inner, 4,
-                                     min_size=int(H * 0.0165))
+            df, dfl, ds = _fit_lines(cd, skin["body_face"], int(H * 0.0235), inner, 4,
+                                     min_size=int(H * 0.0235))
             for ln in dfl:
                 _draw_text(draw, (m, y), ln, df, _rgb(skin["ink"]))
                 y += int(ds * 1.32)
@@ -1256,8 +1293,10 @@ def typeset(base_png, plan, ratio="9:16", skin=None, photo=None, page=None):
     # 顶部锚的布局（图下文上、双列对比、左右分栏）得先知道标题占多高，
     # 卡片才知道从哪儿开始排；贴底的老布局用不到这个数，但量的过程完全一样。
     head = _head_metrics(title, subtitle, skin, H, text_w, spec)
-    if head["overflow"]:
-        problems.append("主标题折行超过 2 行，已截断")
+    if _text_lost(title, head["t_lines"]):
+        problems.append("主标题放不下，文字未完整上版")
+    if _text_lost(subtitle, head["s_lines"]):
+        problems.append("副标题放不下，文字未完整上版")
     f_title, t_lines, t_size = head["f_title"], head["t_lines"], head["t_size"]
     f_sub, s_lines, s_size = head["f_sub"], head["s_lines"], head["s_size"]
     title_top, block_h, top_limit = head["title_top"], head["block_h"], head["top_limit"]
@@ -1365,6 +1404,8 @@ def typeset(base_png, plan, ratio="9:16", skin=None, photo=None, page=None):
             tf, tfl, ts = _fit_lines(ct, skin["title_face"],
                                      int(H * (0.036 if hero else 0.0255)), cw, 1,
                                      min_size=int(H * 0.017))
+            if _text_lost(ct, tfl[:1]):
+                problems.append("第 %d 张卡片标题放不下，文字未完整上版" % (b["i"] + 1))
             _draw_text(draw, (cx, cy), tfl[0], tf, _rgb(skin["accent"]))
             cy += int(ts * 1.45)
         if cd:
@@ -1372,6 +1413,8 @@ def typeset(base_png, plan, ratio="9:16", skin=None, photo=None, page=None):
             df, dfl, ds = _fit_lines(cd, skin["body_face"],
                                      int(H * (0.0255 if hero else 0.0205)), cw,
                                      5, min_size=int(H * 0.0150), max_h=avail)
+            if _text_lost(cd, dfl):
+                problems.append("第 %d 张卡片说明放不下，文字未完整上版" % (b["i"] + 1))
             for ln in dfl:
                 if cy + ds * 1.30 > b["y1"] - int(pad * 0.35):
                     problems.append("第 %d 张卡片说明放不下，已截到最后可读的一行" % (b["i"] + 1))
@@ -1382,6 +1425,8 @@ def typeset(base_png, plan, ratio="9:16", skin=None, photo=None, page=None):
     if footer:
         ff, ffl, fs = _fit_lines(footer, skin["body_face"], int(H * 0.0165), inner, 1,
                                  min_size=int(H * 0.0135))
+        if _text_lost(footer, ffl[:1]):
+            problems.append("脚注放不下，文字未完整上版")
         _draw_text(draw, ((W - ff.getlength(ffl[0])) / 2.0, H - foot_h + int(H * 0.006)),
                    ffl[0], ff, _rgb(skin["muted"]))
 

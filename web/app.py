@@ -293,7 +293,7 @@ def _fast_config():
     实测同一条素材（当时跑的是 deepseek-v4-flash，现已换 v4.1-flash，数字未重测）：
     主模型 qwen3.8-max 拆解约 180 秒，deepseek-v4-flash 33 秒且上图
     字数更守规矩（71 字 vs 超线）；qwen-plus 只要 9.7 秒、便宜五倍，但会把上图文字
-    写到 98 字（超 80 线，会被自动压缩砍掉一张卡）。
+    写到 98 字（超 80 线，需要拆页或人工调整；不能自动砍掉卡片）。
     没配 AI_MODEL_FAST 也没配池子时原样返回主配置，行为零变化。
     """
     cfg = _ai_config()
@@ -4319,7 +4319,7 @@ def api_poster_plan():
         _poster_save_plan(summary["id"], _poster_status["plan"])
         _poster_status["progress"] = ("✅ 文案已拆解（合计 %d 字 · 模型 %s）"
                                       % (ai_poster.plan_chars(plan), cfg.get("model") or "?")
-                                      + ("；自动压缩：" + "、".join(notes) if notes else "")
+                                      + ("；版面提示：" + "、".join(notes) if notes else "")
                                       + ("，⚠️ " + "；".join(bad) if bad else "")
                                       + ("；事实状态：" + (fact_line or "这一版没有机制断言可核")))
 
@@ -4408,7 +4408,7 @@ def api_poster_plan_page():
                                   "manual_prompts": prev.get("manual_prompts")}
         _poster_status["progress"] = ("✅ 第 %d 页已重拆（%d 字 · 模型 %s）"
                                       % (idx, ai_poster.plan_chars(page), cfg.get("model") or "?")
-                                      + ("；自动压缩：" + "、".join(notes) if notes else "")
+                                      + ("；版面提示：" + "、".join(notes) if notes else "")
                                       + ("，⚠️ " + "；".join(bad) if bad else ""))
 
     if not _poster_start("page", fn, summary["id"]):
@@ -4471,9 +4471,7 @@ def api_poster_generate():
             prov = {}
         # 行动依据闸要比对原转写：多源稿不能只看主素材那一条，把所有来源的转写拼起来
         asr_text = _material_text(summary)   # 专名核对与提示词名单都吃这一份，别两处各查一遍
-        # 出图前那道核对会把"太虚/字幕压中间"的那张拦掉，拦完这一页不能就空着
-        # （号主 10-23：② 看版面有图、③ 出来第 3 页没图）。这里把可用帧名单带进出图层，
-        # 让它当场换一张再核一遍。**只读已判过的，不新判帧——这一档 0 元。**
+        # 出图前仍重判已选帧；不合格时留下缺图记录，不换一张不相关的画面冒充证据。
         frame_items = _guide_frames_for(summary, _fast_config(), may_judge=False)
         manifest = ai_poster.generate_poster(summary, _fast_config(), theme=theme, title=title,
                                              ratio=ratio, progress_cb=cb, plan=plan,

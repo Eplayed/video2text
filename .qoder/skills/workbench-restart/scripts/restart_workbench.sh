@@ -39,7 +39,7 @@ OLD_PID="$(lsof -nP -i ":$PORT" -sTCP:LISTEN -t 2>/dev/null | head -1)"
 if [ -z "$OLD_PID" ]; then
   say "  端口 $PORT 无监听进程，跳过"
 else
-  say "  旧 PID=$OLD_PID（$(ps -p "$OLD_PID" -o command= 2>/dev/null | head -c 80)）"
+  say "  旧 PID=${OLD_PID}（$(ps -p "$OLD_PID" -o command= 2>/dev/null | head -c 80)）"
   kill "$OLD_PID" 2>/dev/null
   WAITED=0
   while [ "$WAITED" -lt 10 ]; do
@@ -80,7 +80,7 @@ while [ "$WAITED" -lt 30 ]; do
 done
 
 if [ -z "$NEW_PID" ]; then
-  say "FAIL 未监听 $PORT，新进程未接管。日志尾部："
+  say "FAIL 未监听 ${PORT}，新进程未接管。日志尾部："
   tail -20 "$LOG" 2>/dev/null | sed 's/^/       /'
   exit 1
 fi
