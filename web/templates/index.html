@@ -3620,11 +3620,38 @@ function pollToutiaoStatus(summaryId) {
   setTimeout(poll, 1000);
 }
 
+let _wxBlockedDraft = null;
+function wxDraftFields(card, index, stale) {
+  const rows = [];
+  const input = (path, label, value) => '<label style="display:block;margin:7px 0"><small>' + esc(label)
+    + '</small><textarea data-wx-path="' + path + '" style="width:100%;min-height:42px"'
+    + (stale ? ' disabled' : '') + '>'
+    + esc(value || '') + '</textarea></label>';
+  ['title','subtitle','timeline_label','timeline','timeline_note','precondition','section','footer','badge','faction_text'].forEach(key => {
+    if (typeof card[key] === 'string') rows.push(input('cards.' + index + '.' + key, key, card[key]));
+  });
+  [['hooks',['t','d']],['items',['name','desc','tag']],['steps',['h','p']]].forEach(group => {
+    (card[group[0]] || []).forEach((item, j) => group[1].forEach(key => {
+      if (typeof item[key] === 'string') rows.push(input('cards.' + index + '.' + group[0] + '.' + j + '.' + key,
+        group[0] + ' ' + (j + 1) + ' · ' + key, item[key]));
+    }));
+  });
+  ['title','text'].forEach(key => {
+    if (card.note && typeof card.note[key] === 'string')
+      rows.push(input('cards.' + index + '.note.' + key, '提醒 · ' + key, card.note[key]));
+  });
+  return rows.join('');
+}
+function wxDraftValue(draft, path) {
+  return path.split('.').reduce((value, part) => value && value[part], draft);
+}
 async function wxShowBlockedDraft(id) {
   let data;
   try { data = await fetch('/api/wechat/draft/' + id).then(r => r.json()); }
   catch (e) { return; }
   if (!data || data.error) return;
+  _wxBlockedDraft = {id: id, revision: data.revision, draft: data.draft,
+    stale: !!data.stale, auditStale: !!data.audit_stale};
   const draft = data.draft || {}, fidelity = draft.fidelity || {};
   const points = Object.fromEntries((data.points || []).map(p => [p.point_id, p]));
   const issues = ((fidelity.coverage || {}).issues || []).concat((fidelity.semantic || {}).issues || []);
@@ -3633,10 +3660,11 @@ async function wxShowBlockedDraft(id) {
       .concat((c.items || []).map(x => (x.name || '') + ' ' + (x.desc || '')))
       .concat((c.steps || []).map(x => (x.h || '') + ' ' + (x.p || '')));
     const refs = (c.point_ids || []).map(pid => (points[pid] || {}).display_text || pid);
-    return '<section style="padding:10px;border:1px solid #ddd;border-radius:8px;margin:8px 0">'
-      + '<b>第 ' + (i + 1) + ' 张 · ' + esc(c.title || '') + '</b><div>'
-      + esc([c.subtitle || '', c.timeline || '', c.precondition || ''].concat(bits).filter(Boolean).join('；'))
-      + '</div><small>关联原文：' + esc(refs.join('；') || '未关联') + '</small></section>';
+    return '<details style="padding:10px;border:1px solid #ddd;border-radius:8px;margin:8px 0">'
+      + '<summary><b>第 ' + (i + 1) + ' 张 · ' + esc(c.title || '') + '</b>　'
+      + esc(bits.join('；').slice(0, 65)) + '</summary>'
+      + '<small>关联原文：' + esc(refs.join('；') || '未关联') + '</small>'
+      + wxDraftFields(c, i, data.stale) + '</details>';
   }).join('');
   const old = document.getElementById('wx-blocked-draft');
   if (old) old.remove();
@@ -3644,12 +3672,63 @@ async function wxShowBlockedDraft(id) {
     '<div id="wx-blocked-draft" style="position:fixed;inset:0;z-index:9999;background:#0009;display:flex;align-items:center;justify-content:center">'
     + '<div style="background:var(--surface,#fff);color:var(--text,#222);width:min(760px,94vw);max-height:88vh;overflow:auto;padding:20px;border-radius:12px">'
     + '<button class="btn ghost sm" style="float:right" onclick="document.getElementById(\'wx-blocked-draft\').remove()">关闭</button>'
-    + '<h3>公众号卡片草稿 · 原意核对未过</h3>'
+    + '<h3>公众号卡片草稿 · ' + (data.audit_stale ? '审核规则已更新，需重新核对'
+      : (fidelity.ready ? '原意核对已通过' : '原意核对未过')) + '</h3>'
     + (data.stale ? '<p>原文已变化，这份草稿已过期，请重新生成。</p>' : '')
-    + '<p><b>核心答案：</b>' + esc(data.core_answer || '待核') + '。草稿未渲染成可发布图片。</p>'
+    + '<p><b>核心答案：</b>' + esc(data.core_answer || '待核') + '。草稿尚未渲染成图片。</p>'
     + '<p><b>具体问题：</b>' + (issues.map(x => esc((x.text || (points[x.point_id] || {}).display_text || x.field || '')
-      + '：' + (x.problem || '待核'))).join('<br>') || '校对未完成') + '</p>'
-    + cards + '<p><b>配文草稿：</b>' + esc(draft.copy_text || '') + '</p></div></div>');
+      + '：' + (x.problem || '待核'))).join('<br>') || (data.audit_stale ? '当前文字需要按新规则重审'
+      : (fidelity.ready ? '本轮核对已通过' : '校对未完成'))) + '</p>'
+    + cards + '<label style="display:block"><b>配文草稿</b><textarea data-wx-path="copy_text" style="width:100%;min-height:120px"'
+    + (data.stale ? ' disabled' : '') + '>'
+    + esc(draft.copy_text || '') + '</textarea></label>'
+    + '<label style="display:block"><b>摘要</b><textarea data-wx-path="digest" style="width:100%;min-height:70px"'
+    + (data.stale ? ' disabled' : '') + '>'
+    + esc(draft.digest || '') + '</textarea></label>'
+    + (data.stale ? '' : '<button class="btn" onclick="wxSaveBlockedDraft()">保存修改并重审</button>')
+    + (!data.stale && !data.audit_stale && fidelity.ready ? ' <button class="btn" onclick="wxRenderBlockedDraft()">用这份已核草稿渲染图片</button>' : '')
+    + '<p id="wx-draft-action" style="margin-top:8px"></p></div></div>');
+}
+async function wxSaveBlockedDraft() {
+  const state = _wxBlockedDraft, modal = document.getElementById('wx-blocked-draft');
+  if (!state || !modal || state.stale) return;
+  const edits = Array.from(modal.querySelectorAll('[data-wx-path]')).map(el => ({
+    path: el.getAttribute('data-wx-path'), value: el.value
+  })).filter(item => item.value.trim() !== String(wxDraftValue(state.draft, item.path) || '').trim());
+  const note = document.getElementById('wx-draft-action');
+  if (!edits.length && !state.auditStale) { note.textContent = '没有文字修改；原审核仍有效。'; return; }
+  note.textContent = '正在按修改后的文字重新核对原文…';
+  try {
+    const response = await fetch('/api/wechat/draft/' + state.id + '/revise', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({revision: state.revision, edits: edits})
+    });
+    const result = await response.json();
+    if (!response.ok || result.error) { note.textContent = result.error || '保存失败'; return; }
+    await wxShowBlockedDraft(state.id);
+    const next = document.getElementById('wx-draft-action');
+    if (next) next.textContent = result.ready ? '原意核对通过，可以渲染图片。' : '已保存，仍有原意问题，请按上方问题继续修改。';
+  } catch (e) { note.textContent = '保存失败：' + e.message; }
+}
+async function wxRenderBlockedDraft() {
+  const state = _wxBlockedDraft;
+  if (!state || state.stale || state.auditStale || !(state.draft.fidelity || {}).ready) return;
+  const val = id => (document.getElementById(id) || {}).value || '';
+  try {
+    const response = await fetch('/api/wechat/generate', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({summary_id: state.id, reuse_draft: true, draft_revision: state.revision,
+        template: val('wx-gen-tpl') || 'classic', palette: val('wx-gen-palette'),
+        font: val('wx-gen-font'), layout: val('wx-gen-layout'), theme: val('wx-gen-theme')})
+    });
+    const result = await response.json();
+    if (!response.ok || result.error) {
+      document.getElementById('wx-draft-action').textContent = result.error || '提交失败'; return;
+    }
+    document.getElementById('wx-blocked-draft').remove();
+    setStatus('running', '正在用已核草稿渲染公众号卡片…');
+    pollWechatStatus();
+  } catch (e) { document.getElementById('wx-draft-action').textContent = '提交失败：' + e.message; }
 }
 
 function copyToutiaoText() {

@@ -436,11 +436,18 @@ def wechat_plan(cards, mother):
     """公众号卡片适配同一忠实性闸；页面比例和渲染仍由渠道自己决定。"""
     pages = []
     for card in cards:
-        bits = [str(card.get(k) or "") for k in ("subtitle", "timeline", "timeline_note", "precondition")]
+        bits = [str(card.get(k) or "") for k in
+                ("subtitle", "timeline_label", "timeline", "timeline_note", "precondition",
+                 "section", "footer", "badge", "faction_text")]
         for field, keys in (("hooks", ("t", "d")), ("items", ("name", "desc")),
                             ("steps", ("h", "p"))):
             for item in card.get(field) or []:
                 bits.extend(str(item.get(k) or "") for k in keys)
+                if field == "items":
+                    bits.append(str(item.get("tag") or ""))
+        note = card.get("note") or {}
+        if isinstance(note, dict) and note.get("text"):
+            bits.extend(str(note.get(k) or "") for k in ("title", "text"))
         pages.append({"title": card.get("title") or "",
                       "cards": [{"t": card.get("title") or "", "d": "；".join(x for x in bits if x),
                                  "point_ids": card.get("point_ids") or []}]})

@@ -3675,6 +3675,25 @@ def api_wechat_generate():
     if summary.get("summary_type") != "wechat_material":
         return jsonify({"error": "只支持公众号整合稿（wechat_material）生成图文，请先生成整合稿"}), 400
 
+    reuse_draft = bool(data.get("reuse_draft"))
+    edited_draft = None
+    if reuse_draft:
+        if author_draft:
+            return jsonify({"error": "亲测底稿不能沿用转载模式的卡片草稿"}), 400
+        edited_draft = _wechat_latest_draft(summary_id)
+        if not edited_draft or data.get("draft_revision") != _wechat_draft_revision(edited_draft):
+            return jsonify({"error": "草稿版本已变化，请重新打开预览"}), 409
+        from src import guide_mother
+        try:
+            current_mother = guide_mother.load_mother(DB_PATH, summary_id)
+            current_sources, current_source_rev = guide_mother.source_snapshot(DB_PATH, summary_id)
+        except guide_mother.MotherError as exc:
+            return jsonify({"error": str(exc)}), 409
+        if (current_mother.get("source_revision") != current_source_rev
+                or not _wechat_audit_current(edited_draft, current_mother,
+                                             "\n".join(s["text"] for s in current_sources))):
+            return jsonify({"error": "草稿原意核对未通过或已过期，请重新核对"}), 409
+
     _wx_task_status.update({
         "running": True, "done": False, "progress": "准备生成公众号图文...", "error": "", "package": None,
     })
@@ -3694,6 +3713,11 @@ def api_wechat_generate():
                 if mother_source_rev != mother["source_revision"]:
                     raise guide_mother.MotherError("原文在生成期间更新，请重新提取母稿")
                 mother_source_text = "\n".join(s["text"] for s in mother_sources)
+            if edited_draft and (edited_draft.get("fidelity") or {}).get("mother_revision") != mother["mother_revision"]:
+                raise guide_mother.MotherError("原意母稿已变化，已编辑草稿不能沿用")
+            if edited_draft and _wechat_draft_revision(edited_draft) != _wechat_draft_revision(
+                    _wechat_latest_draft(summary["id"])):
+                raise guide_mother.MotherError("卡片草稿在渲染前被更新，请重新打开预览")
             if mother:
                 import shutil
                 stage_root = wechat_graphics.OUTPUT_DIR.parent / (
@@ -3707,7 +3731,9 @@ def api_wechat_generate():
                                                             palette=palette or None, font=font or None,
                                                             layout=layout or None, ref_token=ref_token,
                                                             mother=mother, source_text=mother_source_text,
-                                                            output_root=stage_root)
+                                                            output_root=stage_root,
+                                                            prepared_data=edited_draft,
+                                                            prechecked_fidelity=(edited_draft or {}).get("fidelity"))
                 if mother:
                     _poster_promote_staged(summary["id"], stage_root / str(summary["id"]),
                                            mother["source_revision"], mother["mother_revision"],
@@ -3745,22 +3771,136 @@ def api_wechat_status():
 @app.route("/api/wechat/draft/<int:summary_id>")
 def api_wechat_draft(summary_id):
     """只读返回最近一次被原意闸拦下的卡片草稿，供定位修改。"""
-    folder = wechat_graphics.OUTPUT_DIR / "_drafts" / str(summary_id)
-    drafts = sorted(folder.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
-    if not drafts:
+    draft = _wechat_latest_draft(summary_id)
+    if not draft:
         return jsonify({"error": "这条没有保留的公众号卡片草稿"}), 404
-    draft = json.loads(drafts[0].read_text(encoding="utf-8"))
     from src import guide_mother
     try:
         mother = guide_mother.load_mother(DB_PATH, summary_id)
-        _sources, revision = guide_mother.source_snapshot(DB_PATH, summary_id)
+        sources, revision = guide_mother.source_snapshot(DB_PATH, summary_id)
         stale = (mother.get("source_revision") != revision or
                  (draft.get("fidelity") or {}).get("mother_revision") != mother.get("mother_revision"))
     except guide_mother.MotherError:
-        mother, stale = {}, True
-    return jsonify({"draft": draft, "stale": stale,
+        mother, sources, stale = {}, [], True
+    audit_stale = bool(not stale and (draft.get("fidelity") or {}).get("ready") and
+                       not _wechat_audit_current(draft, mother, "\n".join(s["text"] for s in sources)))
+    return jsonify({"draft": draft, "revision": _wechat_draft_revision(draft), "stale": stale,
+                    "audit_stale": audit_stale,
                     "core_answer": mother.get("core_answer") or "",
                     "points": mother.get("points") or []})
+
+
+def _wechat_latest_draft(summary_id):
+    folder = wechat_graphics.OUTPUT_DIR / "_drafts" / str(int(summary_id))
+    drafts = sorted(folder.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+    return json.loads(drafts[0].read_text(encoding="utf-8")) if drafts else None
+
+
+def _wechat_draft_revision(draft):
+    fields = {k: (draft or {}).get(k) for k in
+              ("cards", "copy_text", "digest", "source_note", "keyword_reply", "fidelity")}
+    raw = json.dumps(fields, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _wechat_audit_current(draft, mother, source_text):
+    from src import guide_mother
+    fidelity = (draft or {}).get("fidelity") or {}
+    if not fidelity.get("ready") or fidelity.get("mother_revision") != mother.get("mother_revision"):
+        return False
+    plan = guide_mother.wechat_plan(draft.get("cards") or [], mother)
+    publish = {"copy_text": draft.get("copy_text") or "", "digest": draft.get("digest") or ""}
+    revision = guide_mother.audit_revision(mother, plan, publish, source_text)
+    return ((fidelity.get("coverage") or {}).get("input_revision") == revision
+            and (fidelity.get("semantic") or {}).get("input_revision") == revision)
+
+
+_WX_EDIT_CARD = re.compile(r"^cards\.(\d+)\.(title|subtitle|timeline_label|timeline|timeline_note|precondition|section|footer|badge|faction_text)$")
+_WX_EDIT_NESTED = re.compile(r"^cards\.(\d+)\.(hooks|items|steps)\.(\d+)\.(t|d|name|desc|tag|h|p)$")
+_WX_EDIT_NOTE = re.compile(r"^cards\.(\d+)\.note\.(title|text)$")
+_wx_draft_lock = threading.Lock()
+
+
+@app.route("/api/wechat/draft/<int:summary_id>/revise", methods=["POST"])
+def api_wechat_draft_revise(summary_id):
+    """只改白名单文字叶子，卡片结构和来源 ID 均由服务端旧稿保留。"""
+    from src import guide_mother
+    data = request.get_json(silent=True) or {}
+    if _wx_task_status.get("running"):
+        return jsonify({"error": "公众号卡片正在生成，完成后再修改草稿"}), 409
+    old = _wechat_latest_draft(summary_id)
+    if not old:
+        return jsonify({"error": "这条没有可修改的公众号草稿"}), 404
+    if data.get("revision") != _wechat_draft_revision(old):
+        return jsonify({"error": "草稿已被其他编辑更新，请重新打开再修改"}), 409
+    try:
+        mother = guide_mother.load_mother(DB_PATH, summary_id)
+        sources, source_rev = guide_mother.source_snapshot(DB_PATH, summary_id)
+    except guide_mother.MotherError as exc:
+        return jsonify({"error": str(exc)}), 409
+    if (mother.get("status") != "complete" or mother.get("source_revision") != source_rev
+            or (old.get("fidelity") or {}).get("mother_revision") != mother.get("mother_revision")):
+        return jsonify({"error": "原文或母稿已变化，请重新生成卡片草稿"}), 409
+    edits = data.get("edits")
+    if not isinstance(edits, list) or len(edits) > 80:
+        return jsonify({"error": "请提交 0–80 处具体文字修改；空列表表示重新核对当前草稿"}), 400
+    draft = json.loads(json.dumps(old, ensure_ascii=False))
+    for edit in edits:
+        if not isinstance(edit, dict) or not isinstance(edit.get("value"), str):
+            return jsonify({"error": "修改项必须有文字值"}), 400
+        path, value = str(edit.get("path") or ""), edit["value"].strip()
+        if len(value) > 3000:
+            return jsonify({"error": "单项修改超过 3000 字，请拆成多张卡"}), 400
+        if path in ("copy_text", "digest"):
+            draft[path] = value
+            continue
+        match = _WX_EDIT_CARD.fullmatch(path)
+        nested = _WX_EDIT_NESTED.fullmatch(path)
+        note_match = _WX_EDIT_NOTE.fullmatch(path)
+        try:
+            if match:
+                card = draft["cards"][int(match.group(1))]
+                key = match.group(2)
+                if not isinstance(card.get(key), str):
+                    raise ValueError()
+                card[key] = value
+            elif nested:
+                card = draft["cards"][int(nested.group(1))]
+                item = card[nested.group(2)][int(nested.group(3))]
+                key = nested.group(4)
+                if not isinstance(item.get(key), str):
+                    raise ValueError()
+                item[key] = value
+            elif note_match:
+                card = draft["cards"][int(note_match.group(1))]
+                note = card["note"]
+                key = note_match.group(2)
+                if not isinstance(note.get(key), str):
+                    raise ValueError()
+                note[key] = value
+            else:
+                raise ValueError()
+        except (IndexError, KeyError, TypeError, ValueError):
+            return jsonify({"error": "不能修改此字段或卡片结构：%s" % path}), 400
+    source_text = "\n".join(s["text"] for s in sources)
+    fidelity = guide_mother.audit_output(
+        mother, guide_mother.wechat_plan(draft["cards"], mother),
+        {"copy_text": draft.get("copy_text") or "", "digest": draft.get("digest") or ""},
+        _fast_config(), source_text=source_text)
+    with _wx_draft_lock:
+        _sources, latest_rev = guide_mother.source_snapshot(DB_PATH, summary_id)
+        latest_mother = guide_mother.load_mother(DB_PATH, summary_id)
+        current = _wechat_latest_draft(summary_id)
+        if (latest_rev != source_rev or latest_mother.get("mother_revision") != mother.get("mother_revision")
+                or not current or _wechat_draft_revision(old) != _wechat_draft_revision(current)):
+            return jsonify({"error": "审核期间原文、母稿或草稿已变化，本次结果未保存"}), 409
+        draft["fidelity"] = fidelity
+        folder = wechat_graphics.OUTPUT_DIR / "_drafts" / str(summary_id)
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / (uuid.uuid4().hex + ".json")).write_text(
+            json.dumps(draft, ensure_ascii=False, indent=2), encoding="utf-8")
+    return jsonify({"ready": bool(fidelity.get("ready")), "fidelity": fidelity,
+                    "revision": _wechat_draft_revision(draft)})
 
 
 # ── 公众号成稿（2026-10-26 策略：这一渠道交的是完整文章，卡片只是可选配图）──

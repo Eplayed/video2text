@@ -558,7 +558,8 @@ def lint_package(manifest, out_dir):
 def generate_graphics(summary, ai_config, author_draft="", progress_cb=None,
                       theme="", skin="", title="", template=TEMPLATE_DEFAULT, real_screenshots=None,
                       palette=None, font=None, layout=None, ref_token="", mother=None,
-                      source_text="", output_root=None):
+                      source_text="", output_root=None, prepared_data=None,
+                      prechecked_fidelity=None):
     """主入口：wechat_material 整合稿 → manifest dict（落盘 output/wechat/<summary_id>/）。
 
     2026-11-03 合并后：渲染统一走头条循环（toutiao.render_cards），模板白名单与头条同源、
@@ -618,17 +619,26 @@ def generate_graphics(summary, ai_config, author_draft="", progress_cb=None,
     tpl_key = axes["tpl_key"]
     tpl = templates._TEMPLATES[tpl_key]
 
-    _pg("LLM 卡片化素材（模板：%s）..." % tpl["label"])
-    data = (_llm_cards(summary, draft, ai_config, theme, tpl_key, mother=mother)
-            if mother else _llm_cards(summary, draft, ai_config, theme, tpl_key))
-    model = "local-template"
+    if prepared_data is not None:
+        if not mother or draft or not isinstance(prepared_data, dict):
+            raise gate.GraphicsGateError("已编辑卡片只支持当前原意母稿的转载模式")
+        _pg("沿用已编辑卡片渲染（模板：%s），不重新拆卡..." % tpl["label"])
+        data = prepared_data
+    else:
+        _pg("LLM 卡片化素材（模板：%s）..." % tpl["label"])
+        data = (_llm_cards(summary, draft, ai_config, theme, tpl_key, mother=mother)
+                if mother else _llm_cards(summary, draft, ai_config, theme, tpl_key))
+    model = "edited-draft" if prepared_data is not None else "local-template"
     if data:
-        model = ai_config.get("model") or "llm"
+        if prepared_data is None:
+            model = ai_config.get("model") or "llm"
     else:
         _pg("未配置 AI，走本地模板兜底（成品需人工核对）...")
         data = _fallback_cards(summary, draft)
 
     cards = data.get("cards") or []
+    if prepared_data is not None and (not cards or not data.get("copy_text")):
+        raise gate.GraphicsGateError("已编辑草稿缺卡片或配文，不能渲染")
     raw_counts = [(len(c.get("items") or []), len(c.get("steps") or []))
                   for c in cards if isinstance(c, dict)]
     # 渲染前清洗：剔除「素材未提」「请人工核对」等编辑向元语言（成品图直接面向读者）
@@ -656,10 +666,20 @@ def generate_graphics(summary, ai_config, author_draft="", progress_cb=None,
     if mother:
         from src import guide_mother
         check_plan = guide_mother.wechat_plan(cards, mother)
-        fidelity = guide_mother.audit_output(mother, check_plan,
-                                              {"copy_text": data.get("copy_text") or "",
-                                               "digest": data.get("digest") or ""}, ai_config,
-                                              source_text=source_text)
+        publish_text = {"copy_text": data.get("copy_text") or "",
+                        "digest": data.get("digest") or ""}
+        revision = guide_mother.audit_revision(mother, check_plan, publish_text, source_text)
+        previous = prechecked_fidelity or {}
+        if (previous.get("ready") and previous.get("source_revision") == mother["source_revision"]
+                and previous.get("mother_revision") == mother["mother_revision"]
+                and (previous.get("coverage") or {}).get("input_revision") == revision
+                and (previous.get("semantic") or {}).get("input_revision") == revision):
+            fidelity = previous
+        elif prepared_data is not None:
+            raise gate.GraphicsGateError("已编辑草稿的审核版本与渲染文字不一致，请重新核对")
+        else:
+            fidelity = guide_mother.audit_output(mother, check_plan, publish_text, ai_config,
+                                                  source_text=source_text)
         if not fidelity["ready"]:
             draft_dir = OUTPUT_DIR / "_drafts" / str(summary_id)
             draft_dir.mkdir(parents=True, exist_ok=True)
@@ -668,7 +688,10 @@ def generate_graphics(summary, ai_config, author_draft="", progress_cb=None,
                 ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()[:16]
             draft_file = draft_dir / (draft_key + ".json")
             draft_file.write_text(json.dumps({"cards": cards, "copy_text": data.get("copy_text") or "",
-                                             "digest": data.get("digest") or "", "fidelity": fidelity},
+                                             "digest": data.get("digest") or "",
+                                             "source_note": data.get("source_note") or "",
+                                             "keyword_reply": data.get("keyword_reply") or "",
+                                             "fidelity": fidelity},
                                             ensure_ascii=False, indent=2), encoding="utf-8")
             raise gate.GraphicsGateError("公众号原意核对未通过：%s；卡片草稿已保留在 %s" %
                                          ("；".join(guide_mother.audit_problems(fidelity)[:8]), draft_file))
@@ -705,7 +728,7 @@ def generate_graphics(summary, ai_config, author_draft="", progress_cb=None,
         "summary_id": summary_id,
         "channel": "wechat",
         "mode": "repost" if is_repost else "tested",
-        "title": summary.get("title") or "",
+        "title": (cards[0].get("title") or "") if mother and cards else summary.get("title") or "",
         "copy_text": data.get("copy_text") or "",
         "digest": data.get("digest") or "",
         "keyword_reply": data.get("keyword_reply") or "",
