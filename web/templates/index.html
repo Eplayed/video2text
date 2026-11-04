@@ -3620,6 +3620,38 @@ function pollToutiaoStatus(summaryId) {
   setTimeout(poll, 1000);
 }
 
+async function wxShowBlockedDraft(id) {
+  let data;
+  try { data = await fetch('/api/wechat/draft/' + id).then(r => r.json()); }
+  catch (e) { return; }
+  if (!data || data.error) return;
+  const draft = data.draft || {}, fidelity = draft.fidelity || {};
+  const points = Object.fromEntries((data.points || []).map(p => [p.point_id, p]));
+  const issues = ((fidelity.coverage || {}).issues || []).concat((fidelity.semantic || {}).issues || []);
+  const cards = (draft.cards || []).map((c, i) => {
+    const bits = (c.hooks || []).map(x => (x.t || '') + ' ' + (x.d || ''))
+      .concat((c.items || []).map(x => (x.name || '') + ' ' + (x.desc || '')))
+      .concat((c.steps || []).map(x => (x.h || '') + ' ' + (x.p || '')));
+    const refs = (c.point_ids || []).map(pid => (points[pid] || {}).display_text || pid);
+    return '<section style="padding:10px;border:1px solid #ddd;border-radius:8px;margin:8px 0">'
+      + '<b>第 ' + (i + 1) + ' 张 · ' + esc(c.title || '') + '</b><div>'
+      + esc([c.subtitle || '', c.timeline || '', c.precondition || ''].concat(bits).filter(Boolean).join('；'))
+      + '</div><small>关联原文：' + esc(refs.join('；') || '未关联') + '</small></section>';
+  }).join('');
+  const old = document.getElementById('wx-blocked-draft');
+  if (old) old.remove();
+  document.body.insertAdjacentHTML('beforeend',
+    '<div id="wx-blocked-draft" style="position:fixed;inset:0;z-index:9999;background:#0009;display:flex;align-items:center;justify-content:center">'
+    + '<div style="background:var(--surface,#fff);color:var(--text,#222);width:min(760px,94vw);max-height:88vh;overflow:auto;padding:20px;border-radius:12px">'
+    + '<button class="btn ghost sm" style="float:right" onclick="document.getElementById(\'wx-blocked-draft\').remove()">关闭</button>'
+    + '<h3>公众号卡片草稿 · 原意核对未过</h3>'
+    + (data.stale ? '<p>原文已变化，这份草稿已过期，请重新生成。</p>' : '')
+    + '<p><b>核心答案：</b>' + esc(data.core_answer || '待核') + '。草稿未渲染成可发布图片。</p>'
+    + '<p><b>具体问题：</b>' + (issues.map(x => esc((x.text || (points[x.point_id] || {}).display_text || x.field || '')
+      + '：' + (x.problem || '待核'))).join('<br>') || '校对未完成') + '</p>'
+    + cards + '<p><b>配文草稿：</b>' + esc(draft.copy_text || '') + '</p></div></div>');
+}
+
 function copyToutiaoText() {
   // 门禁：没过审不给复制；文案被手改过也不给（门禁判的是出图时那份，改了必须重判）
   if (!_ttReview || !_ttReview.can_publish) {
@@ -7240,7 +7272,12 @@ function pollWechatStatus() {
     catch (e) { setTimeout(poll, 3000); return; }
     if (st.running) { setStatus('running', st.progress || '生成中...', null,
                                  {done: st.step, total: st.steps}); setTimeout(poll, 1500); return; }
-    if (st.error) { setStatus('error', '生成失败: ' + String(st.error).split('\n')[0], st.error); return; }
+    if (st.error) {
+      setStatus('error', '生成失败: ' + String(st.error).split('\n')[0], st.error);
+      if (String(st.error).indexOf('公众号原意核对未通过') >= 0 && _wxGenTargetId)
+        wxShowBlockedDraft(_wxGenTargetId);
+      return;
+    }
     setStatus('done', st.progress || '已生成');
     if (currentView !== 'wechat') switchPage('wechat');
     if (st.package && st.package.id) openWechatDetail(st.package.id);

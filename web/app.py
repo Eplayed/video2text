@@ -3742,6 +3742,27 @@ def api_wechat_status():
     return jsonify(_wx_task_status)
 
 
+@app.route("/api/wechat/draft/<int:summary_id>")
+def api_wechat_draft(summary_id):
+    """只读返回最近一次被原意闸拦下的卡片草稿，供定位修改。"""
+    folder = wechat_graphics.OUTPUT_DIR / "_drafts" / str(summary_id)
+    drafts = sorted(folder.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+    if not drafts:
+        return jsonify({"error": "这条没有保留的公众号卡片草稿"}), 404
+    draft = json.loads(drafts[0].read_text(encoding="utf-8"))
+    from src import guide_mother
+    try:
+        mother = guide_mother.load_mother(DB_PATH, summary_id)
+        _sources, revision = guide_mother.source_snapshot(DB_PATH, summary_id)
+        stale = (mother.get("source_revision") != revision or
+                 (draft.get("fidelity") or {}).get("mother_revision") != mother.get("mother_revision"))
+    except guide_mother.MotherError:
+        mother, stale = {}, True
+    return jsonify({"draft": draft, "stale": stale,
+                    "core_answer": mother.get("core_answer") or "",
+                    "points": mother.get("points") or []})
+
+
 # ── 公众号成稿（2026-10-26 策略：这一渠道交的是完整文章，卡片只是可选配图）──
 # 单独一条路由而不是给 /api/wechat/generate 加 mode：那一路径的产物是 6-8 张卡，
 # 成稿的产物是一篇 md，两者的进度、门禁、结果页都不一样，混在一个 status 里
