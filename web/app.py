@@ -3403,6 +3403,15 @@ def api_toutiao_generate():
         return jsonify({"error": "整理稿不存在"}), 404
     if summary.get("summary_type") != "toutiao_mix":
         return jsonify({"error": "只支持头条整合稿（toutiao_mix）生成图文，请先生成整合稿"}), 400
+    try:
+        source_ids = {int(x) for x in json.loads(summary.get("source_video_ids") or "[]")}
+    except (TypeError, ValueError):
+        source_ids = set()
+    if summary.get("video_id"):
+        source_ids.add(int(summary["video_id"]))
+    if len(source_ids) <= 1:
+        return jsonify({"error": "单条新素材请用「AI 海报」原意保留入口；这条头条卡片入口只保留给旧多源合集，"
+                                 "不会把单条素材退回旧式卡片化"}), 409
 
     _tt_task_status.update({
         "running": True, "done": False, "progress": "准备生成头条图文...", "error": "", "package": None,

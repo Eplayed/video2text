@@ -9004,10 +9004,18 @@ async function openSummary(id) {
   document.getElementById('modal-ai-title').textContent = '整理稿正文';
   document.getElementById('modal-ai-copy').innerHTML = renderSummaryContent(data.content || '');
   window.currentSummaryStructuredData = data.structured_data || '';
+  let ttSourceIds = [];
+  try { ttSourceIds = Array.isArray(data.source_video_ids)
+      ? data.source_video_ids : JSON.parse(data.source_video_ids || '[]'); }
+  catch (e) { ttSourceIds = []; }
+  if (!Array.isArray(ttSourceIds)) ttSourceIds = [];
+  if (data.video_id) ttSourceIds.push(data.video_id);
+  const oldToutiaoMix = new Set(ttSourceIds.map(Number).filter(Boolean)).size > 1;
   document.getElementById('modal-actions').innerHTML = `
     <a href="${esc(data.video_url||'#')}" target="_blank"><button class="btn sm">▶ 观看原视频</button></a>
     ${data.summary_type === 'toutiao_mix' ? `<button class="btn ghost sm" onclick="closeModal();openHumDialog(${id})" title="按体检清单定点改写，先预览再决定写不写回">🧹 去 AI 味</button>` : ''}
-    ${data.summary_type === 'toutiao_mix' ? `<button class="btn sm" style="background:var(--module-3);border-color:var(--module-3);color:#fff" onclick="closeModal();openToutiaoGenDialog(${id})">🔥 生成头条图文</button>` : ''}
+    ${data.summary_type === 'toutiao_mix' && oldToutiaoMix ? `<button class="btn sm" style="background:var(--module-3);border-color:var(--module-3);color:#fff" onclick="closeModal();openToutiaoGenDialog(${id})" title="旧合集卡片，未做新版原意核对">🔥 旧合集卡片</button>` : ''}
+    ${data.summary_type === 'toutiao_mix' && !oldToutiaoMix ? '<span class="mc-hint">单条素材请点「AI 海报」走原文核对</span>' : ''}
     ${data.summary_type === 'wechat_material' && data.plan_slot ? `<button class="btn sm" style="background:var(--module-1);border-color:var(--module-1);color:#fff" onclick="closeModal();ptFromSummary(this)" data-slot="${escAttr((data.plan_slot || {}).slot_key || '')}" data-ch="${escAttr((data.plan_slot || {}).channel || 'wechat')}" data-form="${escAttr((data.plan_slot || {}).form || '')}" title="这篇挂在排产格上：整理稿→公众号图文→复制发布，三步都在那一格里走完">🖋 去这一格走三步（生成公众号图文）</button>` : ''}
     ${data.summary_type === 'wechat_material' && !data.plan_slot ? `<button class="btn sm" style="background:var(--module-1);border-color:var(--module-1);color:#fff" onclick="closeModal();openWechatGenDialog(${id})">🖋 生成公众号图文（整篇）</button>` : ''}
     ${data.summary_type === 'wechat_material' && !data.plan_slot ? `<div class="mc-hint" style="font-size:11.5px;color:var(--text-tertiary);margin-top:6px">这篇没挂排产格（它走的是素材库勾选那条路），所以这里留一个生成入口。<b>挂了格的稿统一在「排产表」那一格里三步走完</b>，不在这页生成。</div>` : ''}

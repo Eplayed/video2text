@@ -121,6 +121,9 @@ META_RULE = ("- **会印到图上的那几行字里不许出现过程词**（%s�
              "「访谈称平均满级耗时约175小时」→「平均满级约 175 小时」；"
              "「口播说团本推迟」→「团本大概率推迟 2 到 3 个 CD」。"
              "出处与口径写进 publish.source_note（发布页那份给人看的），别印到图上。" % META_NAMES)
+MOTHER_META_RULE = ("- 图上只写原意母稿能够定位到原始转写的内容；过程词留在审校记录，"
+                    "来源归属写进发布文案。不能为了去掉过程词而把传闻写成确定事实，"
+                    "也不能补出原文没有的日期、数量或结论。")
 
 
 def ink_texts(page):
@@ -1113,7 +1116,7 @@ __FRAMES__
 - "kicker": "栏目名 · 本篇主题"（≤14 字，整组同一句，只填在第一页）
 - "bignum": {"v": "约 +20%", "label": "这个数字说的是什么"} —— v 里的数字必须在素材原文里出现过
 - "contrast": [{"t": "原来", "d": "…"}, {"t": "现在", "d": "…"}] —— 仅当素材确有前后差异时使用
-- "warn": {"t": "一句提醒", "d": "限制是什么、为什么"} —— 素材没说的写在这儿，别编成结论
+- "warn": {"t": "一句提醒", "d": "限制是什么、为什么"} —— 仅当原文明确给出限制时才写；没说就省略
 - "ask": {"q": "一个能直接回答的问题", "options": ["不超过三项"]} —— 只给最后一页
 这一档每页正文仍守 ≤__TOTAL2__ 字，但卡片建议 2-3 条，把地方留给图。
 每页按内容需要选零件：有真实数值才用 `bignum`，有真实前后差异才用 `contrast`，
@@ -1127,7 +1130,7 @@ __META__
 """
 
 
-def guide_rules_text(items, total):
+def guide_rules_text(items, total, meta_rule=META_RULE):
     """帧清单进提示词；没有可用帧就返回空串（这一档整段不出现，不占预算）"""
     if not items:
         return ""
@@ -1135,12 +1138,67 @@ def guide_rules_text(items, total):
         from . import frame_pool
     except ImportError:
         import frame_pool
-    return (_GUIDE_RULES
+    rules = _GUIDE_RULES
+    if meta_rule == MOTHER_META_RULE:
+        rules = rules.replace("卡片建议 2-3 条，把地方留给图。",
+                              "卡片数量由必保点和可用空间决定，装不下就拆页。")
+    return (rules
             .replace("__FRAMES__", frame_pool.index_text(items))
             .replace("__TOTAL2__", str(total))
             .replace("__SHAPE__", "（这些键就写在 pages[] 每一页的对象里，示例已经带上；"
                                   "哪一页用不上某个零件，就把那**整个键删掉**）")
-            .replace("__META__", META_RULE))
+            .replace("__META__", meta_rule))
+
+
+def _mother_plan_prompt(prompt):
+    """母稿模式去掉旧模板对卡片数量和论证结构的强迫；锚点失效直接报错。"""
+    changes = (
+        ("挑出一条最有价值的主线，并把推理链留在图上。",
+         "按原文的核心信息组织图文，保留使结论成立的条件。"),
+        ("铁律二·结构纪律（这条决定海报是\"一串散点\"还是\"一个论证\"）：",
+         "铁律二·结构纪律（按原文的信息关系排版）："),
+        ("优先保留**带推理链的信息**（为什么值、怎么算出来的、什么条件才成立），",
+         "优先保留核心信息与成立条件，"),
+        ("砍掉单纯罗列的名词、重复修饰和与主题无关的边角料。",
+         "并列清单按原意保留；只去重复修饰和与主题无关的内容。"),
+        ("**每页**卡片 3-5 张；**每页**全部文字合计 ≤__TOTAL__ 字。",
+         "**每页**卡片数量由内容决定；装不下要拆页，不能删必保点；**每页**全部文字合计 ≤__TOTAL__ 字。"),
+        ("每张卡片必须给 v（≤24 字）：这一条**该画成什么**",
+         "需要插画的卡片可给 v（≤24 字），说明这一条可画成什么"),
+        ("scene：先想一个能代表本篇的**主视觉画面**",
+         "scene：仅在需要插画时描述与原文相关的**主视觉画面**"),
+        ("例如\"一个法师在熔岩城墙头举起发光的卷轴\"，不要写\"科技感\"\"高级感\"这类形容词。",
+         "只描述原文能支持的画面，不补原文没有的人物、地点或动作。"),
+        ("一句话说清这条主线（≤24字，不画进海报，只用来检查结构是否成链）",
+         "一句话说清原文的核心信息（≤24字，不画进海报，只用来检查遗漏）"),
+        ("然后 3-5 条要点，最后一句收尾", "再按原文要点数量分行，最后一句收尾"),
+    )
+    for old, new in changes:
+        if old not in prompt:
+            raise PosterError("原意母稿提示词锚点已变化：%s" % old[:30])
+        prompt = prompt.replace(old, new)
+    return prompt
+
+
+def _mother_page_prompt(prompt):
+    """单页重拆也按原文类型组织，避免把清单硬写成递进论证。"""
+    changes = (
+        ("这一页要讲素材里还没被用掉、又能自成一块的内容",
+         "这一页先保留本页已经绑定的原意点，只修正本页内容；其他页只供避免重复"),
+        ("这一页的卡片之间要构成递进，每张都能回答\"所以呢\"；两张卡不许讲同一件事。",
+         "这一页按原文结构组织：清单保留并列，步骤保留先后；两张卡不重复同一件事。"),
+        ("**这一页**卡片 3-5 张、全部文字合计 ≤__TOTAL__ 字；",
+         "**这一页**卡片数量按内容决定，必保点不可删；全部文字合计 ≤__TOTAL__ 字；"),
+        ("角色 __ROLE__（可换，两个字，如 收藏 / 行动 / 风险 / 收尾）",
+         "角色 __ROLE__（按这一页实际内容填写）"),
+        ("scene（≤48 字）写这一页要画成什么场景，要看得见；每张卡给 v（≤24 字）写这一条画什么，",
+         "需要插画时才写 scene（≤48 字）与卡片 v（≤24 字），画面必须与原文有关，"),
+    )
+    for old, new in changes:
+        if old not in prompt:
+            raise PosterError("原意母稿单页提示词锚点已变化：%s" % old[:30])
+        prompt = prompt.replace(old, new)
+    return prompt
 
 
 def guide_shape_prompt(items):
@@ -1486,7 +1544,7 @@ __CONTENT__
 
 
 def page_plan_prompt(page_index, pages, spine, style_key, has_photo, theme, lim, content="",
-                     frames=None):
+                     frames=None, mother_mode=False):
     """把"只重写第 k 页"这段话拼出来（纯函数，离线可测）。
 
     其他页的标题与要点会作为"别重复"的清单塞进去——不给这份清单，模型最容易出现的就是
@@ -1514,7 +1572,7 @@ def page_plan_prompt(page_index, pages, spine, style_key, has_photo, theme, lim,
             f = str((ph or {}).get("frame") or "").strip().upper()
             if f:
                 used.append("%s(%s)" % (f, (ph or {}).get("ts") or "时刻未知"))
-    txt = (_PAGE_PROMPT
+    txt = ((_mother_page_prompt(_PAGE_PROMPT) if mother_mode else _PAGE_PROMPT)
            .replace("__IDX__", str(page_index))
            .replace("__THEME__", (theme or "未指定，按素材自判").strip())
            .replace("__SPINE__", (spine or "（未填）"))
@@ -1528,8 +1586,9 @@ def page_plan_prompt(page_index, pages, spine, style_key, has_photo, theme, lim,
            .replace("__TOTAL__", str(lim["total"]))
            .replace("__GUIDE_SHAPE__", guide_shape_prompt(frames))
            .replace("__CONTENT__", content or "")
-           .replace("__META__", META_RULE)
-           + guide_rules_text(frames, lim["total"]))
+           .replace("__META__", MOTHER_META_RULE if mother_mode else META_RULE)
+           + guide_rules_text(frames, lim["total"],
+                              MOTHER_META_RULE if mother_mode else META_RULE))
     if frames and used:
         # 逐页填这条路必须告诉它"哪些编号已被别的页占了"：不说的话模型会挑同一场景里
         # 挨着的那几张，后端 12 秒同场景闸一挡，这一页就变成没图
@@ -1569,7 +1628,7 @@ def build_page_plan(summary, ai_config, page_index, pages, spine="", theme="",
         from . import guide_mother
         content = guide_mother.mother_prompt(mother)
     prompt = page_plan_prompt(page_index, pages, spine, key, has_photo, theme, lim,
-                              content=content, frames=frames)
+                              content=content, frames=frames, mother_mode=bool(mother))
     if mother:
         prompt += ("\n本次只用上面带 point_id 的原意母稿。每张卡片输出 point_ids 数组；"
                    "逐字保持原句的主体、数量、条件与否定词。别的页已覆盖的点不要重复编造。")
@@ -1673,10 +1732,11 @@ def build_text_plan(summary, ai_config, theme="", title="", style_key="", text_m
                         "单页与 pages 内的 cards 都要带 point_ids；"
                         "不许只挂 ID 却改掉主体、数量、条件、顺序或否定词。"
                         "首屏给 core_answer 与必要条件；不把旧整理稿作为事实来源。")
-    prompt = (_PLAN_PROMPT
+    prompt = ((_mother_plan_prompt(_PLAN_PROMPT) if mother else _PLAN_PROMPT)
               .replace("__THEME__", (theme or "未指定，按素材自判").strip())
               .replace("__STYLES__", style_plan_prompt(frames))
-              .replace("__DENSITY__", _density_rule(text_mode))
+              .replace("__DENSITY__", ("文字必须完整承接所有必保点；版面不够就拆页并提示容量缺口，"
+                                       "不能为了少字删条件或结论。" if mother else _density_rule(text_mode)))
               .replace("__TOTAL__", str(lim["total"])).replace("__TITLE__", str(lim["title"]))
               .replace("__SUB__", str(lim["subtitle"])).replace("__CT__", str(lim["cardT"]))
               .replace("__CD__", str(lim["cardD"])).replace("__FOOT__", str(lim["footer"]))
@@ -1687,9 +1747,10 @@ def build_text_plan(summary, ai_config, theme="", title="", style_key="", text_m
                                      "不要引用旧整理稿；转写不清的专名不要补全。\n\n"
                                      if mother else risks_prompt_block(summary)))
               .replace("__CONTENT__", content)
-              .replace("__META__", META_RULE)
-              .replace("__NAMES__", _names_hint(summary, source_text))
-              + guide_rules_text(frames, lim["total"]) + mother_rules)
+              .replace("__META__", MOTHER_META_RULE if mother else META_RULE)
+              .replace("__NAMES__", _names_hint({"content": ""} if mother else summary, source_text))
+              + guide_rules_text(frames, lim["total"],
+                                 MOTHER_META_RULE if mother else META_RULE) + mother_rules)
     if mother:
         prompt = prompt.replace('"v": "这一条画什么"}',
                                 '"v": "这一条画什么", "point_ids": ["逐字复制的母稿 point_id"]}')
