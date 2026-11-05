@@ -12,7 +12,7 @@ sys.path.insert(0, str(ROOT))
 import main as collector  # main.py
 from src import content_store, material_store, toutiao_graphics, ai_poster, sync_tasks, topic_pack, supplements
 from src import draft_audit, review_store, toutiao_stats, humanize_routes, ops_store
-from src import ai_quota
+from src import ai_quota, model_usage
 from src import ai_thinking
 from src import ai_models        # 主档/快速档按到期时间自动选模型（2026-10-29）
 from src import fact_gate, risk_ledger, release_review   # 待核台账 + 发布证据门 + 放行记录（2026-10-29）
@@ -74,7 +74,7 @@ def _original_graphics_disabled():
                              "新任务不会转入旧裁剪流程"}), 409
 
 
-def _graphics_manifest_view(manifest):
+def _graphics_manifest_view(manifest, include_model_usage=False):
     """只在接口响应标注旧包边界，不迁移或回写 manifest。"""
     data = dict(manifest)
     plan = data.get("plan") if isinstance(data.get("plan"), dict) else {}
@@ -88,7 +88,37 @@ def _graphics_manifest_view(manifest):
     else:
         data["generation_mode"] = "legacy"
         data["validation_label"] = "旧版，未做新版校验"
+    if include_model_usage:
+        for key, field in (("model_run_id", "model_usage"),
+                           ("plan_model_run_id", "plan_model_usage")):
+            if data.get(key):
+                data[field] = model_usage.load(data[key]) or {
+                    "run_id": data[key], "status": "missing", "cost_status": "unknown"}
     return data
+
+
+def _atomic_json(path, payload):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + "." + uuid.uuid4().hex + ".tmp")
+    try:
+        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(str(tmp), str(path))
+    finally:
+        if tmp.exists():
+            tmp.unlink()
+
+
+def _attach_model_run(manifest_path, run_id, plan_run_id=""):
+    """成品只存本次账本 ID；请求详情由只读接口按 ID 取，避免重写成品内容。"""
+    path = Path(manifest_path)
+    if not path.is_file():
+        return
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    manifest["model_run_id"] = run_id
+    if plan_run_id:
+        manifest["plan_model_run_id"] = plan_run_id
+    _atomic_json(path, manifest)
 
 
 @app.route("/api/graphics/original-mode")
@@ -3554,7 +3584,7 @@ def api_toutiao_detail(summary_id):
     package = toutiao_graphics.get_package(summary_id)
     if not package:
         return jsonify({"error": "头条图文不存在"}), 404
-    return jsonify(_graphics_manifest_view(package))
+    return jsonify(_graphics_manifest_view(package, include_model_usage=True))
 
 
 @app.route("/api/toutiao/<int:summary_id>/reveal", methods=["POST"])
@@ -3589,7 +3619,8 @@ def api_toutiao_delete(summary_id):
 # ── 公众号图文：wechat_material 整合稿 + 作者真实底稿 → 3:4 卡片 + 配文/摘要/关键词回复 ──
 # 独立任务状态：与 _task_status / _tt_task_status 三者刻意分离，产线互不打断（迁移方案 §5.5）
 _wx_task_status = {"running": False, "done": True, "progress": "", "error": "", "package": None,
-                    "step": None, "steps": None}
+                    "step": None, "steps": None, "summary_id": 0, "model_usage": {},
+                    "model_run_id": ""}
 # 成稿单独一份进度：卡片在跑与成稿在跑是两件事，混一份状态一定出现"另一条说完成"的假读数
 _wx_article_status = {"running": False, "done": True, "progress": "", "error": "", "article": None,
                         "step": None, "steps": None}
@@ -3742,6 +3773,7 @@ def api_wechat_generate():
 
     _wx_task_status.update({
         "running": True, "done": False, "progress": "准备生成公众号图文...", "error": "", "package": None,
+        "summary_id": int(summary_id), "model_usage": {}, "model_run_id": "",
     })
 
     def run():
@@ -3755,6 +3787,7 @@ def api_wechat_generate():
                 _wx_task_status["progress"] = "从原始转写提取原意母稿..."
                 mother = guide_mother.ensure_mother(DB_PATH, summary["id"], cfg,
                                                     progress=lambda msg: _wx_task_status.update({"progress": msg}))
+                model_usage.current().set_revisions(mother["source_revision"], mother["mother_revision"])
                 mother_sources, mother_source_rev = guide_mother.source_snapshot(DB_PATH, summary["id"])
                 if mother_source_rev != mother["source_revision"]:
                     raise guide_mother.MotherError("原文在生成期间更新，请重新提取母稿")
@@ -3780,6 +3813,9 @@ def api_wechat_generate():
                                                             output_root=stage_root,
                                                             prepared_data=edited_draft,
                                                             prechecked_fidelity=(edited_draft or {}).get("fidelity"))
+                manifest_dir = (stage_root if stage_root is not None
+                                else wechat_graphics.OUTPUT_DIR) / str(summary["id"])
+                _attach_model_run(manifest_dir / "manifest.json", model_usage.current().run_id)
                 if mother:
                     _poster_promote_staged(summary["id"], stage_root / str(summary["id"]),
                                            mother["source_revision"], mother["mother_revision"],
@@ -3801,17 +3837,57 @@ def api_wechat_generate():
             _wx_task_status["error"] = traceback.format_exc()
             _wx_task_status["progress"] = "生成失败"
         finally:
-            _wx_task_status["done"] = True
-            _wx_task_status["running"] = False
             _wx_task_status["step"] = _wx_task_status["steps"] = None
 
-    threading.Thread(target=run, daemon=True).start()
+    def run_tracked():
+        with model_usage.track("wechat", "generate", summary_id) as usage_run:
+            _wx_task_status["model_run_id"] = usage_run.run_id
+            try:
+                run()
+            finally:
+                try:
+                    usage_run.close("failed" if _wx_task_status.get("error") else "complete")
+                    _wx_task_status["model_usage"] = usage_run.snapshot()
+                except Exception:
+                    app.logger.error("公众号图文模型用量账本收尾失败", exc_info=True)
+                    _wx_task_status["error"] = _wx_task_status.get("error") or "模型用量账本保存失败，请核对平台用量"
+                _wx_task_status["done"] = True
+                _wx_task_status["running"] = False
+
+    def safe_run_tracked():
+        try:
+            run_tracked()
+        except Exception:
+            app.logger.error("公众号图文用量账本启动失败", exc_info=True)
+            _wx_task_status["error"] = "模型用量账本异常，请核对本次请求与平台用量"
+            _wx_task_status["done"] = True
+            _wx_task_status["running"] = False
+
+    threading.Thread(target=safe_run_tracked, daemon=True).start()
     return jsonify({"status": "started", "summary_id": summary_id})
 
 
 @app.route("/api/wechat/status")
 def api_wechat_status():
-    return jsonify(_wx_task_status)
+    st = dict(_wx_task_status)
+    try:
+        sid = int(request.args.get("summary_id") or 0)
+    except (TypeError, ValueError):
+        sid = 0
+    if sid and not st.get("running") and st.get("summary_id") != sid:
+        st = {"running": False, "done": True, "progress": "", "error": "",
+              "package": None, "summary_id": sid}
+    elif sid and st.get("running") and st.get("summary_id") != sid:
+        st = {"running": False, "done": True, "progress": "", "error": "另一篇图文任务已接管进度；请查看本篇已保存草稿",
+              "package": None, "summary_id": sid}
+    lookup_id = sid or int(st.get("summary_id") or 0)
+    if lookup_id and (st.get("running") or not st.get("model_usage")):
+        st["model_usage"] = (model_usage.load(st.get("model_run_id"))
+                             if st.get("running") and st.get("model_run_id")
+                             else model_usage.latest(lookup_id, "wechat"))
+    if not st.get("running") and (st.get("model_usage") or {}).get("status") == "running":
+        st["model_usage"] = dict(st["model_usage"], status="interrupted")
+    return jsonify(st)
 
 
 @app.route("/api/wechat/draft/<int:summary_id>")
@@ -4084,7 +4160,7 @@ def api_wechat_detail(summary_id):
     package = wechat_graphics.get_package(summary_id)
     if not package:
         return jsonify({"error": "公众号图文不存在"}), 404
-    return jsonify(_graphics_manifest_view(package))
+    return jsonify(_graphics_manifest_view(package, include_model_usage=True))
 
 
 @app.route("/api/wechat/<int:summary_id>/reveal", methods=["POST"])
@@ -4119,7 +4195,8 @@ def api_wechat_delete(summary_id):
 # ── AI 海报：整理稿 → 出图模型直接画整张海报（含中文文字），出图后 OCR 回读逐字校验 ──
 # 与上面两条 HTML 模板产线互不相干：这里不渲染网页，文字是画进像素的。
 _poster_status = {"running": False, "done": True, "progress": "", "error": "",
-                  "stage": "", "package": None, "plan": None,
+                  "stage": "", "package": None, "plan": None, "model_usage": {},
+                  "model_run_id": "",
                   # 海报任务是全局单例，但界面上可以同时开两条整理稿的弹窗：不带归属的
                   # 状态会被后一个任务覆盖，前一个弹窗轮询到的就是别人的结果（表现为
                   # "我给 A 出图，页面上贴出来 B 的图"）。task_id 每次提交自增，
@@ -4141,8 +4218,7 @@ def _poster_save_plan(sid, payload):
     """
     try:
         p = _poster_plan_file(sid)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        _atomic_json(p, payload)
     except Exception as e:
         print("[poster] 文案备份没写成（不影响这次结果）:", e)
 
@@ -4176,7 +4252,7 @@ def _poster_fidelity(sid, mother, plan, publish, cfg, source_text):
 
 
 def _poster_promote_staged(sid, stage, source_revision, mother_revision, target=None):
-    """原文持锁复核后再替换成品目录；迟到的任务只能留下草稿。"""
+    """持锁复核后替换成品；成功后把旧包归档，提交失败则恢复旧包。"""
     import shutil
     from src import guide_mother
     target = Path(target) if target is not None else ai_poster.OUTPUT_DIR / str(int(sid))
@@ -4184,6 +4260,8 @@ def _poster_promote_staged(sid, stage, source_revision, mother_revision, target=
     backup = target.parent / ("_previous-%d-%s" % (int(sid), uuid.uuid4().hex))
     conn = content_store.connect(DB_PATH)
     moved_old = False
+    moved_new = False
+    committed = False
     try:
         conn.execute("BEGIN IMMEDIATE")
         current_source, current_mother = guide_mother.current_revisions(conn, sid)
@@ -4195,20 +4273,28 @@ def _poster_promote_staged(sid, stage, source_revision, mother_revision, target=
                 shutil.copyfile(old_plan, stage / "plan.json")
             os.replace(str(target), str(backup))
             moved_old = True
-        try:
-            os.replace(str(stage), str(target))
-        except Exception:
-            if moved_old:
-                os.replace(str(backup), str(target))
-                moved_old = False
-            raise
+        os.replace(str(stage), str(target))
+        moved_new = True
         conn.commit()
+        committed = True
+    except Exception:
+        if moved_new and target.exists():
+            os.replace(str(target), str(stage))
+        if moved_old and backup.exists():
+            os.replace(str(backup), str(target))
+        raise
     finally:
         conn.close()
         if backup.exists() and not target.exists():
             os.replace(str(backup), str(target))
-        if backup.exists() and target.exists():
-            shutil.rmtree(backup)
+        if committed and backup.exists() and target.exists():
+            archive = target.parent / "_history" / str(int(sid)) / (
+                datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:8])
+            try:
+                archive.parent.mkdir(parents=True, exist_ok=True)
+                os.replace(str(backup), str(archive))
+            except OSError:
+                app.logger.error("旧图文包归档失败，旧快照仍留在 %s", backup, exc_info=True)
 
 
 def _humanize_llm_error(full_tb: str) -> str:
@@ -4254,10 +4340,13 @@ def _poster_start(stage, fn, summary_id=0, plan_snapshot=None):
     global _poster_task_seq
     if _poster_status["running"]:
         return 0
+    previous = None
+    if summary_id:
+        previous = ((_poster_status.get("plan")
+                     if _poster_status.get("summary_id") == int(summary_id) else None)
+                    or _poster_load_plan(summary_id))
     saved = None
     if stage == "poster":
-        previous = (_poster_status.get("plan") if _poster_status.get("summary_id") == int(summary_id or 0)
-                    else None) or _poster_load_plan(summary_id)
         saved = dict(previous or {})
         if plan_snapshot:
             saved.update(plan_snapshot)
@@ -4267,31 +4356,53 @@ def _poster_start(stage, fn, summary_id=0, plan_snapshot=None):
     _poster_status.update({"running": True, "done": False, "progress": "任务排队中...", "error": "",
                            "stage": stage, "task_id": _poster_task_seq,
                            "summary_id": int(summary_id or 0),
+                           "model_usage": {}, "model_run_id": "",
                            "fact_hard": [],        # 上一任务拦下的清单不能留给下一次点按钮
                            "package": None if stage == "plan" else _poster_status["package"],
-                           "plan": saved if stage == "poster" else _poster_status["plan"]})
+                           "plan": saved if stage == "poster" else previous})
     if stage == "poster" and saved:
         # 本次人工改稿先落盘。即使事实闸拒绝、浏览器刷新或服务重启，仍回到刚提交的文案。
         _poster_save_plan(summary_id, saved)
 
     def wrapper():
+        with model_usage.track("poster", stage, summary_id) as run:
+            _poster_status["model_run_id"] = run.run_id
+            try:
+                fn()
+            except ai_poster.PosterError as e:
+                _poster_status["error"] = str(e)        # 可预期失败只给一句话，不刷 traceback
+                _poster_status["fact_hard"] = list(getattr(e, "fact_hard", None) or [])
+                _poster_status["progress"] = "生成失败"
+            except Exception:
+                full = traceback.format_exc()
+                app.logger.error("海报任务失败：\n%s", full)
+                _poster_status["error"] = _humanize_llm_error(full)
+                _poster_status["progress"] = "生成失败"
+            finally:
+                try:
+                    run.close("failed" if _poster_status.get("error") else "complete")
+                    report = run.snapshot()
+                    _poster_status["model_usage"] = report
+                    saved_plan = _poster_status.get("plan")
+                    if isinstance(saved_plan, dict) and isinstance(saved_plan.get("plan"), dict):
+                        saved_plan["model_usage"] = report
+                        _poster_save_plan(summary_id, saved_plan)
+                except Exception:
+                    app.logger.error("海报模型用量账本收尾失败", exc_info=True)
+                    _poster_status["error"] = _poster_status.get("error") or "模型用量账本保存失败，请核对平台用量"
+                _poster_status["done"] = True
+                _poster_status["running"] = False
+
+    def safe_wrapper():
         try:
-            fn()
-        except ai_poster.PosterError as e:
-            _poster_status["error"] = str(e)        # 可预期失败只给一句话，不刷 traceback
-            # 事实闸拦下来的那些条目**逐条**给前端：人要按条填出处与结论，不是一句"我核过了"
-            _poster_status["fact_hard"] = list(getattr(e, "fact_hard", None) or [])
-            _poster_status["progress"] = "生成失败"
+            wrapper()
         except Exception:
-            full = traceback.format_exc()
-            app.logger.error("海报任务失败：\n%s", full)
-            _poster_status["error"] = _humanize_llm_error(full)
-            _poster_status["progress"] = "生成失败"
-        finally:
+            app.logger.error("海报用量账本启动失败", exc_info=True)
+            _poster_status["error"] = "模型用量账本异常，请核对本次请求与平台用量"
             _poster_status["done"] = True
             _poster_status["running"] = False
 
-    threading.Thread(target=wrapper, daemon=True).start()
+    threading.Thread(target=safe_wrapper, daemon=True).start()
     return _poster_task_seq
 
 
@@ -4655,6 +4766,7 @@ def api_poster_plan():
         _poster_status["progress"] = "从原始转写提取原意母稿..."
         mother = guide_mother.ensure_mother(DB_PATH, summary["id"], cfg,
                                             progress=lambda msg: _poster_status.update({"progress": msg}))
+        model_usage.current().set_revisions(mother["source_revision"], mother["mother_revision"])
         mother_sources, mother_source_rev = guide_mother.source_snapshot(DB_PATH, summary["id"])
         if mother_source_rev != mother["source_revision"]:
             raise guide_mother.MotherError("原文在拆稿期间更新，请重新提取母稿")
@@ -4763,6 +4875,7 @@ def api_poster_plan_page():
         cfg = _fast_config()
         mother = guide_mother.ensure_mother(DB_PATH, summary["id"], cfg,
                                             progress=lambda msg: _poster_status.update({"progress": msg}))
+        model_usage.current().set_revisions(mother["source_revision"], mother["mother_revision"])
         mother_sources, mother_source_rev = guide_mother.source_snapshot(DB_PATH, summary["id"])
         if mother_source_rev != mother["source_revision"]:
             raise guide_mother.MotherError("原文在重拆期间更新，请重新提取母稿")
@@ -4870,6 +4983,8 @@ def api_poster_generate():
             _poster_status["progress"] = msg
         # 在任何画图请求前对当前编辑稿重新核对；上次 PASS 不跨编辑或源版本沿用。
         current = guide_mother.load_mother(DB_PATH, summary["id"])
+        model_usage.current().set_revisions(current.get("source_revision"),
+                                            current.get("mother_revision"))
         _sources, current_source = guide_mother.source_snapshot(DB_PATH, summary["id"])
         if (current.get("mother_revision") != plan.get("mother_revision")
                 or current_source != plan.get("source_revision")):
@@ -4906,6 +5021,10 @@ def api_poster_generate():
                                                  fact_ctx=_fact_ctx(summary),
                                                  provenance=prov, asr_text=asr_text,
                                                  frame_items=frame_items, output_dir=stage)
+            previous = _poster_load_plan(summary["id"]) or {}
+            plan_run_id = (previous.get("model_usage") or {}).get("run_id") or ""
+            _attach_model_run(stage / "manifest.json", model_usage.current().run_id,
+                              plan_run_id=plan_run_id)
             _poster_promote_staged(summary["id"], stage, plan["source_revision"],
                                    plan["mother_revision"])
         finally:
@@ -5334,12 +5453,24 @@ def api_poster_status():
             same_task = st.get("summary_id") == sid
             st["summary_id"] = sid
             st["plan"] = saved
+            st["model_usage"] = saved.get("model_usage") or {}
             if not same_task:
                 st["package"] = None    # 那份成品属于另一条，不许贴到这里
                 st["error"] = ""
             st["done"] = True
             if not same_task:
                 st["progress"] = "这条的文案是从成品包里的备份接回来的（服务重启过也能接着改）"
+        elif st.get("summary_id") != sid:
+            st.update({"summary_id": sid, "plan": None, "package": None,
+                       "error": "", "progress": "", "model_usage": {}, "model_run_id": ""})
+    lookup_id = sid or int(st.get("summary_id") or 0)
+    if lookup_id and (st.get("running") or not st.get("model_usage")
+                      or st.get("summary_id") != _poster_status.get("summary_id")):
+        st["model_usage"] = (model_usage.load(st.get("model_run_id"))
+                             if st.get("running") and st.get("model_run_id")
+                             else model_usage.latest(lookup_id, "poster"))
+    if not st.get("running") and (st.get("model_usage") or {}).get("status") == "running":
+        st["model_usage"] = dict(st["model_usage"], status="interrupted")
     return jsonify(st)
 
 
@@ -5748,7 +5879,7 @@ def api_poster_detail(summary_id):
     manifest = ai_poster.get_package(summary_id)
     if not manifest:
         return jsonify({"error": "海报不存在"}), 404
-    return jsonify(_graphics_manifest_view(manifest))
+    return jsonify(_graphics_manifest_view(manifest, include_model_usage=True))
 
 
 @app.route("/api/poster/<int:summary_id>/pick", methods=["POST"])

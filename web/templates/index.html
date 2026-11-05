@@ -1431,6 +1431,7 @@ textarea{resize:vertical;min-height:84px}
                 <b style="font-size:13.5px" id="wx-img-count">卡片</b>
                 <button class="btn ghost sm" onclick="revealWechatFolder()"><span data-icon="grid" class="ic14"></span>打开图片所在文件夹</button>
               </div>
+              <div id="wx-model-usage" class="pk-hint" style="display:none;margin-bottom:10px"></div>
               <div class="img-stack" id="wx-img-stack"></div>
             </div>
           </div>
@@ -1675,6 +1676,7 @@ textarea{resize:vertical;min-height:84px}
         <div id="pk-frames-hint" style="display:none;font-size:11.5px;line-height:1.6;margin:0 0 8px"></div>
         <!-- 额度预警：拆解/出图都按模型算额度，快没了在这里先说，别等点了才吐一堆堆栈 -->
         <div id="pk-quota" class="pk-quota" style="display:none"></div>
+        <div class="pk-hint" style="margin:0 0 8px">按钮上的“0 元”只指底图与排版。若文案变更触发模型复审，实际费用以本次请求记录和平台账单为准。</div>
         <div class="pk-tpls" id="pk-tpls" style="display:none"></div>
         <div class="pk-break" id="pk-break" style="display:none"></div>
         <div class="pk-one" id="pk-one" style="display:none"></div>
@@ -3827,12 +3829,18 @@ async function pkHydrate(id) {
   if (st.plan && st.plan.plan) {
     if (!errMsg) {
       document.getElementById('pk-result').innerHTML = '<div class="pk-verify mild">这是上一次拆好的草稿。'
-        + '请先看原意核对与下方原始转写，确认后再出图。</div>';
+        + '请先看原意核对与下方原始转写，确认后再出图。</div>'
+        + modelUsageHtml(st.model_usage, '上次任务');
       pkSetFidelity(st.plan.fidelity);
+    } else {
+      document.getElementById('pk-result').innerHTML += modelUsageHtml(st.model_usage, '上次任务');
     }
     const d = document.getElementById('pk-srcpanel');
     if (d) d.open = true;
     pkLoadSource();
+  }
+  if (!st.plan || !st.plan.plan) {
+    document.getElementById('pk-result').innerHTML += modelUsageHtml(st.model_usage, '上次任务');
   }
 }
 // 三步操作卡：默认展开，收过一次就记住——学会之后不必每次挡在动作条下面。
@@ -5461,10 +5469,10 @@ function pkGoLabel() {
     // 但一条干净帧都没有时还写"用素材真帧"就是骗人（2026-11-03 号主：B站素材 18 帧
     // 全被判废，按钮却写着"用素材帧"）——这时候实说是纯文字攻略页。
     const noF = !!(_pkFrames && !(_pkFrames.usable || 0));
-    return '③ 出图 · ' + many + (noF ? '纯文字攻略页 0 元' : '用素材真帧 0 元');
+    return '③ 出图 · ' + many + (noF ? '纯文字攻略页 · 底图 0 元' : '用素材真帧 · 底图 0 元');
   }
   if (_pkPhoto) {
-    return '③ 出图 · ' + many + '用你上传的图 0 元';
+    return '③ 出图 · ' + many + '用你上传的图 · 底图 0 元';
   }
   if (pkTextMode() === 'model') {
     return '③ 出图 · ' + many + 'AI 画底图带字 ' + (n * 0.5).toFixed(1) + ' 元';
@@ -5543,7 +5551,9 @@ function pkPaintPreview(cur) {
           + '。点上面任意一页缩略图切过去改那一页。</div>' : '')
     + '<div class="pk-hint">这张预览 <b>0 元、当场出</b>，用的就是出图时同一个排版函数——字号、折行、卡片位置、配色都是真的。'
     + (pkGuideChrome()
-        ? '这一档不叫 AI 底图，<b>预览看到的就是成品</b>（画面是素材真帧）。<b>改完文案再点一次，不花钱。</b>'
+        ? ('这一档不叫 AI 底图，<b>预览看到的就是成品</b>（'
+           + (_pkFrames && !(_pkFrames.usable || 0) ? '纯文字攻略页' : '画面是素材真帧')
+           + '）。<b>改完文案再点一次，不花钱。</b>')
         : (_pkPhoto ? '首页那块用的是你上传的真图，出图还是这张图。<b>改完文案再点一次，不花钱。</b>'
                     : '只有上面那块灰框在出图时会被 AI 插画替换掉，插画画得好不好只有真出图才知道。'
                       + '<b>改完文案再点一次，不花钱。</b>'))
@@ -5924,7 +5934,9 @@ async function posterGenerate(force) {
     tip = '这条整合稿被判定为规则版骨架。\n确认你已人工复核过拆解出的文案、仍要出图？';
   } else if (pkGuideChrome()) {
     // 攻略档单独一条：这一档不叫底图、不花钱，混在"0.5 元/张"那几条里会让人以为还在花钱
-    tip = `出 ${npages} 页：画面全用素材里挑出来的真帧，不叫 AI 底图，整组 0 元、几秒钟。`
+    tip = (_pkFrames && !(_pkFrames.usable || 0)
+        ? `出 ${npages} 页：没有判合格的素材画面，按纯文字攻略页出图；底图 0 元。`
+        : `出 ${npages} 页：画面用素材里挑出来的真帧，不叫 AI 底图；底图 0 元。`)
         + '\n版面跟「② 看版面」看到的一致（图注不上图，只留档）。已有海报会被覆盖。'
         + (_pkPhoto ? '\n你上传的那张顶掉第 1 页的画面位（一页一张，那一页那张素材帧这轮不用）。' : '');
   } else if (nBase) {
@@ -5950,7 +5962,8 @@ async function posterGenerate(force) {
   const artHint = (!pkGuideChrome() && !nBase && !_pkPhoto && _pkFrames && (_pkFrames.usable || 0))
       ? '\n\n注意：这一版是 AI 画底图，不会用到那 ' + _pkFrames.usable
         + ' 张素材画面。要用它们就取消，改点「整组改成攻略页」（那一档 0 元）。' : '';
-  if (!confirm(tip + artHint)) return;
+  const auditCost = '\n费用说明：上述金额只算底图。若文案或原文版本变化，生成前可能调用语义复审模型；实际请求次数见任务记录，费用以平台账单为准。';
+  if (!confirm(tip + artHint + auditCost)) return;
   const body = {summary_id: _pkId, ratio: document.getElementById('pk-ratio').value,
                 theme: document.getElementById('pk-theme').value.trim(),
                 publish_channel: _pkChannel, form: _pkForm,
@@ -5967,6 +5980,28 @@ async function posterGenerate(force) {
     headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)}).then(x => x.json());
   if (r.error) { setStatus('error', r.error); return; }
   pollPoster('poster', r.task_id);
+}
+function modelUsageText(usage, label) {
+  if (!usage || !usage.run_id) return '';
+  if (usage.status === 'missing') return (label || '本步骤') + '模型请求记录缺失，费用未知，请核对平台账单';
+  const n = Number(usage.request_count || 0);
+  const models = [...new Set((usage.calls || []).map(c => c.response_model || c.requested_model).filter(Boolean))];
+  let line = (label || '本步骤') + '模型请求 ' + n + ' 次';
+  if (models.length) line += '（' + models.join('、') + '）';
+  if (n) {
+    line += '；已知 ' + Number(usage.tokens_known || 0) + ' token';
+    if (usage.tokens_unknown_count) line += '，另有 ' + usage.tokens_unknown_count + ' 次未返回用量';
+    line += '；费用未知，以平台账单为准';
+  } else {
+    line += '；本步骤未调用模型';
+  }
+  if (usage.status === 'running') line += '（任务仍在运行）';
+  if (usage.status === 'interrupted') line += '（服务重启时任务未完成，请先核对平台用量）';
+  return line;
+}
+function modelUsageHtml(usage, label) {
+  const line = modelUsageText(usage, label);
+  return line ? '<div class="pk-verify mild">' + esc(line) + '</div>' : '';
 }
 function pollPoster(stage, task) {
   const myId = _pkId;
@@ -6021,7 +6056,7 @@ function pollPoster(stage, task) {
           : '';
         body = `<div class="pk-verify fail">✗ ${esc(msg)}</div>` + override;
       }
-      box.innerHTML = body;
+      box.innerHTML = body + modelUsageHtml(st.model_usage, '本次任务');
       setStatus('error', '海报任务失败'); return;
     }
     setStatus('done', st.progress || '完成');
@@ -6078,7 +6113,8 @@ function pollPoster(stage, task) {
     if (stage === 'poster' && st.package && st.package.id) { renderPosterResult(st.package.id); return; }
     const warn = (stage === 'plan' && st.plan && st.plan.draft_warning)
       ? `<div class="pk-verify mild">⚠️ ${esc(st.plan.draft_warning)}——文案照拆不误，但出图那一步会先拦你一次，复核后点「仍然出图」放行。</div>` : '';
-    box.innerHTML = `<div class="pk-verify ${st.plan && st.plan.fidelity && !st.plan.fidelity.ready ? 'fail' : 'pass'}">${esc(st.progress || '文案已就绪，可编辑后出图')}</div>` + warn;
+    box.innerHTML = `<div class="pk-verify ${st.plan && st.plan.fidelity && !st.plan.fidelity.ready ? 'fail' : 'pass'}">${esc(st.progress || '文案已就绪，可编辑后出图')}</div>`
+      + modelUsageHtml(st.model_usage, '本次任务') + warn;
     if (st.plan && st.plan.plan) pkSetFidelity(st.plan.fidelity);
   };
   setTimeout(poll, 1200);
@@ -6207,6 +6243,8 @@ async function renderPosterResult(id) {
       : '');
   document.getElementById('pk-result').innerHTML =
     imgHtml
+    + modelUsageHtml(m.plan_model_usage, '拆文案步骤')
+    + modelUsageHtml(m.model_usage, '出图步骤')
     + provBlockHtml(m.provenance)
     + actBlockHtml(m.action_gate)
     + (topWarns.length ? `<div class="pk-verify fail">${topWarns.map(esc).join('<br>')}</div>` : '')
@@ -6986,6 +7024,10 @@ async function openWechatDetail(id) {
       '卡片 · ' + imgs.length + ' 张（' + (inCard ? inCard + ' 张用了你传的真图 · ' : '')
       + '原图 ' + shots + ' 张 · 点击放大）'
       + (p.validation_label ? ' · ' + p.validation_label : '');
+    const usageBox = document.getElementById('wx-model-usage');
+    const usageLine = modelUsageText(p.model_usage, '本包生成步骤');
+    usageBox.textContent = usageLine;
+    usageBox.style.display = usageLine ? '' : 'none';
     document.getElementById('wx-img-stack').innerHTML = imgs.map((im, i) => {
       const real = im.source === 'real_screenshot';
       // 卡片上标出用的是哪张用户图，发布时能一眼对上号
@@ -7350,17 +7392,19 @@ async function confirmWechatGen() {
 function pollWechatStatus() {
   const poll = async () => {
     let st;
-    try { st = await fetch('/api/wechat/status').then(r=>r.json()); }
+    try { st = await fetch('/api/wechat/status?summary_id=' + encodeURIComponent(_wxGenTargetId || 0)).then(r=>r.json()); }
     catch (e) { setTimeout(poll, 3000); return; }
-    if (st.running) { setStatus('running', st.progress || '生成中...', null,
+    const usageLine = modelUsageText(st.model_usage, '本次任务');
+    if (st.running) { setStatus('running', (st.progress || '生成中...') + (usageLine ? ' · ' + usageLine : ''), null,
                                  {done: st.step, total: st.steps}); setTimeout(poll, 1500); return; }
     if (st.error) {
-      setStatus('error', '生成失败: ' + String(st.error).split('\n')[0], st.error);
+      setStatus('error', '生成失败: ' + String(st.error).split('\n')[0]
+        + (usageLine ? ' · ' + usageLine : ''), st.error);
       if (String(st.error).indexOf('公众号原意核对未通过') >= 0 && _wxGenTargetId)
         wxShowBlockedDraft(_wxGenTargetId);
       return;
     }
-    setStatus('done', st.progress || '已生成');
+    setStatus('done', (st.progress || '已生成') + (usageLine ? ' · ' + usageLine : ''));
     if (currentView !== 'wechat') switchPage('wechat');
     if (st.package && st.package.id) openWechatDetail(st.package.id);
     else loadWechatList();

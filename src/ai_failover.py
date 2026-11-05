@@ -73,6 +73,10 @@ def install() -> Dict[str, Any]:
 
     def wrapped(self, *args, **kwargs):                        # noqa: ANN001
         from . import ai_models
+        from . import model_usage
+        run = model_usage.current()
+        if run and not run.allow_failover:
+            return orig(self, *args, **kwargs)
         model = str(kwargs.get("model") or "")
         tier = ai_models.tier_of(model)
         if not tier:

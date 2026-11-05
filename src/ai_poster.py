@@ -2653,24 +2653,26 @@ def generate_image(prompt_text, size, ai_config, timeout=300):
                "parameters": {"size": size}}
     headers = {"Authorization": "Bearer " + api_key, "Content-Type": "application/json",
                "X-DashScope-Async": "disable"}
+    from . import model_usage
+    run = model_usage.current()
     last = ""
     for attempt in range(1, MAX_ATTEMPTS + 1):
         _throttle()
+        call_id = run.begin("image", model) if run else None
         try:
             r = requests.post(url, json=payload, headers=headers, timeout=timeout)
         except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
-            # 连接级失败和"限流"不是一回事：对面很可能已经画完并扣了钱，只是回包没到本机
-            # （实测 2026-10-15 22:49 那次是 300 秒读超时）。仍然重试，但最后一次必须把
-            # "可能已经扣过钱"这句说出来，别让号主以为白等了一场、可以放心连点三次。
+            # 回包丢失时服务端可能已经画完并扣费；不能自动再次发生成请求。
+            if run and call_id:
+                run.end(call_id, "unknown")
             last = "连不上/等不到回包：%s" % str(e)[:140]
-            if attempt < MAX_ATTEMPTS:
-                continue
-            raise PosterError("出图这一跳没通（试了 %d 次）：%s。"
-                              "超时那几次对面可能已经出图并扣费，先去百炼控制台看用量再决定要不要再点。"
-                              % (MAX_ATTEMPTS, last))
+            raise PosterError("出图请求没有收到回包：%s。服务端可能已经出图并扣费；"
+                              "本次没有自动重试，请先去百炼控制台查用量再决定是否重按。" % last)
         try:
             data = r.json()
         except ValueError:
+            if run and call_id:
+                run.end(call_id, "unknown")
             raise PosterError("出图接口返回非 JSON（HTTP %s）：%s" % (r.status_code, r.text[:200]))
         if "output" in data:
             content = ((data.get("output") or {}).get("choices") or [{}])[0] \
@@ -2681,14 +2683,22 @@ def generate_image(prompt_text, size, ai_config, timeout=300):
                     img_url = item["image"]
                     break
             if not img_url:
+                if run and call_id:
+                    run.end(call_id, "unknown", data.get("usage"), data.get("model"))
                 raise PosterError("出图接口没返回图片地址：%s" % str(data)[:200])
+            if run and call_id:
+                run.end(call_id, "success", data.get("usage"), data.get("model"))
             # OSS 链接会过期，当场下载；断了要重试（这一跳不花钱，见 _get_image_bytes）
             return _get_image_bytes(img_url), (data.get("usage") or {})
         last = str(data.get("message") or data.get("code") or
                    ("HTTP %s %s" % (r.status_code, str(data)[:200])))
         if _rate_limited(r.status_code, last) and attempt < MAX_ATTEMPTS:
+            if run and call_id:
+                run.end(call_id, "rejected")
             time.sleep(RATE_LIMIT_WAIT_SEC)
             continue
+        if run and call_id:
+            run.end(call_id, "failed")
         raise PosterError("出图失败：%s" % last[:300])
     raise PosterError("出图失败（重试 %d 次仍被限流）：%s" % (MAX_ATTEMPTS, last[:200]))
 

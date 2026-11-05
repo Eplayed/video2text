@@ -167,14 +167,24 @@ def install() -> Dict[str, Any]:
     orig = Completions.create
 
     def wrapped(self, *args, **kwargs):                        # noqa: ANN001
+        from . import model_usage
         model = str(kwargs.get("model") or "")
+        run = model_usage.current()
+        call_id = run.begin("chat", model) if run else None
         try:
             resp = orig(self, *args, **kwargs)
         except Exception as e:                                 # noqa: BLE001
+            if run and call_id:
+                name = type(e).__name__.lower()
+                outcome = "unknown" if "timeout" in name or "connection" in name else "failed"
+                run.end(call_id, outcome)
             msg = str(e)
             if "insufficient_quota" in msg or "Free quota exhausted" in msg:
                 mark_exhausted(model)
             raise
+        if run and call_id:
+            run.end(call_id, "success", getattr(resp, "usage", None),
+                    getattr(resp, "model", None) or "")
         note(model, _usage_tokens(resp),
              getattr(getattr(resp, "usage", None), "prompt_tokens", 0) or 0,
              getattr(getattr(resp, "usage", None), "completion_tokens", 0) or 0)
