@@ -32,6 +32,7 @@ import io
 import json
 import os
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -39,7 +40,6 @@ ROOT = Path(__file__).resolve().parent.parent
 POOL_DIR = ROOT / "output" / "assets" / "frames"
 
 STEP_MIN = 1.6          # 短视频：每 1.6 秒一帧
-STEP_MAX = 3.0          # 长视频最多松到 3 秒一帧
 CAP_FRAMES = 18         # 候选帧上限（再多判图的钱不值）
 FRAME_W = 900           # 抽帧宽度：排版那条带约 950px，再小就糊
 BAND_MIN_FRAC = 0.30    # 一行里蓝像素占比到多少才算横幅
@@ -76,9 +76,9 @@ def duration(video_path):
 
 def extract(video_path, raw_dir, dur):
     """定距抽帧。为什么不用场景切换为主：字幕条是**持续存在**的，换镜头不等于换掉字幕，
-    而定距采样才保证每条口播都有对应画面可挑。"""
+    定距采样至少覆盖视频全程，长视频的细节帧仍需按内容补抽。"""
     os.makedirs(str(raw_dir), exist_ok=True)
-    step = min(STEP_MAX, max(STEP_MIN, dur / float(CAP_FRAMES))) if dur else 2.0
+    step = max(STEP_MIN, dur / float(CAP_FRAMES)) if dur else 2.0
     pat = os.path.join(str(raw_dir), "f_%03d.jpg")
     subprocess.run([_ffbin("ffmpeg"), "-hide_banner", "-loglevel", "error", "-y",
                     "-i", str(video_path), "-vf", "fps=1/%.2f,scale=%d:-1" % (step, FRAME_W),
@@ -86,7 +86,7 @@ def extract(video_path, raw_dir, dur):
                    capture_output=True, timeout=300)
     files = sorted(f for f in os.listdir(str(raw_dir)) if f.endswith(".jpg"))
     return [(os.path.join(str(raw_dir), f), "%02d:%02d" % (
-        int(i * step) // 60, int(i * step) % 60)) for i, f in enumerate(files, 1)]
+        int((i - 1) * step) // 60, int((i - 1) * step) % 60)) for i, f in enumerate(files, 1)]
 
 
 def band_rows(path):
