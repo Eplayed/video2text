@@ -30,4 +30,11 @@ with tempfile.TemporaryDirectory(prefix="v2t-frame-span-") as d:
     assert all(Path(path).is_file() for path, _ in frames)
     print("PASS 90 秒素材 18 帧覆盖到末段，首帧时间戳为 00:00")
 
+picked = frame_pool._even_sample(list(range(18)), 8)
+assert len(picked) == 8 and picked[0] == 0 and picked[-1] == 17, picked
+assert len(set(picked)) == 8 and picked == sorted(picked), picked
+assert frame_pool._even_sample(list(range(18)), 1) == [0]
+assert frame_pool._even_sample(list(range(18)), 0) == []
+print("PASS 18 帧中判 8 帧时包含首尾且不重复")
+
 print("ALL_OK")

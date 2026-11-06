@@ -537,6 +537,18 @@ def prune_raw(keep_unjudged=True, progress_cb=None):
     return out
 
 
+def _even_sample(items, limit):
+    """从候选中均匀取样，包含首尾。"""
+    if limit <= 0:
+        return []
+    if len(items) <= limit:
+        return items
+    if limit == 1:
+        return [items[0]]
+    return [items[round(i * (len(items) - 1) / float(limit - 1))]
+            for i in range(limit)]
+
+
 def ensure_judged(aweme_id, ai_config, limit=8, progress_cb=None):
     """出图时才判帧：只判 limit 张、按时间均匀取，钱花在真正会进版面的那几张上。
 
@@ -550,9 +562,8 @@ def ensure_judged(aweme_id, ai_config, limit=8, progress_cb=None):
     todo = [f for f in frames if not f.get("checked")]
     if not todo:
         return meta
-    if len(todo) > limit:
-        stride = max(1, len(todo) // limit)
-        todo = todo[::stride][:limit]
+    # 旧的整数步长在 18 取 8 时只取到第 15 帧，末尾关键操作永远不判。
+    todo = _even_sample(todo, limit)
     spent = 0
     for n, it in enumerate(todo, 1):
         if light_share(it.get("raw") or it.get("file") or "") >= CARD_MIN_LIGHT:
