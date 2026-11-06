@@ -3945,7 +3945,7 @@ _wx_draft_lock = threading.Lock()
 
 @app.route("/api/wechat/draft/<int:summary_id>/revise", methods=["POST"])
 def api_wechat_draft_revise(summary_id):
-    """只改白名单文字叶子，卡片结构和来源 ID 均由服务端旧稿保留。"""
+    """定点改文字；来源 ID 只能另经已存在母稿点白名单修订。"""
     from src import guide_mother
     data = request.get_json(silent=True) or {}
     if _wx_task_status.get("running"):
@@ -3966,7 +3966,25 @@ def api_wechat_draft_revise(summary_id):
     edits = data.get("edits")
     if not isinstance(edits, list) or len(edits) > 80:
         return jsonify({"error": "请提交 0–80 处具体文字修改；空列表表示重新核对当前草稿"}), 400
+    point_edits = data.get("point_edits") or []
+    if not isinstance(point_edits, list) or len(point_edits) > 20:
+        return jsonify({"error": "来源点修订最多 20 张卡片"}), 400
     draft = json.loads(json.dumps(old, ensure_ascii=False))
+    known_points = {p["point_id"] for p in mother.get("points") or []}
+    for item in point_edits:
+        if not isinstance(item, dict) or type(item.get("card_index")) is not int:
+            return jsonify({"error": "来源点修订须指定卡片序号"}), 400
+        if not 0 <= item["card_index"] < len(draft.get("cards") or []):
+            return jsonify({"error": "来源点修订的卡片序号无效"}), 400
+        ids = item.get("point_ids")
+        if (not isinstance(ids, list) or not ids or len(ids) > 30
+                or any(not isinstance(pid, str) or pid not in known_points for pid in ids)
+                or len(set(ids)) != len(ids)):
+            return jsonify({"error": "来源点必须是当前母稿中不重复的现有 ID"}), 400
+        try:
+            draft["cards"][item["card_index"]]["point_ids"] = ids
+        except (IndexError, KeyError, TypeError):
+            return jsonify({"error": "来源点修订的卡片序号无效"}), 400
     for edit in edits:
         if not isinstance(edit, dict) or not isinstance(edit.get("value"), str):
             return jsonify({"error": "修改项必须有文字值"}), 400

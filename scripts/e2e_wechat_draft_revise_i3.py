@@ -76,9 +76,19 @@ def main():
                 "edits": [{"path": "cards.0.point_ids", "value": "bad"}]})
             assert denied.status_code == 400 and not calls
             print("PASS 来源 ID 与结构不能通过定点编辑修改")
+            denied_point = client.post("/api/wechat/draft/1/revise", json={
+                "revision": revision, "edits": [],
+                "point_edits": [{"card_index": 0, "point_ids": ["不存在的来源点"]}]})
+            assert denied_point.status_code == 400 and not calls
+            denied_index = client.post("/api/wechat/draft/1/revise", json={
+                "revision": revision, "edits": [],
+                "point_edits": [{"card_index": -1, "point_ids": [point_id]}]})
+            assert denied_index.status_code == 400 and not calls
+            print("PASS 来源点修订只接受当前母稿现有 ID 与有效卡片序号")
 
             response = client.post("/api/wechat/draft/1/revise", json={"revision": revision,
-                "edits": [{"path": "cards.0.items.0.desc", "value": "奖励来自原文"}]})
+                "edits": [{"path": "cards.0.items.0.desc", "value": "奖励来自原文"}],
+                "point_edits": [{"card_index": 0, "point_ids": [point_id]}]})
             assert response.status_code == 200, response.get_json()
             after = client.get("/api/wechat/draft/1").get_json()
             assert after["revision"] != revision and after["draft"]["fidelity"]["ready"]
