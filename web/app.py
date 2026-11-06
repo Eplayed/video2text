@@ -4023,10 +4023,14 @@ def api_wechat_draft_revise(summary_id):
         except (IndexError, KeyError, TypeError, ValueError):
             return jsonify({"error": "不能修改此字段或卡片结构：%s" % path}), 400
     source_text = "\n".join(s["text"] for s in sources)
-    fidelity = guide_mother.audit_output(
-        mother, guide_mother.wechat_plan(draft["cards"], mother),
-        {"copy_text": draft.get("copy_text") or "", "digest": draft.get("digest") or ""},
-        _fast_config(), source_text=source_text)
+    with model_usage.track("wechat", "revise", summary_id) as usage_run:
+        usage_run.set_revisions(source_rev, mother.get("mother_revision"))
+        fidelity = guide_mother.audit_output(
+            mother, guide_mother.wechat_plan(draft["cards"], mother),
+            {"copy_text": draft.get("copy_text") or "", "digest": draft.get("digest") or ""},
+            _fast_config(), source_text=source_text)
+        usage_run.close("complete")
+        usage_report = usage_run.snapshot()
     with _wx_draft_lock:
         _sources, latest_rev = guide_mother.source_snapshot(DB_PATH, summary_id)
         latest_mother = guide_mother.load_mother(DB_PATH, summary_id)
@@ -4040,7 +4044,8 @@ def api_wechat_draft_revise(summary_id):
         (folder / (uuid.uuid4().hex + ".json")).write_text(
             json.dumps(draft, ensure_ascii=False, indent=2), encoding="utf-8")
     return jsonify({"ready": bool(fidelity.get("ready")), "fidelity": fidelity,
-                    "revision": _wechat_draft_revision(draft)})
+                    "revision": _wechat_draft_revision(draft),
+                    "model_usage": usage_report})
 
 
 # ── 公众号成稿（2026-10-26 策略：这一渠道交的是完整文章，卡片只是可选配图）──

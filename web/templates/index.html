@@ -3663,10 +3663,16 @@ async function wxShowBlockedDraft(id) {
       .concat((c.items || []).map(x => (x.name || '') + ' ' + (x.desc || '')))
       .concat((c.steps || []).map(x => (x.h || '') + ' ' + (x.p || '')));
     const refs = (c.point_ids || []).map(pid => (points[pid] || {}).display_text || pid);
+    const pointOptions = (data.points || []).map(p => '<option value="' + esc(p.point_id) + '"'
+      + ((c.point_ids || []).indexOf(p.point_id) >= 0 ? ' selected' : '') + '>'
+      + esc((p.display_text || p.quote || p.point_id).slice(0, 65)) + '</option>').join('');
     return '<details style="padding:10px;border:1px solid #ddd;border-radius:8px;margin:8px 0">'
       + '<summary><b>第 ' + (i + 1) + ' 张 · ' + esc(c.title || '') + '</b>　'
       + esc(bits.join('；').slice(0, 65)) + '</summary>'
       + '<small>关联原文：' + esc(refs.join('；') || '未关联') + '</small>'
+      + '<label style="display:block;margin:7px 0"><small>本卡来源点（按住 Command/Ctrl 可多选）</small>'
+      + '<select data-wx-points="' + i + '" multiple size="4" style="display:block;width:100%"'
+      + (data.stale ? ' disabled' : '') + '>' + pointOptions + '</select></label>'
       + wxDraftFields(c, i, data.stale) + '</details>';
   }).join('');
   const old = document.getElementById('wx-blocked-draft');
@@ -3698,19 +3704,26 @@ async function wxSaveBlockedDraft() {
   const edits = Array.from(modal.querySelectorAll('[data-wx-path]')).map(el => ({
     path: el.getAttribute('data-wx-path'), value: el.value
   })).filter(item => item.value.trim() !== String(wxDraftValue(state.draft, item.path) || '').trim());
+  const pointEdits = Array.from(modal.querySelectorAll('[data-wx-points]')).map(el => ({
+    card_index: Number(el.getAttribute('data-wx-points')),
+    point_ids: Array.from(el.selectedOptions).map(option => option.value)
+  })).filter(item => JSON.stringify(item.point_ids) !== JSON.stringify(
+    (state.draft.cards[item.card_index] || {}).point_ids || []));
   const note = document.getElementById('wx-draft-action');
-  if (!edits.length && !state.auditStale) { note.textContent = '没有文字修改；原审核仍有效。'; return; }
-  note.textContent = '正在按修改后的文字重新核对原文…';
+  if (!edits.length && !pointEdits.length && !state.auditStale) { note.textContent = '没有修改；原审核仍有效。'; return; }
+  note.textContent = '正在按修改后的文字和来源点重新核对原文…';
   try {
     const response = await fetch('/api/wechat/draft/' + state.id + '/revise', {
       method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({revision: state.revision, edits: edits})
+      body: JSON.stringify({revision: state.revision, edits: edits, point_edits: pointEdits})
     });
     const result = await response.json();
     if (!response.ok || result.error) { note.textContent = result.error || '保存失败'; return; }
     await wxShowBlockedDraft(state.id);
     const next = document.getElementById('wx-draft-action');
-    if (next) next.textContent = result.ready ? '原意核对通过，可以渲染图片。' : '已保存，仍有原意问题，请按上方问题继续修改。';
+    if (next) next.textContent = (result.ready ? '原意核对通过，可以渲染图片。'
+      : '已保存，仍有原意问题，请按上方问题继续修改。')
+      + ' ' + modelUsageText(result.model_usage, '本次重审');
   } catch (e) { note.textContent = '保存失败：' + e.message; }
 }
 async function wxRenderBlockedDraft() {

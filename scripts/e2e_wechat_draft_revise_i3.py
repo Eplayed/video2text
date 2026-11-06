@@ -90,6 +90,9 @@ def main():
                 "edits": [{"path": "cards.0.items.0.desc", "value": "奖励来自原文"}],
                 "point_edits": [{"card_index": 0, "point_ids": [point_id]}]})
             assert response.status_code == 200, response.get_json()
+            usage = response.get_json()["model_usage"]
+            assert usage["channel"] == "wechat" and usage["stage"] == "revise"
+            assert usage["summary_id"] == 1 and usage["request_count"] == 0
             after = client.get("/api/wechat/draft/1").get_json()
             assert after["revision"] != revision and after["draft"]["fidelity"]["ready"]
             assert after["draft"]["cards"][0]["items"][0]["desc"] == "奖励来自原文"

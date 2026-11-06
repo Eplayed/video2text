@@ -64,6 +64,7 @@ def main():
                 page.locator("#wx-blocked-draft").wait_for()
                 assert "原意核对未过" in page.locator("#wx-blocked-draft h3").inner_text()
                 page.locator("#wx-blocked-draft details").first.click()
+                assert page.locator('[data-wx-points="0"] option:checked').count() == 1
                 field = page.locator('[data-wx-path="cards.0.items.0.desc"]')
                 field.fill("奖励来自原文")
                 page.get_by_role("button", name="保存修改并重审").click()
@@ -71,6 +72,7 @@ def main():
                 assert page.locator('[data-wx-path="cards.0.items.0.desc"]').input_value() == "奖励来自原文"
                 assert page.locator('[data-wx-path="cards.0.subtitle"]').input_value() == "旧描述"
                 assert page.get_by_role("button", name="用这份已核草稿渲染图片").count() == 1
+                assert "本次重审模型请求 0 次" in page.locator("#wx-draft-action").inner_text()
                 print("PASS 弹窗可定点改文、保存复审并显示通过状态")
                 out = ROOT / "output" / "迭代验收" / "原意保留" / "I3"
                 out.mkdir(parents=True, exist_ok=True)
