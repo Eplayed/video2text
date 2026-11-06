@@ -4731,6 +4731,26 @@ def api_poster_source(summary_id):
                     "mother": mother if mother.get("source_revision") == revision else {}})
 
 
+@app.route("/api/source-corrections/<int:video_id>", methods=["GET", "POST"])
+def api_source_corrections(video_id):
+    """定点修正 ASR：保留原文，以原文哈希和证据位置约束每处修改。"""
+    from src import source_corrections
+    try:
+        if request.method == "GET":
+            return jsonify(source_corrections.inspect(DB_PATH, video_id))
+        data = request.get_json(silent=True) or {}
+        with _db_lock:
+            result = source_corrections.save(DB_PATH, video_id, data.get("base_hash"),
+                                             data.get("patches"))
+        return jsonify(result)
+    except source_corrections.CorrectionError as exc:
+        status = 409 if "变化" in str(exc) else 400
+        return jsonify({"error": str(exc)}), status
+    except Exception:
+        app.logger.error("原始转写定点修订失败", exc_info=True)
+        return jsonify({"error": "修订未保存，请查看服务日志"}), 500
+
+
 @app.route("/api/poster/plan", methods=["POST"])
 def api_poster_plan():
     """只拆解不出图：产出可编辑的文案计划，先审文案再花钱出图。"""

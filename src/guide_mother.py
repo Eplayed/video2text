@@ -4,7 +4,7 @@ import json
 import re
 from datetime import datetime
 
-from . import content_store
+from . import content_store, source_corrections
 
 
 STORE_KEY = "guide_mother_v1"
@@ -44,9 +44,17 @@ def _source_rows(conn, summary_id):
     rows = conn.execute("SELECT id, title, transcript FROM videos WHERE id IN (%s)" % placeholders,
                         ids).fetchall()
     by_id = {int(v["id"]): v for v in rows}
-    sources = [{"video_id": i, "title": str(by_id[i]["title"] or ""),
-                "text": str(by_id[i]["transcript"] or "")}
-               for i in ids if i in by_id and str(by_id[i]["transcript"] or "").strip()]
+    sources = []
+    for i in ids:
+        if i not in by_id or not str(by_id[i]["transcript"] or "").strip():
+            continue
+        raw = str(by_id[i]["transcript"])
+        try:
+            source_text = source_corrections.effective_text(conn, i, raw)
+        except source_corrections.CorrectionError as exc:
+            raise MotherError(str(exc))
+        sources.append({"video_id": i, "title": str(by_id[i]["title"] or ""),
+                        "text": source_text})
     if not sources:
         raise MotherError("缺少原始转写：新图文不能用旧整理稿充当原视频来源")
     if len(sources) != len(ids):
