@@ -4727,7 +4727,9 @@ def api_poster_source(summary_id):
         return jsonify({"error": str(exc)}), 404
     return jsonify({"summary_id": int(summary_id), "source_revision": revision,
                     "sources": [{"video_id": int(s["video_id"]), "title": s["title"],
-                                 "transcript": s["text"]} for s in sources],
+                                 "transcript": s["text"],
+                                 "corrected": s.get("corrected", False),
+                                 "raw_transcript": s.get("raw_text") or ""} for s in sources],
                     "mother": mother if mother.get("source_revision") == revision else {}})
 
 

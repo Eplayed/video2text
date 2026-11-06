@@ -54,7 +54,8 @@ def _source_rows(conn, summary_id):
         except source_corrections.CorrectionError as exc:
             raise MotherError(str(exc))
         sources.append({"video_id": i, "title": str(by_id[i]["title"] or ""),
-                        "text": source_text})
+                        "text": source_text, "corrected": source_text != raw,
+                        "raw_text": raw if source_text != raw else ""})
     if not sources:
         raise MotherError("缺少原始转写：新图文不能用旧整理稿充当原视频来源")
     if len(sources) != len(ids):

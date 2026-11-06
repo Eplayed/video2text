@@ -15,9 +15,10 @@ with tempfile.TemporaryDirectory(prefix="v2t-source-fix-") as d:
     raw = "联盟收集8代验卖。付费包有4个时隔行囊和2个12格包。"
     conn = sqlite3.connect(str(db))
     conn.execute("CREATE TABLE videos (id INTEGER PRIMARY KEY, title TEXT, transcript TEXT)")
-    conn.execute("CREATE TABLE ai_summaries (id INTEGER PRIMARY KEY, video_id INTEGER, source_video_ids TEXT)")
+    conn.execute("CREATE TABLE ai_summaries (id INTEGER PRIMARY KEY, video_id INTEGER, "
+                 "source_video_ids TEXT, structured_data TEXT)")
     conn.execute("INSERT INTO videos VALUES (1,'背包',?)", (raw,))
-    conn.execute("INSERT INTO ai_summaries VALUES (9,1,'[1]')")
+    conn.execute("INSERT INTO ai_summaries VALUES (9,1,'[1]','{}')")
     conn.commit()
     conn.close()
 
@@ -28,6 +29,7 @@ with tempfile.TemporaryDirectory(prefix="v2t-source-fix-") as d:
     out = source_corrections.save(db, 1, source_corrections.raw_hash(raw), patches)
     after, rev_after = guide_mother.source_snapshot(db, 9)
     assert rev_after != rev_before and "4个10格行囊" in after[0]["text"]
+    assert after[0]["corrected"] and after[0]["raw_text"] == raw
     assert out["patch_count"] == 2
     conn = sqlite3.connect(str(db))
     assert conn.execute("SELECT transcript FROM videos WHERE id=1").fetchone()[0] == raw
@@ -50,6 +52,9 @@ with tempfile.TemporaryDirectory(prefix="v2t-source-fix-") as d:
         client = webapp.app.test_client()
         got = client.get("/api/source-corrections/1")
         assert got.status_code == 200 and got.json["effective_text"] == after[0]["text"]
+        shown = client.get("/api/poster/source/9")
+        assert shown.status_code == 200 and shown.json["sources"][0]["corrected"]
+        assert shown.json["sources"][0]["raw_transcript"] == raw
         stale = client.post("/api/source-corrections/1", json={
             "base_hash": "0" * 64, "patches": patches})
         assert stale.status_code == 409

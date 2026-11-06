@@ -3829,7 +3829,7 @@ async function pkHydrate(id) {
   if (st.plan && st.plan.plan) {
     if (!errMsg) {
       document.getElementById('pk-result').innerHTML = '<div class="pk-verify mild">这是上一次拆好的草稿。'
-        + '请先看原意核对与下方原始转写，确认后再出图。</div>'
+        + '请先看原意核对与下方来源文本，确认后再出图。</div>'
         + modelUsageHtml(st.model_usage, '上次任务');
       pkSetFidelity(st.plan.fidelity);
     } else {
@@ -4296,7 +4296,7 @@ function pkFidelityHtml(f) {
     + (ok ? '✅ 原意覆盖与忠实性已按这版文案核对；编辑后需重判。'
           : '⛔ 原意核对未通过：覆盖 ' + esc(coverage.status || '未判')
             + '，忠实性 ' + esc(semantic.status || '未判')
-            + '。请对照原始转写改稿，当前不能出图。')
+            + '。请对照来源文本改稿，当前不能出图。')
     + (issues.length ? '<ul>' + issues.slice(0, 8).map(x => '<li>'
       + esc((x.point_id ? ((((_pkSource || {}).mother || {}).points || []).find(p => p.point_id === x.point_id) || {}).display_text || x.point_id : '')
         + (x.point_id ? '：' : '') + (x.field ? x.field + '：' : '') + (x.text || '') + (x.problem || '待核'))
@@ -4778,7 +4778,7 @@ function pkRenderPlan(plan, publish, cur) {
     + '<div class="pk-count" id="pk-count"></div>'
     + '<div id="pk-fact"></div>'
     + '<details class="pk-guide" id="pk-srcpanel" style="margin:8px 0 10px">'
-    + '<summary>对照原始转写 · 看主体、条件与数字</summary><div id="pk-srcbox"></div></details>';
+    + '<summary>对照来源文本 · 看主体、条件与数字</summary><div id="pk-srcbox"></div></details>';
   // 发布页文案：不进图，所以不占 80 字预算，但同样是 AI 起草、人可改。
   // 按渠道分支渲染（小红书无关键词回复/公众号分两种形态），单独一个渲染函数，
   // 切渠道时只重画这一块、别的表单不动。
@@ -6886,7 +6886,8 @@ async function pkLoadSource() {
   catch (e) { box.innerHTML = '<div class="pk-src">原文读取失败：' + esc(e.message) + '</div>'; return; }
   if (!d || d.error) { box.innerHTML = '<div class="pk-src">' + esc((d && d.error) || '原文读取失败') + '</div>'; return; }
   _pkSource = {id: _pkId,
-    content: (d.sources || []).map(s => '【素材 ' + s.video_id + '】\n' + (s.transcript || '')).join('\n\n'),
+    content: (d.sources || []).map(s => '【素材 ' + s.video_id + (s.corrected ? ' · 已按画面证据修订' : '') + '】\n' + (s.transcript || '')).join('\n\n'),
+    rawContent: (d.sources || []).filter(s => s.corrected).map(s => '【素材 ' + s.video_id + ' · 未改动 ASR】\n' + (s.raw_transcript || '')).join('\n\n'),
     mother: d.mother || {}, source_revision: d.source_revision || ''};
   pkRenderSource();
   if (_pkFidelity) pkSetFidelity(_pkFidelity);
@@ -6926,14 +6927,17 @@ function pkRenderSource() {
   const badNums = nums.filter(n => src.indexOf(n) < 0);
   const hasPlan = !!(plan.title || (plan.cards || []).length);
   const motherHead = pkMotherSummaryHtml();
+  const rawNote = _pkSource.rawContent
+    ? '<details class="pk-guide"><summary>这份来源文本有画面证据修订 · 查看未改动的 ASR 原文</summary><div class="pk-src">'
+      + esc(_pkSource.rawContent) + '</div></details>' : '';
   if (!hasPlan) {
     box.innerHTML = motherHead + '<div class="pk-src">' + esc(src.slice(0, 4000)) + (src.length > 4000 ? '…（原文 ' + src.length + ' 字，往下滚动看这一段就够）' : '') + '</div>'
-      + '<div class="pk-diff">这是这次出图的依据（原始转写）。点「① AI 拆解文案」后回到这里，'
-      + '会把图上文字与原始转写做字面对照；完整判断看上方原意核对。</div>';
+      + rawNote + '<div class="pk-diff">这是这次出图的依据（来源文本）。点「① AI 拆解文案」后回到这里，'
+      + '会把图上文字与来源文本做字面对照；完整判断看上方原意核对。</div>';
     return;
   }
   box.innerHTML = motherHead + '<div class="pk-src">' + (html || '（原始转写为空）') + '</div>'
-    + '<div class="pk-diff">'
+    + rawNote + '<div class="pk-diff">'
     + (miss.length ? '<span class="miss">⚠️ 原文里找不到这些卡片标题（模型改写或编造）：</span>' + miss.map(esc).join('、') + '<br>' : '')
     + (badNums.length ? '<span class="miss">⚠️ 原文里没有这些数字：</span>' + badNums.map(esc).join('、') + '<br>' : '')
     + (!miss.length && !badNums.length ? '<span class="hit">字面上能找到标题与数字；主体和条件仍看原意核对</span>' : '')
