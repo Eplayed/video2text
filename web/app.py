@@ -4567,7 +4567,13 @@ def _material_text(summary):
     except Exception as e:                                # noqa: BLE001
         print("[素材原文] 取失败:", e, flush=True)
         return str(summary.get("transcript") or "")
-    return "\n".join(str(r.get("transcript") or "") for r in rows)
+    from src import source_corrections
+    conn = content_store.connect(DB_PATH)
+    try:
+        return "\n".join(source_corrections.effective_text(
+            conn, int(r["id"]), str(r.get("transcript") or "")) for r in rows)
+    finally:
+        conn.close()
 
 
 def _poster_fact_status(plan, publish, asr_text):
