@@ -5109,13 +5109,14 @@ def _start_poster_graphics(data):
                 try:
                     manifest["wechat_companion"] = poster_companion.render_wechat(
                         stage, summary, _fast_config(), plan, publish or {},
-                        ai_poster.generate_poster, asset, **options)
+                        ai_poster.generate_poster, asset, primary=manifest, **options)
                 except ai_poster.PosterError as exc:
                     exc.args = ("公众号 3:4 排版未完成：%s" % exc,)
                     raise
-                _atomic_json(stage / "manifest.json", manifest)
             elif publish_channel == "wechat" and ai_poster.guide_only_plan(plan):
                 poster_companion.add_mini_promo(stage, manifest, asset)
+            poster_companion.rebase_photos(manifest, stage, ai_poster.OUTPUT_DIR / str(summary["id"]))
+            _atomic_json(stage / "manifest.json", manifest)
             previous = _poster_load_plan(summary["id"]) or {}
             plan_run_id = (previous.get("model_usage") or {}).get("run_id") or ""
             _attach_model_run(stage / "manifest.json", model_usage.current().run_id,

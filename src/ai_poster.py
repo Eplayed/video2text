@@ -288,6 +288,20 @@ def _risk_preview(raw, n=14) -> str:
     return s[:n]
 
 
+def source_attribution(materials):
+    """公开出处只写素材身份与发布时间，核查过程留在清单。"""
+    bits = []
+    for material in materials[:3]:
+        who = str(material.get("author") or "未知作者")
+        when = str(material.get("published_at") or "")[:10] or "日期未知"
+        level = "官方一手公告" if material.get("first_party") else (
+            "第三方口播" if material.get("is_video") else "第三方转述")
+        bits.append("%s·%s·%s" % (who, level, when))
+    if len(materials) > 3:
+        bits.append("等 %d 条" % len(materials))
+    return "来源：" + "；".join(bits) if bits else ""
+
+
 def compose_source_note(ctx, fallback=""):
     """来源那一行由**代码**拼，不让模型写日期。
 
@@ -303,16 +317,7 @@ def compose_source_note(ctx, fallback=""):
     mats = (ctx or {}).get("materials") or []
     if not mats:
         return fallback                      # 没接台账的老路径：不自己编日期，也不假装核过
-    bits = []
-    for m in mats[:3]:
-        who = str(m.get("author") or "未知作者")
-        when = str(m.get("published_at") or "")[:10] or "日期未知"
-        level = "官方一手公告" if m.get("first_party") else (
-            "第三方口播" if m.get("is_video") else "第三方转述")
-        bits.append("%s·%s·%s" % (who, level, when))
-    if len(mats) > 3:
-        bits.append("等 %d 条" % len(mats))
-    line = "来源：" + "；".join(bits)
+    line = source_attribution(mats)
     open_r = (ctx or {}).get("open_risks") or []
     resolved = (ctx or {}).get("resolved") or []
     if open_r:
@@ -2952,7 +2957,7 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
                     copies=1, do_review=True, text_mode=DEFAULT_TEXT_MODE, photo=None,
                     preview_clicks=0, bases=None, publish_channel="toutiao", form="newspic",
                     fact_evidence=None, fact_checked_by="", provenance=None, asr_text=None,
-                    frame_items=None, fact_ctx=None, output_dir=None):
+                    frame_items=None, fact_ctx=None, output_dir=None, reused_frames=None):
     """整理稿 → 海报一张。返回 manifest dict（已落盘 output/poster/<summary_id>/）。
 
     必须传入已拆并审过的 plan；拆文案只在 build_text_plan 发生。
@@ -3259,11 +3264,11 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
     # 判帧那一次问的是七个字段的宽问题，实测会答 where=none 漏掉底部字幕——
     # **问题越窄答得越准**，所以这里只问"最下面三分之一有没有一行字幕 + 该保留哪块矩形"。
     # 只往成品包里写文件，生产帧池（frames.json / raw / clean）一个字节都不动。
-    hardened = []
+    hardened = list(reused_frames or [])
     used_photos = [(pi, ph) for pi, p in enumerate(pages, 1)
                    for ph in (p.get("photos") or [])
                    if (ph.get("path") and os.path.exists(str(ph.get("path"))))]
-    if used_photos and ai_config and ai_config.get("api_key"):
+    if reused_frames is None and used_photos and ai_config and ai_config.get("api_key"):
         try:
             from . import frame_pool
         except ImportError:
@@ -3297,6 +3302,8 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
         # 回写：`plan_pages()` 给的是副本，拦掉的那张、换上的那张都改在副本上。
         # 不回写就成了"成品清单里记着 F4、纸上印的是 F3"——画面使用依据也照着它数，会数错。
         plan["pages"] = pages
+    else:
+        plan["photos"] = pages[0].get("photos") or []
 
     candidates, usage, page_rows = [], {}, []
     photo_name = ""
@@ -3460,6 +3467,8 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
         "digest": pub.get("digest") or "",
         "keyword_reply": pub.get("keyword_reply") or "",
         "source_note": pub.get("source_note") or "",
+        "public_source_note": source_attribution((fact_ctx or {}).get("materials") or [])
+                              or pub.get("source_note") or "",
         "prompt_text": prompt_text,
         "ratio": ratio,
         "size": SIZES[ratio],

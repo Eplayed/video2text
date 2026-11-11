@@ -6724,12 +6724,12 @@ function pkPublishText(m) {
             '【正文】用整理稿原文，别照抄图上的字；合规尾注放正文文末，勿删',
             '【摘要】' + (m.digest || '（待补）'),
             '【关键词自动回复】' + (m.keyword_reply || '（未配置）'),
-            '【来源说明】' + (m.source_note || '（未填）')]).join('\n');
+            '【来源说明】' + (m.public_source_note || m.source_note || '（未填）')]).join('\n');
   }
   const lines = head.concat(['摘要（≤120 字）：' + (m.digest || '（待补）'),
                              '', '【配文】', m.copy_text || '（待手写）']);
   if (ch !== 'xhs') lines.push('', '【关键词自动回复】' + (m.keyword_reply || '（未配置）'));
-  lines.push('', '【来源说明】' + (m.source_note || '（未填）'));
+  lines.push('', '【来源说明】' + (m.public_source_note || m.source_note || '（未填）'));
   return lines.join('\n');
 }
 function copyPosterPublish() {
