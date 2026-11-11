@@ -319,7 +319,7 @@ def _field_texts(plan, publish):
 def _exact_field_sources(fields, points):
     """逐字一致才直接回指母稿。改写仍需校对返回映射。"""
     def normalize(text):
-        return re.sub(r"\s+", "", str(text or "")).strip("。！？；.!?;")
+        return re.sub(r"\s+", " ", str(text or "")).strip().rstrip("。；.;")
 
     by_text = {}
     for point_id, point in points.items():
@@ -335,7 +335,7 @@ def _model_compare(mother, output, ai_config, source_text="", mappings=None, fie
     prompt = """你是独立校对员。逐句比较【源文引文】与【待发布文案】，专查主体数量、谁做了什么、条件、先后、概率、否定词。
 源文引文逐字来自原始转写；不得引用或相信待发布文案自己声称的出处。不要补游戏常识。
 若有任何变义、无源断言，或卡片挂的 point_id 实际不支持卡片文字，issues 逐条列待发布文案的原句、问题、对应引文；不得用免责声明抵消错误。
-对【逐项字段】中的每一项给出支撑它的 point_id 列表。纯导航标签可填 navigation=true，但包含数字、主体、条件或结论的字段不得标为导航。只列真实支持该句的点，不能为凑齐而乱挂 ID。
+对【逐项字段】中未给定 point_ids 的项目补逐句映射。已有 point_ids 的是逐字回指，也要判断语义。配文每句分别核对，配文的映射与卡片的映射各自独立。纯导航标签可填 navigation=true；含数字、主体、条件或结论不得标为导航。不得为凑齐而乱挂 ID。
 输出 JSON：{"issues":[{"text":"待发布文案原句","problem":"具体变义","source_quote":"对应源文原句"}],"field_sources":{"page_1.title":{"point_ids":["现有ID"],"navigation":false}}}。field_sources 必须覆盖逐项字段全部键；没有问题才返回空 issues。
 【原始转写】%s
 【已定位要点】%s
@@ -400,9 +400,12 @@ def audit_output(mother, plan, publish, ai_config, checker=None, source_text="")
     semantic = {"status": "unknown", "issues": [], "input_revision": revision}
     try:
         exact = _exact_field_sources(fields, points)
-        unmapped = {field: value for field, value in fields.items() if field not in exact}
+        fields_for_model = {
+            field: {"text": text, "point_ids": exact[field]["point_ids"]} if field in exact else {"text": text}
+            for field, text in fields.items()
+        }
         result = (checker(mother, output, ai_config, source_text) if checker
-                  else _model_compare(mother, output, ai_config, source_text, mappings, unmapped))
+                  else _model_compare(mother, output, ai_config, source_text, mappings, fields_for_model))
         issues = result.get("issues") if isinstance(result, dict) else None
         if not isinstance(issues, list):
             raise MotherError("忠实性校对未返回 issues 数组")
@@ -440,12 +443,11 @@ def audit_output(mother, plan, publish, ai_config, checker=None, source_text="")
 
 def audit_revision(mother, plan, publish, source_text=""):
     """审核输入只包括读者可见的事实文字、映射 ID、原文版本；换皮不改变它。"""
-    used = set()
-    for page in plan.get("pages") or [plan]:
-        for card in page.get("cards") or []:
-            used.update(str(x) for x in (card.get("point_ids") or []))
+    pages = plan.get("pages") or [plan]
+    bindings = [[sorted(str(pid) for pid in (card.get("point_ids") or []))
+                 for card in page.get("cards") or []] for page in pages]
     return _digest([mother["mother_revision"], _output_text(plan, publish),
-                    sorted(used), _digest(source_text)])
+                    _field_texts(plan, publish), bindings, _digest(source_text)])
 
 
 def audit_problems(check):
