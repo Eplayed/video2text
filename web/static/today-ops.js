@@ -15,7 +15,11 @@
   async function json(url, options) {
     const response = await fetch(url, Object.assign({cache: 'no-store'}, options));
     const data = await response.json();
-    if (!response.ok || data.error) throw new Error(data.error || '请求失败（' + response.status + '）');
+    if (!response.ok || data.error) {
+      const error = new Error(data.error || '请求失败（' + response.status + '）');
+      error.editRequired = Boolean(data.edit_required);
+      throw error;
+    }
     return data;
   }
 
@@ -35,8 +39,6 @@
     return el;
   }
 
-  function jobHasError(topic) { return Boolean(topic.job && topic.job.error); }
-
   function openTopic(topic, channel) {
     const id = Number(topic.summary_id || (topic.job || {}).summary_id);
     if (topic.has_package && id) {
@@ -49,7 +51,7 @@
     } else if (id) {
       if (channel === 'wechat') {
         openWechatGenDialog(id);
-        if (jobHasError(topic)) wxShowBlockedDraft(id);
+        if (topic.edit_notice || (topic.job || {}).error) wxShowBlockedDraft(id);
       }
       else openPosterDialog(id);
     } else {
@@ -96,10 +98,12 @@
     const busy = data.topics.some(topic => topic.job && topic.job.running);
     for (const topic of data.topics) {
       const job = topic.job || {};
+      const notice = job.running ? null : topic.edit_notice;
       const card = document.createElement('article');
       card.className = 'today-card';
       const head = document.createElement('header');
-      head.append(text('h3', topic.title), text('span', job.running ? '生成中' : topic.stage, 'today-tag'));
+      const stage = job.running ? '生成中' : notice ? '草稿待修改' : topic.stage;
+      head.append(text('h3', topic.title), text('span', stage, notice ? 'today-tag today-error' : 'today-tag'));
       card.append(head, text('p', topic.reason, 'today-reason'));
       if (topic.angle) card.append(text('p', topic.angle));
       if (topic.materials.length) {
@@ -124,8 +128,10 @@
       actions.className = 'today-actions';
       if (topic.has_package) {
         actions.append(button('查看待审稿', () => openTopic(topic, data.channel), true));
+      } else if (notice) {
+        actions.append(button('修改草稿', () => openTopic(topic, data.channel), true));
       } else {
-        const generate = button(job.running ? '生成中…' : job.error ? '继续生成' : '生成待审稿',
+        const generate = button(job.running ? '生成中…' : job.error ? '重试生成' : '生成待审稿',
           () => start(topic, data.channel, generate), true);
         generate.disabled = busy || !data.generation_enabled;
         actions.append(generate);
@@ -134,7 +140,18 @@
         }
       }
       card.append(actions);
-      if (job.running || job.error) {
+      if (notice) {
+        card.append(text('p', notice.message, 'today-reason'));
+        if (notice.issues.length) {
+          const details = document.createElement('details');
+          details.className = 'today-checks';
+          details.append(text('summary', '查看 ' + notice.issues.length + ' 条检查结果'));
+          const checks = document.createElement('ul');
+          for (const issue of notice.issues) checks.append(text('li', issue));
+          details.append(checks);
+          card.append(details);
+        }
+      } else if (job.running || job.error) {
         card.append(text('p', job.error || job.progress, job.error ? 'today-error' : 'today-reason'));
       }
       list.append(card);
@@ -178,6 +195,10 @@
       });
       await load();
     } catch (error) {
+      if (error.editRequired) {
+        await load();
+        return;
+      }
       target.disabled = false;
       target.textContent = original;
       context.textContent = errorMessage(error);

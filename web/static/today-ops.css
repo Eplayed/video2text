@@ -17,4 +17,8 @@
 .today-sources summary { cursor: pointer; }
 .today-source { margin: 5px 0 0 12px; }
 .today-source p { margin: 5px 0; }
+.today-checks { margin-top: 6px; font-size: 13px; }
+.today-checks summary { cursor: pointer; color: var(--text-secondary); }
+.today-checks ul { margin: 6px 0; padding-left: 20px; }
+.today-checks li { margin: 4px 0; overflow-wrap: anywhere; }
 .today-error { color: var(--danger); overflow-wrap: anywhere; }

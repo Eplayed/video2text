@@ -8487,6 +8487,42 @@ def _today_board(channel):
     return board, ops_today.recommend(board, brief, _today_package)
 
 
+def _today_edit_notice(summary_id, channel, saved=None):
+    """稿件的拦截状态跟着磁盘草稿走，刷新或重启后仍然能找到修改入口。"""
+    if not summary_id:
+        return None
+    if channel == "wechat":
+        if _wechat_latest_draft(summary_id):
+            return {"message": "公众号卡片草稿已保存，请打开草稿修改或重审。", "issues": []}
+        return None
+
+    saved = saved if saved is not None else _poster_load_plan(summary_id)
+    if not saved:
+        return None
+    if ((saved.get("publish_channel") or "toutiao") != "toutiao"
+            or not ai_poster.guide_only_plan(saved["plan"])):
+        return {"message": "请打开草稿确认发布渠道和版式。", "issues": []}
+    issues = []
+    for violation in saved.get("violations") or []:
+        match = re.search(r"publish\.(tt_titles|xhs_titles)_(\d+)", violation)
+        if match:
+            kind, index = match.groups()
+            if kind == "tt_titles" and index in ("1", "2"):
+                label = "头条发布标题 %s 位" % ("A" if index == "1" else "B")
+            else:
+                label = "%s发布标题 %s" % ("头条" if kind == "tt_titles" else "小红书", index)
+            violation = violation.replace(match[0], label)
+        violation = re.sub(r"publish\.(copy_text|xhs_copy|digest)\.(\d+)",
+                           lambda m: "%s第 %s 句" % (
+                               {"copy_text": "配文", "xhs_copy": "小红书配文", "digest": "摘要"}[m[1]],
+                               m[2]), violation)
+        issues.append(violation)
+    if saved.get("draft_warning"):
+        issues.append(saved["draft_warning"])
+    if issues:
+        return {"message": "草稿已保存。请按检查结果修改，再在编辑器里出图。", "issues": issues}
+    return None
+
 @app.route("/api/ops/today")
 def api_ops_today():
     from src import ops_today
@@ -8498,6 +8534,14 @@ def api_ops_today():
         sources = ops_today.source_overview(_task_view(sync_tasks.load(), _alive_subs(), datetime.now()))
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
+    for topic in topics:
+        if not topic["has_package"]:
+            topic["edit_notice"] = _today_edit_notice(topic["summary_id"], channel)
+    blocked = max((topic for topic in topics if topic.get("edit_notice")),
+                  key=lambda topic: topic["summary_id"], default=None)
+    if blocked:
+        topics.remove(blocked)
+        topics.insert(0, blocked)
     with _today_lock:
         jobs = [dict(job) for (ch, _), job in _today_jobs.items() if ch == channel]
     # 正在生成或遇到门禁的题继续留在首页，避免换日后找不到已完成的步骤。
@@ -8597,8 +8641,9 @@ def _today_run(job, channel):
                 if _wx_task_status.get("running") and _wx_task_status.get("summary_id") != sid:
                     raise RuntimeError("另一篇公众号图文正在生成，请等它完成")
                 if not _wx_task_status.get("running"):
-                    if _wechat_latest_draft(sid):
-                        raise RuntimeError("已有公众号卡片草稿，请在原审核入口继续，避免重新拆稿")
+                    notice = _today_edit_notice(sid, channel)
+                    if notice:
+                        raise RuntimeError(notice["message"])
                     _today_reply(_start_wechat_graphics({"summary_id": sid}))
 
                 def read_wechat():
@@ -8634,11 +8679,9 @@ def _today_run(job, channel):
                     plan = (saved or {}).get("plan")
                     if not plan:
                         raise RuntimeError("头条文案未生成，请打开图文编辑查看")
-                    if ((saved.get("publish_channel") or "toutiao") != "toutiao"
-                            or not ai_poster.guide_only_plan(plan)):
-                        raise RuntimeError("现有文案需要在图文编辑中确认渠道和版式")
-                    if saved.get("violations"):
-                        raise RuntimeError("文案待修订：" + "；".join(saved["violations"][:3]))
+                    notice = _today_edit_notice(sid, channel, saved=saved)
+                    if notice:
+                        raise RuntimeError(notice["message"])
                     poster_id = _today_reply(_start_poster_graphics({
                         "summary_id": sid, "plan": plan, "publish": saved.get("publish"),
                         "text_mode": "typeset", "publish_channel": "toutiao",
@@ -8676,6 +8719,10 @@ def api_ops_today_generate():
     topic = next((x for x in topics if x["slot_key"] == slot_key), None)
     if not topic or topic["candidate_id"] != data.get("candidate_id"):
         return jsonify({"error": "今日选题或推荐素材已变化，请刷新后确认"}), 409
+    if not topic["has_package"]:
+        notice = _today_edit_notice(topic["summary_id"], channel)
+        if notice:
+            return jsonify({"error": notice["message"], "edit_required": True}), 409
     with _today_lock:
         current = _today_jobs.get((channel, slot_key))
         if current and current["running"]:
