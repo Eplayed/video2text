@@ -675,8 +675,7 @@ def generate_graphics(summary, ai_config, author_draft="", progress_cb=None,
     if mother:
         from src import guide_mother
         check_plan = guide_mother.wechat_plan(cards, mother)
-        publish_text = {"copy_text": data.get("copy_text") or "",
-                        "digest": data.get("digest") or ""}
+        publish_text = guide_mother.wechat_publish_fields(data)
         revision = guide_mother.audit_revision(mother, check_plan, publish_text, source_text)
         previous = prechecked_fidelity or {}
         if (previous.get("ready") and previous.get("source_revision") == mother["source_revision"]
@@ -690,7 +689,8 @@ def generate_graphics(summary, ai_config, author_draft="", progress_cb=None,
             fidelity = guide_mother.audit_output(mother, check_plan, publish_text, ai_config,
                                                   source_text=source_text)
         semantic = fidelity["semantic"]
-        if (not fidelity["ready"] and prepared_data is None and evidence_sources
+        source_review = any(issue.get("kind") == "source_review" for issue in fidelity["coverage"]["issues"])
+        if (not fidelity["ready"] and prepared_data is None and evidence_sources and not source_review
                 and ai_config.get("editorial") and (semantic.get("deferred") or semantic["status"] != "unknown")):
             from ...editorial_model import ground_wechat_cards
 
@@ -700,7 +700,7 @@ def generate_graphics(summary, ai_config, author_draft="", progress_cb=None,
                 corrected_cards = checked_cards(corrected)
                 corrected_fidelity = guide_mother.audit_output(
                     mother, guide_mother.wechat_plan(corrected_cards, mother),
-                    {"copy_text": corrected["copy_text"], "digest": corrected["digest"]},
+                    guide_mother.wechat_publish_fields(corrected),
                     ai_config, source_text=source_text)
                 if corrected_fidelity["ready"]:
                     data, cards, fidelity = corrected, corrected_cards, corrected_fidelity

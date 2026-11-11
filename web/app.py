@@ -2255,6 +2255,8 @@ def _run_generation(video_keys, summary_type, combine, st, brief=None, video_ids
         st["progress"] = "同步 Excel 到内容库..."
         _sync_content_db()
         config = ai_config if ai_config is not None else _fast_config()
+        topic_proof = None
+
         def freeze_evidence(result):
             if not config.get("editorial"):
                 return
@@ -2265,7 +2267,10 @@ def _run_generation(video_keys, summary_type, combine, st, brief=None, video_ids
                     entry["body"] = item["body"].removesuffix("…")
                 evidence.append(entry)
             structured = content_store._structured_payload(result)
-            result["structured_data"] = dict(structured, editorial_supplements=evidence)
+            result["structured_data"] = dict(structured, editorial_supplements=evidence,
+                                             editorial_topic=topic_proof)
+            if topic_proof:
+                result["title"] = topic_proof["title"]
         success_count = 0
         summary_ids = []
         selected_videos = []
@@ -2310,6 +2315,24 @@ def _run_generation(video_keys, summary_type, combine, st, brief=None, video_ids
                     selected_videos.append(video)
                 except Exception as e:
                     st["error"] += f"{key}: {e}\n"
+
+        if config.get("editorial"):
+            from src import editorial_model, source_corrections
+
+            st["progress"] = "核对选题与主素材原句..."
+            conn = content_store.open_readonly(DB_PATH)
+            try:
+                selected_videos = [
+                    dict(video, transcript=source_corrections.effective_text(
+                        conn, video["id"], video["transcript"]))
+                    for video in selected_videos
+                ]
+            finally:
+                conn.close()
+            brief = dict(brief or {})
+            topic_proof = editorial_model.review_topic(
+                brief.get("title"), selected_videos, config)
+            brief.update(title=topic_proof["title"], topic_evidence=topic_proof)
 
         if combine:
             if not selected_videos:
@@ -3848,6 +3871,7 @@ def _start_wechat_graphics_locked(data):
             mother = None
             mother_source_text = ""
             mother_sources = []
+            verified_theme = ""
             if not author_draft:
                 _wx_task_status["progress"] = "从原始转写提取原意母稿..."
                 mother = guide_mother.ensure_mother(DB_PATH, summary["id"], cfg,
@@ -3857,6 +3881,7 @@ def _start_wechat_graphics_locked(data):
                 if mother_source_rev != mother["source_revision"]:
                     raise guide_mother.MotherError("原文在生成期间更新，请重新提取母稿")
                 mother_source_text = guide_mother.audit_source_text(mother_sources)
+                verified_theme = _verified_topic_title(summary, mother_sources)
             if edited_draft and (edited_draft.get("fidelity") or {}).get("mother_revision") != mother["mother_revision"]:
                 raise guide_mother.MotherError("原意母稿已变化，已编辑草稿不能沿用")
             if edited_draft and _wechat_draft_revision(edited_draft) != _wechat_draft_revision(
@@ -3870,8 +3895,8 @@ def _start_wechat_graphics_locked(data):
                 stage_root = None
             try:
                 package = wechat_graphics.generate_graphics(summary, cfg, author_draft=author_draft,
-                                                            progress_cb=cb, theme=theme, title=title,
-                                                            template=template, real_screenshots=shots,
+                                                            progress_cb=cb, theme=verified_theme or theme,
+                                                            title=title, template=template, real_screenshots=shots,
                                                             palette=palette or None, font=font or None,
                                                             layout=layout or None, ref_token=ref_token,
                                                             mother=mother, source_text=mother_source_text,
@@ -3996,7 +4021,7 @@ def _wechat_audit_current(draft, mother, source_text):
     if not fidelity.get("ready") or fidelity.get("mother_revision") != mother.get("mother_revision"):
         return False
     plan = guide_mother.wechat_plan(draft.get("cards") or [], mother)
-    publish = {"copy_text": draft.get("copy_text") or "", "digest": draft.get("digest") or ""}
+    publish = guide_mother.wechat_publish_fields(draft)
     revision = guide_mother.audit_revision(mother, plan, publish, source_text)
     return ((fidelity.get("coverage") or {}).get("input_revision") == revision
             and (fidelity.get("semantic") or {}).get("input_revision") == revision)
@@ -4092,7 +4117,7 @@ def api_wechat_draft_revise(summary_id):
         usage_run.set_revisions(source_rev, mother.get("mother_revision"))
         fidelity = guide_mother.audit_output(
             mother, guide_mother.wechat_plan(draft["cards"], mother),
-            {"copy_text": draft.get("copy_text") or "", "digest": draft.get("digest") or ""},
+            guide_mother.wechat_publish_fields(draft),
             _editorial_config(), source_text=source_text)
         usage_run.close("complete")
         usage_report = usage_run.snapshot()
@@ -4322,6 +4347,19 @@ def _poster_load_plan(sid):
         return None
 
 
+def _verified_topic_title(summary, sources):
+    from src import guide_mother
+
+    proof = guide_mother._json_dict(summary.get("structured_data")).get("editorial_topic")
+    if not proof:
+        return ""
+    for source in sources:
+        if (not source.get("role") and source["video_id"] == proof.get("video_id")
+                and proof.get("quote") and proof["quote"] in source["text"]):
+            return proof["title"]
+    raise guide_mother.MotherError("选题对应的主视频原句已变化，请核对素材并重新生成整理稿")
+
+
 def _poster_fidelity(sid, mother, plan, publish, cfg, source_text):
     """只复用服务端已通过且输入逐字相同的审核；客户端自带的 PASS 不算。"""
     from src import guide_mother
@@ -4335,7 +4373,7 @@ def _poster_fidelity(sid, mother, plan, publish, cfg, source_text):
         return check, True
     check = guide_mother.audit_output(mother, plan, publish, cfg, source_text=source_text)
     violations = [item for item in saved.get("violations") or []
-                  if not item.startswith(("原意覆盖：", "原意忠实性："))]
+                  if not item.startswith(("原意覆盖：", "原意忠实性：", "原文待核："))]
     saved.update({"plan": plan, "publish": publish, "fidelity": check,
                   "violations": violations + guide_mother.audit_problems(check)})
     _poster_save_plan(sid, saved)
@@ -4908,16 +4946,22 @@ def _start_poster_plan(data):
         _poster_status["progress"] = "LLM 拆解海报文案（模型：%s）..." % (cfg.get("model") or "?")
         asr_text = _material_text(summary)   # ① 拆完就对当前 plan+publish 跑同一道本地闸
         source_text = guide_mother.audit_source_text(mother_sources)
+        verified_theme = _verified_topic_title(summary, mother_sources)
+        from src import editorial_model
+        limits = ai_poster.limits_for(text_mode)
 
         def draft(feedback=None):
             options = {"feedback": feedback} if feedback else {}
             plan, publish, bad, notes = ai_poster.build_text_plan(
-                summary, cfg, theme=theme, title=title, style_key=style_key, text_mode=text_mode,
+                summary, cfg, theme=verified_theme or theme, title=title, style_key=style_key, text_mode=text_mode,
                 has_photo=has_photo, page_hint=page_hint, frames=frames, source_text=asr_text,
                 mother=mother, **options)
+            if cfg.get("editorial") and text_mode == "typeset" and ai_poster.guide_only_plan(plan):
+                plan, coverage_notes = editorial_model.complete_poster_coverage(
+                    plan, mother, limits, ai_poster.PAGE_MAX, ai_poster.CARD_MAX)
+                notes = list(notes) + coverage_notes
+                bad = ai_poster.lint_plan(plan, limits)
             if feedback:
-                from src import editorial_model
-                limits = ai_poster.limits_for(text_mode)
                 publish = editorial_model.ground_poster_fields(
                     plan, publish, mother, mother_sources, limits)
                 publish = ai_poster._clip_publish(publish, plan)
@@ -4927,7 +4971,9 @@ def _start_poster_plan(data):
 
         plan, publish, bad, notes, fidelity = draft()
         semantic = fidelity.get("semantic") or {}
-        if cfg.get("editorial") and bad and (semantic.get("deferred") or semantic.get("status") != "unknown"):
+        source_review = any(issue.get("kind") == "source_review" for issue in fidelity["coverage"]["issues"])
+        if (cfg.get("editorial") and bad and not source_review
+                and (semantic.get("deferred") or semantic.get("status") != "unknown")):
             _poster_save_plan(summary["id"], {"plan": plan, "publish": publish, "violations": bad,
                                                "fidelity": fidelity, "publish_channel": publish_channel,
                                                "form": pk_form, "model": cfg["model"]})
