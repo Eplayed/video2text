@@ -64,8 +64,9 @@ def recommend(board, package_for):
             task_error = task.get("error") or "上次整合稿生成未完成"
             stage = "整合稿中断" if task["status"] == "aborted" else "整合稿失败"
         item = {
-            "slot_key": key, "title": task.get("title") or slot["title"],
-            "form": form, "angle": slot.get("angle") or "",
+            "slot_key": key,
+            "title": (rows[0]["title"] if priority == 0 else task.get("title") or slot["title"]),
+            "form": form, "angle": "" if priority == 0 else slot.get("angle") or "",
             "boundary": slot.get("boundary") or "", "reason": reason,
             "stage": stage, "summary_id": sid, "has_package": bool(package),
             "task_error": task_error,

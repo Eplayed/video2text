@@ -1067,13 +1067,20 @@ def generate_summary(
     video: dict[str, Any],
     summary_type: str,
     ai_config: dict[str, str] | None = None,
+    brief: dict | None = None,
 ) -> tuple[dict[str, Any], str, str]:
     ai_config = ai_config or {}
     method = (ai_config.get("method") or "skip").strip()
     api_key = ai_config.get("api_key", "")
     model = ai_config.get("model", "")
     if method != "skip" and api_key:
-        ai_result = _generate_with_llm(video, summary_type, ai_config)
+        ai_result = _generate_with_llm(video, summary_type, ai_config, brief)
+        if ai_config.get("editorial"):
+            from .editorial_model import validate_summary
+            if not isinstance(ai_result, dict) or "error" in ai_result:
+                raise ValueError("DeepSeek V4 Pro 整理失败：%s" %
+                                 (ai_result.get("error") if isinstance(ai_result, dict) else "输出不是 JSON 对象"))
+            validate_summary(ai_result, ai_config)
         if "error" not in ai_result:
             if summary_type == "ai_interview":
                 ai_result = _normalize_interview_result(
@@ -1096,13 +1103,20 @@ def generate_collection_summary(
     videos: list[dict[str, Any]],
     summary_type: str,
     ai_config: dict[str, str] | None = None,
+    brief: dict | None = None,
 ) -> tuple[dict[str, Any], str, str]:
     ai_config = ai_config or {}
     method = (ai_config.get("method") or "skip").strip()
     api_key = ai_config.get("api_key", "")
     model = ai_config.get("model", "")
     if method != "skip" and api_key:
-        ai_result = _generate_collection_with_llm(videos, summary_type, ai_config)
+        ai_result = _generate_collection_with_llm(videos, summary_type, ai_config, brief)
+        if ai_config.get("editorial"):
+            from .editorial_model import validate_summary
+            if not isinstance(ai_result, dict) or "error" in ai_result:
+                raise ValueError("DeepSeek V4 Pro 整理失败：%s" %
+                                 (ai_result.get("error") if isinstance(ai_result, dict) else "输出不是 JSON 对象"))
+            validate_summary(ai_result, ai_config)
         if "error" not in ai_result:
             if summary_type == "ai_interview":
                 ai_result = _normalize_interview_result(
@@ -1135,22 +1149,27 @@ def _generate_with_llm(
     video: dict[str, Any],
     summary_type: str,
     ai_config: dict[str, str],
+    brief: dict | None = None,
 ) -> dict[str, Any]:
     prompt = _prompt(video, summary_type)
+    if ai_config.get("editorial"):
+        from .editorial_model import prompt_scope
+        prompt += prompt_scope(brief)
     try:
         import openai
+        from .editorial_model import chat_options
 
         client = openai.OpenAI(
             api_key=ai_config["api_key"],
             base_url=ai_config.get("api_base") or "https://api.openai.com/v1",
             timeout=LLM_TIMEOUT,
-            max_retries=1,
+            max_retries=0 if ai_config.get("editorial") else 1,
         )
         resp = client.chat.completions.create(
             model=ai_config.get("model") or "gpt-4o-mini",
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.25,
             response_format={"type": "json_object"},
+            **chat_options(ai_config, 0.25),
         )
         return _parse_llm_json(resp.choices[0].message.content)
     except Exception as exc:
@@ -1161,22 +1180,27 @@ def _generate_collection_with_llm(
     videos: list[dict[str, Any]],
     summary_type: str,
     ai_config: dict[str, str],
+    brief: dict | None = None,
 ) -> dict[str, Any]:
     prompt = _collection_prompt(videos, summary_type)
+    if ai_config.get("editorial"):
+        from .editorial_model import prompt_scope
+        prompt += prompt_scope(brief)
     try:
         import openai
+        from .editorial_model import chat_options
 
         client = openai.OpenAI(
             api_key=ai_config["api_key"],
             base_url=ai_config.get("api_base") or "https://api.openai.com/v1",
             timeout=LLM_TIMEOUT,
-            max_retries=1,
+            max_retries=0 if ai_config.get("editorial") else 1,
         )
         resp = client.chat.completions.create(
             model=ai_config.get("model") or "gpt-4o-mini",
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.25,
             response_format={"type": "json_object"},
+            **chat_options(ai_config, 0.25),
         )
         return _parse_llm_json(resp.choices[0].message.content)
     except Exception as exc:

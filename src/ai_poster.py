@@ -1615,6 +1615,7 @@ def build_page_plan(summary, ai_config, page_index, pages, spine="", theme="",
     """
     api_key, api_base, model = _require_ai(ai_config)
     import openai
+    from .editorial_model import EVIDENCE_RULES, TITLE_RULES, chat_options
 
     lim = limits_for(text_mode)
     try:
@@ -1638,11 +1639,14 @@ def build_page_plan(summary, ai_config, page_index, pages, spine="", theme="",
         prompt += ("\n本次只用上面带 point_id 的原意母稿。每张卡片输出 point_ids 数组；"
                    "逐字保持原句的主体、数量、条件与否定词。别的页已覆盖的点不要重复编造。")
     client = openai.OpenAI(api_key=api_key, base_url=api_base or "https://api.openai.com/v1",
-                           timeout=300, max_retries=1)
+                           timeout=300, max_retries=0 if ai_config.get("editorial") else 1)
+    if ai_config.get("editorial"):
+        prompt += "\n【逐项校验规则】" + EVIDENCE_RULES
+        prompt += "\n" + TITLE_RULES
     resp = client.chat.completions.create(
         model=model or "qwen-plus",
         messages=[{"role": "user", "content": prompt}],
-        temperature=0.5, response_format={"type": "json_object"})
+        response_format={"type": "json_object"}, **chat_options(ai_config, 0.5))
     data = _parse_json(resp.choices[0].message.content)
     page, notes = normalize_page(data, lim, key, has_photo, page_index,
                                  first_title=(pages[0].get("title") if page_index == 1 else ""),
@@ -1700,7 +1704,7 @@ def roster_scan_text(plan, pub):
 
 
 def build_text_plan(summary, ai_config, theme="", title="", style_key="", text_mode=DEFAULT_TEXT_MODE,
-                    has_photo=False, page_hint=0, frames=None, source_text="", mother=None):
+                    has_photo=False, page_hint=0, frames=None, source_text="", mother=None, feedback=None):
     """调 LLM 产出文案计划 + 发布文案，并逐字段裁到字数线内。
 
     返回 (plan, publish, violations, notes)：plan 是要画进图里的文字（超预算先经 fit_plan
@@ -1717,6 +1721,7 @@ def build_text_plan(summary, ai_config, theme="", title="", style_key="", text_m
     """
     api_key, api_base, model = _require_ai(ai_config)
     import openai
+    from .editorial_model import EVIDENCE_RULES, TITLE_RULES, chat_options
 
     try:
         page_hint = int(page_hint or 0)
@@ -1725,7 +1730,7 @@ def build_text_plan(summary, ai_config, theme="", title="", style_key="", text_m
     page_hint = max(0, min(page_hint, PAGE_MAX))
     lim = limits_for(text_mode)
     client = openai.OpenAI(api_key=api_key, base_url=api_base or "https://api.openai.com/v1",
-                           timeout=300, max_retries=1)
+                           timeout=300, max_retries=0 if ai_config.get("editorial") else 1)
     mother_rules = ""
     content = (summary.get("content") or "")[:8000]
     if mother:
@@ -1759,11 +1764,20 @@ def build_text_plan(summary, ai_config, theme="", title="", style_key="", text_m
     if mother:
         prompt = prompt.replace('"v": "这一条画什么"}',
                                 '"v": "这一条画什么", "point_ids": ["逐字复制的母稿 point_id"]}')
+    if ai_config.get("editorial"):
+        prompt += "\n【逐项校验规则】" + EVIDENCE_RULES
+        prompt += "\n" + TITLE_RULES
+    if feedback:
+        prompt += ("\n【上一版检查结果】逐项修复后重新返回完整 JSON。"
+                   "保持已经成立的母稿点，超字数就拆成更多卡片或页，不能删条件。\n"
+                   + "\n".join(feedback))
     resp = client.chat.completions.create(
         model=model or "qwen-plus",
         messages=[{"role": "user", "content": prompt}],
-        temperature=0.3, response_format={"type": "json_object"})
+        response_format={"type": "json_object"}, **chat_options(ai_config, 0.3))
     data = _parse_json(resp.choices[0].message.content)
+    if ai_config.get("editorial") and not (data.get("cards") or data.get("pages")):
+        raise PosterError("DeepSeek V4 Pro 没有返回攻略页或卡片")
 
     cards = []
     for c in _as_list(data.get("cards")):

@@ -340,18 +340,23 @@ def _llm_cards(summary, author_draft, ai_config, theme="", template="classic", m
         return None
     try:
         import openai
+        from ...editorial_model import EVIDENCE_RULES, chat_options
 
         client = openai.OpenAI(
             api_key=ai_config["api_key"],
             base_url=ai_config.get("api_base") or "https://api.openai.com/v1",
-            timeout=300, max_retries=1,
+            timeout=300, max_retries=0 if ai_config.get("editorial") else 1,
         )
         prompt = _build_cards_prompt(summary, author_draft, theme, template, mother=mother)
+        if ai_config.get("editorial") and mother:
+            prompt += ("\n【逐项校验规则】" + EVIDENCE_RULES
+                       + "\n列表卡最多 5 项，步骤卡最多 4 步，超出就拆卡。"
+                         "封面副标题缺证据可留空；配文与摘要逐句和母稿比对。")
         resp = client.chat.completions.create(
             model=ai_config.get("model") or "gpt-4o-mini",
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.3,
             response_format={"type": "json_object"},
+            **chat_options(ai_config, 0.3),
         )
         text = resp.choices[0].message.content
         data = _parse_json(text)
@@ -559,7 +564,7 @@ def generate_graphics(summary, ai_config, author_draft="", progress_cb=None,
                       theme="", skin="", title="", template=TEMPLATE_DEFAULT, real_screenshots=None,
                       palette=None, font=None, layout=None, ref_token="", mother=None,
                       source_text="", output_root=None, prepared_data=None,
-                      prechecked_fidelity=None):
+                      prechecked_fidelity=None, evidence_sources=None):
     """主入口：wechat_material 整合稿 → manifest dict（落盘 output/wechat/<summary_id>/）。
 
     2026-11-03 合并后：渲染统一走头条循环（toutiao.render_cards），模板白名单与头条同源、
@@ -636,32 +641,36 @@ def generate_graphics(summary, ai_config, author_draft="", progress_cb=None,
         _pg("未配置 AI，走本地模板兜底（成品需人工核对）...")
         data = _fallback_cards(summary, draft)
 
-    cards = data.get("cards") or []
-    if prepared_data is not None and (not cards or not data.get("copy_text")):
-        raise gate.GraphicsGateError("已编辑草稿缺卡片或配文，不能渲染")
-    raw_counts = [(len(c.get("items") or []), len(c.get("steps") or []))
-                  for c in cards if isinstance(c, dict)]
-    # 渲染前清洗：剔除「素材未提」「请人工核对」等编辑向元语言（成品图直接面向读者）
-    cards = ir.sanitize_cards(cards)
-    if model != "local-template":
-        clean_counts = [(len(c.get("items") or []), len(c.get("steps") or []))
-                        for c in cards if isinstance(c, dict)]
-        if raw_counts != clean_counts:
-            raise gate.GraphicsGateError("卡片清洗发现内容被删除；原始结果未出图，请回到拆稿核对缺口")
-    if len(cards) > MAX_IMAGES:
-        raise gate.GraphicsGateError(
-            "卡片 %d 张，超过图片消息 %d 张上限；原始卡片未裁剪，请调整后重试"
-            % (len(cards), MAX_IMAGES))
-    if len(cards) + len(shots) > MAX_IMAGES:
-        raise gate.GraphicsGateError("卡片与截图合计 %d 张，超过平台 %d 张上限；请拆成两组"
-                                     % (len(cards) + len(shots), MAX_IMAGES))
-    for i, card in enumerate(cards, 1):
-        if (card.get("kind") or "list") == "list" and len(card.get("items") or []) > 5:
-            raise gate.GraphicsGateError("第 %d 张列表卡有 %d 条，单卡最多 5 条；请拆卡"
-                                         % (i, len(card.get("items") or [])))
-        if card.get("kind") == "text" and len(card.get("steps") or []) > 4:
-            raise gate.GraphicsGateError("第 %d 张步骤卡有 %d 步，单卡最多 4 步；请拆卡"
-                                         % (i, len(card.get("steps") or [])))
+    def checked_cards(candidate):
+        cards = candidate.get("cards") or []
+        if prepared_data is not None and (not cards or not candidate.get("copy_text")):
+            raise gate.GraphicsGateError("已编辑草稿缺卡片或配文，不能渲染")
+        raw_counts = [(len(c.get("items") or []), len(c.get("steps") or []))
+                      for c in cards if isinstance(c, dict)]
+        # 渲染前清洗：剔除「素材未提」「请人工核对」等编辑向元语言（成品图直接面向读者）
+        cards = ir.sanitize_cards(cards)
+        if model != "local-template":
+            clean_counts = [(len(c.get("items") or []), len(c.get("steps") or []))
+                            for c in cards if isinstance(c, dict)]
+            if raw_counts != clean_counts:
+                raise gate.GraphicsGateError("卡片清洗发现内容被删除；原始结果未出图，请回到拆稿核对缺口")
+        if len(cards) > MAX_IMAGES:
+            raise gate.GraphicsGateError(
+                "卡片 %d 张，超过图片消息 %d 张上限；原始卡片未裁剪，请调整后重试"
+                % (len(cards), MAX_IMAGES))
+        if len(cards) + len(shots) > MAX_IMAGES:
+            raise gate.GraphicsGateError("卡片与截图合计 %d 张，超过平台 %d 张上限；请拆成两组"
+                                         % (len(cards) + len(shots), MAX_IMAGES))
+        for i, card in enumerate(cards, 1):
+            if (card.get("kind") or "list") == "list" and len(card.get("items") or []) > 5:
+                raise gate.GraphicsGateError("第 %d 张列表卡有 %d 条，单卡最多 5 条；请拆卡"
+                                             % (i, len(card.get("items") or [])))
+            if card.get("kind") == "text" and len(card.get("steps") or []) > 4:
+                raise gate.GraphicsGateError("第 %d 张步骤卡有 %d 步，单卡最多 4 步；请拆卡"
+                                             % (i, len(card.get("steps") or [])))
+        return cards
+
+    cards = checked_cards(data)
     fidelity = {}
     if mother:
         from src import guide_mother
@@ -680,6 +689,22 @@ def generate_graphics(summary, ai_config, author_draft="", progress_cb=None,
         else:
             fidelity = guide_mother.audit_output(mother, check_plan, publish_text, ai_config,
                                                   source_text=source_text)
+        if (not fidelity["ready"] and prepared_data is None and evidence_sources
+                and ai_config.get("editorial") and fidelity["semantic"]["status"] != "unknown"):
+            from ...editorial_model import ground_wechat_cards
+
+            _pg("按已定位原句重排卡片与配文，重新核对...")
+            try:
+                corrected = ground_wechat_cards(data, mother, evidence_sources)
+                corrected_cards = checked_cards(corrected)
+                corrected_fidelity = guide_mother.audit_output(
+                    mother, guide_mother.wechat_plan(corrected_cards, mother),
+                    {"copy_text": corrected["copy_text"], "digest": corrected["digest"]},
+                    ai_config, source_text=source_text)
+                if corrected_fidelity["ready"]:
+                    data, cards, fidelity = corrected, corrected_cards, corrected_fidelity
+            except gate.GraphicsGateError as exc:
+                _pg("原句重排超出版面容量，保留原草稿：%s" % exc)
         if not fidelity["ready"]:
             draft_dir = OUTPUT_DIR / "_drafts" / str(summary_id)
             draft_dir.mkdir(parents=True, exist_ok=True)

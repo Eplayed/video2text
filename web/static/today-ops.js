@@ -97,6 +97,69 @@
     if (!items.length) sources.append(text('p', '暂无素材源回执'));
   }
 
+  function supplementPicker(topic, channel) {
+    const details = document.createElement('details');
+    details.className = 'today-checks';
+    const title = text('summary', '补充资料（可选）');
+    const body = document.createElement('div');
+    details.append(title, body);
+    let state = null;
+    let loading = false;
+    details.addEventListener('toggle', async () => {
+      if (!details.open || state || loading) return;
+      loading = true;
+      body.textContent = '正在查找与主视频相关的资料…';
+      try {
+        const query = new URLSearchParams({channel, slot_key: topic.slot_key,
+          candidate_id: topic.candidate_id || ''});
+        const data = await json('/api/ops/today/supplements?' + query);
+        const selected = new Set(data.adopted);
+        state = {selected, before: data.adopted};
+        body.replaceChildren();
+        if (!data.candidates.length) {
+          body.append(text('p', '暂无强相关补充资料，可以用主视频直接生成。'));
+          return;
+        }
+        const hint = text('p', '最多勾选 ' + data.max_items + ' 条。官方资料可用于核对口径，其他资料供编辑比对。');
+        const rows = document.createElement('ul');
+        for (const item of data.candidates) {
+          const row = document.createElement('li');
+          const label = document.createElement('label');
+          const check = document.createElement('input');
+          check.type = 'checkbox';
+          check.checked = selected.has(item.id);
+          check.addEventListener('change', () => {
+            if (check.checked && selected.size >= data.max_items) {
+              check.checked = false;
+              hint.textContent = '已选满 ' + data.max_items + ' 条，取消一条后可再选。';
+              return;
+            }
+            if (check.checked) selected.add(item.id);
+            else selected.delete(item.id);
+            title.textContent = '补充资料 · 已选 ' + selected.size + ' 条';
+          });
+          label.append(check, ' ' + item.title + ' · ' + item.tier
+            + (item.date ? ' · ' + item.date.slice(0, 10) : ''));
+          row.append(label);
+          if (item.why) row.append(text('div', item.why, 'today-reason'));
+          rows.append(row);
+        }
+        if (selected.size) title.textContent = '补充资料 · 已选 ' + selected.size + ' 条';
+        body.append(hint, rows);
+      } catch (error) {
+        body.textContent = '补充资料加载失败。' + errorMessage(error) + ' 可合上后重试。';
+      } finally {
+        loading = false;
+      }
+    });
+    return {details, selection() {
+      if (!state) return {};
+      const ids = Array.from(state.selected);
+      if (ids.length === state.before.length && state.before.every(id => state.selected.has(id))) return {};
+      return {supplement_ids: ids, base_supplement_ids: state.before};
+    }};
+  }
+
   function render(data) {
     list.replaceChildren();
     if (!data.topics.length) {
@@ -134,6 +197,9 @@
         }
         card.append(materials);
       }
+      const supplements = !topic.summary_id && !job.summary_id && !job.running && topic.materials.length
+        ? supplementPicker(topic, data.channel) : null;
+      if (supplements) card.append(supplements.details);
       const actions = document.createElement('div');
       actions.className = 'today-actions';
       if (topic.has_package) {
@@ -142,7 +208,7 @@
         actions.append(button('修改草稿', () => openTopic(topic, data.channel), true));
       } else {
         const generate = button(job.running ? '生成中…' : failure ? '重试生成' : '生成待审稿',
-          () => start(topic, data.channel, generate), true);
+          () => start(topic, data.channel, generate, supplements ? supplements.selection() : {}), true);
         generate.disabled = busy || !data.generation_enabled;
         actions.append(generate);
         if (topic.summary_id || job.summary_id) {
@@ -204,7 +270,8 @@
       snapshot = data;
       context.textContent = data.today + (data.last_match ? ' · 最近成功匹配 ' + String(data.last_match.finished_at || '').slice(5, 16) : ' · 暂无成功匹配')
         + (data.match_error ? ' · 最新匹配失败：' + data.match_error : '')
-        + (data.generation_enabled ? '' : ' · 图文生成已暂停');
+        + (data.text_model ? ' · ' + data.text_model : ' · 待配置 DeepSeek V4 Pro')
+        + (data.text_model && !data.generation_enabled ? ' · 图文生成已暂停' : '');
       render(data);
       renderSources(data.sources);
       const active = data.topics.find(topic => topic.job && topic.job.running);
@@ -222,14 +289,14 @@
     }
   }
 
-  async function start(topic, channel, target) {
+  async function start(topic, channel, target, supplements) {
     target.disabled = true;
     const original = target.textContent;
     target.textContent = '提交中…';
     try {
       await json('/api/ops/today/generate', {
         method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({channel, slot_key: topic.slot_key, candidate_id: topic.candidate_id}),
+        body: JSON.stringify(Object.assign({channel, slot_key: topic.slot_key, candidate_id: topic.candidate_id}, supplements)),
       });
       await load();
     } catch (error) {

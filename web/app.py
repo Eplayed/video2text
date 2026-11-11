@@ -372,6 +372,18 @@ def _fast_config():
             cfg["api_key"] = fk
     return cfg
 
+def _editorial_config(*, required=False):
+    from src import editorial_model
+    local = collector.load_env_file(str(ROOT / "config" / "config.env.local"))
+    key = collector.config_get(local, "TODAY_DEEPSEEK_API_KEY")
+    if key:
+        return {"method": "deepseek", "api_key": key, "api_base": editorial_model.API_BASE,
+                "model": editorial_model.MODEL, "editorial": True}
+    if required:
+        raise ValueError("今日选题需要配置 DeepSeek V4 Pro，尚未启动生成")
+    return _fast_config()
+
+
 # ── API: 视频列表 ──
 def _first_markdown_image(text: str) -> str:
     """从 Markdown 正文提取第一张图片 URL（微信文章封面兜底：入库时不存 cover_url，正文首图即头图）。"""
@@ -2224,7 +2236,7 @@ def api_bank_file():
     return send_from_directory(bank_board.PRODUCT, name)
 
 
-def _run_generation(video_keys, summary_type, combine, st, brief=None, video_ids=None):
+def _run_generation(video_keys, summary_type, combine, st, brief=None, video_ids=None, *, ai_config=None):
     """生成那一段的真身：把 `sheet:row` 列表整理成整理稿并落库，进度写进 `st` 这个字典。
 
     为什么抽出来：排产任务那条链（`/api/plan/task/generate`）要跑**同一套**提示词与落库，
@@ -2242,7 +2254,18 @@ def _run_generation(video_keys, summary_type, combine, st, brief=None, video_ids
     try:
         st["progress"] = "同步 Excel 到内容库..."
         _sync_content_db()
-        config = _fast_config()   # 同上：整理稿走快速档，理由见 /regenerate 那段注释
+        config = ai_config if ai_config is not None else _fast_config()
+        def freeze_evidence(result):
+            if not config.get("editorial"):
+                return
+            evidence = []
+            for item in (brief or {}).get("supplements") or []:
+                entry = {k: v for k, v in item.items() if k != "body"}
+                if item["sheet"] == "暴雪官方":
+                    entry["body"] = item["body"].removesuffix("…")
+                evidence.append(entry)
+            structured = content_store._structured_payload(result)
+            result["structured_data"] = dict(structured, editorial_supplements=evidence)
         success_count = 0
         summary_ids = []
         selected_videos = []
@@ -2265,6 +2288,8 @@ def _run_generation(video_keys, summary_type, combine, st, brief=None, video_ids
                 selected_videos.append(video)
             # 真掉了几条就按剩下的重算合并档：三条变一条还按"合并稿"走会产出一篇假合集
             combine = len(selected_videos) > 1
+            if config.get("editorial") and len(selected_videos) != len(want_ids):
+                raise ValueError("有主视频缺少转写或已下架，请在选题管理重新选择")
             if not selected_videos:
                 st["progress"] = "没有可生成的 ASR 文本"
                 st["done"] = True
@@ -2296,6 +2321,7 @@ def _run_generation(video_keys, summary_type, combine, st, brief=None, video_ids
             result, model, status = content_store.generate_collection_summary(
                 selected_videos, summary_type, config, brief
             )
+            freeze_evidence(result)
             _risk_inherit(result, selected_videos)      # 台账兜底：模型漏写的待核不能消失
             if summary_type in GUIDE_SUMMARY_TYPES:
                 # 攻略类：抽关键帧做配图，嵌入整理稿尾部
@@ -2322,6 +2348,7 @@ def _run_generation(video_keys, summary_type, combine, st, brief=None, video_ids
                 result, model, status = content_store.generate_summary(
                     video, summary_type, config, brief
                 )
+                freeze_evidence(result)
                 _risk_inherit(result, [video])          # 同上：单条素材也要继承
                 if summary_type in GUIDE_SUMMARY_TYPES:
                     # 攻略类：抽关键帧做配图，嵌入整理稿尾部
@@ -2962,7 +2989,7 @@ def api_plan_task_generate():
     return _start_plan_task(request.get_json(force=True) or {})
 
 
-def _start_plan_task(data):
+def _start_plan_task(data, *, ai_config=None, expected_supplements=None):
     """排产主入口那一下：默认**继续已有稿**，显式重新生成才建新版本。
 
     四条硬规矩（都是这一单要验收的）：
@@ -3081,10 +3108,15 @@ def _start_plan_task(data):
             return jsonify({"mode": "blocked", "error": "这一版的采用清单刚被改过，改完的那几条"
                                                         "现在都不能用，没起生成",
                             "task": after, "problems": problems}), 422
+    latest = after
+    if expected_supplements is not None and latest["supplement_ids"] != expected_supplements:
+        error = "补充资料刚刚被调整，请刷新选题后重新确认"
+        plan_tasks.finish(DB_PATH, latest["id"], "aborted", error=error, token=token)
+        return jsonify({"error": error}), 409
     job = _plan_job(latest["id"])
     _plan_job_reset(job, "准备生成内容...")
     task_id = latest["id"]
-    model_name = (_fast_config() or {}).get("model") or ""
+    model_name = (ai_config if ai_config is not None else _fast_config()).get("model") or ""
     # R3：选题要求进真实提示词。取的是**库里那一版**存的字段（不是请求里带的），
     # 这样"当初用什么要求生成的"永远能从任务行回查，与冻结的证据同源。
     brief = {"title": latest.get("title"), "hook": latest.get("hook"),
@@ -3099,13 +3131,26 @@ def _start_plan_task(data):
             brief["supplements"] = supplements.rows_by_ids(
                 DB_PATH, sup_ids, snaps=latest.get("supplement_sources"))
         except Exception as e:
+            if ai_config is not None:
+                error = "补充资料读取失败，请重试"
+                plan_tasks.finish(DB_PATH, task_id, "failed", error=error, token=token)
+                job.update(running=False, error=error)
+                return jsonify({"error": error}), 502
             print("[plan] 补充资料读取失败（这次生成不带它们）: %s" % e, flush=True)
+        if ai_config is not None and (
+                [row["id"] for row in brief["supplements"]] != sup_ids
+                or any(not row.get("body") for row in brief["supplements"])):
+            error = "已选补充资料缺少正文，请在管理选题重新确认"
+            plan_tasks.finish(DB_PATH, task_id, "failed", error=error, token=token)
+            job.update(running=False, error=error)
+            return jsonify({"error": error}), 409
 
     def run():
         # T1：worker 用事务定下来的那几条素材 id，不再经 sheet:row 绕回另一条记录
         try:
+            options = {"ai_config": ai_config} if ai_config is not None else {}
             ids = _run_generation(None, summary_type, len(run_ids) > 1, job, brief,
-                                  video_ids=run_ids)
+                                  video_ids=run_ids, **options)
         except Exception:
             job.update(error=traceback.format_exc(), done=True)
             ids = []
@@ -3787,7 +3832,7 @@ def _start_wechat_graphics_locked(data):
             return jsonify({"error": str(exc)}), 409
         if (current_mother.get("source_revision") != current_source_rev
                 or not _wechat_audit_current(edited_draft, current_mother,
-                                             "\n".join(s["text"] for s in current_sources))):
+                                             guide_mother.audit_source_text(current_sources))):
             return jsonify({"error": "草稿原意核对未通过或已过期，请重新核对"}), 409
 
     _wx_task_status.update({
@@ -3799,9 +3844,10 @@ def _start_wechat_graphics_locked(data):
         try:
             from src import guide_mother
             cb = _run_progress_cb(_wx_task_status)
-            cfg = _fast_config()
+            cfg = _editorial_config()
             mother = None
             mother_source_text = ""
+            mother_sources = []
             if not author_draft:
                 _wx_task_status["progress"] = "从原始转写提取原意母稿..."
                 mother = guide_mother.ensure_mother(DB_PATH, summary["id"], cfg,
@@ -3810,7 +3856,7 @@ def _start_wechat_graphics_locked(data):
                 mother_sources, mother_source_rev = guide_mother.source_snapshot(DB_PATH, summary["id"])
                 if mother_source_rev != mother["source_revision"]:
                     raise guide_mother.MotherError("原文在生成期间更新，请重新提取母稿")
-                mother_source_text = "\n".join(s["text"] for s in mother_sources)
+                mother_source_text = guide_mother.audit_source_text(mother_sources)
             if edited_draft and (edited_draft.get("fidelity") or {}).get("mother_revision") != mother["mother_revision"]:
                 raise guide_mother.MotherError("原意母稿已变化，已编辑草稿不能沿用")
             if edited_draft and _wechat_draft_revision(edited_draft) != _wechat_draft_revision(
@@ -3829,7 +3875,7 @@ def _start_wechat_graphics_locked(data):
                                                             palette=palette or None, font=font or None,
                                                             layout=layout or None, ref_token=ref_token,
                                                             mother=mother, source_text=mother_source_text,
-                                                            output_root=stage_root,
+                                                            evidence_sources=mother_sources, output_root=stage_root,
                                                             prepared_data=edited_draft,
                                                             prechecked_fidelity=(edited_draft or {}).get("fidelity"))
                 manifest_dir = (stage_root if stage_root is not None
@@ -3924,7 +3970,7 @@ def api_wechat_draft(summary_id):
     except guide_mother.MotherError:
         mother, sources, stale = {}, [], True
     audit_stale = bool(not stale and (draft.get("fidelity") or {}).get("ready") and
-                       not _wechat_audit_current(draft, mother, "\n".join(s["text"] for s in sources)))
+                       not _wechat_audit_current(draft, mother, guide_mother.audit_source_text(sources)))
     return jsonify({"draft": draft, "revision": _wechat_draft_revision(draft), "stale": stale,
                     "audit_stale": audit_stale,
                     "core_answer": mother.get("core_answer") or "",
@@ -4041,13 +4087,13 @@ def api_wechat_draft_revise(summary_id):
                 raise ValueError()
         except (IndexError, KeyError, TypeError, ValueError):
             return jsonify({"error": "不能修改此字段或卡片结构：%s" % path}), 400
-    source_text = "\n".join(s["text"] for s in sources)
+    source_text = guide_mother.audit_source_text(sources)
     with model_usage.track("wechat", "revise", summary_id) as usage_run:
         usage_run.set_revisions(source_rev, mother.get("mother_revision"))
         fidelity = guide_mother.audit_output(
             mother, guide_mother.wechat_plan(draft["cards"], mother),
             {"copy_text": draft.get("copy_text") or "", "digest": draft.get("digest") or ""},
-            _fast_config(), source_text=source_text)
+            _editorial_config(), source_text=source_text)
         usage_run.close("complete")
         usage_report = usage_run.snapshot()
     with _wx_draft_lock:
@@ -4570,6 +4616,10 @@ def _material_text(summary):
     白名单必须是"素材说过什么"，不能拿整理稿或成品自己当依据——模型把名字写错之后，
     错名字会顺着整理稿一路"有据"下去（11-02 那张「德莱尼」卡片就是这么发出去的）。
     """
+    from src import guide_mother
+    if "editorial_supplements" in guide_mother._json_dict(summary.get("structured_data")):
+        sources, _revision = guide_mother.source_snapshot(DB_PATH, summary["id"])
+        return guide_mother.audit_source_text(sources)
     ids = []
     try:
         ids += [int(x) for x in (json.loads(summary.get("source_video_ids") or "[]") or [])]
@@ -4843,7 +4893,7 @@ def _start_poster_plan(data):
 
     def fn():
         from src import guide_mother
-        cfg = _fast_config()
+        cfg = _editorial_config()
         _poster_status["progress"] = "从原始转写提取原意母稿..."
         mother = guide_mother.ensure_mother(DB_PATH, summary["id"], cfg,
                                             progress=lambda msg: _poster_status.update({"progress": msg}))
@@ -4851,18 +4901,39 @@ def _start_poster_plan(data):
         mother_sources, mother_source_rev = guide_mother.source_snapshot(DB_PATH, summary["id"])
         if mother_source_rev != mother["source_revision"]:
             raise guide_mother.MotherError("原文在拆稿期间更新，请重新提取母稿")
-        frames = _guide_frames_for(summary, cfg)
+        frames = _guide_frames_for(summary, _fast_config())
         _poster_status["progress"] = "LLM 拆解海报文案（模型：%s）..." % (cfg.get("model") or "?")
         asr_text = _material_text(summary)   # ① 拆完就对当前 plan+publish 跑同一道本地闸
-        plan, publish, bad, notes = ai_poster.build_text_plan(summary, cfg, theme=theme, title=title,
-                                                              style_key=style_key, text_mode=text_mode,
-                                                              has_photo=has_photo, page_hint=page_hint,
-                                                              frames=frames,
-                                                              source_text=asr_text, mother=mother)
-        fidelity = guide_mother.audit_output(
-            mother, plan, publish, cfg,
-            source_text="\n".join(s["text"] for s in mother_sources))
-        bad = list(bad) + guide_mother.audit_problems(fidelity)
+        source_text = guide_mother.audit_source_text(mother_sources)
+
+        def draft(feedback=None):
+            options = {"feedback": feedback} if feedback else {}
+            plan, publish, bad, notes = ai_poster.build_text_plan(
+                summary, cfg, theme=theme, title=title, style_key=style_key, text_mode=text_mode,
+                has_photo=has_photo, page_hint=page_hint, frames=frames, source_text=asr_text,
+                mother=mother, **options)
+            if feedback:
+                from src import editorial_model
+                limits = ai_poster.limits_for(text_mode)
+                publish = editorial_model.ground_poster_fields(
+                    plan, publish, mother, mother_sources, limits)
+                publish = ai_poster._clip_publish(publish, plan)
+                bad = ai_poster.lint_plan(plan, limits)
+            fidelity = guide_mother.audit_output(mother, plan, publish, cfg, source_text=source_text)
+            return plan, publish, list(bad) + guide_mother.audit_problems(fidelity), notes, fidelity
+
+        plan, publish, bad, notes, fidelity = draft()
+        if cfg.get("editorial") and bad and (fidelity.get("semantic") or {}).get("status") != "unknown":
+            _poster_save_plan(summary["id"], {"plan": plan, "publish": publish, "violations": bad,
+                                               "fidelity": fidelity, "publish_channel": publish_channel,
+                                               "form": pk_form, "model": cfg["model"]})
+            _poster_status["progress"] = "按原意和版面检查结果修订一次..."
+            try:
+                corrected = draft(bad[:18])
+                if not corrected[2] and corrected[4].get("ready"):
+                    plan, publish, bad, notes, fidelity = corrected
+            except Exception:
+                app.logger.info("攻略文案自动修订未完成 summary=%s", summary["id"], exc_info=True)
         # 骨架稿不在这里拦：拆解本身就能判断这份素材有没有料，拦在这里会让人白等一次拆解。
         # 只把风险随结果一起回给前端，出图那一步再决定是否放行。
         warning = "；".join(ai_poster.draft_gate.draft_blockers(summary))
@@ -4953,7 +5024,7 @@ def api_poster_plan_page():
 
     def fn():
         from src import guide_mother
-        cfg = _fast_config()
+        cfg = _editorial_config()
         mother = guide_mother.ensure_mother(DB_PATH, summary["id"], cfg,
                                             progress=lambda msg: _poster_status.update({"progress": msg}))
         model_usage.current().set_revisions(mother["source_revision"], mother["mother_revision"])
@@ -4962,7 +5033,7 @@ def api_poster_plan_page():
             raise guide_mother.MotherError("原文在重拆期间更新，请重新提取母稿")
         # 这一页重拆也要带着真帧清单：不带给它，模型不敢给 photos 编号，
         # 重拆一次就把原来那页的证据图悄悄丢了（攻略页最伤的一种"字还在图没了"）
-        frames = _guide_frames_for(summary, cfg)
+        frames = _guide_frames_for(summary, _fast_config())
         _poster_status["progress"] = "只重拆第 %d 页（模型：%s）..." % (idx, cfg.get("model") or "?")
         page, bad, notes = ai_poster.build_page_plan(
             summary, cfg, idx, pages, spine=spine, theme=theme, style_key=style_key,
@@ -4974,7 +5045,7 @@ def api_poster_plan_page():
             merged["mother_revision"] = mother["mother_revision"]
         fidelity = guide_mother.audit_output(
             mother, merged or page, prev.get("publish") or {}, cfg,
-            source_text="\n".join(s["text"] for s in mother_sources))
+            source_text=guide_mother.audit_source_text(mother_sources))
         bad = list(bad) + guide_mother.audit_problems(fidelity)
         # ① 单页重拆也是一次文案变更：对并回后的整组重跑本地事实闸（0 模型）
         fact_status = _poster_fact_status(merged or page, prev.get("publish") or {},
@@ -5079,8 +5150,8 @@ def _start_poster_graphics(data):
                 or current_source != plan.get("source_revision")):
             raise ai_poster.PosterError("原始转写或母稿已更新，请重新拆稿")
         fidelity, _reused = _poster_fidelity(
-            summary["id"], current, plan, publish or {}, _fast_config(),
-            "\n".join(s["text"] for s in _sources))
+            summary["id"], current, plan, publish or {}, _editorial_config(),
+            guide_mother.audit_source_text(_sources))
         if not fidelity["ready"]:
             raise ai_poster.PosterError("原意核对未通过：%s；草稿已保留，请按原文修改后重试" %
                                         "；".join(guide_mother.audit_problems(fidelity)[:8]))
@@ -8511,7 +8582,7 @@ def _today_board(channel):
 
 
 def _today_public_job(job):
-    return {key: value for key, value in job.items() if key != "topic"}
+    return {key: value for key, value in job.items() if key not in ("topic", "supplement_selection")}
 
 
 def _today_edit_notice(summary_id, channel, saved=None):
@@ -8604,9 +8675,14 @@ def api_ops_today():
     match_error = None
     if last_result and last_result["status"] == "failed":
         match_error = _short_err(last_result.get("note") or "请在选题管理中查看")
+    try:
+        text_model = _editorial_config(required=True)["model"]
+    except ValueError:
+        text_model = ""
     return jsonify({"today": board["today"], "channel": channel, "topics": topics[:3],
                     "sources": sources, "last_match": status.get("last_ok"),
-                    "match_error": match_error, "generation_enabled": _original_graphics_enabled()})
+                    "match_error": match_error, "text_model": text_model,
+                    "generation_enabled": bool(text_model) and _original_graphics_enabled()})
 
 
 @app.route("/api/ops/today/status")
@@ -8623,6 +8699,61 @@ def api_ops_today_status():
     with _today_lock:
         job = _today_jobs.get((channel, slot))
         return jsonify({"job": _today_public_job(job) if job else None})
+
+
+def _today_supplement_pool(topic, channel):
+    mains = content_store.get_videos_by_ids(DB_PATH, [m["video_id"] for m in topic["materials"]])
+    mains = [row for row in mains if supplements.is_video(row.get("source_sheet") or "")]
+    task = plan_tasks.find_task(DB_PATH, topic["slot_key"], channel, topic["form"]) or {}
+    adopted = task.get("supplement_ids") or []
+    candidates = [row for row in supplements.candidates(DB_PATH, mains)["list"] if row["body_len"]]
+    return mains, candidates, adopted, task.get("supplement_sources") or []
+
+
+@app.route("/api/ops/today/supplements")
+def api_ops_today_supplements():
+    try:
+        channel = plan_series.norm_channel(request.args.get("channel"))
+        if channel not in plan_tasks.VALID_CHANNELS:
+            raise ValueError("今日选题支持头条号与公众号")
+        _, topics = _today_board(channel)
+        key = request.args.get("slot_key")
+        topic = next((item for item in topics if item["slot_key"] == key), None)
+        if not topic or topic["summary_id"] or str(topic["candidate_id"] or "") != (
+                request.args.get("candidate_id") or ""):
+            raise ValueError("选题或采用状态已变化，请刷新")
+        _mains, candidates, adopted, snapshots = _today_supplement_pool(topic, channel)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 409
+    by_id = {row["id"]: row for row in candidates}
+    for item in snapshots:
+        by_id.setdefault(item["db_id"], dict(item, id=item["db_id"],
+                         tier=supplements.TIER_BY_SHEET.get(item.get("sheet"), "补充资料")))
+    return jsonify({"candidates": list(by_id.values()), "adopted": adopted,
+                    "max_items": supplements.MAX_ITEMS})
+
+
+def _today_supplement_selection(topic, channel, data):
+    ids = data["supplement_ids"]
+    before = data.get("base_supplement_ids")
+    if (topic["summary_id"] or not isinstance(ids, list) or not isinstance(before, list)
+            or any(type(value) is not int or value <= 0 for value in ids + before)
+            or len(ids) > supplements.MAX_ITEMS or len(set(ids)) != len(ids)):
+        raise ValueError("补充资料选择无效，请刷新选题后重新确认")
+    mains, candidates, adopted, _snapshots = _today_supplement_pool(topic, channel)
+    if adopted != before:
+        raise ValueError("已采用的补充资料有变化，请刷新后重新勾选")
+    allowed = {row["id"] for row in candidates}.union(adopted)
+    if set(ids) - allowed:
+        raise ValueError("有补充资料已不在当前提名中，请刷新后重新勾选")
+    selected = content_store.get_videos_by_ids(DB_PATH, ids) if ids else []
+    indexed = {row["id"]: row for row in selected
+               if row.get("source_sheet") in supplements.NON_VIDEO_SHEETS
+               and (row.get("transcript") or "").strip()}
+    if set(indexed) != set(ids):
+        raise ValueError("已选补充资料缺少可用正文，请重新勾选")
+    rows = [indexed[i] for i in ids]
+    return {"rows": rows, "before": before, "why": supplements.why_map(mains, rows)}
 
 
 def _today_reply(result):
@@ -8679,11 +8810,19 @@ def _today_run(job, channel):
                 elif topic["candidate_id"] or task["video_ids"] != [
                         m["video_id"] for m in topic["materials"]]:
                     raise RuntimeError("排产表的采用清单刚刚变化，请刷新后重新确认")
+                selection = job["supplement_selection"]
+                if selection is not None:
+                    task, action = plan_tasks.save_supplements(
+                        DB_PATH, task["id"], selection["rows"], selection["why"],
+                        expected=([m["video_id"] for m in topic["materials"]], selection["before"]))
+                    if action not in ("updated", "unchanged"):
+                        raise RuntimeError("采用素材或补充资料刚刚变化，请刷新选题后重新确认")
                 data = _today_reply(_start_plan_task({
                     "slot_key": key, "channel": channel, "form": form,
                     "video_ids": task["video_ids"], "base_task_id": task["id"],
                     "base_version": task["version"],
-                }))
+                }, ai_config=_editorial_config(required=True),
+                   expected_supplements=task["supplement_ids"]))
                 sid = data.get("summary_id")
                 if not sid:
                     task_id = data.get("task_id") or data["task"]["id"]
@@ -8790,6 +8929,11 @@ def api_ops_today_generate():
     topic = next((x for x in topics if x["slot_key"] == slot_key), None)
     if not topic or topic["candidate_id"] != data.get("candidate_id"):
         return jsonify({"error": "今日选题或推荐素材已变化，请刷新后确认"}), 409
+    try:
+        _editorial_config(required=True)
+        selection = _today_supplement_selection(topic, channel, data) if "supplement_ids" in data else None
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 409
     if not topic["has_package"]:
         notice = _today_edit_notice(topic["summary_id"], channel)
         if notice:
@@ -8802,7 +8946,8 @@ def api_ops_today_generate():
             return jsonify({"error": "该渠道已有一篇待审稿在生成，请等它完成"}), 409
         job = {"slot_key": slot_key, "topic": topic, "date": board["today"],
                "running": True, "summary_id": topic["summary_id"],
-               "progress": "准备待审稿", "error": "", "finished_at": ""}
+               "progress": "准备待审稿", "error": "", "finished_at": "",
+               "supplement_selection": selection}
         _today_jobs[(channel, slot_key)] = job
         threading.Thread(target=_today_run, args=(job, channel), daemon=True).start()
     return jsonify({"status": "started"}), 202

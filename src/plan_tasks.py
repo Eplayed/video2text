@@ -371,7 +371,7 @@ def save_sources(db_path, slot_key, channel, form, meta, videos, *, only_if_miss
         con.close()
 
 
-def save_supplements(db_path, task_id, videos, why_by_id=None):
+def save_supplements(db_path, task_id, videos, why_by_id=None, *, expected=None):
     """勾定「补充资料」——挂在已采用视频下面的非视频料（微信文章/暴雪公告/NGA 帖）。
 
     与 `save_sources` 两处刻意不同：
@@ -397,6 +397,10 @@ def save_supplements(db_path, task_id, videos, why_by_id=None):
         if not (task.get("video_ids") or []):
             con.rollback()
             return task, "no-main"
+        if expected is not None and (is_started(task) or
+                (task["video_ids"], task["supplement_ids"]) != expected):
+            con.rollback()
+            return task, "stale"
         ids = [int(v["id"]) for v in videos]
         if list(task.get("supplement_ids") or []) == ids:
             con.rollback()
