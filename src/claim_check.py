@@ -201,6 +201,7 @@ def _hits(needles: Dict[str, Any], text: str) -> List[Tuple[str, int]]:
 
 
 _GENERIC_CONDITIONS = {"攻击", "法术"}
+_QUEST_XP_OBSERVATION = re.compile(r"(?:非?亡灵)?按睡袋(?:增益|buff)统计[，,：:](?:非?亡灵)?约?\d+(?:\.\d+)?万?经验[。]?$", re.I)
 _ROUTE_ORDINAL = re.compile(r"第一(?=(?:个|间|扇)?(?:房间|路口|箱子|门)|处站位|步)")
 
 
@@ -340,6 +341,9 @@ def check_fields(fields: List[Tuple[str, str]], reg: Optional[Dict[str, Any]] = 
                 hard.append("%s「%s」写了「%s」：这是替读者下的结论，登记表与官方原句里都没有这种说法，"
                             "改成客观列变动（谁、什么技能、从多少到多少）"
                             % (label, sent.strip()[:34], hype.group(0)))
+            if not pos_skills and not pos_conds and _QUEST_XP_OBSERVATION.fullmatch(s):
+                # A scoped quest-run XP observation is not a racial skill mechanic.
+                continue
             trigger = bool(nums or pos_skills or pos_conds or (in_races and _MECH.search(s)))
             # 整句点到的技能/属性/条件**全是否定式**（「矮人没有接手移速」）：这句在纠错，
             # 没有可核对的断言，别把它判成"未登记"——那等于罚诚实标注（同一条坑踩过三次）

@@ -39,6 +39,11 @@ def main():
     assert all(x["state"] != "verified" for x in checked["fields"])
     assert not claim_check.check_fields([("路线","走进左手第一个房间。")], config)["hard"]
     assert claim_check.check_fields([("卖点","全职业第一。")], config)["hard"]
+    xp = "按睡袋增益统计，亡灵约1.58万经验"
+    got = claim_check.fact_status_fields([("卡片", "亡灵 "+xp)], asr_text="魔兽无限："+xp, reg=config)
+    assert got["fields"][0]["state"] != "blocked", got
+    assert got["fields"][0]["state"] != "verified", got
+
     print("ALL_OK literal clause coverage, unresolved point isolation, exact command and fact registry scope")
 
 
