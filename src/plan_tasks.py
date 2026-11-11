@@ -324,7 +324,7 @@ def _ids_srcs(videos):
     return [int(v["id"]) for v in videos], [_snapshot(v) for v in videos]
 
 
-def save_sources(db_path, slot_key, channel, form, meta, videos):
+def save_sources(db_path, slot_key, channel, form, meta, videos, *, only_if_missing=False):
     """保存"本篇采用哪几条素材"。**已开工的版本是只读的**（R1）。
 
     规则（一次说清，别在调用点各判一遍）：
@@ -352,6 +352,9 @@ def save_sources(db_path, slot_key, channel, form, meta, videos):
             con.commit()
             return task, "created"
         latest = _row_to_dict(row)
+        if only_if_missing:
+            con.rollback()
+            return latest, "unchanged"
         same = list(latest.get("video_ids") or []) == ids
         started = is_started(latest)
         if same and (started or not (meta.get("title") or meta.get("hook"))):

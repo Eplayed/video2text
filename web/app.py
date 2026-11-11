@@ -2959,6 +2959,10 @@ def api_plan_task_save():
 
 @app.route("/api/plan/task/generate", methods=["POST"])
 def api_plan_task_generate():
+    return _start_plan_task(request.get_json(force=True) or {})
+
+
+def _start_plan_task(data):
     """排产主入口那一下：默认**继续已有稿**，显式重新生成才建新版本。
 
     四条硬规矩（都是这一单要验收的）：
@@ -2968,7 +2972,6 @@ def api_plan_task_generate():
       3 素材缺正文/已被删 → 422 带具体恢复入口，**不起任务**；
       4 regenerate → version+1 新行，前稿原样留着。
     """
-    data = request.get_json(force=True) or {}
     slot = str(data.get("slot_key") or "").strip()[:40]
     channel = str(data.get("channel") or "").strip()[:20]
     form = str(data.get("form") or plan_tasks.DEFAULT_FORM).strip()[:20]
@@ -3719,11 +3722,22 @@ def api_wechat_ref_upload():
 
 @app.route("/api/wechat/generate", methods=["POST"])
 def api_wechat_generate():
+    return _start_wechat_graphics(request.get_json(force=True))
+
+
+_wechat_graphics_start_lock = threading.Lock()
+
+
+def _start_wechat_graphics(data):
+    with _wechat_graphics_start_lock:
+        return _start_wechat_graphics_locked(data)
+
+
+def _start_wechat_graphics_locked(data):
     """从 wechat_material 整合稿生成公众号图片消息卡片包。
     底稿可选：填了走亲测模式（实测口吻），留空走转载模式（把他人已总结内容整理成图文）。"""
     if not _original_graphics_enabled():
         return _original_graphics_disabled()
-    data = request.get_json(force=True)
     summary_id = data.get("summary_id")
     author_draft = str(data.get("author_draft") or "").strip()
     theme = str(data.get("theme") or "").strip()[:30]    # 题材（进 LLM prompt，如「AI工具实测」）
@@ -4358,7 +4372,15 @@ def _humanize_llm_error(full_tb: str) -> str:
     return "任务失败：%s" % " ⏎ ".join(tail)
 
 
+_poster_start_lock = threading.Lock()
+
+
 def _poster_start(stage, fn, summary_id=0, plan_snapshot=None):
+    with _poster_start_lock:
+        return _poster_start_locked(stage, fn, summary_id, plan_snapshot)
+
+
+def _poster_start_locked(stage, fn, summary_id, plan_snapshot):
     """海报任务统一壳。拆解与出图都是几十秒到几分钟的活，必须后台跑 + 前端轮询。"""
     global _poster_task_seq
     if _poster_status["running"]:
@@ -4784,10 +4806,13 @@ def api_source_corrections(video_id):
 
 @app.route("/api/poster/plan", methods=["POST"])
 def api_poster_plan():
+    return _start_poster_plan(request.get_json(force=True) or {})
+
+
+def _start_poster_plan(data):
     """只拆解不出图：产出可编辑的文案计划，先审文案再花钱出图。"""
     if not _original_graphics_enabled():
         return _original_graphics_disabled()
-    data = request.get_json(force=True) or {}
     summary = _poster_get_summary(data.get("summary_id"))
     if not summary:
         return jsonify({"error": "整合稿不存在"}), 404
@@ -4975,10 +5000,13 @@ def api_poster_plan_page():
 
 @app.route("/api/poster/generate", methods=["POST"])
 def api_poster_generate():
+    return _start_poster_graphics(request.get_json(force=True) or {})
+
+
+def _start_poster_graphics(data):
     """出图只用已拆并审过的 plan；空 plan 要回到拆文案，不暗中收费重拆。"""
     if not _original_graphics_enabled():
         return _original_graphics_disabled()
-    data = request.get_json(force=True) or {}
     summary = _poster_get_summary(data.get("summary_id"))
     if not summary:
         return jsonify({"error": "整合稿不存在"}), 404
@@ -8437,6 +8465,231 @@ def api_content_question_delete():
 @app.route("/")
 def index():
     return send_from_directory(str(ROOT / "web" / "templates"), "index.html")
+
+# 首页的一键生成在服务端串起现有任务，离开页面也会继续。
+_today_jobs = {}
+_today_lock = threading.Lock()
+
+
+def _today_package(summary_id, channel):
+    if channel == "wechat":
+        return wechat_graphics.get_package(summary_id)
+    package = ai_poster.get_package(summary_id)
+    if package and (package.get("publish_channel") or "toutiao") == "toutiao":
+        return package
+    return None
+
+
+def _today_board(channel):
+    from src import ops_today
+    board = plan_series.board(DB_PATH, channel=channel)
+    brief = plan_brief.build(str(DB_PATH), datetime.fromisoformat(board["today"]).date())
+    return board, ops_today.recommend(board, brief, _today_package)
+
+
+@app.route("/api/ops/today")
+def api_ops_today():
+    from src import ops_today
+    try:
+        channel = plan_series.norm_channel(request.args.get("channel"))
+        if channel not in plan_tasks.VALID_CHANNELS:
+            raise ValueError("今日选题支持头条号与公众号")
+        board, topics = _today_board(channel)
+        sources = ops_today.source_overview(_task_view(sync_tasks.load(), _alive_subs(), datetime.now()))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    with _today_lock:
+        jobs = [dict(job) for (ch, _), job in _today_jobs.items() if ch == channel]
+    # 正在生成或遇到门禁的题继续留在首页，避免换日后找不到已完成的步骤。
+    by_key = {topic["slot_key"]: topic for topic in topics}
+    for job in jobs:
+        key = job["slot_key"]
+        if key in by_key:
+            topics.remove(by_key[key])
+            topic = by_key[key]
+        elif job["running"]:
+            topic = job["topic"]
+        else:
+            continue
+        topics.insert(0, dict(topic, job={k: v for k, v in job.items() if k != "topic"}))
+    return jsonify({"today": board["today"], "channel": channel, "topics": topics[:3],
+                    "sources": sources, "last_match": board["status"].get("last_ok"),
+                    "generation_enabled": _original_graphics_enabled()})
+
+
+def _today_reply(result):
+    response = app.make_response(result)
+    data = response.get_json() or {}
+    if response.status_code >= 400 and data.get("mode") != "running":
+        raise RuntimeError(data.get("error") or "生成入口没有接受请求")
+    return data
+
+
+def _today_wait(job, read, stage):
+    """轮询现有任务。各入口以自己的任务号或稿件号确认归属。"""
+    import time
+    deadline = time.monotonic() + 45 * 60
+    while time.monotonic() < deadline:
+        result = read()
+        job["progress"] = result.get("progress") or stage
+        if not result.get("running"):
+            if result.get("error"):
+                raise RuntimeError(_short_err(result["error"]))
+            return result
+        time.sleep(1)
+    raise RuntimeError("后台任务仍在运行，请稍后查看进度")
+
+
+def _today_run(job, channel):
+    topic = job["topic"]
+    key = topic["slot_key"]
+    sid = topic["summary_id"]
+    form = topic["form"]
+    try:
+        with app.app_context():
+            guard = plan_series.slot_guard(DB_PATH, key, channel=channel)
+            if guard["error"]:
+                raise RuntimeError(guard["error"])
+            if not sid:
+                task = plan_tasks.find_task(DB_PATH, key, channel, form)
+                if task is None:
+                    material_id = topic["candidate_id"]
+                    selected, problems = _plan_materials([material_id] if material_id else [])
+                    if not selected:
+                        raise RuntimeError(problems[0]["msg"])
+                    task, _ = plan_tasks.save_sources(
+                        DB_PATH, key, channel, form,
+                        {"title": topic["title"], "hook": topic["angle"],
+                         "note": topic["boundary"], "date": job["date"]},
+                        selected, only_if_missing=True)
+                    if task["video_ids"] != [material_id]:
+                        raise RuntimeError("排产表的采用清单刚刚变化，请刷新后重新确认")
+                elif topic["candidate_id"] or task["video_ids"] != [
+                        m["video_id"] for m in topic["materials"]]:
+                    raise RuntimeError("排产表的采用清单刚刚变化，请刷新后重新确认")
+                data = _today_reply(_start_plan_task({
+                    "slot_key": key, "channel": channel, "form": form,
+                    "video_ids": task["video_ids"], "base_task_id": task["id"],
+                    "base_version": task["version"],
+                }))
+                sid = data.get("summary_id")
+                if not sid:
+                    task_id = data.get("task_id") or data["task"]["id"]
+
+                    def read_plan_task():
+                        task_status = plan_tasks.get_task(DB_PATH, task_id)
+                        state = dict(_plan_job(task_id))
+                        if task_status["status"] != "running":
+                            state.update(running=False, summary_id=task_status.get("summary_id"),
+                                         error=task_status.get("error") or state.get("error"))
+                        elif not state["running"] and not state["done"]:
+                            state["error"] = "整合稿任务已中断，请到排产表检查后继续"
+                        return state
+
+                    sid = _today_wait(job, read_plan_task, "正在生成整合稿").get("summary_id")
+                if not sid:
+                    raise RuntimeError("整合稿未生成，请到排产表查看")
+            job["summary_id"] = sid
+            if _today_package(sid, channel):
+                job["progress"] = "已有图文包，打开查看审核结果"
+                return
+            if channel == "wechat":
+                if _wx_task_status.get("running") and _wx_task_status.get("summary_id") != sid:
+                    raise RuntimeError("另一篇公众号图文正在生成，请等它完成")
+                if not _wx_task_status.get("running"):
+                    if _wechat_latest_draft(sid):
+                        raise RuntimeError("已有公众号卡片草稿，请在原审核入口继续，避免重新拆稿")
+                    _today_reply(_start_wechat_graphics({"summary_id": sid}))
+
+                def read_wechat():
+                    state = dict(_wx_task_status)
+                    if state.get("summary_id") != sid:
+                        if _today_package(sid, channel):
+                            return {}
+                        raise RuntimeError("公众号任务进度已切换，请查看保存的草稿")
+                    return state
+
+                _today_wait(job, read_wechat, "正在生成公众号图文")
+            else:
+                def read_poster(task_id):
+                    state = dict(_poster_status)
+                    if state.get("summary_id") != sid or state.get("task_id") != task_id:
+                        raise RuntimeError("海报任务进度已切换，请查看保存的稿件")
+                    return state
+
+                saved = _poster_load_plan(sid)
+                if _poster_status.get("running"):
+                    if _poster_status.get("summary_id") != sid:
+                        raise RuntimeError("另一篇海报正在处理，请等它完成")
+                    poster_id = _poster_status["task_id"]
+                    result = _today_wait(job, lambda: read_poster(poster_id), "正在处理头条图文")
+                    saved = result.get("plan") or saved
+                if not _today_package(sid, channel):
+                    if not saved:
+                        poster_id = _today_reply(_start_poster_plan({
+                            "summary_id": sid, "style_key": "guide_ink", "text_mode": "typeset",
+                            "publish_channel": "toutiao",
+                        }))["task_id"]
+                        saved = _today_wait(job, lambda: read_poster(poster_id), "正在拆解头条文案").get("plan")
+                    plan = (saved or {}).get("plan")
+                    if not plan:
+                        raise RuntimeError("头条文案未生成，请打开图文编辑查看")
+                    if ((saved.get("publish_channel") or "toutiao") != "toutiao"
+                            or not ai_poster.guide_only_plan(plan)):
+                        raise RuntimeError("现有文案需要在图文编辑中确认渠道和版式")
+                    if saved.get("violations"):
+                        raise RuntimeError("文案待修订：" + "；".join(saved["violations"][:3]))
+                    poster_id = _today_reply(_start_poster_graphics({
+                        "summary_id": sid, "plan": plan, "publish": saved.get("publish"),
+                        "text_mode": "typeset", "publish_channel": "toutiao",
+                        "form": saved.get("form") or "newspic",
+                    }))["task_id"]
+                    _today_wait(job, lambda: read_poster(poster_id), "正在排版头条图文")
+            if not _today_package(sid, channel):
+                raise RuntimeError("没有找到图文成品，请查看已保存的草稿")
+            job["progress"] = "图文包已生成，请打开审核"
+    except Exception as exc:
+        app.logger.warning("今日选题生成停止 channel=%s slot=%s: %s", channel, key, exc)
+        job["error"] = _short_err(str(exc)) or "生成停止，请查看稿件"
+    finally:
+        job["running"] = False
+
+
+@app.route("/api/ops/today/generate", methods=["POST"])
+def api_ops_today_generate():
+    data = request.get_json(force=True, silent=True) or {}
+    if not _original_graphics_enabled():
+        return _original_graphics_disabled()
+    if not isinstance(data, dict):
+        return jsonify({"error": "请求格式有误"}), 400
+    try:
+        channel = plan_series.norm_channel(data.get("channel"))
+        if channel not in plan_tasks.VALID_CHANNELS:
+            raise ValueError("今日选题支持头条号与公众号")
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    slot_key = str(data.get("slot_key") or "")
+    with _today_lock:
+        if (_today_jobs.get((channel, slot_key)) or {}).get("running"):
+            return jsonify({"status": "running"}), 202
+    board, topics = _today_board(channel)
+    topic = next((x for x in topics if x["slot_key"] == slot_key), None)
+    if not topic or topic["candidate_id"] != data.get("candidate_id"):
+        return jsonify({"error": "今日选题或推荐素材已变化，请刷新后确认"}), 409
+    with _today_lock:
+        current = _today_jobs.get((channel, slot_key))
+        if current and current["running"]:
+            return jsonify({"status": "running"}), 202
+        if any(ch == channel and job["running"] for (ch, _), job in _today_jobs.items()):
+            return jsonify({"error": "该渠道已有一篇待审稿在生成，请等它完成"}), 409
+        job = {"slot_key": slot_key, "topic": topic, "date": board["today"],
+               "running": True, "summary_id": topic["summary_id"],
+               "progress": "准备待审稿", "error": ""}
+        _today_jobs[(channel, slot_key)] = job
+        threading.Thread(target=_today_run, args=(job, channel), daemon=True).start()
+    return jsonify({"status": "started"}), 202
+
+
 
 if __name__ == "__main__":
     print(f"🎬 video2text Web 面板")

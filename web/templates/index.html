@@ -968,6 +968,7 @@ textarea{resize:vertical;min-height:84px}
 #modal-kf img{aspect-ratio:16/9;object-fit:cover;cursor:zoom-in}
 .copy-link{cursor:pointer;color:var(--module-2);font-size:12px;text-decoration:underline}
 </style>
+  <link rel="stylesheet" href="/static/today-ops.css">
 </head>
 <body>
 <div class="layout">
@@ -1017,6 +1018,27 @@ textarea{resize:vertical;min-height:84px}
         <button class="btn ghost sm" onclick="switchPage('collect')"><span data-icon="camera" class="ic14"></span>开始采集</button>
         <span class="date-chip"><span data-icon="calendar" class="ic14"></span><span id="today-str"></span></span>
       </div>
+
+
+      <div role="region" class="panel today-ops" id="today-ops" aria-labelledby="today-ops-heading">
+        <div class="today-toolbar">
+          <h3 id="today-ops-heading">今日选题</h3>
+          <div>
+            <label>发布渠道<select id="today-channel">
+              <option value="toutiao">头条号</option>
+              <option value="wechat">公众号</option>
+            </select></label>
+            <button type="button" class="btn ghost sm" data-today-refresh>刷新</button>
+          </div>
+        </div>
+        <div id="today-context" class="today-context" role="status"></div>
+        <div id="today-topics" class="today-topics"><p>正在加载选题…</p></div>
+        <details class="today-sources">
+          <summary>素材源最近回执</summary>
+          <div id="today-sources"></div>
+        </details>
+      </div>
+
 
       <div class="oneline" id="dash-oneline">加载中…</div>
 
@@ -2476,6 +2498,7 @@ const TODO_ICON = {draft:'book', need_summary:'list', pkg_review:'image', asr_fa
                    autosync:'calendar', autosync_off:'calendar', stale_output:'chart', no_output:'chart'};
 
 async function loadDashboard() {
+  if (window.loadTodayOps) window.loadTodayOps();
   let data = {}, td = {};
   try {
     const rs = await Promise.all([apiGet('/api/dashboard'), apiGet('/api/todo')]);
@@ -11385,5 +11408,6 @@ function bkRender() {
     + bkLedger() + bkHook();
 }
 </script>
+  <script src="/static/today-ops.js"></script>
 </body>
 </html>

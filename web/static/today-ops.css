@@ -1,0 +1,20 @@
+.today-ops { margin: 12px 0 18px; }
+.today-toolbar, .today-card header, .today-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.today-toolbar { justify-content: space-between; margin-bottom: 8px; }
+.today-toolbar h3, .today-card h3 { margin: 0; }
+.today-toolbar > div, .today-toolbar label { display: flex; align-items: center; gap: 8px; }
+.today-toolbar select { width: auto; min-width: 100px; padding: 6px 8px; }
+.today-context, .today-reason, .today-source { color: var(--text-secondary); font-size: 13px; }
+.today-context { margin-bottom: 12px; }
+.today-topics { display: grid; gap: 10px; }
+.today-card { border: 1px solid var(--border); border-radius: 10px; padding: 13px 15px; background: var(--surface-nested); }
+.today-card h3 { font-size: 15px; line-height: 1.45; }
+.today-card p { margin: 6px 0; }
+.today-tag { font-size: 12px; color: var(--text-secondary); }
+.today-materials { padding-left: 17px; margin: 8px 0 12px; }
+.today-link { padding: 0; border: 0; background: transparent; color: var(--text-secondary); font: inherit; text-align: left; cursor: pointer; text-decoration: underline; }
+.today-sources { border-top: 1px solid var(--border); margin-top: 13px; padding-top: 10px; }
+.today-sources summary { cursor: pointer; }
+.today-source { margin: 5px 0 0 12px; }
+.today-source p { margin: 5px 0; }
+.today-error { color: var(--danger); overflow-wrap: anywhere; }
