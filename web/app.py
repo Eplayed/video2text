@@ -5012,8 +5012,9 @@ def _start_poster_plan(data):
                                   # 每页一份、自包含的"拿去豆包手动出图"提示词（0 元那条路）
                                   "manual_prompts": ai_poster.manual_prompts_for(plan, ratio, text_mode)}
         _poster_save_plan(summary["id"], _poster_status["plan"])
-        _poster_status["progress"] = ("✅ 文案已拆解（合计 %d 字 · 模型 %s）"
-                                      % (ai_poster.plan_chars(plan), cfg.get("model") or "?")
+        label = "文案待核" if bad or warning else "文案已拆解并通过原意核对"
+        _poster_status["progress"] = ("%s（合计 %d 字 · 模型 %s）"
+                                      % (label, ai_poster.plan_chars(plan), cfg.get("model") or "?")
                                       + ("；版面提示：" + "、".join(notes) if notes else "")
                                       + ("，⚠️ " + "；".join(bad) if bad else "")
                                       + ("；事实状态：" + (fact_line or "这一版没有机制断言可核")))

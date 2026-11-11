@@ -200,6 +200,19 @@ def _hits(needles: Dict[str, Any], text: str) -> List[Tuple[str, int]]:
     return out
 
 
+_GENERIC_CONDITIONS = {"攻击", "法术"}
+_ROUTE_ORDINAL = re.compile(r"第一(?=(?:个|间|扇)?(?:房间|路口|箱子|门)|处站位|步)")
+
+
+def _condition_hits(idx, text):
+    named_entries = {id(entry) for name, _ in _hits(idx["skill"], text) for entry in idx["skill"][name]}
+    for name, pos in _hits(idx["cond"], text):
+        if name not in _GENERIC_CONDITIONS or any(
+                id(entry) in named_entries or (_norm(entry.get("race")) and _norm(entry.get("race")) in text)
+                for entry in idx["cond"][name]):
+            yield name, pos
+
+
 _CLAUSE_BREAK = re.compile(r"[。！？；，、\s]")
 
 
@@ -270,8 +283,7 @@ def check_fields(fields: List[Tuple[str, str]], reg: Optional[Dict[str, Any]] = 
             in_races = [r for r in races if r and r in s]
             skill_hits = _hits(idx["skill"], s)
             attr_hits = [(a, s.find(a)) for a in _ATTRS if a in s]
-            cond_hits = [(c, s.find(c)) for c in sorted(idx["cond"], key=len, reverse=True)
-                         if c in s]
+            cond_hits = list(_condition_hits(idx, s))
             nums = _numbers_pos(s)
             # 只认**肯定式**点到的技能与属性（「未获得原野疾驰」不当断言，也不当错配）
             pos_skills = [k for k, i in skill_hits if not _neg_near(s, i)]
@@ -322,7 +334,8 @@ def check_fields(fields: List[Tuple[str, str]], reg: Optional[Dict[str, Any]] = 
             # 评价性结论**先于**锚点门查：这类句子（「全职业都在亏」「实为削弱」）常常
             # 独立成句、没有种族名也没有数——「兽人1%暴击换宠物5%伤害？算完账发现全职业都在亏」
             # 按句末切开后，后半句什么都不剩，老位置（trigger 门之后）永远轮不到它
-            hype = _HYPE.search(s)
+            hype = next((match for match in _HYPE.finditer(s)
+                         if not (match.group() == "第一" and _ROUTE_ORDINAL.match(s, match.start()))), None)
             if hype and not _neg_near(s, hype.start(), 6, 6):
                 hard.append("%s「%s」写了「%s」：这是替读者下的结论，登记表与官方原句里都没有这种说法，"
                             "改成客观列变动（谁、什么技能、从多少到多少）"
@@ -534,7 +547,7 @@ def fact_status_fields(fields: List[Tuple[str, str]], asr_text: str = "",
     def _anchors(s: str) -> List[str]:
         """这句里的可核锚点（技能别名/条件词/种族名/属性词/数值）：一个都没有＝非机制句。"""
         out = [k for k, _i in _hits(idx["skill"], s)]
-        out += [c for c, _i in _hits(idx["cond"], s)]
+        out += [c for c, _i in _condition_hits(idx, s)]
         if races:
             out += [r for r, _i in _hits({r: 1 for r in races}, s)]
         out += [a for a in _ATTRS if a in s]
@@ -550,7 +563,7 @@ def fact_status_fields(fields: List[Tuple[str, str]], asr_text: str = "",
             for e in idx["skill"][k]:
                 if e not in got:
                     got.append(e)
-        for c, i in _hits(idx["cond"], s):
+        for c, i in _condition_hits(idx, s):
             if _neg_near(s, i):
                 continue
             for e in idx["cond"][c]:
