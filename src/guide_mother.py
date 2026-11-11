@@ -316,6 +316,21 @@ def _field_texts(plan, publish):
     return fields
 
 
+def _exact_field_sources(fields, points):
+    """逐字一致才直接回指母稿。改写仍需校对返回映射。"""
+    def normalize(text):
+        return re.sub(r"\s+", "", str(text or "")).strip("。！？；.!?;")
+
+    by_text = {}
+    for point_id, point in points.items():
+        for value in (point.get("display_text"), point.get("quote")):
+            key = normalize(value)
+            if key:
+                by_text.setdefault(key, []).append(point_id)
+    return {field: {"point_ids": list(dict.fromkeys(by_text[normalize(text)])), "navigation": False}
+            for field, text in fields.items() if normalize(text) in by_text}
+
+
 def _model_compare(mother, output, ai_config, source_text="", mappings=None, fields=None):
     prompt = """你是独立校对员。逐句比较【源文引文】与【待发布文案】，专查主体数量、谁做了什么、条件、先后、概率、否定词。
 源文引文逐字来自原始转写；不得引用或相信待发布文案自己声称的出处。不要补游戏常识。
@@ -384,15 +399,17 @@ def audit_output(mother, plan, publish, ai_config, checker=None, source_text="")
     revision = audit_revision(mother, plan, publish, source_text)
     semantic = {"status": "unknown", "issues": [], "input_revision": revision}
     try:
+        exact = _exact_field_sources(fields, points)
+        unmapped = {field: value for field, value in fields.items() if field not in exact}
         result = (checker(mother, output, ai_config, source_text) if checker
-                  else _model_compare(mother, output, ai_config, source_text, mappings, fields))
+                  else _model_compare(mother, output, ai_config, source_text, mappings, unmapped))
         issues = result.get("issues") if isinstance(result, dict) else None
         if not isinstance(issues, list):
             raise MotherError("忠实性校对未返回 issues 数组")
         field_sources = result.get("field_sources") if isinstance(result, dict) else None
         if checker is None or field_sources is not None:
-            if not isinstance(field_sources, dict):
-                raise MotherError("校对未返回标题与配文来源映射")
+            field_sources = dict(field_sources) if isinstance(field_sources, dict) else {}
+            field_sources.update(exact)
             for field, value in fields.items():
                 entry = field_sources.get(field)
                 if not isinstance(entry, dict):

@@ -5057,6 +5057,11 @@ def _start_poster_graphics(data):
     except (TypeError, ValueError):
         clicks = 0
 
+    from src import poster_companion
+    also_wechat = data.get("also_wechat") is True and publish_channel != "wechat"
+    if also_wechat and (text_mode != "typeset" or not ai_poster.guide_only_plan(plan)):
+        return jsonify({"error": "同步公众号需要攻略页与程序排字，以便两套图复用同一份正文"}), 400
+
     def fn():
         def cb(msg):
             _poster_status["progress"] = msg
@@ -5085,21 +5090,32 @@ def _start_poster_graphics(data):
         asr_text = _material_text(summary)   # 专名核对与提示词名单都吃这一份，别两处各查一遍
         # 出图前仍重判已选帧；不合格时留下缺图记录，不换一张不相关的画面冒充证据。
         frame_items = _guide_frames_for(summary, _fast_config(), may_judge=False)
+        import copy
         import shutil
         stage = ai_poster.OUTPUT_DIR / ("_pending-%d-%s" % (summary["id"], uuid.uuid4().hex))
+        options = dict(theme=theme, title=title, progress_cb=cb, force=force,
+                       text_mode=text_mode, photo=photo, bases=bases or None,
+                       fact_evidence=fact_evidence, fact_checked_by=fact_checked_by,
+                       fact_ctx=_fact_ctx(summary), provenance=prov, asr_text=asr_text,
+                       frame_items=frame_items)
+        asset = OUTPUT_DIR / "promo" / "mini-dungeons.png"
         try:
-            manifest = ai_poster.generate_poster(summary, _fast_config(), theme=theme, title=title,
-                                                 ratio=ratio, progress_cb=cb, plan=plan,
-                                                 publish=publish, force=force, copies=copies,
-                                                 do_review=do_review, text_mode=text_mode,
-                                                 photo=photo, preview_clicks=clicks,
-                                                 bases=bases or None,
-                                                 publish_channel=publish_channel, form=pk_form,
-                                                 fact_evidence=fact_evidence,
-                                                 fact_checked_by=fact_checked_by,
-                                                 fact_ctx=_fact_ctx(summary),
-                                                 provenance=prov, asr_text=asr_text,
-                                                 frame_items=frame_items, output_dir=stage)
+            manifest = ai_poster.generate_poster(
+                summary, _fast_config(), ratio=ratio, plan=copy.deepcopy(plan), publish=publish,
+                copies=copies, do_review=do_review, preview_clicks=clicks,
+                publish_channel=publish_channel, form=pk_form, output_dir=stage, **options)
+            if also_wechat:
+                cb("用同一份攻略正文排版公众号 3:4 图文…")
+                try:
+                    manifest["wechat_companion"] = poster_companion.render_wechat(
+                        stage, summary, _fast_config(), plan, publish or {},
+                        ai_poster.generate_poster, asset, **options)
+                except ai_poster.PosterError as exc:
+                    exc.args = ("公众号 3:4 排版未完成：%s" % exc,)
+                    raise
+                _atomic_json(stage / "manifest.json", manifest)
+            elif publish_channel == "wechat" and ai_poster.guide_only_plan(plan):
+                poster_companion.add_mini_promo(stage, manifest, asset)
             previous = _poster_load_plan(summary["id"]) or {}
             plan_run_id = (previous.get("model_usage") or {}).get("run_id") or ""
             _attach_model_run(stage / "manifest.json", model_usage.current().run_id,
@@ -5134,6 +5150,7 @@ def _start_poster_graphics(data):
                                      "photos_unjudged": manifest.get("photos_unjudged") or []}
         _poster_status["plan"] = {"plan": manifest["plan"], "publish": manifest["publish"],
                                   "violations": errs, "chars": manifest["text_chars"],
+                                  "fidelity": fidelity,
                                   "prompt_text": manifest["prompt_text"],
                                   "publish_channel": manifest.get("publish_channel") or "toutiao",
                                   "form": manifest.get("form") or ""}

@@ -1686,6 +1686,7 @@ textarea{resize:vertical;min-height:84px}
           <label>配图<span class="pk-photo" id="pk-photo"><button type="button" class="btn ghost sm" onclick="pkPhotoPick()" title="有真实截图（坐骑、装备、界面）就传上来当主视觉：这条不出 AI 底图、0 元">＋ 用你的图</button></span></label>
           <label class="pk-grow">题材<input id="pk-theme" placeholder="选填，例：魔兽怀旧服 塔卡"></label>
           <label class="pk-check"><input type="checkbox" id="pk-review" checked>出图后打分</label>
+          <label class="pk-check" title="攻略页复用当前正文，另出 3:4 公众号配图与正文"><input type="checkbox" id="pk-also-wechat">一并生成公众号图文攻略</label>
         </div>
         <div class="pk-actions">
           <button class="btn ghost sm" onclick="posterPlan()">① 拆文案</button>
@@ -3811,6 +3812,7 @@ function openPosterDialog(id) {
   _pkGuideNote = '';                       // 上一条素材那句「整组已切成攻略页」不作数
   pkFramesProbe(id);
   provLoad(id);        // 编辑证据链按整理稿倒查，开弹窗就取
+  document.getElementById('pk-also-wechat').checked = false;
   _pkPages = []; _pkCur = 0; // 分页同样属于这条素材，不清会把上一条的页带过来
   _pkPagesWanted = 0; _pkPagesNote = '';   // 「拆几页」点过的数也按素材归零
   (function () { const s = document.getElementById('pk-pages'); if (s) s.value = '0'; })();
@@ -4323,6 +4325,13 @@ function pkStyle(key) {
 let _pkLimitsByMode = null;
 let _pkLastPlan = null, _pkLastPublish = null;
 let _pkFidelity = null;
+function pkFidelityFieldLabel(ref) {
+  const page = /^page_(\d+)\.(title|subtitle)$/.exec(ref);
+  if (page) return '第 ' + page[1] + ' 页' + (page[2] === 'title' ? '标题' : '副标题');
+  const title = /^publish\.tt_titles_(\d+)$/.exec(ref);
+  if (title) return '头条发布标题 ' + (['A 位', 'B 位'][Number(title[1]) - 1] || title[1]);
+  return ref;
+}
 function pkFidelityHtml(f) {
   if (!f) return '<div id="pk-fidelity" class="pk-verify mild">原意核对待运行；出图前会按当前编辑稿重新检查。</div>';
   const coverage = f.coverage || {}, semantic = f.semantic || {};
@@ -4335,7 +4344,7 @@ function pkFidelityHtml(f) {
             + '。请对照来源文本改稿，当前不能出图。')
     + (issues.length ? '<ul>' + issues.slice(0, 8).map(x => '<li>'
       + esc((x.point_id ? ((((_pkSource || {}).mother || {}).points || []).find(p => p.point_id === x.point_id) || {}).display_text || x.point_id : '')
-        + (x.point_id ? '：' : '') + (x.field ? x.field + '：' : '') + (x.text || '') + (x.problem || '待核'))
+        + (x.point_id ? '：' : '') + (x.field ? pkFidelityFieldLabel(x.field) + '：' : '') + (x.text ? '「' + x.text + '」：' : '') + (x.problem || '待核'))
       + ((x.point_id || x.field) && /^[\w.]+$/.test(x.point_id || x.field)
         ? ' <button type="button" class="btn ghost sm" onclick="pkFocusFidelityIssue(\''
           + (x.point_id || x.field) + '\')">定位</button>' : '')
@@ -4437,6 +4446,8 @@ function pkSyncChannelChrome() {
   if (fw) fw.style.display = _pkChannel === 'wechat' ? '' : 'none';
   const fe = document.getElementById('pk-form');
   if (fe) fe.value = _pkChannel === 'wechat' ? _pkForm : 'newspic';
+  const companion = document.getElementById('pk-also-wechat');
+  companion.closest('label').style.display = _pkChannel === 'wechat' ? 'none' : '';
 }
 function pkSetChannel(ch) {
   if (['toutiao', 'xhs', 'wechat'].indexOf(ch) < 0) ch = 'toutiao';
@@ -5998,14 +6009,20 @@ async function posterGenerate(force) {
   const artHint = (!pkGuideChrome() && !nBase && !_pkPhoto && _pkFrames && (_pkFrames.usable || 0))
       ? '\n\n注意：这一版是 AI 画底图，不会用到那 ' + _pkFrames.usable
         + ' 张素材画面。要用它们就取消，改点「整组改成攻略页」（那一档 0 元）。' : '';
+  const alsoWechat = document.getElementById('pk-also-wechat').checked && _pkChannel !== 'wechat';
+  if (alsoWechat && (pkTextMode() !== 'typeset' || !pkGuideChrome())) {
+    setStatus('error', '同步公众号需要先将整组切为攻略页，并使用程序排字。');
+    return;
+  }
+  const companionTip = alsoWechat ? '\n同一份正文也会排成公众号 3:4 图文，发布仍由你操作。' : '';
   const auditCost = '\n费用说明：上述金额只算底图。若文案或原文版本变化，生成前可能调用语义复审模型；实际请求次数见任务记录，费用以平台账单为准。';
-  if (!confirm(tip + artHint + auditCost)) return;
+  if (!confirm(tip + artHint + companionTip + auditCost)) return;
   const body = {summary_id: _pkId, ratio: document.getElementById('pk-ratio').value,
                 theme: document.getElementById('pk-theme').value.trim(),
                 publish_channel: _pkChannel, form: _pkForm,
                 plan: plan, publish: pkReadPublish(),
                 force: !!force, copies: copies, review: review, text_mode: pkTextMode(),
-                preview_clicks: _pkPreviewClicks};
+                also_wechat: alsoWechat, preview_clicks: _pkPreviewClicks};
   if (_pkPhoto) body.photo = _pkPhoto.ref;
   if (nBase) body.bases = baseRefs;              // 豆包回传的无字底图，按页对齐
   if (force && ev.length) {                      // 逐条凭据跟着放行一起交，缺的记录由后端判
@@ -6171,6 +6188,22 @@ function pkReviewHtml(rv) {
   return `<div class="pk-verify ${rv.ok ? 'pass' : 'mild'}">${head}</div>`
     + `<div class="pk-rv">${chips}</div>`;
 }
+function pkCompanionHtml(m) {
+  const companion = m.wechat_companion;
+  const promo = companion ? companion.promo : m.mini_promo;
+  if (!promo) return '';
+  const imageUrl = companion ? promo.image_url : (promo.image ? '/media/poster/' + Number(m.id) + '/' + promo.image : '');
+  const links = companion
+    ? '<p><a href="' + esc(companion.article_url) + '" target="_blank" rel="noopener">查看公众号正文</a>'
+      + '　<a href="' + esc(companion.manifest_url) + '" target="_blank" rel="noopener">查看检查记录</a>'
+      + companion.pages.map((p, i) => '　<a href="' + esc(p.url) + '" target="_blank" rel="noopener">第 ' + (i + 1) + ' 张图</a>').join('')
+      + '</p>' : '';
+  return '<div class="pk-verify mild"><b>' + (companion ? ('公众号图文攻略 · 3:4 · ' + (companion.publishable ? '待人工审核' : '机器检查未通过')) : '公众号文末小程序素材')
+    + '</b>' + links + '<p>' + esc(promo.copy) + '</p><p>' + esc(promo.card_hint) + ' <code>' + esc(promo.page_path || '') + '</code></p>'
+    + '<button type="button" class="btn ghost sm" data-copy="' + esc(promo.copy) + '" onclick="pkCopyAny(this,this.dataset.copy)">复制文末文案</button>　'
+    + (imageUrl ? '<a href="' + esc(imageUrl) + '" target="_blank" rel="noopener">打开跑本助手界面图</a>' : '界面图尚未配置') + '</div>';
+}
+
 async function renderPosterResult(id) {
   const m = await fetch('/api/poster/' + id).then(r => r.json());
   _pkLast = m;
@@ -6279,6 +6312,7 @@ async function renderPosterResult(id) {
       : '');
   document.getElementById('pk-result').innerHTML =
     imgHtml
+    + pkCompanionHtml(m)
     + modelUsageHtml(m.plan_model_usage, '拆文案步骤')
     + modelUsageHtml(m.model_usage, '出图步骤')
     + provBlockHtml(m.provenance)
@@ -6867,6 +6901,7 @@ async function openPosterDetail(id) {
     + provBlockHtml(m.provenance)
     + actBlockHtml(m.action_gate)
     + '<div id="pk-detail-state"></div>'
+    + pkCompanionHtml(m)
     + (warns.length ? '<div class="pk-verify mild">' + warns.map(esc).join('<br>') + '</div>' : '')
     + '<div style="margin:8px 0 0;display:flex;gap:8px;flex-wrap:wrap">'
     + '<button class="btn ghost sm" onclick="openSummary(' + (m.summary_id || m.id) + ')">看整理稿原文</button>'
