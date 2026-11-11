@@ -1,7 +1,20 @@
 """首页运营入口。选题沿用排产匹配，稿件和出图沿用各渠道产线。"""
 import datetime as dt
+import re
 
-from . import frame_pool, plan_brief, plan_series
+from . import frame_pool, plan_brief, plan_series, supplements
+
+
+_CONTEXT_TERMS = re.compile(
+    "魔兽世界|魔兽|无限服|测试服|国服|正式服|攻略|实测|猎人|术士|法师|牧师|"
+    "战士|盗贼|圣骑士|萨满|德鲁伊"
+)
+
+
+def topic_overlap(main_title, supplement_title):
+    """游戏、服务器或职业相同，还要有具体机制、事件或操作的交集。"""
+    return any(len(_CONTEXT_TERMS.sub("", part)) >= 3
+               for part in supplements.strong_fragments(main_title, supplement_title))
 
 
 def recommend(board, package_for):

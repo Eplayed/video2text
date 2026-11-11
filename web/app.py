@@ -8702,11 +8702,14 @@ def api_ops_today_status():
 
 
 def _today_supplement_pool(topic, channel):
+    from src import ops_today
+
     mains = content_store.get_videos_by_ids(DB_PATH, [m["video_id"] for m in topic["materials"]])
     mains = [row for row in mains if supplements.is_video(row.get("source_sheet") or "")]
     task = plan_tasks.find_task(DB_PATH, topic["slot_key"], channel, topic["form"]) or {}
     adopted = task.get("supplement_ids") or []
-    candidates = [row for row in supplements.candidates(DB_PATH, mains)["list"] if row["body_len"]]
+    candidates = [row for row in supplements.candidates(DB_PATH, mains)["list"]
+                  if row["body_len"] and ops_today.topic_overlap(row["main_title"], row["title"])]
     return mains, candidates, adopted, task.get("supplement_sources") or []
 
 

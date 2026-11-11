@@ -125,6 +125,7 @@
         for (const item of data.candidates) {
           const row = document.createElement('li');
           const label = document.createElement('label');
+          label.className = 'today-supplement-option';
           const check = document.createElement('input');
           check.type = 'checkbox';
           check.checked = selected.has(item.id);
@@ -138,8 +139,8 @@
             else selected.delete(item.id);
             title.textContent = '补充资料 · 已选 ' + selected.size + ' 条';
           });
-          label.append(check, ' ' + item.title + ' · ' + item.tier
-            + (item.date ? ' · ' + item.date.slice(0, 10) : ''));
+          label.append(check, text('span', item.title + ' · ' + item.tier
+            + (item.date ? ' · ' + item.date.slice(0, 10) : '')));
           row.append(label);
           if (item.why) row.append(text('div', item.why, 'today-reason'));
           rows.append(row);
@@ -184,7 +185,8 @@
         materials.className = 'today-materials';
         for (const material of topic.materials) {
           const item = document.createElement('li');
-          const name = [material.title || '素材 ' + material.video_id, material.author, material.date]
+          const heading = material.title === topic.title ? '主视频' : (material.title || '素材 ' + material.video_id);
+          const name = [heading, material.author, material.date]
             .filter(Boolean).join(' · ');
           if (material.sheet && material.row) {
             const link = button(name, () => gotoMaterial(material.sheet, Number(material.row)));

@@ -22,3 +22,5 @@
 .today-checks ul { margin: 6px 0; padding-left: 20px; }
 .today-checks li { margin: 4px 0; overflow-wrap: anywhere; }
 .today-error { color: var(--danger); overflow-wrap: anywhere; }
+.today-supplement-option{display:flex;align-items:baseline;gap:7px;cursor:pointer}
+.today-supplement-option input[type="checkbox"]{flex:none;width:auto;margin:0}
