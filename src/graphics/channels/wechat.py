@@ -689,8 +689,9 @@ def generate_graphics(summary, ai_config, author_draft="", progress_cb=None,
         else:
             fidelity = guide_mother.audit_output(mother, check_plan, publish_text, ai_config,
                                                   source_text=source_text)
+        semantic = fidelity["semantic"]
         if (not fidelity["ready"] and prepared_data is None and evidence_sources
-                and ai_config.get("editorial") and fidelity["semantic"]["status"] != "unknown"):
+                and ai_config.get("editorial") and (semantic.get("deferred") or semantic["status"] != "unknown")):
             from ...editorial_model import ground_wechat_cards
 
             _pg("按已定位原句重排卡片与配文，重新核对...")

@@ -161,7 +161,7 @@ def _save_mother(db_path, summary_id, mother):
         conn.close()
 
 
-def _client_json(ai_config, prompt):
+def _client_json(ai_config, prompt, *, max_tokens=None):
     if not (ai_config or {}).get("api_key"):
         raise MotherError("未配置 AI，原意母稿未生成；采集素材不受影响")
     import openai
@@ -170,14 +170,23 @@ def _client_json(ai_config, prompt):
     client = openai.OpenAI(api_key=ai_config["api_key"],
                            base_url=ai_config.get("api_base") or "https://api.openai.com/v1",
                            timeout=300, max_retries=0 if ai_config.get("editorial") else 1)
+    options = chat_options(ai_config, 0)
+    if max_tokens is not None:
+        options["max_tokens"] = max_tokens
     resp = client.chat.completions.create(
         model=ai_config.get("model") or "qwen-plus",
         messages=[{"role": "user", "content": prompt}],
-        response_format={"type": "json_object"}, **chat_options(ai_config, 0))
+        response_format={"type": "json_object"}, **options)
+    choice = resp.choices[0]
+    if getattr(choice, "finish_reason", None) == "length":
+        raise MotherError("模型输出达到长度上限，JSON 被截断")
     try:
-        return json.loads(resp.choices[0].message.content or "{}")
+        result = json.loads(choice.message.content or "")
     except (TypeError, ValueError):
-        raise MotherError("模型没有返回可解析的母稿 JSON")
+        raise MotherError("模型没有返回可解析的 JSON")
+    if not isinstance(result, dict):
+        raise MotherError("模型返回的 JSON 不是对象")
+    return result
 
 
 def _extract_segment(segment, source_title, ai_config, feedback=""):
@@ -366,7 +375,70 @@ def _exact_field_sources(fields, points):
             for field, text in fields.items() if normalize(text) in by_text}
 
 
+def _editorial_compare(mother, source_text, mappings, fields, ai_config):
+    """Bound the response size by checking small groups of labeled fields."""
+    points = mother["points"]
+    point_index = {point["point_id"]: index for index, point in enumerate(points, 1)}
+    quotes = {str(index): point["quote"] for index, point in enumerate(points, 1)}
+    units = []
+    for card in mappings or []:
+        value = "\n".join(filter(None, (card["title"], card["text"])))
+        if value:
+            units.append((None, value, [point_index[pid] for pid in card["point_ids"]
+                                         if pid in point_index]))
+    for key, field in (fields or {}).items():
+        units.append((key, field["text"], [point_index[pid] for pid in field.get("point_ids") or []
+                                           if pid in point_index]))
+    result = {"issues": [], "field_sources": {}}
+    if not units:
+        return result
+
+    instructions = """你是独立事实校对员。逐条核对 JSON items 的原句，依据只有 source 和 quotes。
+卡片提供的数字编号是已绑定引文，任何断言都要有依据，挂着无关引文视为失败。
+保留主体、条件、顺序、数值、否定和观点强度；主题标题只需与来源题材一致，栏目名不当作事实。
+对明确说明转写疑点或数值待核的文字，核对它是否准确指出有歧义的源句。
+对于标题和配文，填写真正支持该句的 refs（quotes 的数字编号）。没有断言的纯导航可填 nav=true。
+逐一输出每个编号，禁止复述输入。只输出 JSON 对象，格式：
+{"checks":{"0":{"ok":true,"refs":[1]},"1":{"ok":true,"nav":true},"2":{"ok":false,"why":"具体差异","refs":[]}}}。
+why 只写失败原因，至多 60 字；ok 必须是布尔值。"""
+    for offset in range(0, len(units), 14):
+        batch = units[offset:offset + 14]
+        items = {str(i): {"text": value, "kind": key or "卡片", "refs": refs}
+                 for i, (key, value, refs) in enumerate(batch)}
+        prompt = instructions + "\n" + json.dumps(
+            {"source": source_text, "quotes": quotes, "items": items}, ensure_ascii=False)
+        for attempt in range(2):
+            try:
+                checks = _client_json(ai_config, prompt, max_tokens=4096).get("checks")
+                if not isinstance(checks, dict) or set(checks) != set(items):
+                    raise MotherError("校对 JSON 未完整覆盖本组字段")
+                for value in checks.values():
+                    if not isinstance(value, dict) or type(value.get("ok")) is not bool:
+                        raise MotherError("校对 JSON 缺布尔结论")
+                    refs = value.get("refs", [])
+                    if not isinstance(refs, list) or any(type(i) is not int or str(i) not in quotes for i in refs):
+                        raise MotherError("校对 JSON 引用了无效编号")
+                    if not value["ok"] and not str(value.get("why") or "").strip():
+                        raise MotherError("校对 JSON 缺少失败原因")
+                break
+            except MotherError as exc:
+                if attempt:
+                    raise
+                prompt += "\n上一轮格式错误：%s。逐项返回全部编号，禁止输出解释。" % exc
+        for i, (key, text, _refs) in enumerate(batch):
+            check = checks[str(i)]
+            refs = [points[index - 1]["point_id"] for index in check.get("refs", [])]
+            if key is not None:
+                result["field_sources"][key] = {"point_ids": refs, "navigation": check.get("nav") is True}
+            if not check["ok"]:
+                result["issues"].append({"text": text, "problem": check["why"],
+                                         "field": key or "card", "source_quote": ""})
+    return result
+
+
 def _model_compare(mother, output, ai_config, source_text="", mappings=None, fields=None):
+    if ai_config.get("editorial"):
+        return _editorial_compare(mother, source_text, mappings, fields, ai_config)
     prompt = """你是独立校对员。逐句比较【源文引文】与【待发布文案】，专查主体数量、谁做了什么、条件、先后、概率、否定词。
 源文引文逐字来自原始转写或明确标注的官方补充；不得相信待发布文案自己声称的出处。不要补游戏常识。
 引用官方补充时须保留其适用版本与条件。主视频与官方补充冲突时不得把两种说法合并为一个确定结论。\n纯主题名词标题只标识母稿中的对象，无事实断言时只映射主题点；含数字、动作、升降、范围或结论时逐项核对完整条件。
@@ -428,12 +500,18 @@ def audit_output(mother, plan, publish, ai_config, checker=None, source_text="")
                              "point_ids": card.get("point_ids") or []})
     missing = sorted(must - used)
     unknown = sorted(used - set(points))
-    coverage_issues = ([{"point_id": pid, "problem": "必保点未映射到图上卡片"} for pid in missing]
+    coverage_issues = ([{"point_id": pid, "quote": points[pid]["quote"],
+                         "problem": "必保点未映射到图上卡片"} for pid in missing]
                        + [{"point_id": pid, "problem": "引用了不存在的母稿点"} for pid in unknown])
     output = _output_text(plan, publish)
     fields = _field_texts(plan, publish)
     revision = audit_revision(mother, plan, publish, source_text)
     semantic = {"status": "unknown", "issues": [], "input_revision": revision}
+    if ai_config.get("editorial") and coverage_issues and checker is None:
+        # Start with the proof that does not require a model call.
+        return {"coverage": {"status": "fail", "issues": coverage_issues, "input_revision": revision},
+                "semantic": dict(semantic, deferred=True), "source_revision": mother["source_revision"],
+                "mother_revision": mother["mother_revision"], "ready": False}
     try:
         exact = _exact_field_sources(fields, points)
         fields_for_model = {
@@ -489,7 +567,8 @@ def audit_revision(mother, plan, publish, source_text=""):
 def audit_problems(check):
     problems = []
     for item in (check.get("coverage") or {}).get("issues") or []:
-        problems.append("原意覆盖：%s（%s）" % (item.get("field") or item.get("point_id") or "?", item.get("problem") or ""))
+        label = item.get("field") or item.get("quote") or item.get("point_id") or "?"
+        problems.append("原意覆盖：%s（%s）" % (label, item.get("problem") or ""))
     for item in (check.get("semantic") or {}).get("issues") or []:
         problems.append("原意忠实性：%s%s" % (item.get("text") or "",
                                          item.get("problem") or "未判"))

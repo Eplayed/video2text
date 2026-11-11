@@ -4334,7 +4334,10 @@ def _poster_fidelity(sid, mother, plan, publish, cfg, source_text):
             and check.get("mother_revision") == mother.get("mother_revision")):
         return check, True
     check = guide_mother.audit_output(mother, plan, publish, cfg, source_text=source_text)
-    saved.update({"plan": plan, "publish": publish, "fidelity": check})
+    violations = [item for item in saved.get("violations") or []
+                  if not item.startswith(("原意覆盖：", "原意忠实性："))]
+    saved.update({"plan": plan, "publish": publish, "fidelity": check,
+                  "violations": violations + guide_mother.audit_problems(check)})
     _poster_save_plan(sid, saved)
     return check, False
 
@@ -4923,13 +4926,19 @@ def _start_poster_plan(data):
             return plan, publish, list(bad) + guide_mother.audit_problems(fidelity), notes, fidelity
 
         plan, publish, bad, notes, fidelity = draft()
-        if cfg.get("editorial") and bad and (fidelity.get("semantic") or {}).get("status") != "unknown":
+        semantic = fidelity.get("semantic") or {}
+        if cfg.get("editorial") and bad and (semantic.get("deferred") or semantic.get("status") != "unknown"):
             _poster_save_plan(summary["id"], {"plan": plan, "publish": publish, "violations": bad,
                                                "fidelity": fidelity, "publish_channel": publish_channel,
                                                "form": pk_form, "model": cfg["model"]})
             _poster_status["progress"] = "按原意和版面检查结果修订一次..."
             try:
-                corrected = draft(bad[:18])
+                missing = ["补到图上卡片：point_id=%s，原句「%s」" % (item["point_id"], item["quote"])
+                           for item in fidelity["coverage"]["issues"] if item.get("quote")]
+                feedback = (["已满的页不要硬塞，可增页至 %d 或合并同一母稿点的重复卡。"
+                             "转写不清的名称或数值标为待核，不自行推断。" % ai_poster.PAGE_MAX]
+                            + missing + bad[:18]) if missing else bad[:18]
+                corrected = draft(feedback)
                 if not corrected[2] and corrected[4].get("ready"):
                     plan, publish, bad, notes, fidelity = corrected
             except Exception:
