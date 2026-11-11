@@ -787,6 +787,11 @@ textarea{resize:vertical;min-height:84px}
 .pk-sub{font-size:12.5px;font-weight:800;color:var(--text-secondary);margin:16px 0 6px;letter-spacing:.5px}
 .pk-ta{flex:1;min-width:0;min-height:76px;font-size:12.5px;line-height:1.7}
 .pk-pub{white-space:pre-wrap;word-break:break-word;font-family:inherit;font-size:12.5px;line-height:1.75;background:var(--surface-nested);border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin:0;max-height:240px;overflow:auto}
+.pk-publish-tabs{display:flex;gap:4px;flex-wrap:wrap;border-bottom:1px solid var(--border);margin:10px 0 12px}
+.pk-publish-tabs button{padding:8px 12px;border:0;border-bottom:2px solid transparent;background:transparent;color:var(--text-secondary);font:inherit;cursor:pointer}
+.pk-publish-tabs button[aria-selected="true"]{color:var(--text-primary);border-bottom-color:var(--module-5);font-weight:700}
+.pk-publish-tabs button:focus-visible{outline:2px solid var(--module-5);outline-offset:-2px}
+#pk-detail-publish-tabs .pk-pub{max-height:420px}
 .pk-ck{margin:0;padding-left:20px;font-size:12px;line-height:1.85;color:var(--text-secondary)}
 /* 一条设置栏 + 一条带序号的动作栏：把"该点什么"变成看得见的顺序 */
 .pk-bar{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;margin:14px 0 2px}
@@ -1530,8 +1535,8 @@ textarea{resize:vertical;min-height:84px}
                 <button class="btn sm" id="pk-detail-copy">📋 复制发布文案</button>
                 <button class="btn ghost sm" id="pk-detail-prompt">复制出图提示词</button>
               </div>
-              <div id="pk-detail-meta"></div>
-              <pre class="pk-pub" id="pk-detail-pub" style="max-height:420px"></pre>
+              <div id="pk-detail-publish-tabs"></div>
+              <div id="pk-detail-meta" style="margin-top:12px"></div>
               <div style="font-size:13px;font-weight:800;margin:16px 0 8px">✅ 发布前逐条人工过</div>
               <ul class="pk-ck" id="pk-detail-ck"></ul>
             </div>
@@ -6231,7 +6236,6 @@ async function renderPosterResult(id) {
     txt = `✗ 图面文字与文案不一致，缺失：${(v.missing || []).join('、') || '（未知）'}——别发布，改文案或重出`;
   }
   const warns = (m.lint || []).filter(s => !s.startsWith('error') && !s.startsWith('info:'));
-  const pub = pkPublishText(m);
   const ck = (m.checklist || []).map(s => `<li>${esc(s)}</li>`).join('');
   let imgHtml;
   const pgRows = (m.pages || []).filter(p => p && p.url);
@@ -6312,7 +6316,6 @@ async function renderPosterResult(id) {
       : '');
   document.getElementById('pk-result').innerHTML =
     imgHtml
-    + pkCompanionHtml(m)
     + modelUsageHtml(m.plan_model_usage, '拆文案步骤')
     + modelUsageHtml(m.model_usage, '出图步骤')
     + provBlockHtml(m.provenance)
@@ -6325,11 +6328,11 @@ async function renderPosterResult(id) {
                : pkReviewHtml(m.review))
     + (restWarns.length ? `<div class="pk-verify mild">${restWarns.map(esc).join('<br>')}</div>` : '')
     + `<div class="pk-sub">发布文案（${m.text_chars} 字上图 · 风格 ${esc(m.style_label || m.style_key || '未指定')}）</div>`
-    + `<pre class="pk-pub">${esc(pub)}</pre>`
+    + '<div id="pk-result-publish-tabs"></div>'
     + `<div class="pk-sub">发布前逐条人工过</div><ul class="pk-ck">${ck}</ul>`
     + '<div id="pk-pub-bar"></div>'
     + '<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">'
-    + '<button class="btn sm" style="background:var(--module-5);border-color:var(--module-5);color:#fff" onclick="copyPosterPublish()">复制发布文案</button>'
+    + '<button class="btn sm" style="background:var(--module-5);border-color:var(--module-5);color:#fff" id="pk-result-copy">复制发布文案</button>'
     + '<button class="btn ghost sm" onclick="copyPosterPrompt()">复制出图提示词</button>'
     + '<button class="btn ghost sm" onclick="window.open(\'' + m.url + '\',\'_blank\')">看原图</button>'
     + '<button class="btn ghost sm" onclick="posterReveal(' + m.id + ')" title="在访达里定位这张图">📁 打开文件夹</button>'
@@ -6337,7 +6340,9 @@ async function renderPosterResult(id) {
     + '<button class="btn ghost sm" onclick="gotoPosterPage(' + m.id + ')" title="成品页能回看、换图、复制文案，不必重出">→ 海报成品页</button></div>';
   _pkPubSeed = ((m.publish || {}).tt_titles || [])[0]
     || ((m.publish || {}).xhs_titles || [])[0] || (m.plan || {}).title || '';
-  pkPubBar('pk-pub-bar', m.id, _pkChannel);   // 发出去了就在这里改状态，不用再跑排产表
+  pkMountPublishTabs(document.getElementById('pk-result-publish-tabs'),
+    document.getElementById('pk-result-copy'), m);
+  pkPubBar(m.id, null, m.publish_channel || 'toutiao', 'pk-pub-bar');
 }
 
 // ── 事实与放行（2026-10-29 小红书反例后加的）──────────────────────────────
@@ -6732,9 +6737,140 @@ function pkPublishText(m) {
   lines.push('', '【来源说明】' + (m.public_source_note || m.source_note || '（未填）'));
   return lines.join('\n');
 }
-function copyPosterPublish() {
-  if (_pkLast) copyText(pkPublishText(_pkLast));
+const POSTER_PUBLISH_CHANNELS = [
+  ['toutiao', '头条号', '复制头条文案'],
+  ['xhs', '小红书', '复制小红书文案'],
+  ['wechat', '公众号', '复制公众号正文'],
+];
+
+function pkChannelCopy(m, channel) {
+  const primary = m.publish_channel || 'toutiao';
+  const pub = m.publish || {};
+  if (channel === 'xhs') {
+    const body = pub.xhs_copy || (primary === 'xhs' && !m.publish ? m.copy_text : '');
+    if (!body) return '';
+    const tags = (pub.xhs_tags || []).join(' ');
+    const lines = [...(pub.xhs_titles || [])];
+    if (lines.length) lines.push('');
+    lines.push(body);
+    if (tags) lines.push('', tags);
+    if (m.public_source_note) lines.push('', m.public_source_note);
+    return lines.join('\n');
+  }
+  if (channel === 'wechat') {
+    return primary === 'wechat' && (m.form || 'newspic') !== 'article' && m.copy_text
+      ? pkPublishText(m) : '';
+  }
+  const body = primary === 'toutiao' ? (m.copy_text || pub.copy_text) : pub.copy_text;
+  return body ? pkPublishText({...m, publish_channel: 'toutiao', copy_text: body}) : '';
 }
+
+function pkArticleCopy(markdown) {
+  return markdown.split('\n')
+    .filter(line => !/^\s*!\[/.test(line))
+    .map(line => line.replace(/^#{1,6}\s+/, '')
+      .replace(/\*\*([^*]+)\*\*/g, '$1')
+      .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1（$2）'))
+    .join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+function pkMountPublishTabs(host, copyButton, manifest) {
+  const primary = manifest.publish_channel || 'toutiao';
+  const tabs = document.createElement('div');
+  tabs.className = 'pk-publish-tabs';
+  tabs.setAttribute('role', 'tablist');
+  tabs.setAttribute('aria-label', '发布渠道');
+  const panels = new Map();
+  let active;
+  host.replaceChildren(tabs);
+
+  for (const [key, label, copyLabel] of POSTER_PUBLISH_CHANNELS) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.id = host.id + '-tab-' + key;
+    button.textContent = label;
+    button.setAttribute('role', 'tab');
+    const panel = document.createElement('div');
+    panel.id = host.id + '-panel-' + key;
+    panel.setAttribute('role', 'tabpanel');
+    panel.setAttribute('aria-labelledby', button.id);
+    button.setAttribute('aria-controls', panel.id);
+    const content = document.createElement('pre');
+    content.className = 'pk-pub';
+    panel.append(content);
+    if (key === 'wechat') panel.insertAdjacentHTML('beforeend', pkCompanionHtml(manifest));
+    host.append(panel);
+    tabs.append(button);
+    panels.set(key, {button, panel, content, copyLabel, text: pkChannelCopy(manifest, key)});
+    button.addEventListener('click', () => select(key));
+  }
+
+  function copyActive() {
+    const text = panels.get(active).text;
+    if (text) copyText(text);
+  }
+  copyButton.onclick = copyActive;
+
+  function syncCopy() {
+    if (copyButton.onclick !== copyActive) return;
+    const selected = panels.get(active);
+    copyButton.disabled = !selected.text;
+    copyButton.textContent = selected.copyLabel;
+  }
+
+  async function loadWechat(state) {
+    state.loading = true;
+    state.content.textContent = '正在读取公众号正文…';
+    try {
+      const response = await fetch(manifest.wechat_companion.article_url, {cache: 'no-store'});
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      state.text = pkArticleCopy(await response.text());
+      if (!state.text) throw new Error('正文为空');
+      state.content.textContent = state.text;
+    } catch (error) {
+      state.content.textContent = '公众号正文读取失败。可在下方打开正文，或重新切换到本页签再试。';
+    } finally {
+      state.loading = false;
+      syncCopy();
+    }
+  }
+
+  function select(key) {
+    active = key;
+    for (const [channel, state] of panels) {
+      const selected = channel === key;
+      state.button.setAttribute('aria-selected', String(selected));
+      state.button.tabIndex = selected ? 0 : -1;
+      state.panel.hidden = !selected;
+    }
+    const state = panels.get(key);
+    if (state.text) {
+      state.content.textContent = state.text;
+    } else if (key === 'wechat' && manifest.wechat_companion) {
+      if (!state.loading) loadWechat(state);
+    } else if (key === 'wechat' && primary === 'wechat' && manifest.form === 'article') {
+      state.content.textContent = '这份成品是公众号文章配图。正文可从「看整理稿原文」打开。';
+    } else {
+      const missing = {toutiao: '这篇还没有头条号文案。', xhs: '这篇还没有小红书专用文案。',
+        wechat: '这篇还没有公众号成品。出图时可以勾选「一并生成公众号图文攻略」。'};
+      state.content.textContent = missing[key];
+    }
+    syncCopy();
+  }
+
+  tabs.addEventListener('keydown', event => {
+    const keys = [...panels.keys()];
+    const index = keys.indexOf(active);
+    const next = {ArrowRight: (index + 1) % keys.length,
+      ArrowLeft: (index + keys.length - 1) % keys.length, Home: 0, End: keys.length - 1}[event.key];
+    if (next === undefined) return;
+    event.preventDefault();
+    select(keys[next]);
+    panels.get(keys[next]).button.focus();
+  });
+  select(panels.has(primary) ? primary : 'toutiao');
+}
+
 function copyPosterPrompt() {
   if (_pkLast) copyText(_pkLast.prompt_text || '');
 }
@@ -6743,8 +6879,10 @@ function copyPosterPrompt() {
 // 成品一直躺在 output/poster/<整理稿id>/ 里，但以前只有生成那一刻能在弹窗里看见，
 // 关掉就找不回来了（想复用一张文案、或发布当天再取一次文案都得重新出图花钱）。
 let _pkDetail = null;
+let _pkDetailRequest = 0;
 
 function showPosterList() {
+  _pkDetailRequest++;
   document.getElementById('pk-list-view').style.display = '';
   document.getElementById('pk-detail-view').style.display = 'none';
   loadPosterList();
@@ -6813,12 +6951,18 @@ async function loadPosterList() {
 }
 
 async function openPosterDetail(id) {
+  const requestId = ++_pkDetailRequest;
+  const copy = document.getElementById('pk-detail-copy');
+  copy.disabled = true;
+  copy.onclick = null;
+  document.getElementById('pk-detail-publish-tabs').replaceChildren();
   document.getElementById('pk-list-view').style.display = 'none';
   document.getElementById('pk-detail-view').style.display = '';
   document.getElementById('pk-img-stack').innerHTML = '<div style="padding:20px;color:var(--text-tertiary);font-size:13px">加载中...</div>';
   let m;
   try { m = await fetch('/api/poster/' + id).then(r => r.json()); }
   catch (e) { m = {error: e.message}; }
+  if (requestId !== _pkDetailRequest) return;
   if (!m || m.error) {
     setStatus('error', (m && m.error) || '海报读取失败');
     document.getElementById('pk-img-stack').innerHTML = '<div class="pk-verify fail">✗ ' + esc((m && m.error) || '读取失败') + '</div>';
@@ -6833,7 +6977,8 @@ async function openPosterDetail(id) {
                                           lay: p.layout_label || ''}))
     : ((m.copies > 1 && (m.candidates || []).length > 1) ? m.candidates
        : [{url: m.url, index: m.chosen || 1, verify: m.verify, review: m.review}]);
-  document.getElementById('pk-detail-img-label').textContent = (multi
+  const imageChannel = POSTER_PUBLISH_CHANNELS.find(([key]) => key === (m.publish_channel || 'toutiao'));
+  document.getElementById('pk-detail-img-label').textContent = (imageChannel ? imageChannel[1] + ' · ' : '') + (multi
     ? ('成品一组 · ' + imgs.length + ' 页（发布时按这个顺序一次带走）')
     : ('成品图 · ' + imgs.length + ' 张（点图放大）'))
     + (m.validation_label ? ' · ' + m.validation_label : '');
@@ -6901,7 +7046,6 @@ async function openPosterDetail(id) {
     + provBlockHtml(m.provenance)
     + actBlockHtml(m.action_gate)
     + '<div id="pk-detail-state"></div>'
-    + pkCompanionHtml(m)
     + (warns.length ? '<div class="pk-verify mild">' + warns.map(esc).join('<br>') + '</div>' : '')
     + '<div style="margin:8px 0 0;display:flex;gap:8px;flex-wrap:wrap">'
     + '<button class="btn ghost sm" onclick="openSummary(' + (m.summary_id || m.id) + ')">看整理稿原文</button>'
@@ -6909,11 +7053,10 @@ async function openPosterDetail(id) {
   _pkPubSeed = ((m.publish || {}).tt_titles || [])[0]
     || ((m.publish || {}).xhs_titles || [])[0] || (m.plan || {}).title || '';
   pkPubBar(m.summary_id || m.id, null, m.publish_channel || 'toutiao', 'pk-detail-state');
-  document.getElementById('pk-detail-pub').textContent = pkPublishText(m);
+  pkMountPublishTabs(document.getElementById('pk-detail-publish-tabs'), copy, m);
   document.getElementById('pk-detail-ck').innerHTML = (m.checklist || []).map(s => '<li>' + esc(s) + '</li>').join('');
   document.getElementById('pk-detail-edit').onclick = function () { openPosterDialog(m.summary_id || m.id); };
   document.getElementById('pk-detail-reveal').onclick = function () { posterReveal(m.id); };
-  document.getElementById('pk-detail-copy').onclick = function () { copyText(pkPublishText(m)); };
   document.getElementById('pk-detail-prompt').onclick = function () { copyText(m.prompt_text || ''); };
   window.scrollTo(0, 0);
 }
