@@ -3070,6 +3070,7 @@ def _start_plan_task(data):
         try:
             selected, run_problems = _plan_materials(run_ids)
         except Exception as e:
+            plan_tasks.finish(DB_PATH, latest["id"], "failed", error=_short_err(e), token=token)
             return jsonify({"error": str(e), "retry": True}), 502
         problems = [p for p in (run_problems or []) if p not in (problems or [])] + problems
         if not selected:
@@ -3102,8 +3103,12 @@ def _start_plan_task(data):
 
     def run():
         # T1：worker 用事务定下来的那几条素材 id，不再经 sheet:row 绕回另一条记录
-        ids = _run_generation(None, summary_type, len(run_ids) > 1, job, brief,
-                              video_ids=run_ids)
+        try:
+            ids = _run_generation(None, summary_type, len(run_ids) > 1, job, brief,
+                                  video_ids=run_ids)
+        except Exception:
+            job.update(error=traceback.format_exc(), done=True)
+            ids = []
         try:
             if ids:
                 plan_tasks.finish(DB_PATH, task_id, "done", summary_id=ids[0],
@@ -8500,9 +8505,13 @@ def _today_package(summary_id, channel):
 
 def _today_board(channel):
     from src import ops_today
-    board = plan_series.board(DB_PATH, channel=channel)
-    brief = plan_brief.build(str(DB_PATH), datetime.fromisoformat(board["today"]).date())
-    return board, ops_today.recommend(board, brief, _today_package)
+    plan_tasks.ensure_table(DB_PATH)
+    board = plan_series.board(DB_PATH, channel=channel, compact=True)
+    return board, ops_today.recommend(board, _today_package)
+
+
+def _today_public_job(job):
+    return {key: value for key, value in job.items() if key != "topic"}
 
 
 def _today_edit_notice(summary_id, channel, saved=None):
@@ -8520,8 +8529,13 @@ def _today_edit_notice(summary_id, channel, saved=None):
     if ((saved.get("publish_channel") or "toutiao") != "toutiao"
             or not ai_poster.guide_only_plan(saved["plan"])):
         return {"message": "请打开草稿确认发布渠道和版式。", "issues": []}
+    from src import guide_mother
+    fidelity = saved.get("fidelity") or {}
+    violations = list(saved.get("violations") or [])
+    if any((fidelity.get(key) or {}).get("status") == "fail" for key in ("coverage", "semantic")):
+        violations.extend(guide_mother.audit_problems(fidelity))
     issues = []
-    for violation in saved.get("violations") or []:
+    for violation in dict.fromkeys(violations):
         match = re.search(r"publish\.(tt_titles|xhs_titles)_(\d+)", violation)
         if match:
             kind, index = match.groups()
@@ -8557,33 +8571,66 @@ def api_ops_today():
             topic["edit_notice"] = _today_edit_notice(topic["summary_id"], channel)
     blocked = max((topic for topic in topics if topic.get("edit_notice")),
                   key=lambda topic: topic["summary_id"], default=None)
-    if blocked:
-        topics.remove(blocked)
-        topics.insert(0, blocked)
     with _today_lock:
-        jobs = [dict(job) for (ch, _), job in _today_jobs.items() if ch == channel]
-    # 正在生成或遇到门禁的题继续留在首页，避免换日后找不到已完成的步骤。
+        for key, job in list(_today_jobs.items()):
+            if not job["running"] and job["date"] < board["today"]:
+                del _today_jobs[key]
+        jobs = {key: dict(job) for (ch, key), job in _today_jobs.items() if ch == channel}
     by_key = {topic["slot_key"]: topic for topic in topics}
-    for job in jobs:
-        key = job["slot_key"]
-        if key in by_key:
-            topics.remove(by_key[key])
-            topic = by_key[key]
-        elif job["running"]:
-            topic = job["topic"]
-        else:
-            continue
-        topics.insert(0, dict(topic, job={k: v for k, v in job.items() if k != "topic"}))
+    retryable = [(topic["task_error_at"], topic) for topic in topics
+                 if topic["task_error_at"][:10] == board["today"]]
+    active = None
+    for key, job in jobs.items():
+        topic = by_key.get(key)
+        if job["running"]:
+            if topic is not None:
+                topics.remove(topic)
+            active = dict(topic or job["topic"], job=_today_public_job(job))
+        elif (topic is not None and not topic["has_package"] and job["error"]
+              and topic["materials"] == job["topic"]["materials"]
+              and (not job["summary_id"] or topic["summary_id"] == job["summary_id"])):
+            topic["job"] = _today_public_job(job)
+            retryable.append((job["finished_at"], topic))
+    # 只保留最近一条失败入口，历史稿仍按日常推荐顺序展示。
+    retry = max(((at, topic) for at, topic in retryable if topic in topics),
+                key=lambda entry: entry[0], default=None)
+    for topic in (retry[1] if retry else None, blocked if blocked in topics else None, active):
+        if topic is not None:
+            if topic in topics:
+                topics.remove(topic)
+            topics.insert(0, topic)
+    status = board["status"]
+    last_result = next((run for run in status["runs"] if run["status"] in ("ok", "failed")), None)
+    match_error = None
+    if last_result and last_result["status"] == "failed":
+        match_error = _short_err(last_result.get("note") or "请在选题管理中查看")
     return jsonify({"today": board["today"], "channel": channel, "topics": topics[:3],
-                    "sources": sources, "last_match": board["status"].get("last_ok"),
-                    "generation_enabled": _original_graphics_enabled()})
+                    "sources": sources, "last_match": status.get("last_ok"),
+                    "match_error": match_error, "generation_enabled": _original_graphics_enabled()})
+
+
+@app.route("/api/ops/today/status")
+def api_ops_today_status():
+    try:
+        channel = plan_series.norm_channel(request.args.get("channel"))
+        if channel not in plan_tasks.VALID_CHANNELS:
+            raise ValueError("今日选题支持头条号与公众号")
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    slot = request.args.get("slot_key") or ""
+    if not plan_series.SLOT_RE.fullmatch(slot):
+        return jsonify({"error": "选题编号有误"}), 400
+    with _today_lock:
+        job = _today_jobs.get((channel, slot))
+        return jsonify({"job": _today_public_job(job) if job else None})
 
 
 def _today_reply(result):
     response = app.make_response(result)
     data = response.get_json() or {}
     if response.status_code >= 400 and data.get("mode") != "running":
-        raise RuntimeError(data.get("error") or "生成入口没有接受请求")
+        problem = next((item["msg"] for item in data.get("problems") or [] if item.get("msg")), "")
+        raise RuntimeError(problem or data.get("error") or "生成入口没有接受请求")
     return data
 
 
@@ -8612,13 +8659,16 @@ def _today_run(job, channel):
             guard = plan_series.slot_guard(DB_PATH, key, channel=channel)
             if guard["error"]:
                 raise RuntimeError(guard["error"])
+            worker = _wx_task_status if channel == "wechat" else _poster_status
+            if not topic["has_package"] and worker.get("running") and worker.get("summary_id") != sid:
+                raise RuntimeError("该渠道已有一篇图文在处理，请等它完成")
             if not sid:
                 task = plan_tasks.find_task(DB_PATH, key, channel, form)
                 if task is None:
                     material_id = topic["candidate_id"]
                     selected, problems = _plan_materials([material_id] if material_id else [])
                     if not selected:
-                        raise RuntimeError(problems[0]["msg"])
+                        raise RuntimeError(problems[0]["msg"] if problems else "选题素材已不可用，请刷新后重新选择")
                     task, _ = plan_tasks.save_sources(
                         DB_PATH, key, channel, form,
                         {"title": topic["title"], "hook": topic["angle"],
@@ -8713,6 +8763,7 @@ def _today_run(job, channel):
         app.logger.warning("今日选题生成停止 channel=%s slot=%s: %s", channel, key, exc)
         job["error"] = _short_err(str(exc)) or "生成停止，请查看稿件"
     finally:
+        job["finished_at"] = plan_series.cn_now().isoformat(sep=" ", timespec="seconds")
         job["running"] = False
 
 
@@ -8733,6 +8784,8 @@ def api_ops_today_generate():
     with _today_lock:
         if (_today_jobs.get((channel, slot_key)) or {}).get("running"):
             return jsonify({"status": "running"}), 202
+        if any(ch == channel and job["running"] for (ch, _), job in _today_jobs.items()):
+            return jsonify({"error": "该渠道已有一篇待审稿在生成，请等它完成"}), 409
     board, topics = _today_board(channel)
     topic = next((x for x in topics if x["slot_key"] == slot_key), None)
     if not topic or topic["candidate_id"] != data.get("candidate_id"):
@@ -8749,7 +8802,7 @@ def api_ops_today_generate():
             return jsonify({"error": "该渠道已有一篇待审稿在生成，请等它完成"}), 409
         job = {"slot_key": slot_key, "topic": topic, "date": board["today"],
                "running": True, "summary_id": topic["summary_id"],
-               "progress": "准备待审稿", "error": ""}
+               "progress": "准备待审稿", "error": "", "finished_at": ""}
         _today_jobs[(channel, slot_key)] = job
         threading.Thread(target=_today_run, args=(job, channel), daemon=True).start()
     return jsonify({"status": "started"}), 202

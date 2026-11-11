@@ -1,24 +1,26 @@
 """首页运营入口。选题沿用排产匹配，稿件和出图沿用各渠道产线。"""
 import datetime as dt
 
-from . import plan_series
+from . import frame_pool, plan_brief, plan_series
 
 
-def recommend(board, brief, package_for):
+def recommend(board, package_for):
     """只推荐已有明确素材或在制稿件的可采用题位。"""
     today = board["today"]
     channel = board["channel"]
     day = dt.date.fromisoformat(today).toordinal()
-    cutoff = day - brief["fresh_days"]
+    cutoff = day - plan_brief.FRESH_DAYS
+    legacy_dates = {item["id"]: item["date"] for item in plan_brief.load_data()["items"]}
+    frames_available = {}
     items = []
     for slot in board["slots"]:
         if slot["published"] or slot["pending_review"] or not slot["adoptable"]:
             continue
         key = slot["slot_key"]
-        legacy = brief["slots"].get(key) or {}
+        scheduled_date = legacy_dates.get(key)
         task = slot["task"] or {}
         form = task.get("form") or slot["form"]
-        if form not in ("guide", "mix") or (legacy and not legacy["due"]):
+        if form not in ("guide", "mix") or (scheduled_date and scheduled_date > today):
             continue
         sid = task.get("summary_id")
         package = package_for(sid, channel) if sid else None
@@ -33,15 +35,21 @@ def recommend(board, brief, package_for):
                 continue
             fresh = []
             for row in slot["candidates"]:
-                if (not cutoff <= plan_series._day_ordinal(row["date"]) <= day
-                        or not (row.get("frames") or {}).get("total")):
+                material_day = plan_series._day_ordinal(row["date"])
+                if not cutoff <= material_day <= day:
                     continue
                 hits = plan_series._match_terms(slot["keywords"], row["title"], "", "")
-                if hits:
-                    # 优先具体的标题命中，避免转写顺带一提就被当作成稿的主要依据。
-                    score = (sum(len(word.replace(" ", "")) for word in hits),
-                             plan_series._day_ordinal(row["date"]), int(row.get("nk") or 0))
-                    fresh.append((score, row, hits))
+                aid = str(row.get("aweme_id") or "").strip()
+                if not hits or not aid:
+                    continue
+                if aid not in frames_available:
+                    frames_available[aid] = bool((frame_pool.load(aid) or {}).get("frames"))
+                if not frames_available[aid]:
+                    continue
+                # 优先具体的标题命中，避免转写顺带一提就被当作成稿的主要依据。
+                score = (sum(len(word.replace(" ", "")) for word in hits),
+                         material_day, int(row.get("nk") or 0))
+                fresh.append((score, row, hits))
             if not fresh:
                 continue
             _, row, hits = max(fresh, key=lambda match: match[0])
@@ -51,17 +59,23 @@ def recommend(board, brief, package_for):
         stage = "待审图文" if package else slot["stage_label"]
         if sid and not package:
             stage = "已有整合稿"
+        task_error = ""
+        if not sid and task.get("status") in ("failed", "aborted"):
+            task_error = task.get("error") or "上次整合稿生成未完成"
+            stage = "整合稿中断" if task["status"] == "aborted" else "整合稿失败"
         item = {
             "slot_key": key, "title": task.get("title") or slot["title"],
             "form": form, "angle": slot.get("angle") or "",
             "boundary": slot.get("boundary") or "", "reason": reason,
             "stage": stage, "summary_id": sid, "has_package": bool(package),
+            "task_error": task_error,
+            "task_error_at": (task.get("updated_at") or "") if task_error else "",
             "materials": [{k: r.get(k) for k in ("video_id", "title", "author", "date",
                                                  "sheet", "row")} for r in rows],
             "candidate_id": rows[0]["video_id"] if priority == 0 else None,
         }
         date = max((plan_series._day_ordinal(r["date"]) for r in rows), default=0)
-        items.append(((priority, bool(priority == 0 and not legacy),
+        items.append(((priority, bool(priority == 0 and not scheduled_date),
                        -date, key), item))
     ordered = []
     seen = set()

@@ -13,14 +13,23 @@
   }
 
   async function json(url, options) {
-    const response = await fetch(url, Object.assign({cache: 'no-store'}, options));
-    const data = await response.json();
-    if (!response.ok || data.error) {
-      const error = new Error(data.error || '请求失败（' + response.status + '）');
-      error.editRequired = Boolean(data.edit_required);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), API_MS);
+    try {
+      const response = await fetch(url, Object.assign({cache: 'no-store', signal: controller.signal}, options));
+      const data = response.ok ? await response.json() : await response.json().catch(() => ({}));
+      if (!response.ok || data.error) {
+        const error = new Error(data.error || '请求失败（' + response.status + '）');
+        error.editRequired = Boolean(data.edit_required);
+        throw error;
+      }
+      return data;
+    } catch (error) {
+      if (controller.signal.aborted) throw new Error('服务响应超时，请刷新查看');
       throw error;
+    } finally {
+      clearTimeout(timeout);
     }
-    return data;
   }
 
   function button(label, callback, primary = false) {
@@ -91,16 +100,17 @@
   function render(data) {
     list.replaceChildren();
     if (!data.topics.length) {
-      list.append(text('p', '当前没有具备近期素材的选题或在制稿件。'),
-        button('查看排产表', () => switchPage('schedule')));
+      list.append(text('p', '当前没有具备近期素材的选题或在制稿件。'));
       return;
     }
     const busy = data.topics.some(topic => topic.job && topic.job.running);
     for (const topic of data.topics) {
       const job = topic.job || {};
       const notice = job.running ? null : topic.edit_notice;
+      const failure = job.error || topic.task_error;
       const card = document.createElement('article');
       card.className = 'today-card';
+      card.dataset.slot = topic.slot_key;
       const head = document.createElement('header');
       const stage = job.running ? '生成中' : notice ? '草稿待修改' : topic.stage;
       head.append(text('h3', topic.title), text('span', stage, notice ? 'today-tag today-error' : 'today-tag'));
@@ -131,7 +141,7 @@
       } else if (notice) {
         actions.append(button('修改草稿', () => openTopic(topic, data.channel), true));
       } else {
-        const generate = button(job.running ? '生成中…' : job.error ? '重试生成' : '生成待审稿',
+        const generate = button(job.running ? '生成中…' : failure ? '重试生成' : '生成待审稿',
           () => start(topic, data.channel, generate), true);
         generate.disabled = busy || !data.generation_enabled;
         actions.append(generate);
@@ -151,10 +161,36 @@
           details.append(checks);
           card.append(details);
         }
-      } else if (job.running || job.error) {
-        card.append(text('p', job.error || job.progress, job.error ? 'today-error' : 'today-reason'));
+      } else if (job.running || failure) {
+        const progress = text('p', job.running ? job.progress : failure,
+          job.running ? 'today-reason' : 'today-error');
+        if (job.running) {
+          progress.dataset.todayProgress = '';
+          progress.setAttribute('role', 'status');
+        }
+        card.append(progress);
       }
       list.append(card);
+    }
+  }
+
+  async function poll(id, channel, slot) {
+    if (id !== requestId || currentView !== 'dashboard') return;
+    const progress = list.querySelector('[data-slot="' + slot + '"] [data-today-progress]');
+    try {
+      const data = await json('/api/ops/today/status?channel=' + encodeURIComponent(channel)
+        + '&slot_key=' + encodeURIComponent(slot));
+      if (id !== requestId || currentView !== 'dashboard') return;
+      if (!data.job || !data.job.running) {
+        await load();
+        return;
+      }
+      if (progress && progress.textContent !== data.job.progress) progress.textContent = data.job.progress;
+      refreshTimer = setTimeout(() => poll(id, channel, slot), 3000);
+    } catch (error) {
+      if (id !== requestId || currentView !== 'dashboard') return;
+      if (progress) progress.textContent = '暂时读不到生成进度，正在重连。';
+      refreshTimer = setTimeout(() => poll(id, channel, slot), 5000);
     }
   }
 
@@ -164,20 +200,22 @@
     if (currentView !== 'dashboard') return;
     try {
       const data = await json('/api/ops/today?channel=' + encodeURIComponent(picker.value));
-      if (id !== requestId) return;
+      if (id !== requestId || currentView !== 'dashboard') return;
       snapshot = data;
-      context.textContent = data.today + (data.last_match ? ' · 最近匹配 ' + String(data.last_match.finished_at || '').slice(5, 16) : ' · 暂无成功匹配')
+      context.textContent = data.today + (data.last_match ? ' · 最近成功匹配 ' + String(data.last_match.finished_at || '').slice(5, 16) : ' · 暂无成功匹配')
+        + (data.match_error ? ' · 最新匹配失败：' + data.match_error : '')
         + (data.generation_enabled ? '' : ' · 图文生成已暂停');
       render(data);
       renderSources(data.sources);
-      if (data.topics.some(topic => topic.job && topic.job.running)) {
-        refreshTimer = setTimeout(load, 3000);
-      }
+      const active = data.topics.find(topic => topic.job && topic.job.running);
+      if (active) refreshTimer = setTimeout(() => poll(id, data.channel, active.slot_key), 3000);
     } catch (error) {
-      if (id !== requestId) return;
+      if (id !== requestId || currentView !== 'dashboard') return;
       context.textContent = '今日选题刷新失败。' + errorMessage(error);
       if (snapshot && snapshot.channel === picker.value) {
-        refreshTimer = setTimeout(load, 5000);
+        if (snapshot.topics.some(topic => topic.job && topic.job.running)) {
+          refreshTimer = setTimeout(load, 5000);
+        }
       } else {
         list.replaceChildren(button('重试', load));
       }
@@ -195,6 +233,7 @@
       });
       await load();
     } catch (error) {
+      if (channel !== picker.value || currentView !== 'dashboard') return;
       if (error.editRequired) {
         await load();
         return;

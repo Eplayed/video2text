@@ -1072,11 +1072,13 @@ def poster_state(summary_id, base=None) -> Dict[str, Any]:
 
 
 # ── 看板：每个位置现在走到哪一档 ───────────────────────────────────────────
-def board(db_path, today=None, base=None, channel: str = DEFAULT_CHANNEL) -> Dict[str, Any]:
+def board(db_path, today=None, base=None, channel: str = DEFAULT_CHANNEL,
+          *, compact: bool = False) -> Dict[str, Any]:
     """两个系列 + 独立篇 + 旧题的整块看板。判据全在这里，页面只上色。
 
     `channel` 决定"发过没有"读哪一路台账：这块看板默认是**头条线**，
     公众号那边登记的同一张位置不算它已发（第 2 条反例）。
+    今日选题用 compact，保留同一套候选和任务判据，跳过排产页面的展示统计。
     """
     ensure(db_path)
     ch = norm_channel(channel)
@@ -1136,8 +1138,9 @@ def board(db_path, today=None, base=None, channel: str = DEFAULT_CHANNEL) -> Dic
             for i in range(0, len(want_ids), 400):     # 分块：一次几千个 IN 参数会顶到 SQLite 上限
                 chunk = want_ids[i:i + 400]
                 for r in con.execute(
-                        "SELECT id, title, author, published_at, source_sheet, source_row"
-                        " FROM videos WHERE id IN (%s)" % ",".join("?" * len(chunk)),
+                        "SELECT id, title, author, published_at, source_sheet, source_row%s"
+                        " FROM videos WHERE id IN (%s)" % (
+                            ", aweme_id" if compact else "", ",".join("?" * len(chunk))),
                         chunk).fetchall():
                     vinfo[int(r["id"])] = dict(r)
     finally:
@@ -1160,6 +1163,8 @@ def board(db_path, today=None, base=None, channel: str = DEFAULT_CHANNEL) -> Dic
             c["date"] = (info.get("published_at") or "")[:10]
             c["sheet"] = info.get("source_sheet") or ""
             c["row"] = str(info.get("source_row") or "")
+            if compact:
+                c["aweme_id"] = info.get("aweme_id") or ""
             cand.append(c)
         live_pub = [p for p in (pub_rows.get(key) or [])
                     if (key, p["ref_id"]) not in revoked]
@@ -1197,7 +1202,12 @@ def board(db_path, today=None, base=None, channel: str = DEFAULT_CHANNEL) -> Dic
                   "review_note": (flag or {}).get("note") or "",
                   # 关联稿自己的身份不动，这里只列出"挂在我这个位置下的稿件"（第 4 条反例）
                   "parent_slot": s.get("parent_slot") or "", "linked_slots": []})
+        if compact and task:
+            s["task"]["updated_at"] = task.get("updated_at")
         out.append(s)
+    if compact:
+        return {"today": today.isoformat(), "channel": ch, "slots": out,
+                "status": status_line(db_path, today=now0)}
     # 关联关系在算完状态之后再挂：子稿的档位/发布情况要用上面那份结果，不能拿原始行糊上去
     by_key = {s["slot_key"]: s for s in out}
     kids = {}

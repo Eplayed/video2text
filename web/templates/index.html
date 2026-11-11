@@ -993,7 +993,6 @@ textarea{resize:vertical;min-height:84px}
       <div class="navi" id="nav-collect" onclick="switchPage('collect')"><span class="nav-ic" data-icon="camera"></span>采集中心<span class="cnt" id="nav-collect-dot" style="display:none">●</span></div>
       <div class="nav-sep">内容</div>
       <div class="navi" id="nav-materials" onclick="switchPage('materials')"><span class="nav-ic" data-icon="grid"></span>数据与同步</div>
-      <div class="navi" id="nav-schedule" onclick="switchPage('schedule')"><span class="nav-ic" data-icon="calendar"></span>排产表</div>
       <div class="navi" id="nav-videos" onclick="switchPage('videos')"><span class="nav-ic" data-icon="list"></span>素材库</div>
       <div class="navi" id="nav-summaries" onclick="switchPage('summaries')"><span class="nav-ic" data-icon="book"></span>整理稿</div>
       <div class="navi" id="nav-toutiao" onclick="switchPage('toutiao')"><span class="nav-ic" data-icon="flame"></span>头条图文</div>
@@ -1034,6 +1033,7 @@ textarea{resize:vertical;min-height:84px}
               <option value="wechat">公众号</option>
             </select></label>
             <button type="button" class="btn ghost sm" data-today-refresh>刷新</button>
+            <button type="button" class="btn ghost sm" onclick="switchPage('schedule')">管理选题</button>
           </div>
         </div>
         <div id="today-context" class="today-context" role="status"></div>
@@ -1291,12 +1291,12 @@ textarea{resize:vertical;min-height:84px}
       <p style="font-size:12px;color:var(--text-tertiary);margin:14px 0 0">浏览素材与生成内容请用「素材库」；缺 ASR 转写的视频没法生成整理稿。</p>
     </section>
 
-    <!-- 选题雷达页面已删除（2026-10-20）：排产表是唯一的日常选题入口，旧 #radar 见 pageFromHash() -->
     <!-- ── 排产表（页面自包含在 web/static/schedule.html，选题与素材 id 已对齐）── -->
     <section id="page-schedule">
       <div class="header">
-        <h2>排产表</h2>
+        <h2>选题管理</h2>
         <div class="spacer"></div>
+        <button class="btn ghost sm" onclick="switchPage('dashboard')">返回今日选题</button>
         <button class="btn ghost sm" onclick="window.open('/static/schedule.html','_blank')">新窗口打开</button>
       </div>
       <div class="oneline" style="margin-bottom:10px">只剩两件事：<b>两个系列的内容位置与今晚候选</b>（勾哪几条由你定），
@@ -2367,7 +2367,6 @@ async function init() {
   loadAiQuota();                  // 额度同理：快没了要在打开时就看见，不是点了拆解才吐一堆堆栈
 
   loadCategoryOptions();          // 分类名单下发到各下拉（不等它，先让首页渲染）
-  await loadTopics();
   switchPage(pageFromHash());          // 带 #videos 这类地址打开时直接落回那一页
   // ?open=素材库sheet:row —— 排产页被单独打开时（非 iframe）用它跳进来
   const _open = new URLSearchParams(location.search).get('open');
@@ -2398,7 +2397,7 @@ async function init() {
   if (st.running) { startPolling(); setStatus('running', st.progress); }
   updateSidebarStatus(st);
 }
-init();
+window.addEventListener('DOMContentLoaded', init, {once: true});
 
 // ── 页面切换 ──
 // 地址栏带 #页名：刷新不跳回首页，每一页能被收藏/直接贴链接给别人（"你看下整理稿那页"）。
@@ -2490,11 +2489,11 @@ async function loadCurrentView() {
   if (currentView === 'ops') return loadOps();
   if (currentView === 'bank') return bkLoad();
   if (currentView === 'settings') return loadAiConfig();
+  loadTopics().catch(error => console.warn('[素材库] 作者筛选加载失败：', error));
   return loadVideos();
 }
 
 async function refreshAll() {
-  await loadTopics();
   await loadCurrentView();
   refreshReviewBadge();   // 不 await：徽章读不到不该拖住页面
 }
@@ -2623,8 +2622,9 @@ function gotoTodo(page, key) {
 
 // ── 加载作者分类 ──
 async function loadTopics() {
-  const st = await fetch('/api/stats').then(r=>r.json());
+  const st = await apiGet('/api/stats');
   const sel = document.getElementById('topic-filter');
+  const selected = sel.value;
   sel.innerHTML = '<option value="">全部作者</option>';
   for (const [author,count] of Object.entries(st.topics || {})) {
     const opt = document.createElement('option');
@@ -2649,6 +2649,7 @@ async function loadTopics() {
       + (s.failed ? `（含 ${s.failed} 条转写失败）` : '') + '，所以按来源筛不到';
     sel.appendChild(o);
   });
+  if (Array.from(sel.options).some(option => option.value === selected)) sel.value = selected;
 }
 
 // ── 加载列表 ──
