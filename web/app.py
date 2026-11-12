@@ -4648,6 +4648,12 @@ def _fact_ctx(summary):
             print("[事实上下文] 官网资料库没并进一手文本（这一项按缺席判）:", e, flush=True)
     except Exception as e:                                  # noqa: BLE001
         print("[事实上下文] 台账/一手文本读取失败:", e, flush=True)
+    from src import guide_mother
+
+    adopted = guide_mother._json_dict(summary.get("structured_data")).get("editorial_supplements") or []
+    blobs.extend(item["body"] for item in adopted
+                 if item.get("body") and (item.get("evidence_status") == "official"
+                                          or item.get("sheet") == "暴雪官方"))
     return {"materials": materials, "open_items": open_items, "resolved": resolved,
             "official_blobs": blobs,
             "open_risks": [str(i.get("raw") or "") for i in open_items],

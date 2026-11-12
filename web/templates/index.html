@@ -4648,10 +4648,11 @@ function pkLayoutKey() {
   const sel = document.getElementById('pk-layout-key-top');
   return sel ? sel.value : '';
 }
+  if (!_pkLayouts.length) return (_pkPages[_pkCur] || {}).layout_key || '';
 function pkRenderLayoutOptions() {
   const sel = document.getElementById('pk-layout-key-top');
   if (!sel || !_pkLayouts.length) return;
-  const keep = sel.value;
+  const keep = _pkPages.length ? (_pkPages[_pkCur].layout_key || '') : sel.value;
   // 名单只剩「攻略页」一种时不再摆"跟着风格"那一行：那一档本来就等于攻略页，
   // 留着只会让人以为还有别的构图可选（号主 10-16：看版面也是看攻略页）。
   // 全名单还在排版层里，是后端下发时收窄的（ai_poster.layout_choices(guide_only)）。
@@ -5530,8 +5531,9 @@ function pkGoLabel() {
     // 他才知道这一版出的是页、图是从那批画面里挑的。
     // 但一条干净帧都没有时还写"用素材真帧"就是骗人（2026-11-03 号主：B站素材 18 帧
     // 全被判废，按钮却写着"用素材帧"）——这时候实说是纯文字攻略页。
-    const noF = !!(_pkFrames && !(_pkFrames.usable || 0));
-    return '③ 出图 · ' + many + (noF ? '纯文字攻略页 · 底图 0 元' : '用素材真帧 · 底图 0 元');
+    if (_pkPhoto) return '③ 出图 · ' + many + '用你上传的图 · 底图 0 元';
+    const hasFrames = _pkPages.some(p => (p.photos || []).length > 0);
+    return '③ 出图 · ' + many + (hasFrames ? '用相关素材帧 · 底图 0 元' : '纯文字攻略页 · 底图 0 元');
   }
   if (_pkPhoto) {
     return '③ 出图 · ' + many + '用你上传的图 · 底图 0 元';
@@ -5543,9 +5545,10 @@ function pkGoLabel() {
 }
 function pkModeLine() {
   if (pkGuideChrome()) {
-    return (_pkFrames && !(_pkFrames.usable || 0))
-      ? '这条素材没有判合格的帧，画面位空着，中文由程序排'
-      : '画面用素材真帧（后期压的字、整帧卡都挑掉了），中文由程序排';
+    if (_pkPhoto) return '画面用你上传的图，中文由程序排';
+    return _pkPages.some(p => (p.photos || []).length > 0)
+      ? '有确认相关画面的页面会配图，中文由程序排'
+      : '没有已选的相关画面，使用文字攻略页';
   }
   if (_pkPhoto) return '主视觉用你上传的真图，中文由程序排版';
   return pkTextMode() === 'model' ? '字由 AI 画，看到的就是成品 · 传上来会逐字核对'

@@ -125,8 +125,10 @@ def test_pipeline(root):
         assert events == ["拆页", "修稿", "校对", "配图"]
         sources = client.get("/api/poster/source/1").get_json()["sources"]
         assert sources[1]["role"] == "official_supplement" and sources[1]["official_date"] == OFFICIAL["official_date"]
-        wa._prepare_poster_sources(wa._poster_get_summary(1))
+        summary = wa._poster_get_summary(1)
+        wa._prepare_poster_sources(summary)
         assert fetch.call_count == 1
+        assert OFFICIAL["body"] in wa._fact_ctx(summary)["official_blobs"]
 
 
 def main_test():
