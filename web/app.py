@@ -85,6 +85,9 @@ def _graphics_manifest_view(manifest, include_model_usage=False):
         fidelity = {}
     if source_revision and mother_revision and fidelity.get("ready"):
         data["generation_mode"] = "original_fidelity_v1"
+    elif data.get("editorial_source"):
+        data["generation_mode"] = "editorial"
+        data["validation_label"] = "已对照官方公告编校"
     else:
         data["generation_mode"] = "legacy"
         data["validation_label"] = "旧版，未做新版校验"
@@ -5692,6 +5695,11 @@ def api_poster_status():
         elif st.get("summary_id") != sid:
             st.update({"summary_id": sid, "plan": None, "package": None,
                        "error": "", "progress": "", "model_usage": {}, "model_run_id": ""})
+    if sid and not st.get("running"):
+        manifest = ai_poster.get_package(sid)
+        st["package"] = {"id": sid, "url": manifest["url"]} if manifest and manifest.get("url") else None
+        if st["package"]:
+            st.update({"summary_id": sid, "done": True})
     lookup_id = sid or int(st.get("summary_id") or 0)
     if lookup_id and (st.get("running") or not st.get("model_usage")
                       or st.get("summary_id") != _poster_status.get("summary_id")):

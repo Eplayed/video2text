@@ -3855,7 +3855,7 @@ async function pkHydrate(id) {
     document.getElementById('pk-result').innerHTML =
       pkFactFailHtml(errMsg, st.fact_hard || []);
   }
-  if (st.plan && st.plan.plan) {
+  if (st.plan && st.plan.plan && !st.plan.editorial) {
     _pkManualRaw = st.plan.manual_prompts || [];   // 每页一份"拿去豆包手动出图"的材料
     _pkGuideOnly = !!st.plan.guide_only;           // 攻略页那份是空的：这一档不出底图
     _pkManual = pkTakeManual(_pkManualRaw);
@@ -3870,7 +3870,7 @@ async function pkHydrate(id) {
     pkSetFidelity(st.plan.fidelity);
   }
   if (st.package && st.package.id === id && !errMsg) { renderPosterResult(id); return; }
-  if (st.plan && st.plan.plan) {
+  if (st.plan && st.plan.plan && !st.plan.editorial) {
     if (!errMsg) {
       document.getElementById('pk-result').innerHTML = '<div class="pk-verify mild">这是上一次拆好的草稿。'
         + '请先看原意核对与下方来源文本，确认后再出图。</div>'
@@ -6200,18 +6200,30 @@ function pkCompanionHtml(m) {
   if (!promo) return '';
   const imageUrl = companion ? promo.image_url : (promo.image ? '/media/poster/' + Number(m.id) + '/' + promo.image : '');
   const links = companion
-    ? '<p><a href="' + esc(companion.article_url) + '" target="_blank" rel="noopener">查看公众号正文</a>'
+    ? '<p><a href="' + esc(companion.article_preview_url || companion.article_url) + '" target="_blank" rel="noopener">查看公众号正文</a>'
       + '　<a href="' + esc(companion.manifest_url) + '" target="_blank" rel="noopener">查看检查记录</a>'
       + companion.pages.map((p, i) => '　<a href="' + esc(p.url) + '" target="_blank" rel="noopener">第 ' + (i + 1) + ' 张图</a>').join('')
       + '</p>' : '';
+  const previewLinks = (promo.preview_images || []).map(p =>
+    '　<a href="' + esc(p.url) + '" target="_blank" rel="noopener">' + esc(p.label) + '</a>').join('');
   return '<div class="pk-verify mild"><b>' + (companion ? ('公众号图文攻略 · 3:4 · ' + (companion.publishable ? '待人工审核' : '机器检查未通过')) : '公众号文末小程序素材')
     + '</b>' + links + '<p>' + esc(promo.copy) + '</p><p>' + esc(promo.card_hint) + ' <code>' + esc(promo.page_path || '') + '</code></p>'
     + '<button type="button" class="btn ghost sm" data-copy="' + esc(promo.copy) + '" onclick="pkCopyAny(this,this.dataset.copy)">复制文末文案</button>　'
-    + (imageUrl ? '<a href="' + esc(imageUrl) + '" target="_blank" rel="noopener">打开跑本助手界面图</a>' : '界面图尚未配置') + '</div>';
+    + (imageUrl ? '<a href="' + esc(imageUrl) + '" target="_blank" rel="noopener">打开跑本助手界面图</a>' : '界面图尚未配置') + previewLinks + '</div>';
+}
+
+function pkEditorialSourceHtml(m) {
+  const source = m.editorial_source;
+  if (!source) return '';
+  return '<div class="pk-verify pass">' + esc(m.validation_label || '已编校') + ' · '
+    + '<a href="' + esc(source.url) + '" target="_blank" rel="noopener">核对公告</a>'
+    + (m.download_url ? '　<a href="' + esc(m.download_url) + '" download>下载完整发布包</a>' : '')
+    + '</div>';
 }
 
 async function renderPosterResult(id) {
   const m = await fetch('/api/poster/' + id).then(r => r.json());
+  if (_pkId !== id || m.error) return;
   _pkLast = m;
   const v = m.verify || {};
   const tsp = (m.typeset && m.typeset.problems) || [];
@@ -6316,7 +6328,7 @@ async function renderPosterResult(id) {
         + (fg.soft || []).map(s => '· ' + esc(s)).join('<br>') + '</div>'
       : '');
   document.getElementById('pk-result').innerHTML =
-    imgHtml
+    pkEditorialSourceHtml(m) + imgHtml
     + modelUsageHtml(m.plan_model_usage, '拆文案步骤')
     + modelUsageHtml(m.model_usage, '出图步骤')
     + provBlockHtml(m.provenance)
@@ -7044,6 +7056,7 @@ async function openPosterDetail(id) {
     + '<span class="pill">#' + (m.summary_id || m.id) + ' 整理稿</span>'
     + '<span class="pill">' + esc(m.created_at || '') + '</span></div>'
     + flag
+    + pkEditorialSourceHtml(m)
     + provBlockHtml(m.provenance)
     + actBlockHtml(m.action_gate)
     + '<div id="pk-detail-state"></div>'
