@@ -1661,6 +1661,12 @@ def build_page_plan(summary, ai_config, page_index, pages, spine="", theme="",
         group = list(pages)
         group[page_index - 1] = page
         notes = list(notes) + bind_frames(group, frames, lim)
+        if ai_config.get("editorial"):
+            from .poster_content import frame_related
+            photos = page.get("photos") or []
+            page["photos"] = [p for p in photos if frame_related(page, p.get("caption"))]
+            if photos and not page["photos"]:
+                notes.append("该页配图未能确认相关，保留文字页")
     one = {"pages": [page]}
     return page, lint_plan(one, lim), notes
 
@@ -1761,6 +1767,14 @@ def build_text_plan(summary, ai_config, theme="", title="", style_key="", text_m
               .replace("__NAMES__", _names_hint({"content": ""} if mother else summary, source_text))
               + guide_rules_text(frames, lim["total"],
                                  MOTHER_META_RULE if mother else META_RULE) + mother_rules)
+    if ai_config.get("editorial") and text_mode == "typeset":
+        prompt += ("\n先按母稿要点确定主线、必保信息和同主题补充，再按主题分组。"
+                   "所有页用 layout_key=guide。内容多就增页，单职业页不要混写其他职业。"
+                   "官方补充的关键点和未在主视频出现的相关职业也必须有对应卡片。"
+                   "单一职业标题下只写该职业的卡片、副标题、警示与互动。"
+                   "统一栏目名用简短主题名（最多16字）。")
+        if not frames:
+            prompt += "这次只拆文案，photos 留空，核完内容后程序会按页选图。"
     if mother:
         prompt = prompt.replace('"v": "这一条画什么"}',
                                 '"v": "这一条画什么", "point_ids": ["逐字复制的母稿 point_id"]}')
@@ -1806,6 +1820,11 @@ def build_text_plan(summary, ai_config, theme="", title="", style_key="", text_m
         plan["source_revision"] = mother["source_revision"]
         plan["mother_revision"] = mother["mother_revision"]
     plan, notes = fit_plan(plan, lim["total"], lim)
+    if ai_config.get("editorial") and text_mode == "typeset":
+        plan["layout_key"] = "guide"
+        for page in data.get("pages") or []:
+            if isinstance(page, dict):
+                page["layout_key"] = "guide"
     pages, why, pnotes = _pages_from_data(data, lim, key, has_photo, plan.get("title") or "",
                                           page_hint)
     if not pages and (page_hint > 1 or len(plan.get("cards") or []) > CARD_MAX
@@ -3281,10 +3300,26 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
     hardened = list(reused_frames or [])
     used_photos = [(pi, ph) for pi, p in enumerate(pages, 1)
                    for ph in (p.get("photos") or [])
-                   if (ph.get("path") and os.path.exists(str(ph.get("path"))))]
+                   if (not ph.get("_drop") and ph.get("path") and os.path.exists(str(ph.get("path"))))]
     if reused_frames is None and used_photos and ai_config and ai_config.get("api_key"):
         try:
+    from .poster_content import frame_related
+
             from . import frame_pool
+    # 最终稿可能在弹窗改过，重验当前页与所选帧，不沿用上一版结论。
+    frame_by_path = {str(item.get("file")): item for item in frame_items or []}
+    if plan.get("editorial_frames"):
+        for pi, page in enumerate(pages, 1):
+            for ph in page.get("photos") or []:
+                if not ph.get("frame"):
+                    continue
+                if reused_frames is None:
+                    evidence = frame_by_path.get(str(ph.get("path"))) or {}
+                    caption = evidence.get("subject")
+                else:
+                    caption = ph.get("caption")
+                if not frame_related(page, caption):
+                    ph.update(_drop="画面无法确认与本页内容相符", page=pi)
         except ImportError:
             import frame_pool
         _pg("核对要印上版的 %d 张画面：底部有没有字幕、四周虚化的边裁不裁" % len(used_photos))

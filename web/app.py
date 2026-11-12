@@ -2263,15 +2263,10 @@ def _run_generation(video_keys, summary_type, combine, st, brief=None, video_ids
         def freeze_evidence(result):
             if not config.get("editorial"):
                 return
-            evidence = []
-            for item in (brief or {}).get("supplements") or []:
-                entry = {k: v for k, v in item.items() if k != "body"}
-                if item["sheet"] == "暴雪官方":
-                    entry["body"] = item["body"].removesuffix("…")
-                evidence.append(entry)
             structured = content_store._structured_payload(result)
-            result["structured_data"] = dict(structured, editorial_supplements=evidence,
-                                             editorial_topic=topic_proof)
+            result["structured_data"] = dict(
+                structured, editorial_supplements=(brief or {}).get("supplements") or [],
+                editorial_evidence_version=1, editorial_topic=topic_proof)
             if topic_proof:
                 result["title"] = topic_proof["title"]
         success_count = 0
@@ -2327,12 +2322,15 @@ def _run_generation(video_keys, summary_type, combine, st, brief=None, video_ids
             try:
                 selected_videos = [
                     dict(video, transcript=source_corrections.effective_text(
-                        conn, video["id"], video["transcript"]))
+                        conn, video["id"], video["transcript"], video.get("title") or ""))
                     for video in selected_videos
                 ]
             finally:
                 conn.close()
             brief = dict(brief or {})
+            st["progress"] = "核对已选补充资料的官方来源..."
+            brief["supplements"] = supplements.prepare_evidence(
+                brief.get("supplements"), "\n".join(v["transcript"] for v in selected_videos))
             topic_proof = editorial_model.review_topic(
                 brief.get("title"), selected_videos, config)
             brief.update(title=topic_proof["title"], topic_evidence=topic_proof)
@@ -4357,9 +4355,11 @@ def _verified_topic_title(summary, sources):
     if not proof:
         return ""
     for source in sources:
-        if (not source.get("role") and source["video_id"] == proof.get("video_id")
-                and proof.get("quote") and proof["quote"] in source["text"]):
-            return proof["title"]
+        if not source.get("role") and source["video_id"] == proof.get("video_id") and proof.get("quote"):
+            from src.term_glossary import normalize_wow
+            quote = normalize_wow(proof["quote"], source.get("title"))
+            if quote in source["text"]:
+                return proof["title"]
     raise guide_mother.MotherError("选题对应的主视频原句已变化，请核对素材并重新生成整理稿")
 
 
@@ -4692,9 +4692,51 @@ def _material_text(summary):
     conn = content_store.connect(DB_PATH)
     try:
         return "\n".join(source_corrections.effective_text(
-            conn, int(r["id"]), str(r.get("transcript") or "")) for r in rows)
+            conn, int(r["id"]), str(r.get("transcript") or ""), r.get("title") or "") for r in rows)
     finally:
         conn.close()
+
+
+def _prepare_poster_sources(summary):
+    """老整理稿首次重拆时补齐原勾选资料；之后复用快照。"""
+    from src import guide_mother
+
+    sid = summary["id"]
+    original = guide_mother._json_dict(summary.get("structured_data"))
+    if original.get("editorial_evidence_version"):
+        return original.get("editorial_supplements") or []
+    adopted = original.get("editorial_supplements") or []
+    task = plan_tasks.task_of_summary(DB_PATH, sid) or {}
+    ids = [item["id"] for item in adopted] or task.get("supplement_ids") or []
+    if not ids:
+        return []
+    snaps = [{"db_id": item["id"], "why": item.get("why") or ""} for item in adopted]
+    frozen = {item["id"]: item for item in adopted if item.get("body") and item.get("sheet") == "暴雪官方"}
+    rows = supplements.rows_by_ids(DB_PATH, [i for i in ids if i not in frozen],
+                                   snaps=snaps or task.get("supplement_sources"))
+    rows += list(frozen.values())
+    sources, _revision = guide_mother.source_snapshot(DB_PATH, sid)
+    text = "\n".join(s["text"] for s in sources if not s.get("role"))
+    evidence = supplements.prepare_evidence(rows, text)
+    by_id = {item["id"]: item for item in evidence}
+    stored = {item["id"]: item for item in adopted}
+    entries = [by_id.get(i) or {**stored.get(i, {"id": i, "title": "素材 #%d" % i}),
+                               "evidence_status": "reference",
+                               "evidence_note": "原补充资料已不存在"} for i in ids]
+    conn = content_store.connect(DB_PATH)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute("SELECT structured_data FROM ai_summaries WHERE id=?", (sid,)).fetchone()
+        current = guide_mother._json_dict(row["structured_data"])
+        if current.get("editorial_evidence_version"):
+            return current.get("editorial_supplements") or []
+        current.update(editorial_supplements=entries, editorial_evidence_version=1)
+        conn.execute("UPDATE ai_summaries SET structured_data=? WHERE id=?",
+                     (json.dumps(current, ensure_ascii=False), sid))
+        conn.commit()
+    finally:
+        conn.close()
+    return entries
 
 
 def _poster_fact_status(plan, publish, asr_text):
@@ -4878,6 +4920,8 @@ def api_poster_source(summary_id):
     return jsonify({"summary_id": int(summary_id), "source_revision": revision,
                     "sources": [{"video_id": int(s["video_id"]), "title": s["title"],
                                  "transcript": s["text"],
+                                 "role": s.get("role") or "video",
+                                 "url": s.get("url") or "", "official_date": s.get("official_date") or "",
                                  "corrected": s.get("corrected", False),
                                  "raw_transcript": s.get("raw_text") or ""} for s in sources],
                     "mother": mother if mother.get("source_revision") == revision else {}})
@@ -4938,6 +4982,8 @@ def _start_poster_plan(data):
     def fn():
         from src import guide_mother
         cfg = _editorial_config()
+        _poster_status["progress"] = "核对主素材及已选补充资料..."
+        supplement_entries = _prepare_poster_sources(summary)
         _poster_status["progress"] = "从原始转写提取原意母稿..."
         mother = guide_mother.ensure_mother(DB_PATH, summary["id"], cfg,
                                             progress=lambda msg: _poster_status.update({"progress": msg}))
@@ -4945,34 +4991,37 @@ def _start_poster_plan(data):
         mother_sources, mother_source_rev = guide_mother.source_snapshot(DB_PATH, summary["id"])
         if mother_source_rev != mother["source_revision"]:
             raise guide_mother.MotherError("原文在拆稿期间更新，请重新提取母稿")
-        frames = _guide_frames_for(summary, _fast_config())
         _poster_status["progress"] = "LLM 拆解海报文案（模型：%s）..." % (cfg.get("model") or "?")
-        asr_text = _material_text(summary)   # ① 拆完就对当前 plan+publish 跑同一道本地闸
         source_text = guide_mother.audit_source_text(mother_sources)
+        asr_text = source_text
         verified_theme = _verified_topic_title(summary, mother_sources)
-        from src import editorial_model
+        from src import editorial_model, poster_content
         limits = ai_poster.limits_for(text_mode)
 
         def draft(feedback=None):
             options = {"feedback": feedback} if feedback else {}
             plan, publish, bad, notes = ai_poster.build_text_plan(
                 summary, cfg, theme=verified_theme or theme, title=title, style_key=style_key, text_mode=text_mode,
-                has_photo=has_photo, page_hint=page_hint, frames=frames, source_text=asr_text,
+                has_photo=has_photo, page_hint=page_hint, frames=None, source_text=asr_text,
                 mother=mother, **options)
+            if cfg.get("editorial"):
+                notes = list(notes) + poster_content.repair_optional_blocks(plan)
+                notes += editorial_model.reflow_poster_pages(
+                    plan, limits, ai_poster.CARD_MAX, ai_poster.PAGE_MAX, ai_poster.plan_chars)
+                bad = ai_poster.lint_plan(plan, limits)
             if cfg.get("editorial") and text_mode == "typeset" and ai_poster.guide_only_plan(plan):
                 plan, coverage_notes = editorial_model.complete_poster_coverage(
                     plan, mother, limits, ai_poster.PAGE_MAX, ai_poster.CARD_MAX)
                 notes = list(notes) + coverage_notes
                 bad = ai_poster.lint_plan(plan, limits)
-            if feedback:
-                publish = editorial_model.ground_poster_fields(
-                    plan, publish, mother, mother_sources, limits)
-                publish = ai_poster._clip_publish(publish, plan)
-                bad = ai_poster.lint_plan(plan, limits)
             fidelity = guide_mother.audit_output(mother, plan, publish, cfg, source_text=source_text)
-            return plan, publish, list(bad) + guide_mother.audit_problems(fidelity), notes, fidelity
+            fact_status = _poster_fact_status(plan, publish, asr_text)
+            fact_errors = list(dict.fromkeys(
+                (field.get("detail") or field.get("text")) for field in fact_status.get("fields") or []
+                if field.get("state") == "blocked"))
+            return plan, publish, list(bad) + guide_mother.audit_problems(fidelity) + fact_errors, notes, fidelity, fact_status
 
-        plan, publish, bad, notes, fidelity = draft()
+        plan, publish, bad, notes, fidelity, fact_status = draft()
         semantic = fidelity.get("semantic") or {}
         source_review = any(issue.get("kind") == "source_review" for issue in fidelity["coverage"]["issues"])
         if (cfg.get("editorial") and bad and not source_review
@@ -4989,19 +5038,34 @@ def _start_poster_plan(data):
                             + missing + bad[:18]) if missing else bad[:18]
                 corrected = draft(feedback)
                 if not corrected[2] and corrected[4].get("ready"):
-                    plan, publish, bad, notes, fidelity = corrected
+                    plan, publish, bad, notes, fidelity, fact_status = corrected
             except Exception:
                 app.logger.info("攻略文案自动修订未完成 summary=%s", summary["id"], exc_info=True)
         # 骨架稿不在这里拦：拆解本身就能判断这份素材有没有料，拦在这里会让人白等一次拆解。
         # 只把风险随结果一起回给前端，出图那一步再决定是否放行。
         warning = "；".join(ai_poster.draft_gate.draft_blockers(summary))
-        # ① 三步事实闸（2026-11-02）：拆文案完成≠事实已核，逐条状态随结果一起回
-        fact_status = _poster_fact_status(plan, publish, asr_text)
+        if not bad and fidelity.get("ready") and ai_poster.guide_only_plan(plan):
+            _poster_status["progress"] = "逐页核对原片画面..."
+            frames = _guide_frames_for(summary, _fast_config())
+            notes = list(notes) + poster_content.attach_frames(plan, frames)
+            plan["editorial_frames"] = True
         fact_line = _fact_status_summary(fact_status)
+        point_ids = {p["point_id"]: p["source_ref"]["video_id"] for p in mother["points"]}
+        supplement_receipt = []
+        for entry in supplement_entries:
+            adopted_pages = [i for i, page in enumerate(ai_poster.plan_pages(plan), 1)
+                             if any(point_ids.get(pid) == entry["id"] for card in page.get("cards") or []
+                                    for pid in card.get("point_ids") or [])]
+            supplement_receipt.append({
+                "title": entry.get("title") or "", "pages": adopted_pages,
+                "url": entry.get("official_url") or entry.get("url") or "",
+                "status": entry.get("evidence_status") or "reference",
+                "note": entry.get("evidence_note") or "",
+            })
         _poster_status["plan"] = {"plan": plan, "publish": publish, "violations": bad,
                                   "notes": notes, "chars": ai_poster.plan_chars(plan),
                                   "publish_channel": publish_channel, "form": pk_form,
-                                  "fact_status": fact_status,
+                                  "fact_status": fact_status, "supplements": supplement_receipt,
                                   "fidelity": fidelity,
                                   # 整组都是攻略页时界面不该再摆"去豆包画无字底图"那一块：
                                   # 这一档的画面是素材真帧，传一张底图回来反而把真帧盖掉
@@ -5215,6 +5279,8 @@ def _start_poster_graphics(data):
             raise ai_poster.PosterError("原意核对未通过：%s；草稿已保留，请按原文修改后重试" %
                                         "；".join(guide_mother.audit_problems(fidelity)[:8]))
         plan["fidelity"] = fidelity
+        if ai_poster.guide_only_plan(plan):
+            plan["editorial_frames"] = True
         # 编辑证据链按整理稿倒查（表/模块都是我这轮的，函数内 import 少碰别人那片导入区）
         try:
             from src import guide_provenance
@@ -5222,7 +5288,7 @@ def _start_poster_graphics(data):
         except Exception:
             prov = {}
         # 行动依据闸要比对原转写：多源稿不能只看主素材那一条，把所有来源的转写拼起来
-        asr_text = _material_text(summary)   # 专名核对与提示词名单都吃这一份，别两处各查一遍
+        asr_text = guide_mother.audit_source_text(_sources)
         # 出图前仍重判已选帧；不合格时留下缺图记录，不换一张不相关的画面冒充证据。
         frame_items = _guide_frames_for(summary, _fast_config(), may_judge=False)
         import copy
@@ -6650,8 +6716,15 @@ def _bili_transcribe_job(progress, author: str, limit: int, model_size: str,
                                       transcribe_with_frames as _chain_asr)
     # 先扫残片：上一轮作业被 kill 时 `finally` 那句 os.remove 根本没跑，半截 wav/mp4 会一直躺着
     swept, swept_bytes = _sweep(work)
+    from src import asr_fix
+
+    games = {}
+    if rows and not frames_only:
+        games = {row["id"]: row.get("game") or "" for row in
+                 content_store.get_videos_by_ids(DB_PATH, [r["id"] for r in rows])}
     t0 = time.time()
     for i, r in enumerate(rows, 1):
+        context = "%s %s" % (games.get(r["id"], ""), r.get("title") or "")
         mins = int(time.time() - t0) // 60
         dur = int(r.get("duration_sec") or 0)
         want_fr = int(frame_max_min or 0) > 0 and dur <= int(frame_max_min) * 60
@@ -6683,11 +6756,13 @@ def _bili_transcribe_job(progress, author: str, limit: int, model_size: str,
                 frames, note_err = extract_frames_only(r["aweme_id"], cookie=cookie,
                                                        workdir=work)
             elif want_fr:
-                text, note_err, frames = _chain_asr(r["aweme_id"], cookie=cookie,
-                                                    model_size=model_size, workdir=work)
+                with asr_fix.material_context(context):
+                    text, note_err, frames = _chain_asr(r["aweme_id"], cookie=cookie,
+                                                        model_size=model_size, workdir=work)
             else:
-                text, note_err = _audio_asr(r["aweme_id"], cookie=cookie,
-                                            model_size=model_size, workdir=work)
+                with asr_fix.material_context(context):
+                    text, note_err = _audio_asr(r["aweme_id"], cookie=cookie,
+                                                model_size=model_size, workdir=work)
                 if want_fr is False and dl_ok and not frames_only:
                     no_fr += 1           # 纯粹因为太长才不抽帧的，跟"盘子不够"分开报
         except Exception as e:

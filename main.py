@@ -241,14 +241,14 @@ def _get_asr_model(model_size: str):
         return _ASR_MODELS[model_size]
 
 
-def _asr_hotwords():
+def _asr_hotwords(context=""):
     """给 Whisper 的一句简体术语开头（同音错字与繁体输出都靠它压）。失败返回空串。"""
     try:
         try:
             from src import asr_fix
         except ImportError:
             import asr_fix
-        return asr_fix.hotwords()
+        return asr_fix.hotwords(context=context)
     except Exception as e:
         print("[ASR] 术语提示词没拿到（不影响转写）:", e)
         return ""
@@ -273,7 +273,7 @@ def _asr_normalize(segs):
 
 
 def transcribe_audio(audio_path: str, model_size: str = "small",
-                     language: str = "zh", tag: str = "") -> tuple:
+                     language: str = "zh", tag: str = "", context: str = "") -> tuple:
     """已有音频文件 → (转写文本, 带时间戳的分句)。失败时文本是 "[转写失败] …"。
 
     为什么要单独拆这一层：B 站那条链路只下音频（一个合集 122 小时，下整片没有意义），
@@ -283,7 +283,7 @@ def transcribe_audio(audio_path: str, model_size: str = "small",
     log = tag or "ASR"
     segs = []
     try:
-        hot = _asr_hotwords()
+        hot = _asr_hotwords(context)
         if HAS_FASTER_WHISPER:
             model = _get_asr_model(model_size)
             segments, _info = model.transcribe(
@@ -311,7 +311,7 @@ def transcribe_audio(audio_path: str, model_size: str = "small",
 
 def asr_transcribe(video_url: str, model_size: str = "small",
                     language: str = "zh", aweme_id: str = "",
-                    tag: str = "") -> str:
+                    tag: str = "", context: str = "") -> str:
     """下载视频 → 提取音频 → faster-whisper 转写。
 
     给了 aweme_id 就顺手把「帧池」抽出来（零成本：只抽帧、只裁掉作者后期压的字幕条，
@@ -365,7 +365,7 @@ def asr_transcribe(video_url: str, model_size: str = "small",
         return "[音频提取失败] 文件不存在"
 
     # 转写（模型调用与出口规范化见 transcribe_audio，抖音/B 站共用那一份）
-    text, segs = transcribe_audio(audio_path, model_size, language, log)
+    text, segs = transcribe_audio(audio_path, model_size, language, log, context=context)
 
     # 抽帧必须在删视频之前：视频删了就再也补不回这条素材的画面
     if aweme_id and os.path.exists(video_path):
@@ -481,7 +481,8 @@ def process_row(ws, row_idx: int, cookie: str,
     if not existing_asr:
         print(f"[Row {row_idx}] 开始ASR转写...")
         transcript = asr_transcribe(info["video_url"], model_size=asr_model,
-                                    aweme_id=aweme_id, tag="Row %d" % row_idx)
+                                    aweme_id=aweme_id, tag="Row %d" % row_idx,
+                                    context=str(info.get("title") or info.get("desc") or ""))
         if transcript and not transcript.startswith("[") and not transcript.startswith("下载失败"):
             set_cell(ws, row_idx, "视频文案ASR", transcript)
             set_cell(ws, row_idx, "口播原文", transcript)

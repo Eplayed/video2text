@@ -5,6 +5,8 @@ import json
 import sqlite3
 from datetime import datetime
 
+from .term_glossary import normalize_wow
+
 
 class CorrectionError(ValueError):
     pass
@@ -41,21 +43,21 @@ def _apply(raw_text, patches):
     return text
 
 
-def effective_text(conn, video_id, raw_text):
+def effective_text(conn, video_id, raw_text, context=""):
     """只读：修订不匹配当前 ASR 时拦截，不静默回退旧原文。"""
     if not _table_exists(conn):
-        return raw_text
+        return normalize_wow(raw_text, context)
     row = conn.execute("SELECT base_hash, patches_json FROM video_source_corrections "
                        "WHERE video_id=?", (int(video_id),)).fetchone()
     if not row:
-        return raw_text
+        return normalize_wow(raw_text, context)
     if row["base_hash"] != raw_hash(raw_text):
         raise CorrectionError("素材 %d 的原始转写已更新，定点修订须重新核对" % int(video_id))
     try:
         patches = json.loads(row["patches_json"])
     except (TypeError, ValueError):
         raise CorrectionError("素材 %d 的定点修订记录损坏，请先修复" % int(video_id))
-    return _apply(raw_text, patches)
+    return normalize_wow(_apply(raw_text, patches), context)
 
 
 def inspect(db_path, video_id):
@@ -73,7 +75,7 @@ def inspect(db_path, video_id):
                  if _table_exists(conn) else None)
         patches = json.loads(saved["patches_json"]) if saved else []
         stale = bool(saved and saved["base_hash"] != raw_hash(raw))
-        effective = "" if stale else _apply(raw, patches) if patches else raw
+        effective = "" if stale else effective_text(conn, video_id, raw, row["title"])
         return {"video_id": int(video_id), "title": row["title"],
                 "raw_text": raw, "base_hash": raw_hash(raw),
                 "patches": patches, "effective_text": effective,
@@ -87,14 +89,14 @@ def save(db_path, video_id, base_hash, patches):
     conn.row_factory = sqlite3.Row
     try:
         conn.execute("BEGIN IMMEDIATE")
-        row = conn.execute("SELECT transcript FROM videos WHERE id=?",
+        row = conn.execute("SELECT transcript, title FROM videos WHERE id=?",
                            (int(video_id),)).fetchone()
         if not row or not str(row["transcript"] or "").strip():
             raise CorrectionError("素材不存在或没有原始转写")
         raw = str(row["transcript"])
         if base_hash != raw_hash(raw):
             raise CorrectionError("原始转写版本已变化，请重新读取再修订")
-        effective = _apply(raw, patches)
+        effective = normalize_wow(_apply(raw, patches), row["title"])
         conn.execute("CREATE TABLE IF NOT EXISTS video_source_corrections ("
                      "video_id INTEGER PRIMARY KEY, base_hash TEXT NOT NULL, "
                      "patches_json TEXT NOT NULL, updated_at TEXT NOT NULL)")

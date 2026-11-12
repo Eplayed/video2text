@@ -15,6 +15,8 @@
   needs_review 拿不准的 —— 不参与提示词，只在诊断里提示人去看
 """
 import json
+import os
+from functools import lru_cache
 import re
 from pathlib import Path
 
@@ -80,7 +82,65 @@ def apply_confirmed(text):
     return out, changed
 
 
-def asr_prompt(max_chars=110):
+WOW_CLASSES = {
+    "死亡骑士": "deathknight", "恶魔猎手": "demonhunter", "德鲁伊": "druid",
+    "猎人": "hunter", "法师": "mage", "圣骑士": "paladin", "牧师": "priest",
+    "潜行者": "rogue", "盗贼": "rogue", "萨满": "shaman", "术士": "warlock", "战士": "warrior",
+}
+_WOW_SCOPE = re.compile(r"魔兽|无限服|\bWoW(?::?\s*Forever)?\b|暴雪", re.I)
+# 仅替换已核过且含明确技能锚点的同音误写。原文中的数字和机制不动。
+_WOW_PAIRS = (
+    ("风怒图腾和副魔", "风怒图腾和附魔"),
+    ("小鬼的火焰剑", "小鬼的火焰箭"),
+    ("小鬼前四级的火焰剑", "小鬼前四级的火焰箭"),
+    ("小鬼火焰剑", "小鬼火焰箭"),
+)
+_WOW_HOTWORDS = {
+    "hunter": ("奥术射击", "召唤雄鹰"),
+    "shaman": ("风怒武器", "风怒图腾", "风暴打击", "漩涡武器"),
+    "warlock": ("小鬼", "火焰箭", "折磨", "持续伤害"),
+}
+
+
+def is_wow(context):
+    return bool(_WOW_SCOPE.search(str(context or "")))
+
+
+def normalize_wow(text, context):
+    if not text or (not is_wow(context) and not is_wow(text)):
+        return text
+    for old, new in _WOW_PAIRS:
+        text = text.replace(old, new)
+    return text
+
+
+@lru_cache(maxsize=12)
+def _read_verified_terms(path, mtime_ns):
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return [(row.get("classId"), row.get("cn") or row.get("name"))
+            for row in data.get("items", data.get("spells", []))
+            if row.get("level") == "L0" and (row.get("cn") or row.get("name"))]
+
+
+def _wow_terms(context):
+    base = Path(os.environ.get("V2T_FOREVER_DATA") or
+                ROOT.parent / "wow-forever" / "wow-forever-web" / "app" / "data")
+    verified = []
+    for name in ("glossary.json", "abilities.json", "spells.json"):
+        path = base / name
+        try:
+            verified.extend(_read_verified_terms(path, path.stat().st_mtime_ns))
+        except (OSError, ValueError):
+            continue
+    classes = {key for title, key in WOW_CLASSES.items() if title in context}
+    explicit = [term for _key, term in verified if len(term) >= 2 and term in context]
+    owned = [term for key, term in verified if key in classes]
+    preferred = [term for key, terms in _WOW_HOTWORDS.items() if key in classes for term in terms]
+    return list(dict.fromkeys(["魔兽世界无限"] + explicit + preferred + owned
+                              + ["副本", "专精", "天赋", "附魔", "装备等级"]))
+
+
+def asr_prompt(max_chars=110, context=""):
     """给 Whisper 的 initial_prompt：只塞标准写法，让它朝这些词解码。
 
     为什么要塞：同音错字是**解码阶段**选错了词，下游再怎么提示模型都只是补救。
@@ -89,6 +149,12 @@ def asr_prompt(max_chars=110):
     为什么不塞长：Whisper 的提示词吃的是那 224 token 的上下文，给长了会挤掉音频、
     还会让模型开始复读提示词。所以先放"已经错过的那批正确写法"，再补标准词表。
     """
+    if is_wow(context):
+        parts = []
+        for term in _wow_terms(context):
+            if len("、".join(parts + [term])) <= max_chars:
+                parts.append(term)
+        return "、".join(parts)
     need = []
     for _w, c, _d in confirmed_pairs():
         if c and c not in need:
@@ -119,7 +185,7 @@ def render_prompt(max_chars=1400):
         terms = "、".join(g.get("terms") or [])
         if terms:
             lines.append("%s标准写法：%s" % (g.get("domain") or "", terms))
-    pairs = ["%s→%s" % (w, c) for w, c, _d, _s in observed_pairs()]
+    pairs = ["%s→%s" % (w, c) for w, c, _d in confirmed_pairs()]
     if pairs:
         lines.append("已确认的误写对照（照这个改）：" + "；".join(pairs))
     text = "\n".join(lines)

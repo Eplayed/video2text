@@ -50,7 +50,7 @@ def _source_rows(conn, summary_id):
             continue
         raw = str(by_id[i]["transcript"])
         try:
-            source_text = source_corrections.effective_text(conn, i, raw)
+            source_text = source_corrections.effective_text(conn, i, raw, by_id[i]["title"])
         except source_corrections.CorrectionError as exc:
             raise MotherError(str(exc))
         sources.append({"video_id": i, "title": str(by_id[i]["title"] or ""),
@@ -63,14 +63,17 @@ def _source_rows(conn, summary_id):
     # Only confirmed official supplements can supply publishable facts. The excerpt is
     # the one frozen with this summary, so later changes to the schedule cannot alter it.
     for item in _json_dict(row["structured_data"]).get("editorial_supplements") or []:
-        if item.get("sheet") == "暴雪官方" and item.get("body") and item["id"] not in ids:
-            sources.append({"video_id": item["id"], "title": item["title"], "text": item["body"],
+        if (item.get("evidence_status") == "official" or item.get("sheet") == "暴雪官方") \
+                and item.get("body") and item["id"] not in ids:
+            sources.append({"video_id": item["id"], "title": item.get("official_title") or item["title"],
+                            "text": item["body"], "url": item.get("official_url") or item.get("url") or "",
+                            "official_date": item.get("official_date") or item.get("date") or "",
                             "role": "official_supplement", "corrected": False, "raw_text": ""})
     return sources
 
 
 def _source_revision(sources):
-    return _digest([{k: s[k] for k in ("video_id", "title", "text", "role") if k in s}
+    return _digest([{k: s[k] for k in ("video_id", "title", "text", "role", "url", "official_date") if k in s}
                     for s in sources])
 
 
@@ -105,9 +108,14 @@ def split_sources(sources, source_revision, max_chars=SEGMENT_CHARS):
     for source in sources:
         raw = source["text"]
         start = 0
+        # 官方案例按职业原始分段，每段至少保留一条关键点。
+        groups = [(match.start(), match[1]) for match in re.finditer(r"(?m)^【([A-Za-z ]+)】", raw)
+                  if source.get("role") == "official_supplement"]
+        stops = [offset for offset, _ in groups] + [len(raw)]
         while start < len(raw):
-            end = min(len(raw), start + max_chars)
-            if end < len(raw):
+            boundary = next(stop for stop in stops if stop > start)
+            end = min(boundary, start + max_chars)
+            if end < boundary:
                 cuts = [m.end() for m in re.finditer(r"[。！？!?；;\n]", raw[start:end])
                         if m.end() >= max_chars // 2]
                 if cuts:
@@ -118,6 +126,9 @@ def split_sources(sources, source_revision, max_chars=SEGMENT_CHARS):
                    "text": raw[start:end]}
             if source.get("role"):
                 seg["role"] = source["role"]
+                owners = [owner for offset, owner in groups if offset <= start]
+                if owners:
+                    seg["topic_group"] = owners[-1]
             seg["segment_id"] = _digest([source_revision, seg["video_id"], start, end])[:20]
             out.append(seg)
             start = end
@@ -203,10 +214,18 @@ quote 必须逐字复制 text 中的连续文本，不能改标点、合并跨�
                    "conditions 数组仅复制 quote 中有实际约束的原文字词，每一项都逐字包含于 quote。"
                    "不能把猜测改成事实。正文中的乱码、疑似识别错的数值或无法确认的专名，"
                    "原句逐字保留，在该点新增 review_reason，写清疑点；明确无疑点时填空字符串。"
-                   "不要在 display_text 里修正读音或推算数值。")
+                   "不要在 display_text 里修正读音或推算数值。"
+                   "仅有情绪、感慨、段子而不新增明确机制或可执行步骤的内容标 optional。")
+    if segment.get("official_context"):
+        prompt += ("\n以下已确认同批次的官方补充用于排查口播错听。"
+                   "如能在同一职业、技能、属性与版本定位到冲突，逐字保留视频原句并填 review_reason，"
+                   "注明官方来源中的对应短句。不能仅凭相同数字跨主体纠错。\n"
+                   + segment["official_context"])
     if segment.get("role") == "official_supplement":
-        prompt += ("\n此段属于官方补充，只摘取明确口径与限制，优先级为 support；"
-                   "没有可用事实时输出空 points。")
+        prompt += ("\n此段为用户选用的官方补充。保留涉及的每个主体、改动与条件。"
+                   "影响玩家判断的新增事实标 must；背景与解释标 support。"
+                   "英文原文的 quote 保持英文逐字，display_text 用中文忠实表达。"
+                   "每项要点的 subject 写明所属职业或明确对象。没有可用事实时才可输出空 points。")
     if feedback:
         prompt += "\n上次校验：%s。修正后重新输出，逐字从 text 字段复制引文。" % feedback
     prompt += "\n输入资料 JSON：\n" + json.dumps({"title": source_title, "text": segment["text"]},
@@ -216,7 +235,8 @@ quote 必须逐字复制 text 中的连续文本，不能改标点、合并跨�
 
 def _points_from_result(segment, result, source_revision, *, editorial=False):
     raw = result.get("points") if isinstance(result, dict) else None
-    if not isinstance(raw, list) or (not raw and segment["text"].strip() and not segment.get("role")):
+    if not isinstance(raw, list) or (not raw and segment["text"].strip()
+                                     and (not segment.get("role") or segment.get("topic_group"))):
         raise MotherError("第 %s 段没有可定位的要点，不能当作已完整处理" % segment["segment_id"])
     points = []
     for item in raw:
@@ -233,7 +253,7 @@ def _points_from_result(segment, result, source_revision, *, editorial=False):
         priority = str(item.get("priority") or "support")
         if priority not in ("must", "support", "optional"):
             raise MotherError("要点 %s 的 priority 无效" % point_id)
-        if segment.get("role") == "official_supplement":
+        if segment.get("role") == "official_supplement" and not editorial:
             priority = "support"
         conditions = item.get("conditions") or []
         if not isinstance(conditions, list):
@@ -249,13 +269,18 @@ def _points_from_result(segment, result, source_revision, *, editorial=False):
                                       "start": start, "end": end}})
         if segment.get("role"):
             points[-1]["source_ref"]["role"] = segment["role"]
+        if segment.get("topic_group"):
+            points[-1]["topic_group"] = segment["topic_group"]
         if editorial:
             from .editorial_model import uncertain_talent_rank
-            points[-1]["display_text"] = quote
+            if segment.get("role") != "official_supplement":
+                points[-1]["display_text"] = quote
             reason = (uncertain_talent_rank(quote, segment["text"])
                       or str(item.get("review_reason") or "").strip()[:100])
             if reason:
                 points[-1]["review_reason"] = reason
+    if editorial and segment.get("topic_group") and points and not any(p["priority"] == "must" for p in points):
+        points[0]["priority"] = "must"
     return points
 
 
@@ -276,7 +301,9 @@ def ensure_mother(db_path, summary_id, ai_config, extractor=None, progress=None)
     sources, revision = source_snapshot(db_path, summary_id)
     segments = split_sources(sources, revision)
     old = load_mother(db_path, summary_id)
-    evidence_schema = 3 if ai_config.get("editorial") else 0
+    evidence_schema = 0
+    if ai_config.get("editorial"):
+        evidence_schema = 4 if any(s.get("role") for s in sources) else 3
     if (old.get("evidence_schema") or 0) < evidence_schema:
         old = {}
     if old.get("source_revision") == revision and old.get("status") == "complete":
@@ -290,7 +317,10 @@ def ensure_mother(db_path, summary_id, ai_config, extractor=None, progress=None)
               "status": "partial", "segments": [], "points": [], "core_question": "",
               "core_answer": "", "updated_at": datetime.now().isoformat(timespec="seconds")}
     by_video = {s["video_id"]: s for s in sources}
+    official_context = "\n".join(s["text"] for s in sources if s.get("role"))[:16000]
     for i, seg in enumerate(segments, 1):
+        if ai_config.get("editorial") and official_context and not seg.get("role"):
+            seg["official_context"] = official_context
         sid = seg["segment_id"]
         if progress:
             progress("提取原意母稿：第 %d/%d 段" % (i, len(segments)))
@@ -340,6 +370,7 @@ def mother_prompt(mother):
                        "points": [{"point_id": p["point_id"], "quote": p["quote"],
                                    "display_text": p["display_text"], "priority": p["priority"],
                                    "subject": p["subject"], "conditions": p["conditions"],
+                                   **({"topic_group": p["topic_group"]} if p.get("topic_group") else {}),
                                    "modality": p["modality"],
                                    **({"review_reason": p["review_reason"]} if p.get("review_reason") else {}),
                                    **({"source_role": "暴雪官方补充"}
@@ -551,6 +582,8 @@ def audit_output(mother, plan, publish, ai_config, checker=None, source_text="")
                        + [{"point_id": pid, "problem": "引用了不存在的母稿点"} for pid in unknown])
     editorial = bool(ai_config.get("editorial"))
     if editorial:
+        from .poster_content import page_issues
+        coverage_issues.extend(page_issues(plan, points))
         from .editorial_model import (claim_issues, TALENT_RANK_REVIEW,
                                       unclear_command_spans, unclear_talent_rank_spans, uncertain_talent_rank)
         for pid in sorted((must | used) & set(points)):
@@ -634,7 +667,7 @@ def audit_revision(mother, plan, publish, source_text=""):
     pages = plan.get("pages") or [plan]
     bindings = [[sorted(str(pid) for pid in (card.get("point_ids") or []))
                  for card in page.get("cards") or []] for page in pages]
-    return _digest(["all-visible-fields-v2", mother["mother_revision"], _output_text(plan, publish),
+    return _digest(["all-visible-fields-v3", mother["mother_revision"], _output_text(plan, publish),
                     _field_texts(plan, publish), bindings, _digest(source_text)])
 
 

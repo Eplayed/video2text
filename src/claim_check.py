@@ -200,9 +200,13 @@ def _hits(needles: Dict[str, Any], text: str) -> List[Tuple[str, int]]:
     return out
 
 
-_GENERIC_CONDITIONS = {"攻击", "法术"}
-_QUEST_XP_OBSERVATION = re.compile(r"(?:非?亡灵)?按睡袋(?:增益|buff)统计[，,：:](?:非?亡灵)?约?\d+(?:\.\d+)?万?经验[。]?$", re.I)
-_ROUTE_ORDINAL = re.compile(r"第一(?=(?:个|间|扇)?(?:房间|路口|箱子|门)|处站位|步)")
+# 职业只是「命令」的适用条件。职业名独立出现不能定位到旧种族条目。
+_GENERIC_CONDITIONS = {"攻击", "法术", "术士", "猎人"}
+_XP_RESULT = r"(?:非?亡灵)(?:约)?\d+(?:\.\d+)?万?经验"
+_QUEST_XP_OBSERVATION = re.compile(
+    r"(?:(?:非?亡灵(?:经验)?|经验(?:统计|收益|记录))[:：]?)?(?:按睡袋(?:增益|buff)(?:统计)?[，,：:]?)?"
+    + _XP_RESULT + r"(?:[，,]" + _XP_RESULT + r")?[。]?$", re.I)
+_ROUTE_ORDINAL = re.compile(r"第一(?=(?:个|扇)?(?:房间|路口|箱子|门)|间|处站位|步)")
 
 
 def _condition_hits(idx, text):

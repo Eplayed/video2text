@@ -265,3 +265,105 @@ def main(argv=None) -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+def _hotfix_id(url):
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(url)
+    if parts.scheme != "https" or parts.netloc not in (
+            "worldofwarcraft.blizzard.com", "news.blizzard.com"):
+        return ""
+    hit = re.match(r"^/[a-z]{2}-[a-z]{2}/(?:news|article)/(\d{6,10})(?:/|$)", parts.path)
+    return hit[1] if hit else ""
+
+
+def forever_hotfix_from_reference(reference, selected_date, primary_text, classes_only=False):
+    """解析暴雪热修汇总里的唯一相符批次，日期冲突时用主素材中的数值交叉确认。"""
+    from datetime import date, timedelta
+    from urllib.parse import urljoin
+
+    article = _hotfix_id(reference)
+    if not article:
+        raise ValueError("未找到暴雪官方公告链接")
+    if BeautifulSoup is None:
+        raise ValueError("公告正文解析器不可用")
+    url = "https://news.blizzard.com/en-us/article/%s/forever-hotfixes" % article
+    for _ in range(3):
+        response = requests.get(url, headers={"User-Agent": UA}, timeout=(4, 8), allow_redirects=False)
+        if not response.is_redirect:
+            break
+        url = urljoin(url, response.headers["Location"])
+        if _hotfix_id(url) != article:
+            raise ValueError("官方公告跳转地址不匹配")
+    response.raise_for_status()
+    soup = BeautifulSoup(response.content, "html.parser")
+    headline = _text_of(soup.find("h1")) or _text_of(soup.title)
+    if not re.search(r"\bForever\s+Hotfixes\b", headline, re.I):
+        raise ValueError("该链接未确认是无限服热修汇总")
+    blog = soup.select_one("section.blog")
+    if not blog:
+        raise ValueError("未找到暴雪公告正文")
+    day = date.fromisoformat(selected_date)
+    days = {(day - timedelta(days=i)).strftime("%B %d, %Y").replace(" 0", " ")
+            for i in (0, 1)}
+    batches = {}
+    for node in blog.find_all(["p", "h2", "h3"], recursive=False):
+        heading = _text_of(node)
+        if heading not in days:
+            continue
+        sections = []
+        for entry in node.next_siblings:
+            if getattr(entry, "name", None) == "hr":
+                break
+            if getattr(entry, "name", None) not in ("p", "ul", "ol", "h3", "h4"):
+                continue
+            if re.fullmatch(r"[A-Za-z]+ \d{1,2}, 20\d\d", _text_of(entry)):
+                break
+            sections.append(entry)
+        batches[heading] = sections
+    number = re.compile(r"(?<![.\d])\d+(?:\.\d+)?\s*[%％]")
+    numbers = {x.replace(" ", "").replace("％", "%") for x in number.findall(primary_text)}
+    ranked = sorted(((len(numbers & {x.replace(" ", "") for x in number.findall(
+                         " ".join(_text_of(n) for n in rows))}), heading)
+                     for heading, rows in batches.items()), reverse=True)
+    if (not ranked or ranked[0][0] < 2 or
+            (len(ranked) > 1 and ranked[0][0] == ranked[1][0])):
+        raise ValueError("当天与前一天的公告批次无法用主素材唯一确认")
+    section = ranked[0][1]
+    body = []
+    if classes_only:
+        def own_text(node):
+            return " ".join(filter(None, (_text_of(child) if hasattr(child, "get_text")
+                                           else str(child).strip() for child in node.contents
+                                           if getattr(child, "name", None) not in ("ul", "ol"))))
+
+        def bullets(node, scope=()):
+            for block in node.find_all(["ul", "ol"], recursive=False):
+                for item in block.find_all("li", recursive=False):
+                    label = own_text(item)
+                    children = item.find(["ul", "ol"], recursive=False)
+                    if children and label and len(label) < 40:
+                        yield from bullets(item, scope + (label,))
+                    else:
+                        if label:
+                            yield " / ".join(scope + (label,))
+                        if children:
+                            yield from bullets(item, scope)
+
+        in_classes = False
+        for node in batches[section]:
+            if node.name != "ul":
+                if in_classes:
+                    break
+                in_classes = _text_of(node).lower() == "classes"
+            elif in_classes:
+                for item in node.find_all("li", recursive=False):
+                    body.append("【%s】\n%s" % (own_text(item), "\n".join(bullets(item))))
+    else:
+        body = [_text_of(row) for row in batches[section]]
+    text = "\n\n".join(body)
+    if not text.strip() or len(text) > 16000:
+        raise ValueError("相关公告段落为空或过长，需选取具体段落")
+    return {"body": text, "official_url": url, "official_date": section,
+            "official_title": headline}

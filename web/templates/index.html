@@ -3874,7 +3874,7 @@ async function pkHydrate(id) {
     if (!errMsg) {
       document.getElementById('pk-result').innerHTML = '<div class="pk-verify mild">这是上一次拆好的草稿。'
         + '请先看原意核对与下方来源文本，确认后再出图。</div>'
-        + modelUsageHtml(st.model_usage, '上次任务');
+        + modelUsageHtml(st.model_usage, '上次任务') + pkSupplementReceiptHtml(st.plan.supplements);
       pkSetFidelity(st.plan.fidelity);
     } else {
       document.getElementById('pk-result').innerHTML += modelUsageHtml(st.model_usage, '上次任务');
@@ -4388,6 +4388,15 @@ async function pkFocusFidelityIssue(ref) {
   pkFocusMotherPoint(ref);
 }
 function pkSetFidelity(f) {
+function pkSupplementReceiptHtml(rows) {
+  if (!rows || !rows.length) return '';
+  return '<div class="pk-verify mild"><b>补充资料</b><ul>' + rows.map(row => {
+    const state = row.pages.length ? '已用于第 ' + row.pages.join('、') + ' 页'
+      : (row.status === 'official' ? '已确认官方来源，当前稿件尚未采用' : '仅供选题参考');
+    return '<li>' + esc(row.title) + ' · ' + state + (row.note ? ' · ' + esc(row.note) : '') + '</li>';
+  }).join('') + '</ul></div>';
+}
+
   _pkFidelity = f || null;
   const box = document.getElementById('pk-result');
   if (!box) return;
@@ -6173,7 +6182,7 @@ function pollPoster(stage, task) {
     const warn = (stage === 'plan' && st.plan && st.plan.draft_warning)
       ? `<div class="pk-verify mild">⚠️ ${esc(st.plan.draft_warning)}——文案照拆不误，但出图那一步会先拦你一次，复核后点「仍然出图」放行。</div>` : '';
     box.innerHTML = `<div class="pk-verify ${st.plan && st.plan.fidelity && !st.plan.fidelity.ready ? 'fail' : 'pass'}">${esc(st.progress || '文案已就绪，可编辑后出图')}</div>`
-      + modelUsageHtml(st.model_usage, '本次任务') + warn;
+      + modelUsageHtml(st.model_usage, '本次任务') + warn + pkSupplementReceiptHtml(st.plan && st.plan.supplements);
     if (st.plan && st.plan.plan) pkSetFidelity(st.plan.fidelity);
   };
   setTimeout(poll, 1200);
@@ -7114,7 +7123,7 @@ async function pkLoadSource() {
   catch (e) { box.innerHTML = '<div class="pk-src">原文读取失败：' + esc(e.message) + '</div>'; return; }
   if (!d || d.error) { box.innerHTML = '<div class="pk-src">' + esc((d && d.error) || '原文读取失败') + '</div>'; return; }
   _pkSource = {id: _pkId,
-    content: (d.sources || []).map(s => '【素材 ' + s.video_id + (s.corrected ? ' · 已按画面证据修订' : '') + '】\n' + (s.transcript || '')).join('\n\n'),
+    content: (d.sources || []).map(s => '【' + (s.role === 'official_supplement' ? '官方补充 ' : '素材 ') + s.video_id + (s.official_date ? ' · ' + s.official_date : '') + (s.corrected ? ' · 已核对术语或原片' : '') + '】\n' + (s.transcript || '')).join('\n\n'),
     rawContent: (d.sources || []).filter(s => s.corrected).map(s => '【素材 ' + s.video_id + ' · 未改动 ASR】\n' + (s.raw_transcript || '')).join('\n\n'),
     mother: d.mother || {}, source_revision: d.source_revision || ''};
   pkRenderSource();
@@ -7156,7 +7165,7 @@ function pkRenderSource() {
   const hasPlan = !!(plan.title || (plan.cards || []).length);
   const motherHead = pkMotherSummaryHtml();
   const rawNote = _pkSource.rawContent
-    ? '<details class="pk-guide"><summary>这份来源文本有画面证据修订 · 查看未改动的 ASR 原文</summary><div class="pk-src">'
+    ? '<details class="pk-guide"><summary>查看修订前的 ASR 原文</summary><div class="pk-src">'
       + esc(_pkSource.rawContent) + '</div></details>' : '';
   if (!hasPlan) {
     box.innerHTML = motherHead + '<div class="pk-src">' + esc(src.slice(0, 4000)) + (src.length > 4000 ? '…（原文 ' + src.length + ' 字，往下滚动看这一段就够）' : '') + '</div>'

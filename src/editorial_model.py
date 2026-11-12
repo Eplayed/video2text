@@ -60,8 +60,14 @@ def prompt_scope(brief):
         lines.append("主视频主题原句：" + brief["topic_evidence"]["quote"])
     selected = brief.get("supplements") or []
     metadata = supplements.brief_lines(selected)
-    excerpts = ["补充 %d 原文节选：%s" % (index, row["body"])
-                for index, row in enumerate(selected, 1) if row.get("body")]
+    excerpts = ["补充 %d 已核官方正文（%s %s）：\n%s" % (
+                    index, row.get("official_url") or row.get("url") or "",
+                    row.get("official_date") or "", row["body"])
+                for index, row in enumerate(selected, 1)
+                if row.get("body") and (row.get("evidence_status") == "official"
+                                         or row.get("sheet") == "暴雪官方")]
+    excerpts += ["补充 %d 仅供选题比对：%s" % (index, row["evidence_note"])
+                 for index, row in enumerate(selected, 1) if row.get("evidence_note")]
     return ("\n【本次选题方向，仅供取舍】" + " / ".join(lines)
             + "\n【补充资料】\n" + "\n".join(metadata + excerpts)
             + "\n【编辑与证据规则】" + EVIDENCE_RULES)
@@ -185,7 +191,7 @@ ready=true 时，quote 是一段连续原文，12 至 320 字，保留主体与�
 def _literal_card_fragments(quote, limit):
     if len(quote) <= limit:
         return [quote]
-    chunks = [part for part in re.split(r"(?<=[，。；！？、\n])", quote) if part]
+    chunks = [part for part in re.split(r"(?<=[，。；！？、;,\n])", quote) if part]
     if any(len(chunk) > limit for chunk in chunks):
         return []
     cards = [""]
@@ -194,6 +200,38 @@ def _literal_card_fragments(quote, limit):
             cards.append("")
         cards[-1] += chunk
     return cards
+
+
+def reflow_poster_pages(plan, limits, card_cap, page_cap, measure):
+    """保留同一主题与要点映射，按容量增页；超过整组上限交给修稿。"""
+    original = plan.get("pages") or [plan]
+    result = []
+    changed = False
+    for page in original:
+        cards = page.get("cards") or []
+        page_meta = {key: value for key, value in page.items() if key not in ("cards", "pages")}
+        current = dict(page_meta, cards=[])
+        for card in cards:
+            fragments = _literal_card_fragments(card.get("d") or "", limits["cardD"])
+            fitted = [dict(card, d=part) for part in fragments] if len(fragments) > 1 else [card]
+            trial = dict(current, cards=current["cards"] + fitted)
+            if current["cards"] and (len(trial["cards"]) > card_cap or measure(trial) > limits["total"]):
+                result.append(current)
+                current = {key: page[key] for key in ("title", "subtitle", "kicker", "footer", "style_key", "layout_key")
+                           if key in page}
+                current["cards"] = []
+                changed = True
+            current["cards"].extend(fitted)
+            changed = changed or len(fitted) > 1
+        result.append(current)
+    if not changed or len(result) > page_cap:
+        return []
+    if len(result) == 1 and not plan.get("pages"):
+        plan["cards"] = result[0]["cards"]
+    else:
+        plan["pages"] = result
+        plan["cards"] = result[0]["cards"]
+    return ["按正文容量重新排成%d页，保留原要点和条件" % len(result)]
 
 
 def complete_poster_coverage(plan, mother, limits, page_cap, card_cap):
@@ -217,6 +255,9 @@ def complete_poster_coverage(plan, mother, limits, page_cap, card_cap):
     label = "原文要点"
     for point in missing:
         quote = point["quote"]
+        if (point.get("source_ref") or {}).get("role") == "official_supplement" and not re.search(r"[一-龥]", quote):
+            notes.append("官方补充要点需在拆稿中用中文覆盖：%s" % quote[:80])
+            continue
         if point.get("review_reason"):
             notes.append("待核原句：%s" % quote)
             continue
@@ -254,12 +295,20 @@ def complete_poster_coverage(plan, mother, limits, page_cap, card_cap):
 
 # Compare explicit quantities used in these guides, without treating page indices as claims.
 _NUMERIC_CLAIM = re.compile(r"(?<![\d.])(?:\d+(?:[.．]\d+)*|[零一二三四五六七八九十两]+)\s*"
-                            r"(?:个百分点|分钟|小时|万经验|经验|秒伤|[%％]|点|级|秒|倍|层|天)")
+                            r"(?:个百分点|分钟|小时|万经验|经验|秒伤|[%％]|点|级|秒|倍|层|次|天)")
 _DIGITS = dict(zip("零一二三四五六七八九两", "01234567892"))
 
 
 def numeric_claims(text):
     text = re.sub(r"百分之([零一二三四五六七八九十两\d.]+)", r"\1%", text or "")
+    unit_pairs = {"seconds": "秒", "minutes": "分钟", "hours": "小时",
+                  "ranks": "级", "levels": "级", "stacks": "层", "times": "次"}
+    for unit, cn in unit_pairs.items():
+        text = re.sub(r"(\d)\s*" + unit + r"\b", r"\1" + cn, text, flags=re.I)
+    text = re.sub(r"\b(?:first|last) (\d+) ranks?\b", r"\1级", text, flags=re.I)
+    # 4/8/12% 表示三个同单位的等级值。
+    text = re.sub(r"(?<![.\d])((?:\d+/)+\d+)([%％次])",
+                  lambda match: " ".join(value + match[2] for value in match[1].split("/")), text)
 
     def normalize(match):
         value = re.sub(r"\s+", "", match.group()).replace("％", "%").replace("．", ".")
@@ -298,10 +347,13 @@ def claim_issues(value, points, field, source_fallback=""):
     evidence = " ".join(point["quote"] for point in points) or source_fallback
     commands = set(_COMMAND_LITERAL.findall(value)) - set(_COMMAND_LITERAL.findall(evidence))
     missing = claims - numeric_claims(evidence)
-    conditions = sorted({condition for point in points
-                         if claims & numeric_claims(point["quote"])
-                         for condition in point.get("conditions") or []
-                         if condition not in value})
+    conditions = set()
+    for point in points:
+        scope = point.get("conditions") or []
+        outcomes = numeric_claims(point["quote"]) - numeric_claims(" ".join(scope))
+        if claims & outcomes:
+            conditions.update(condition for condition in scope
+                              if re.search(r"[一-龥]", condition) and condition not in value)
     issues = []
     if commands:
         issues.append({"field": field, "text": value,
@@ -311,7 +363,7 @@ def claim_issues(value, points, field, source_fallback=""):
                        "problem": "关联原句缺少数量或单位：" + "、".join(sorted(missing))})
     if conditions:
         issues.append({"field": field, "text": value,
-                       "problem": "数字结论遗漏原文条件：" + "、".join(conditions)})
+                       "problem": "数字结论遗漏原文条件：" + "、".join(sorted(conditions))})
     return issues
 
 

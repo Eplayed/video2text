@@ -18,6 +18,8 @@ Python 3.9 兼容：不用 match / X|Y 语法。
 """
 import os
 import sys
+from contextlib import contextmanager
+from contextvars import ContextVar
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
@@ -40,10 +42,22 @@ def _t2s():
     return _cc["obj"]
 
 
-def hotwords(max_chars=110):
+_ASR_MATERIAL = ContextVar("asr_material", default="")
+
+
+@contextmanager
+def material_context(text):
+    token = _ASR_MATERIAL.set(text)
+    try:
+        yield
+    finally:
+        _ASR_MATERIAL.reset(token)
+
+
+def hotwords(max_chars=110, context=""):
     try:
         import term_glossary
-        return term_glossary.asr_prompt(max_chars=max_chars)
+        return term_glossary.asr_prompt(max_chars=max_chars, context=context or _ASR_MATERIAL.get())
     except Exception as e:
         print("[asr_fix] 术语提示词没拿到（不影响转写）:", e)
         return ""

@@ -240,7 +240,7 @@ def rows_by_ids(db_path, ids, limit: int = MAX_ITEMS, snaps=None) -> List[Dict[s
                     "url": r.get("source_url") or "", "remark": r.get("remark") or "",
                     "why": why_by.get(i, ""),
                     "tier": TIER_BY_SHEET.get(r.get("source_sheet"), "素材"),
-                    "body": body[:PER_ITEM_CHARS] + ("…" if len(body) > PER_ITEM_CHARS else "")})
+                    "body": body[:body_limit] + ("…" if len(body) > body_limit else "")})
     return out
 
 
@@ -286,3 +286,36 @@ def brief_block(items) -> str:
               "③ 补充料里没有的，不许因为这里列了就编。\n"
             + ("\n".join(bodies) + "\n" if bodies else ""))
 
+        body_limit = 16000 if r.get("source_sheet") == "暴雪官方" else PER_ITEM_CHARS
+
+
+def prepare_evidence(items, primary_text):
+    """同一份已选补充回执供整理、母稿和核对使用。未核实的转述只有选题用途。"""
+    from . import blizzard_news, term_glossary
+    import requests
+
+    result = []
+    for item in items or []:
+        entry = {key: value for key, value in item.items() if key != "body"}
+        text = str(item.get("body") or "")
+        if item.get("sheet") == "暴雪官方" and text and not text.endswith("…"):
+            entry.update(body=text, evidence_status="official",
+                         official_url=item.get("url") or "")
+        else:
+            entry["evidence_status"] = "reference"
+            links = list(dict.fromkeys(
+                link for link in re.findall(r"https://[^\s<>\[\]，。；]+", text)
+                if blizzard_news._hotfix_id(link)))
+            if len(links) == 1 and item.get("date"):
+                try:
+                    classes_only = any(name in item.get("title", "")
+                                       for name in term_glossary.WOW_CLASSES) or "职业" in item.get("title", "")
+                    evidence = blizzard_news.forever_hotfix_from_reference(
+                        links[0], item["date"], primary_text, classes_only=classes_only)
+                    entry.update(evidence, evidence_status="official")
+                except (ValueError, requests.RequestException) as exc:
+                    entry["evidence_note"] = str(exc)[:140]
+            else:
+                entry["evidence_note"] = "仅作选题参考，缺少能唯一定位的官方公告"
+        result.append(entry)
+    return result
