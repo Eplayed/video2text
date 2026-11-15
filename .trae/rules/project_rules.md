@@ -20,14 +20,14 @@ As this project's AI coding tool, you must follow the additional conventions bel
 （Dify 知识库同步已于 2026-09-30 下线：一条素材都未真正发布过，且 Dify 侧写稿质量不达标）
 同时是**选题/渠道策略的唯一权威源**（`src/content_store.py` 的 `RADAR_CHANNEL_STRATEGY` / `CHANNEL_STRATEGY_GLOBAL`）。
 
-## 开始前必读（按顺序）
+## 开工入口（按任务读取）
 
-1. `docs/AGENT-HANDOFF.md` — **接手必读那一份**：规则有几份、skill 在哪、门禁怎么跑、
-   界面改动收尾要自己走一遍、并发提交怎么隔离、哪些口径别再翻回去
-2. `CHANGELOG_FOR_AI.md`（从顶部往下读）— 每处改动为什么改
-3. `output/角色交接/`（按日期那份）— 内容产线各角色的结论与每份文件的最低要求
-4. `README.md` — 基础用法
-5. `PROJECT_STATUS.md` — 现状快照**停在 2026-09-10**，只当历史背景读，别当现状
+1. `NOW.md` — 当前接手入口、工作归属与未结事项；先核 Git 状态和本题最近的交接，不能把日期快照当实时状态。
+2. `PROJECT_STATUS.md` — 架构与流程基线，最后完整盘点为 2026-10-23；涉及的数字、路径和功能以现有代码与数据复核。
+3. 只读**本题相关**的 `output/角色交接/<日期>-<渠道>-<环节>.md`；需要追溯原因时，再在 `CHANGELOG_FOR_AI.md` 搜本题关键词或日期。不要从头通读整本更新史或整个交接目录。
+4. 换工具、换机、处理并发或门禁时读 `docs/AGENT-HANDOFF.md` 的相关章节；需要启动和基本命令时读 `README.md`。
+
+跨 Qoder / Codex 交接时，把结果落到项目文件，写清任务、状态、改动文件、验证证据、未验项和下一位负责人；不要只依赖任一软件的对话记忆。同一工作树的同一文件一次只由一条任务写入。
 
 ## 跨仓库锚（必须认）
 

@@ -135,6 +135,11 @@ bash .qoder/skills/workbench-restart/scripts/restart_workbench.sh src/xxx.py web
 - **仓库公开**：`config/config.env*`（Cookie / API Key）、`*.db`、`output/`、`product/`、`temp/`、
   `video_index.json` 等运行数据一律不进 git；可卖内容也不进。
 - **永不自动发布**：发布动作永远是人工那一下（`media-publish` 只出清单和回填）。
+- **自动跑的东西散在四个地方**（工作台进程里的定时器 / 系统 launchd / cron / Qoder 定时任务），
+  只看工作台那一屏会以为只有 6 条。全量清单与每条的实测状态见 `docs/每日自动任务清单-2026-10-30.md`。
+  两条最容易当成漏的：头条自动写稿那条 cron **10-30 已删**（带着 `TOUTIAO_AUTOGEN_OFF=1` 空跑了些天，
+  脚本还在 `~/Documents/自媒体/_content_factory/dify/scheduler/`，恢复的那一行抄在清单第 4 节）；
+  发布台账每日回填**没有定时**（号主 10-19 说先别建），台账里 `net_follow`/`revenue` 空着不是坏了。
 - **小红书这一侧先看 `docs/小红书违规面盘点.md` 再动**：10-11、10-15 两篇笔记被判
   「AI 托管发文/互动 / 不可被他人查看」。**触发器本地证据定不了论**：我们装配的文案里确实带着
   「本文由 AI 辅助整理归纳」+「回复 X 领取…」关键词钩子（18 个成品包没一个按小红书档装配过），

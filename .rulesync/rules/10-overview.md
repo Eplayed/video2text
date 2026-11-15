@@ -16,19 +16,20 @@ globs:
 （Dify 知识库同步已于 2026-09-30 下线：一条素材都未真正发布过，且 Dify 侧写稿质量不达标）
 同时是**选题/渠道策略的唯一权威源**（`src/content_store.py` 的 `RADAR_CHANNEL_STRATEGY` / `CHANNEL_STRATEGY_GLOBAL`）。
 
-## 开始前必读（按顺序）
+## 开工入口（按任务读取）
 
-1. `docs/AGENT-HANDOFF.md` — **接手必读那一份**：规则有几份、skill 在哪、门禁怎么跑、
-   界面改动收尾要自己走一遍、并发提交怎么隔离、哪些口径别再翻回去
-2. `CHANGELOG_FOR_AI.md`（从顶部往下读）— 每处改动为什么改
-3. `output/角色交接/`（按日期那份）— 内容产线各角色的结论与每份文件的最低要求
-4. `README.md` — 基础用法
-5. `PROJECT_STATUS.md` — 现状快照**停在 2026-09-10**，只当历史背景读，别当现状
+1. `NOW.md` — 当前接手入口、工作归属与未结事项；先核 Git 状态和本题最近的交接，不能把日期快照当实时状态。
+2. `PROJECT_STATUS.md` — 架构与流程基线，最后完整盘点为 2026-10-23；涉及的数字、路径和功能以现有代码与数据复核。
+3. 只读**本题相关**的 `output/角色交接/<日期>-<渠道>-<环节>.md`；需要追溯原因时，再在 `CHANGELOG_FOR_AI.md` 搜本题关键词或日期。不要从头通读整本更新史或整个交接目录。
+4. 换工具、换机、处理并发或门禁时读 `docs/AGENT-HANDOFF.md` 的相关章节；需要启动和基本命令时读 `README.md`。
+
+跨 Qoder / Codex 交接时，把结果落到项目文件，写清任务、状态、改动文件、验证证据、未验项和下一位负责人；不要只依赖任一软件的对话记忆。同一工作树的同一文件一次只由一条任务写入。
 
 ## 跨仓库锚（必须认）
 
 - 三仓库架构、权威源地图、换机流程 → **media-workbench 仓库 `docs/DEV-SYNC.md`**（改策略只改权威源一处）
 - 自媒体产线双端任务分工、工作纪律 → **media-workbench 仓库 `AGENTS.md` 第七节**
+- 公众号这条线的现状与接手清单 → **`~/Documents/自媒体/公众号交接文档.md`**（2026-10-06 实测取证；含与《公众号写作铁律》v1.2 的待拍板冲突）
 
 ## 关键纪律
 
@@ -36,7 +37,13 @@ globs:
 2. 改代码后必须重启 Flask（无热重载）：先按占用端口的 PID 杀旧进程（`lsof -nP -i :15801` 取 PID 后 `kill`），再 `cd web && python3 app.py`；重启后用 `lsof` 确认 PID 已换、新进程真正接管。禁用 `pkill -f "web/app.py"`——它匹配不到实际命令行（`.../MacOS/Python app.py`），会造成旧进程占端口、新进程静默退出。
 3. 运行数据不进 git：`config/config.env`（Cookie/API Key）、`video_index.json` 等索引文件、`*.json` 索引——换机时手动迁移。
 4. AI 加工未配置时静默跳过、不阻断采集主流程。
-5. 界面类改动收尾前**自己把流程走一遍**：`python3 scripts/agent/ui_walk.py <整合稿id> "主题" --plan`（headless 走弹窗、把每处用户会读到的文案原样打印＋截图），再跑门禁。号主只有「截图 + 一句话」这一种反馈方式，等他指出来就已经花掉他一轮。判据要跟后端同源、别拿上次回传的标记当现状——那次抓到的是「界面写 0 元、后端照样扣钱」。
+5. 改 `src/graphics/`（配色/字体/版式三轴、模板、渠道适配）前必读 `.agents/memories/40-graphics-variants.md`——三轮「选了不生效」静默失效复盘全在其中；改完必须跑 `/graphics-verify` 三条线全绿。
+6. 界面类改动收尾前**自己把流程走一遍**：`python3 scripts/agent/ui_walk.py <整合稿id> "主题" --plan`（headless 走弹窗、把每处用户会读到的文案原样打印＋截图），再跑门禁。号主只有「截图 + 一句话」这一种反馈方式，等他指出来就已经花掉他一轮。判据要跟后端同源，别拿上次回传的标记当现状——那次抓到的是「界面写 0 元、后端照样扣钱」。
+
+## Qoder 项目技能（`.qoder/skills/`）
+
+- `/workbench-restart`：按端口 PID 安全重启 Flask + 语法自检 + PID/接口双确认（落实纪律 2）。
+- `/graphics-verify`：一条命令跑完 `check_variant_tokens.py` + 头条/公众号两条 e2e（脚本已收编进 `scripts/e2e_toutiao_variants.py`、`scripts/e2e_wechat_variants.py`）。
 
 ## 角色路由（自媒体内容产线）
 

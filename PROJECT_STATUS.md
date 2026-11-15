@@ -1,80 +1,133 @@
 # video2text 项目现状（给 AI / Agent 的快照）
 
-更新时间：2026-09-30
-阅读顺序：本文件（现状快照）→ `README.md`（基础用法）→ `CHANGELOG_FOR_AI.md`（2026-06 历史改动与写稿流程约定）。
-双机协作/换机流程见 media-workbench 仓库 `docs/DEV-SYNC.md`（跨三仓库的权威文档）。
+更新时间：2026-10-23
+这是 10-23 的完整架构快照；当前接手状态先看 `NOW.md`，再核实际工作树和本题最新交接。
+阅读顺序：`AGENTS.md`（纪律）→ `NOW.md`（当前接手入口）→ **本文件**（10-23 架构快照）；按本题需要再读 `output/角色交接/` 的最新原件、`CHANGELOG_FOR_AI.md` 的相关节或 `docs/AGENT-HANDOFF.md` 的工具章节。
+双机协作/换机流程见 media-workbench 仓库 `docs/DEV-SYNC.md`。
+
+> 本次（10-23）文档清理：根目录 5 篇一次性方案/历史快照移进 **`docs/归档/`**（迁移方案、Phase0/Phase1、
+> 头条号与公众号交接梳理、海报布局 PRD），另删掉一份重复的旧 Cursor 规则 `.cursor/rules/overview.mdc`
+> （与 `10-overview.mdc` 同体，只少一句中文尾注）。归档原因逐条写在 `docs/归档/README.md`。
+> 同时把 `.rulesync/rules/10-overview.md`（规则**源**）补齐到与 `AGENTS.md` 一致——
+> 以前源落后，下次 `rulesync generate` 会把新规则冲掉。
 
 ## 项目定位
 
-抖音短视频素材采集器 + 自媒体文章选题索引 + 内容工作台。
-核心链路：视频/文章采集 → ASR 转写 → AI 加工（标题/摘要/关键词/分类）→ SQLite 存储 → Flask 工作台管理 → 图文出图（头条/公众号渠道）。
+抖音短视频 / 公众号文章 / B站 / 暴雪官方资讯 的**素材采集器 + 选题索引 + 内容工作台**，
+往下接两条出图产线，再往接发布与台账。核心链路：
 
-2026-06 之后定位进一步扩展：除抖音视频外，还接入微信公众号文章（WeWe RSS）作为素材源；工作台从"查看器"升级为"采集 + 打标 + 生成 + 发布"的一体化面板。
+采集 → ASR 转写（带时间戳）+ 场景抽帧 → AI 加工（标题/摘要/关键词/分类/整合稿）→ SQLite
+→ 工作台（选题、排产、生成、质检）→ **图文出图两条路** → 人工发布 → 数据回灌。
 
-2026-08 之后新增职责：**选题/渠道策略的唯一权威源**——`content_store.RADAR_CHANNEL_STRATEGY` 集中管理头条号/公众号/小红书的选题策略（7:2:1 配比、止损线、排除词），通过 `/api/strategy/channels` 下发给 media-workbench 前端策略引擎（channel-strategy.js），单一权威源、两处消费。
+三条不可让的口径：
+1. **选题/渠道策略唯一权威源** = `src/content_store.py` 的 `RADAR_CHANNEL_STRATEGY` / `CHANNEL_STRATEGY_GLOBAL`，通过 `/api/strategy/channels` 下发，工作台侧不另写一份。
+2. **永不自动发布**：所有触到平台页面的动作都是"生成可粘贴产物 + 人工点发布 + 回来登记"。
+3. **机器闸只挡确定性错误**，语义判断交人；闸的结论一律落进成品清单，不许只活在会话里。
+
+## 文档地图（谁是什么）
+
+| 文件 | 作用 | 状态 |
+| --- | --- | --- |
+| `AGENTS.md` / `CLAUDE.md` / `CODEBUDDY.md` / `.cursor/rules/*.mdc` | 各工具的项目规则 | 全部由 `.rulesync/rules/*` 生成，**四份 10-23 已对齐**；改规则改源，别只改一份 |
+| `.rulesync/rules/10-overview.md`、`20-conventions.md`、`30-python-backend.md` | 规则**源** | 权威 |
+| `.agents/memories/40-graphics-variants.md` | 三轴静默失效的复盘守则 | 改 `src/graphics/` 前必读 |
+| `docs/AGENT-HANDOFF.md` | 换 agent 接手必读：规则几份、skill 在哪、门禁怎么跑、并发怎么隔离 | 10-19 |
+| `CHANGELOG_FOR_AI.md` | 改动史（顶部最新，97 节） | 活跃 |
+| `output/角色交接/*.md`（49 份） | 内容产线各角色的结论与每份文件最低要求 | 活跃 |
+| `docs/*.md`（8 份带日期） | 一次性调研/盘点/排产表，仍被 `web/static/schedule.html` 等引用 | 保留 |
+| `docs/归档/` | 已走完的方案与历史快照 | **别照着动手** |
+| `公众号内容审计与工作流诊断-2026-09-23.md`、`公众号卡片参考拆解-2026-09-29.md` | 仍被 skill / `src/graphics/templates.py` 引用的方法论与模板依据 | 保留在根目录 |
 
 ## 当前架构
 
 ```
-main.py                  CLI 入口（采集/处理/索引更新，支持 --config、--parser-dir；update_video_index 带备份+原子写入）
+main.py                  CLI 入口（采集/ASR/索引更新；whisper 双引擎，ffmpeg 抽音频）
+web/app.py               Flask 工作台后端，124 个路由（15801，无热重载）
+web/templates/index.html 单页工作台（hash 路由 + 海报弹窗 + 排产板 + 素材库 + 选题雷达 + 运营台账）
+web/static/schedule.html 排产板页（读 /api/plan/*，节点决定排产）
 src/
-  video_extractor.py     视频下载
-  content_store.py       SQLite 内容库（videos/ai_summaries/subscriptions）+ AI 加工（_llm_chat）+ 策略权威源（RADAR_CHANNEL_STRATEGY/CHANNEL_STRATEGY_GLOBAL）+ 选题雷达聚合 + 分类
-  fetch_user_videos.py   批量获取用户视频
-  wechat_fetcher.py      公众号文章抓取（WeWe RSS → 解析 → 入 videos 表，transcript=正文）
-  material_store.py      素材工作台导出（Excel/SQLite/JSONL/图片同步）+ 关键帧路径
-  path_config.py         douyin_parse 解析器路径解析（env → vendor/ → /tmp 兼容）
-web/app.py               Flask 工作台后端（64 个路由，见下）
-src/graphics/            图文渲染内核（Phase 1 抽出）：templates（模板 CSS+渲染）· variants（配色/字体/版式三轴）· skins（皮肤/题材素材）· css_engine（__TOKEN__ 替换）· renderer（Playwright 截图）· package（manifest）· ir（卡片 schema）· channels/{toutiao,wechat}.py（渠道适配器）
-scripts/                 list_candidates（候选查询）· check_variant_tokens（三轴静态检查）· e2e_toutiao_variants / e2e_wechat_variants（图文 e2e，2026-09-30 从 Trae 工作区收编入仓）
-.qoder/skills/           Qoder 项目技能：workbench-restart（安全重启+双确认）· graphics-verify（三线回归）
+  content_store.py       SQLite 内容库 + AI 加工 + 策略权威源 + 选题雷达聚合 + 转写规范化出口
+  采集源                 fetch_user_videos / browser_fetch(+tools/douyin_browser_fetch.js) /
+                         wechat_fetcher(WeWe RSS) / bilibili_fetcher / douyin_notes(小红书笔记) /
+                         blizzard_news(暴雪官方) / nga_forum(NGA 无限板块，直写 videos，UI 入口待接)
+  frame_pool.py          场景抽帧 + 判帧 + **出图前核对**（清晰度闸、裁后期字幕、按内容框裁；池在 output/assets/frames/<aid>/{raw,clean}）
+  整合稿/加工            draft_audit · humanize(+humanize_routes) · term_check/term_glossary/asr_fix（转写质量）· topic_pack（选题包）
+  出图·HTML 卡片线       toutiao_graphics + graphics/{templates,variants,skins,css_engine,renderer,package,ir,channels/{toutiao,wechat}}
+  出图·AI 海报线         ai_poster（拆解/分页/风格/提示词）· poster_typeset（真字体排版，攻略页流式排）·
+                         poster_templates（★ 收编模板）· poster_breakdown（参考图拆解）
+  四道闸                 fact_gate（待核数字不许当卖点）· action_gate（建议玩家能不能照做）·
+                         guide_provenance（编辑证据链：问题/新增/依据 + 逐张画面使用依据）· draft_gate（骨架稿）
+  排产与台账             plan_brief（选题卡）· plan_series（双系列看板+槽位）· plan_tasks（任务）·
+                         ops_store（发布台账）· toutiao_stats（数据回流）· review_store（质检记录）·
+                         sync_tasks（自动同步定时器，配置在 config/sync_tasks.json）· ai_quota（额度按模型算）
+  其他                   material_store（导出）· bank_board/ai_*（答案库线）· wow_reference · path_config · ffmpeg_probe
+scripts/                 14 条 e2e/门禁（见下）+ agent/（界面走查、审计探针、隔离测试服务）+ build_*/import_* 数据脚本
+.qoder/skills/           13 个：workbench-restart · graphics-verify · article-audit · article-humanize · media-*（9 个角色）
 vendor/douyin_parse      内置解析器（免依赖 /tmp）
 ```
 
-注：真实 ASR 在 `main.py`（whisper 双引擎，ffmpeg 抽音频），链接解析在 `main.py` + vendor 解析器；2026-09-01 已删除零引用的历史遗留模块 `src/asr.py`、`src/ai_optimizer.py`、`src/link_resolver.py`（功能早已由 main.py/content_store.py 接管）。
+## 内容产线（头条线现在长什么样）
 
-## 工作台（web/app.py）功能分组
+九角色按序走（skill 在项目内、`.gitignore` 掉，公开仓库不出现）：
+`/media-pm` → `/media-planner`（角度门三问没答完禁止写稿）→ `/media-writer`（选题包→整合稿，交稿即过机器门）
+或 `/media-material`（单条素材→素材档案）→ `/media-ui`（版式与样张，**必须有截图才算完成**）
+→ `/media-publish`（发布清单、人工发、登记回填）→ `/media-ops`（台账，每周只看涨粉与钱）→ `/media-retro`。
 
-- 视频管理：`/api/videos`（列表+筛选+搜索）、`/api/videos/<sheet>/<row>`（详情）、`/api/videos/delete`
-- 采集：`/api/fetch_user_videos`、`/api/preview_user_videos`、`/api/fetch_and_process`（获取+写入+ASR 一键流水线，完成后自动增量 AI 打标）
-- AI：`/api/videos/classify`（异步批量分类，`/api/classify/status` 轮询；增量=只补 category/ai_tags 任一为空）、`/api/videos/category`、`/api/ai/config|test`
-- 内容生成：`/api/content/generate|sync|summaries`（生成/重生成/删除 AI 摘要；类型含 game_guide/wechat_material/ai_interview）
-- 策略下发：`/api/strategy/channels`（渠道策略配置，media-workbench 拉取）
-- 订阅：`/api/subscriptions`（CRUD、导入、按 ids 批量同步，`/sync/status` 轮询；分类与标签支持批量设置）
-- 看板：`/api/dashboard`、`/api/stats`、`/api/topics/radar`（支持 channel 渠道策略参数）、`/api/workbench`
+出图两条路：
+- **HTML 卡片线**（`src/graphics/`）：模板 + 三轴（配色/字体/版式）→ Playwright 截图。改前三轴守则、改完跑 `/graphics-verify`。
+- **AI 海报线**（`src/ai_poster.py`）：弹窗三步 ① 拆文案 → ② 看版面（免费，与出图同一个排版函数）→ ③ 出图。
+  攻略页那一档**画面用素材真帧、渐变底、字由程序排 → 0 元**；硬口径：一页 1 张图、**每页必须有图**、
+  整组同一编号只用一次、两页之间差 12 秒以上、印之前逐张再核对一遍（虚的/带字幕的不许上版，拦下就当场换一张）。
 
-## 最新进展（git 时间线）
+## 数据与配置（10-23 实测）
 
-- 2026-06-12~13：批量采集一键流水线；Cookie 记忆；分类分组；整理稿 Tab 交互；视频去重修复
-- 2026-08-26：采集入库后自动增量 AI 打标（a90ada1）
-- 2026-08-31（86cb727~f8100f5）：公众号素材接入（wechat_material 生成 + 关键帧配图）、Dify 知识库同步、素材导出、订阅按 ids 批量同步 + 分类筛选、选题雷达 Top10/展开收起/时间排序、**渠道策略权威源**（RADAR_CHANNEL_STRATEGY + /api/strategy/channels 下发）、AI 批量分类筛选修复（category 或 ai_tags 任一为空即补）
-- 2026-09-01（9fa078d~faa7be7）：修复链接采集 NameError（_auto_classify_after_sync 函数本体补齐：AI 未配置静默跳过、失败不阻塞采集）；索引安全加固（update_video_index 备份 .bak + 原子写入）；删除废文件；删除零引用死代码三件套；本文档同步真实化
-- 2026-09-02（def1e7c 等）：头条策略排除分类补「汽车资讯」（10→11 类）+ 策略下发版本号 v2；「数据与同步」页重构——移除 grid-materials 卡片网格，改为 订阅管理 → 同步按钮 → 5 统计卡片（总素材/有ASR/本地封面/关键帧/已生成内容），loadWorkbench 精简
-- 2026-09-10：项目整体接入周一体检自动化（media-workbench 定时任务，只读检查本仓库 15801 端口服务与 git 状态）
-- 2026-09-14：**SQLite 权威源第一步（实体标识）**——videos 表新增 `author_sec_uid`/`source` 列（Excel 重同步不覆盖）：订阅同步按行号回写 sec_uid，启动时按订阅作者名幂等回填存量（737 条）；订阅导入改 SQLite 直查 sec_uid（URL 反查降为兜底）。**索引实体键重构**——video_index 以 aweme_id 为实体键（缺 id 旧条目退回 sheet:row），重建只保留本次扫描到的实体，Excel 清行（删除视频）自动出索引，published/performance 按实体键继承。**采集链修复**——resolve_url 由 HEAD 改 GET(stream)（抖音 CDN 对 HEAD 返回 404/超时导致短链解析失败，Row 834 实测），parser 自带重定向解析作双保险；采集失败原因从 Excel 备注列带回前端
+- SQLite `output/video2text.db`，14 张表：`videos`(1286 行) / `ai_summaries`(45) / `subscriptions` /
+  `publish_stats` / `week_stats` / `content_reviews` / `guide_provenance` /
+  `plan_slots` `plan_tasks` `plan_candidates` `plan_slot_flags` `plan_publish_audit` `plan_match_runs` / `sqlite_sequence`
+- 帧池 493 条素材有目录；海报成品包 25 个（`output/poster/<整理稿id>/`，含 `manifest.json` 与 `plan.json` 文案备份）
+- `video_index.json` 等运行索引**全部 gitignore**，换机手动迁移；Excel `output/抖音视频信息.xlsx` 仍是采集真相源（A-O 基础列 + 扩展列）
+- 敏感配置 `config/config.env` / `config.env.local`（Cookie、AI key）——**仓库是公开的，永不入库、永不打印值**；改前先备份
+- 模型：拆解走 `deepseek-v4-pro-0813`（快速档，300s 超时 + 1 次重试），判帧/核对走 `qwen3-vl-plus`（免费额度）；**额度按模型分开算**
+- 依赖钉版见 `requirements.txt`（系统 Python 3.9；无 venv；ffmpeg / playwright 内核 / 解析器换机手动准备）
 
-- 2026-09-21~24：**头条图文生成链路**——①采集兜底：抖音 Argus 风控拦截纯 API 签名，parser 解析不到 aweme_id 时改用真实 Chromium 打开视频页抓 detail（src/browser_fetch.py + tools/douyin_browser_fetch.js），视频下载 curl 加 --fail/UA 防空文件；②整合稿：content_store 新增 toutiao_mix 类型（单视频/多视频决策化整合，【标题候选/时间线/变化对比/对你的影响/行动建议/风险核查】固定标签六节结构）；③出图：src/toutiao_graphics.py v3——LLM 卡片化整合稿 → playwright 渲染 9:16（1080×1920）竖版信息图 4 张 + 微头条文案，版式参照 2026-09-24 参考图（金渐变衬线大标题/插画主视觉底缘渐隐/圆环图标三面板/双金边横幅，无页码无来源行）；题材+皮双选择：题材决定 LLM 文案点明的游戏与插画素材文件夹（output/toutiao/<题材>图片素材/，更新素材下次生成即生效），皮决定整套调色板与背景（wow 蓝黑金/d4 烬红/poe 青铜/poe2 墨玉绿/自定义 _assets/<名称>_bg.jpg），插画封面取竖构图、内容页取横构图按页轮换，LLM 不可用走本地模板兜底；④前端：生成弹框新增标题输入框（自动代入整理稿标题，可改可留空），超 12 字标题自动降字号防截断
-- 2026-09-25~29：**Phase 1 内核抽取 + 图文三轴**——`src/graphics/` 从 `toutiao_graphics.py` 抽出渠道无关内核（templates/variants/skins/css_engine/renderer/package/ir），`channels/{toutiao,wechat}.py` 两渠道共用同一渲染内核；公众号模板库扩到 6 套（新增 lilac_list 浅紫清单 / cream_gold 奶油金插画，含参考样本拆解文档）；**变体三轴（配色/字体/版式）两渠道全部接线**，manifest 落真实键；头条素材选图支持随机（rng/exclude + 可复现种子 + manifest.assets 追溯）；`scripts/check_variant_tokens.py` 代码化防线（字体/配色轴失效即报错，因三轮「选了不生效」静默失效复盘而生，守则见 `.agents/memories/40-graphics-variants.md`）
-- 2026-09-30：**Qoder 接手准备**——两条图文 e2e（18+14 用例）从 Trae 私有工作区收编进 `scripts/`；新增 `.qoder/skills/workbench-restart`（按端口 PID 安全重启 + py_compile 前置 + PID/接口双确认）与 `.qoder/skills/graphics-verify`（三线回归一条命令）；AGENTS.md 补纪律第 5 条（改 graphics 先读 40 守则、改完跑验证）；`requirements.txt` 依赖钉版；README 项目结构纠偏（已删模块不再列）。业务行为零改动，三线回归 `ALL_OK`，重启实跑 72113→23054
-- 2026-09-30（同日二、三轮）：**订阅页三维分组**——`subscriptions` 新增自定义 `tags` 列（与固定 11 类 `category` 正交：category 喂选题雷达/渠道策略，tags 只做本地分组），来源/分类/标签三维筛选 + 勾选批量设分类/设标签 + 「同步当前筛选」一键整组同步；分类端点由单 id 改批量 `{ids}`。**Dify 知识库同步整体下线**——删 `src/dify_client.py`、6 个 `/api/dify/*` 路由、设置页 RAG 面板与「发布到知识库」按钮（取证：1220 行素材 `dify_document_id` 全为 NULL，一条都没发布过，且 Dify 侧写稿质量不达标）；`videos` 两列按约定保留不删。图文回归三条线 `ALL_OK`，`wechat_material` 固定【标签】分节经实测仍被本地兜底模板正常消费
+## 运营现状（决定优先级，别拿旧口径判新事）
 
-## 运营协作现状（2026-09）
+- 头条实测单价量级是零钱（0.1785 元/千），**决定量的是平台开不开池子**（节点脉冲），不是写法；
+  决策型题材比告知型高一个量级。细则与算式见 `docs/你的量是怎么来的-2026-10-16.md`、`docs/涨粉与流量的卡点-2026-10-16.md`。
+- 钱主要看**按篇入口**（贴吧/营地/大神暗黑圈），不是分成——见 `docs/图文奖池盘点-2026-10-16.md`。
+- 11-05 无限服上线 / 12-11 是两个节点，排产按节点分班（`docs/11-05排产表-2026-10-16.md` + 工作台排产板）。
+- 小红书：无图文分成，且 10-10 因"尾注自证 + 回复 XX 获取"被判 **AI 托管**限流——合规口径见 `docs/小红书违规面盘点.md`。
+- 公众号线现状与接手清单在仓库外：`~/Documents/自媒体/公众号交接文档.md`。
 
-本仓库是三仓库自媒体产线的**素材层**，生产层见 `自媒体/_content_factory`，运营层见 `media-workbench`。当前公众号走「老张码上记」AI 科技赛道（周二更：周一科普/周四战地日记），头条处于修复期（3天×2篇），选题雷达支持 channel 参数按渠道出题。
+## 门禁与验证（改完要跑哪些）
 
-## 数据与配置
-
-- SQLite 表：`videos`（含 transcript、ai_copy、keywords、分类 category/ai_tags、实体标识 author_sec_uid/source；另有 `dify_document_id`/`dify_synced_at` 两列随 Dify 下线保留但不再读写，全表均为 NULL）、`ai_summaries`、`subscriptions`（含自定义分组 tags）
-- `video_index.json`：文章素材索引（v1.1，含 topic/article_score/fact_risk/summary/published/performance/resultScore）。**实体键口径（2026-09-14 起）**：aweme_id 为主键（缺 id 旧条目退回 sheet:row），重建只保留本次扫描到的实体，Excel 清行自动出索引。**已被 gitignore（`*.json`），换机迁移见 DEV-SYNC.md 数据清单**；update_video_index 每次写入前自动备份 `.bak`
-- Excel（output/抖音视频信息.xlsx）是采集数据的真相源，含"是否已发布/处理状态"列供回写；`author_sec_uid`/`source` 为 SQLite 专属字段，Excel 重同步不覆盖
-- 敏感配置在 `config/config.env.local`（已 gitignore）：DOUYIN_SESSIONID、AI key（`DIFY_*` 键随 Dify 下线已不再写入，本机配置里本就没有）
-- 写稿筛选约定见 `CHANGELOG_FOR_AI.md`：优先 article_score A/B、fact_risk 非空必须联网核查
+| 改动位置 | 跑什么 |
+| --- | --- |
+| 任意 `.py` | `python3 -m py_compile <file>`，然后按 `/workbench-restart` 重启（**禁 pkill**） |
+| `src/graphics/` 或海报排版 | `/graphics-verify` 三线 + `scripts/e2e_poster_layouts.py`、`e2e_guide_frames.py`、`e2e_ai_poster.py` |
+| 闸口 | `e2e_guide_gate.py`（事实闸，拿三篇已发错成品当夹具）、`e2e_action_gate.py`、`e2e_provenance.py`、`e2e_frame_judge.py` |
+| 排产/台账/自动同步 | `e2e_plan_series.py`(127 条) `e2e_plan_tasks.py` `e2e_plan_brief.py` `e2e_sync_tasks.py` |
+| 界面 | `scripts/agent/ui_walk.py` / `ui_poster_*_walk.py`（headless 走真页面 + 截图，**判据与后端同源**） |
+| 选项是否真生效 | `scripts/agent/audit_poster_options.py`（0 元、纯红靶图当判据，末行 `ALL_OK`） |
 
 ## 已知注意事项
 
-- ASR 对游戏专有名词易误识别，攻略/BD/数值类内容不能只依赖口播转写
-- 异步任务（分类、订阅同步）均走"启动 + status 轮询"模式，改动时保持该契约
-- Excel 基础列 A-O，扩展列（选题等级/适合平台等）由索引自动识别
-- 运行中的 web 进程无热重载，改完代码必须重启（15801 端口）
-- 遗留工程债（不阻塞，改采集代码时留意）：web/app.py 三条采集流水线为逐行复制结构，实际位置（2026-09-30 复核，旧文档记的 531/716/1603 已过期）——链接采集 `api_process` 641–741、批量获取 `api_fetch_and_process` 838–967、订阅同步 `api_subscriptions_sync` 2117–2369。三者**不是简单同构**，抽公共层前必须保住这些差异：Excel 打开粒度（P1/P2 每行 load+save，P3 单工作簿循环内多次 save + finally close）、写入列（P1 只写 col1/2，P2/P3 还写 col3 aweme_id，P3 另读 col4 作者回填）、失败处理（P1/P2 回读第 15 列备注累加 error，P3 不看 `ok` 只写订阅 summary）、状态契约（P1/P2 共用 `_task_status`+`/api/status`，P2 多 total/current 且前端依赖；P3 用 `_sub_status`+`/api/subscriptions/sync/status`；冲突码 400 vs 409、返回结构也不同）、`mark_video_source` 来源值（single_link vs subscription）。**_auto_classify_after_sync（327–344）现三条流水线都在流程末尾调用**（P1 724 / P2 950 / P3 2356；P3 原先只挂在抖音分支内，只勾微信订阅同步时新文章永不打标，2026-09-30 已移到两条分支之外）。P3 另有 2318–2344 的裸 SQL 按订阅预设回填 category/game，与增量打标并存（谁优先由 `content_store.classify_videos` 的 `force=False` 护栏决定：已有 category 不改写，只补缺）。传给 process_row 的 ai_config 三条都硬编码 skip。
-- 依赖钉版见 `requirements.txt`（2026-09-30 新增，按系统 Python 3.9 实测版本；无 venv，ffmpeg / playwright 浏览器内核 / vendor 解析器仍需换机手动准备）
+- 异步任务一律"启动 + `/api/*/status` 轮询"，改契约要连前端一起改。
+- 详情接口单次约 5 秒（每次整表读 Excel），**别把慢当 bug**；前端等待给到 15 秒。
+- 三条采集流水线（`api_process` / `api_fetch_and_process` / `api_subscriptions_sync`）历史上是逐行复制结构，
+  差异（Excel 打开粒度、写入列、失败处理、状态契约、`mark_video_source` 取值）都还在，抽公共层前必须逐条保住；
+  **行号会漂，别照旧文档的行号动手，用函数名定位**。
+- 转写出口只做确定性两道（繁简、错字对），语义纠错不承诺；ASR 对游戏专有名词易错，数值/BD 类不能只靠口播。
+- **多个 AI 会话并发改本仓库**：动手前 `git status` 比对，只提自己的文件/hunk，push 前 fetch，禁 `git add .`。
+- 界面上任何"点了不会发生任何事"的控件必须置灰并写明原因，不许静默改掉用户点过的选择
+  （10-23 一轮抓到 11 个选项里 5 个白放，复盘见 `CHANGELOG_FOR_AI.md` 顶部两节）。
+- **列表页取图一律走 `thumbOf(url, w)` → `/media/<路径>?w=`**（10-24 首屏提速）：别退回直接塞原图，
+  也别把"点开看大图"改回 `window.open(this.src)`（那会打开糊的那张）；**源文件 <180KB 服务端刻意不缩**，
+  因为缩放一次要 130-240ms CPU，而本机带宽不是瓶颈。
+- `video_index.json` 有**进程内缓存**（`_index_raw/_index_videos`）：任何绕过 `api_rebuild_index` 直接改这个文件的写入点，
+  都必须调 `_index_invalidate()`，否则界面读到旧索引。
+- 整理稿列表接口默认 `brief=1`（`content` 只给 300 字、`structured_data` 不给）：要全文走 `/api/content/summaries/<id>`；
+  **面试题页不传 brief**，它要整段 `structured_data` 汇全量表——别把这一刀推广到所有调用方。
+- 量性能用 `scripts/agent/perf_pages_probe.py`（读浏览器 Resource Timing）与 `scripts/agent/perf_thumb_ab.py`
+  （同一页把 `thumbOf` 换成恒等函数当"改前"）。**别拿 Playwright 事件时间相减当接口耗时**，
+  上一版就是这么把 110ms 量成 1528ms、差点照着假影子去优化接口。
