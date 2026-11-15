@@ -1791,45 +1791,65 @@ def api_content_material_check(summary_id):
 
 @app.route("/api/content/summaries/<int:summary_id>/regenerate", methods=["POST"])
 def api_content_regenerate(summary_id):
-    """重新生成指定整理稿。"""
+    """从当前有效素材重新生成，继续使用原稿 ID 和已选补充资料。"""
+    from src import guide_mother, source_corrections, source_frame_evidence
+
     try:
         summary = content_store.get_summary(DB_PATH, summary_id)
         if not summary:
             return jsonify({"error": "整理稿不存在"}), 404
 
         summary_type = request.args.get("type") or summary.get("summary_type", "game_guide")
-        # 整理稿走快速档：这一步是"把口播压缩组织成结构化稿子"，不需要思考型模型。
-        # 实测 51 篇成功整理稿全是 deepseek-v4-flash 跑的（现为 v4.1-flash，该数字未重测）；
-        # 切到 qwen3.8-max 后生成的
-        # 2 篇 100% 撞 _generate_with_llm 的超时、静默降级成规则版（＝照抄转写原文），
-        # 下游海报拆文案拿到的就是没整理过的生料。
-        config = _fast_config()
-        source_ids = json.loads(summary.get("source_video_ids") or "[]")
-        if len(source_ids) > 1:
-            videos = content_store.get_videos_by_ids(DB_PATH, [int(v) for v in source_ids])
-            if not videos:
-                return jsonify({"error": "关联视频不存在"}), 404
-            result, model, status = content_store.generate_collection_summary(
-                videos, summary_type, config
-            )
-            content_store.update_summary(
-                DB_PATH, summary_id, result, model, status, source_video_ids=[int(v["id"]) for v in videos]
-            )
+        adopted_ids = json.loads(summary.get("source_video_ids") or "[]") or []
+        ids = list(dict.fromkeys([int(summary["video_id"])] + [int(value) for value in adopted_ids]))
+        videos = content_store.get_videos_by_ids(DB_PATH, ids)
+        if len(videos) != len(ids):
+            return jsonify({"error": "部分关联素材已不存在，请核对选题素材后重试"}), 409
+        if any(not (video.get("transcript") or "").strip() for video in videos):
+            return jsonify({"error": "部分关联素材缺少转写，请先补齐"}), 409
+
+        guide = summary_type in GUIDE_SOURCE_TYPES
+        cfg = _editorial_config() if guide else _fast_config()
+        brief = ({"title": summary.get("title") or "", "supplements": _prepare_poster_sources(summary)}
+                 if guide else None)
+
+        videos, brief, proof = _prepare_summary_generation(
+            videos, summary_type, cfg, brief, frozen_supplements=guide)
+        if len(videos) > 1:
+            result, model, status = content_store.generate_collection_summary(videos, summary_type, cfg, brief)
         else:
-            video = content_store.get_video_by_source(DB_PATH, summary["source_sheet"], summary["source_row"])
-            if not video:
-                return jsonify({"error": "关联视频不存在"}), 404
-            result, model, status = content_store.generate_summary(video, summary_type, config)
-            content_store.update_summary(
-                DB_PATH, summary_id, result, model, status, source_video_ids=[int(video["id"])]
-            )
+            result, model, status = content_store.generate_summary(videos[0], summary_type, cfg, brief)
+        if guide and status != "ai" and summary.get("status") == "ai":
+            return jsonify({"error": "本次整理失败，已有整理稿仍可查看"}), 422
+        _freeze_summary_sources(result, videos, summary_type, cfg, brief, proof)
+        if guide:
+            _risk_inherit(result, videos)
+        if summary_type in GUIDE_SUMMARY_TYPES:
+            result["content"] = (result.get("content") or "") + _video_keyframe_markdown(videos)
 
-        updated = content_store.get_summary(DB_PATH, summary_id)
-        return jsonify({"success": True, "summary": updated})
+        with _db_lock:
+            current = content_store.get_summary(DB_PATH, summary_id)
+            if not current or (current.get("title"), current.get("content"),
+                               current.get("source_video_ids"), current.get("updated_at")) != (
+                                   summary.get("title"), summary.get("content"),
+                                   summary.get("source_video_ids"), summary.get("updated_at")):
+                return jsonify({"error": "整理稿在生成期间已经变化，请刷新后重新生成"}), 409
+            if guide:
+                newest = _read_effective_summary_videos(content_store.get_videos_by_ids(DB_PATH, ids))
+                if _summary_source_revision(newest) != _summary_source_revision(videos):
+                    return jsonify({"error": "素材在生成期间已修订，请重新生成"}), 409
+            content_store.update_summary(DB_PATH, summary_id, result, model, status, source_video_ids=ids)
+        if guide:
+            _risk_record(result, videos, summary_id)
+        return jsonify({"success": True, "summary": content_store.get_summary(DB_PATH, summary_id)})
+    except (source_frame_evidence.EvidenceError, source_corrections.CorrectionError,
+            guide_mother.MotherError) as e:
+        return jsonify({"error": str(e)}), 409
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 422
     except Exception as e:
-        import traceback; traceback.print_exc()
+        app.logger.exception("重新生成整理稿失败")
         return jsonify({"error": str(e)}), 500
-
 
 
 @app.route("/api/content/summaries/<int:summary_id>", methods=["DELETE"])
@@ -2239,6 +2259,64 @@ def api_bank_file():
     return send_from_directory(bank_board.PRODUCT, name)
 
 
+def _read_effective_summary_videos(videos):
+    from src import source_corrections
+
+    conn = content_store.open_readonly(DB_PATH)
+    try:
+        return [dict(video, transcript=source_corrections.effective_text(
+            conn, video["id"], video.get("transcript") or "", video.get("title") or ""))
+                for video in videos]
+    finally:
+        conn.close()
+
+
+def _summary_source_revision(videos):
+    from src import guide_mother
+
+    return guide_mother._source_revision([
+        {"video_id": video["id"], "title": video.get("title") or "", "text": video.get("transcript") or ""}
+        for video in videos])
+
+
+def _prepare_summary_generation(videos, summary_type, cfg, brief=None, *, progress=None,
+                                frozen_supplements=False):
+    from src import editorial_model
+
+    if summary_type in GUIDE_SOURCE_TYPES:
+        if progress:
+            progress("对照原片画面核对主素材转写...")
+        _prepare_guide_evidence(videos)
+    if summary_type in GUIDE_SOURCE_TYPES or cfg.get("editorial"):
+        videos = _read_effective_summary_videos(videos)
+    proof = None
+    if cfg.get("editorial"):
+        brief = dict(brief or {})
+        if not frozen_supplements:
+            if progress:
+                progress("核对已选补充资料的官方来源...")
+            brief["supplements"] = supplements.prepare_evidence(
+                brief.get("supplements"), "\n".join(video["transcript"] for video in videos))
+        if progress:
+            progress("核对选题与主素材原句...")
+        proof = editorial_model.review_topic(brief.get("title"), videos, cfg)
+        brief.update(title=proof["title"], topic_evidence=proof)
+    return videos, brief, proof
+
+
+def _freeze_summary_sources(result, videos, summary_type, cfg, brief, proof):
+    if summary_type not in GUIDE_SOURCE_TYPES and not cfg.get("editorial"):
+        return
+    structured = content_store._structured_payload(result)
+    result["structured_data"] = dict(structured, summary_source_revision=_summary_source_revision(videos))
+    if cfg.get("editorial") or (brief or {}).get("supplements"):
+        result["structured_data"].update(
+            editorial_supplements=(brief or {}).get("supplements") or [],
+            editorial_evidence_version=1, editorial_topic=proof)
+    if proof:
+        result["title"] = proof["title"]
+
+
 def _run_generation(video_keys, summary_type, combine, st, brief=None, video_ids=None, *, ai_config=None):
     """生成那一段的真身：把 `sheet:row` 列表整理成整理稿并落库，进度写进 `st` 这个字典。
 
@@ -2254,21 +2332,12 @@ def _run_generation(video_keys, summary_type, combine, st, brief=None, video_ids
     旧素材库那条仍传 `video_keys`（`video_ids=None`），行为一字不变。
     返回 summary_ids；每条素材为什么被跳过写在 `st["error"]` 里（原样保留老文案）。
     """
+    from src import source_corrections, source_frame_evidence
+
     try:
         st["progress"] = "同步 Excel 到内容库..."
         _sync_content_db()
         config = ai_config if ai_config is not None else _fast_config()
-        topic_proof = None
-
-        def freeze_evidence(result):
-            if not config.get("editorial"):
-                return
-            structured = content_store._structured_payload(result)
-            result["structured_data"] = dict(
-                structured, editorial_supplements=(brief or {}).get("supplements") or [],
-                editorial_evidence_version=1, editorial_topic=topic_proof)
-            if topic_proof:
-                result["title"] = topic_proof["title"]
         success_count = 0
         summary_ids = []
         selected_videos = []
@@ -2314,26 +2383,9 @@ def _run_generation(video_keys, summary_type, combine, st, brief=None, video_ids
                 except Exception as e:
                     st["error"] += f"{key}: {e}\n"
 
-        if config.get("editorial"):
-            from src import editorial_model, source_corrections
-
-            st["progress"] = "核对选题与主素材原句..."
-            conn = content_store.open_readonly(DB_PATH)
-            try:
-                selected_videos = [
-                    dict(video, transcript=source_corrections.effective_text(
-                        conn, video["id"], video["transcript"], video.get("title") or ""))
-                    for video in selected_videos
-                ]
-            finally:
-                conn.close()
-            brief = dict(brief or {})
-            st["progress"] = "核对已选补充资料的官方来源..."
-            brief["supplements"] = supplements.prepare_evidence(
-                brief.get("supplements"), "\n".join(v["transcript"] for v in selected_videos))
-            topic_proof = editorial_model.review_topic(
-                brief.get("title"), selected_videos, config)
-            brief.update(title=topic_proof["title"], topic_evidence=topic_proof)
+        selected_videos, brief, topic_proof = _prepare_summary_generation(
+            selected_videos, summary_type, config, brief,
+            progress=lambda message: st.update(progress=message))
 
         if combine:
             if not selected_videos:
@@ -2345,7 +2397,7 @@ def _run_generation(video_keys, summary_type, combine, st, brief=None, video_ids
             result, model, status = content_store.generate_collection_summary(
                 selected_videos, summary_type, config, brief
             )
-            freeze_evidence(result)
+            _freeze_summary_sources(result, selected_videos, summary_type, config, brief, topic_proof)
             _risk_inherit(result, selected_videos)      # 台账兜底：模型漏写的待核不能消失
             if summary_type in GUIDE_SUMMARY_TYPES:
                 # 攻略类：抽关键帧做配图，嵌入整理稿尾部
@@ -2372,7 +2424,7 @@ def _run_generation(video_keys, summary_type, combine, st, brief=None, video_ids
                 result, model, status = content_store.generate_summary(
                     video, summary_type, config, brief
                 )
-                freeze_evidence(result)
+                _freeze_summary_sources(result, [video], summary_type, config, brief, topic_proof)
                 _risk_inherit(result, [video])          # 同上：单条素材也要继承
                 if summary_type in GUIDE_SUMMARY_TYPES:
                     # 攻略类：抽关键帧做配图，嵌入整理稿尾部
@@ -2398,6 +2450,9 @@ def _run_generation(video_keys, summary_type, combine, st, brief=None, video_ids
         st["progress"] = f"✅ 已生成 {success_count} 条{label}"
         st["done"] = True
         return summary_ids
+    except (source_frame_evidence.EvidenceError, source_corrections.CorrectionError) as e:
+        st.update(error=str(e), progress="素材需要核对", done=True)
+        return []
     except Exception:
         st["error"] = traceback.format_exc()
         st["done"] = True
@@ -3262,6 +3317,7 @@ def api_content_summaries_by_video(video_id):
 # ── 攻略整理稿配图：抽取视频关键帧并生成 Markdown 图片段 ──
 # 成品文章在自媒体工作台生成；这里只给资料整理稿（game_guide / wechat_material 公众号素材档案）配图，供工作台取材时引用
 GUIDE_SUMMARY_TYPES = ("game_guide", "wechat_material")
+GUIDE_SOURCE_TYPES = GUIDE_SUMMARY_TYPES + ("toutiao_mix",)
 
 _extractor = None
 _extractor_lock = threading.Lock()
@@ -3874,15 +3930,15 @@ def _start_wechat_graphics_locked(data):
             mother_sources = []
             verified_theme = ""
             if not author_draft:
-                _wx_task_status["progress"] = "从原始转写提取原意母稿..."
+                _wx_task_status["progress"] = "对照原片画面核对主素材转写..."
+                mother_sources, mother_source_rev, verified_theme = _preflight_guide_mother(summary)
+                _wx_task_status["progress"] = "从有效转写提取原意母稿..."
                 mother = guide_mother.ensure_mother(DB_PATH, summary["id"], cfg,
                                                     progress=lambda msg: _wx_task_status.update({"progress": msg}))
                 model_usage.current().set_revisions(mother["source_revision"], mother["mother_revision"])
-                mother_sources, mother_source_rev = guide_mother.source_snapshot(DB_PATH, summary["id"])
                 if mother_source_rev != mother["source_revision"]:
                     raise guide_mother.MotherError("原文在生成期间更新，请重新提取母稿")
                 mother_source_text = guide_mother.audit_source_text(mother_sources)
-                verified_theme = _verified_topic_title(summary, mother_sources)
             if edited_draft and (edited_draft.get("fidelity") or {}).get("mother_revision") != mother["mother_revision"]:
                 raise guide_mother.MotherError("原意母稿已变化，已编辑草稿不能沿用")
             if edited_draft and _wechat_draft_revision(edited_draft) != _wechat_draft_revision(
@@ -4507,12 +4563,18 @@ def _poster_start_locked(stage, fn, summary_id, plan_snapshot):
     def wrapper():
         with model_usage.track("poster", stage, summary_id) as run:
             _poster_status["model_run_id"] = run.run_id
+            from src import guide_mother, source_corrections, source_frame_evidence
+
             try:
                 fn()
             except ai_poster.PosterError as e:
                 _poster_status["error"] = str(e)        # 可预期失败只给一句话，不刷 traceback
                 _poster_status["fact_hard"] = list(getattr(e, "fact_hard", None) or [])
                 _poster_status["progress"] = "生成失败"
+            except (source_frame_evidence.EvidenceError, source_corrections.CorrectionError,
+                    guide_mother.MotherError) as e:
+                _poster_status["error"] = str(e)
+                _poster_status["progress"] = "素材需要核对"
             except Exception:
                 full = traceback.format_exc()
                 app.logger.error("海报任务失败：\n%s", full)
@@ -4658,49 +4720,6 @@ def _fact_ctx(summary):
             "official_blobs": blobs,
             "open_risks": [str(i.get("raw") or "") for i in open_items],
             "generated_at": datetime.now().strftime("%Y-%m-%d")}
-
-
-def _material_text(summary):
-    """这篇稿的**素材原文**拼一起（采用的一条条 + 勾着的补充料）。
-
-    白名单必须是"素材说过什么"，不能拿整理稿或成品自己当依据——模型把名字写错之后，
-    错名字会顺着整理稿一路"有据"下去（11-02 那张「德莱尼」卡片就是这么发出去的）。
-    """
-    from src import guide_mother
-    if "editorial_supplements" in guide_mother._json_dict(summary.get("structured_data")):
-        sources, _revision = guide_mother.source_snapshot(DB_PATH, summary["id"])
-        return guide_mother.audit_source_text(sources)
-    ids = []
-    try:
-        ids += [int(x) for x in (json.loads(summary.get("source_video_ids") or "[]") or [])]
-    except (TypeError, ValueError):
-        pass
-    try:
-        if summary.get("video_id"):
-            ids.insert(0, int(summary["video_id"]))
-    except (TypeError, ValueError):
-        pass
-    try:
-        from src import plan_tasks as _pt
-        tk = _pt.task_of_summary(DB_PATH, summary.get("id")) or {}
-        ids += [int(x) for x in (tk.get("supplement_ids") or [])]
-    except Exception:                                     # noqa: BLE001
-        pass
-    want = [i for i in dict.fromkeys(ids) if i]
-    if not want:
-        return str(summary.get("transcript") or "")
-    try:
-        rows = content_store.get_videos_by_ids(DB_PATH, want)
-    except Exception as e:                                # noqa: BLE001
-        print("[素材原文] 取失败:", e, flush=True)
-        return str(summary.get("transcript") or "")
-    from src import source_corrections
-    conn = content_store.connect(DB_PATH)
-    try:
-        return "\n".join(source_corrections.effective_text(
-            conn, int(r["id"]), str(r.get("transcript") or ""), r.get("title") or "") for r in rows)
-    finally:
-        conn.close()
 
 
 def _prepare_poster_sources(summary):
@@ -4851,6 +4870,36 @@ def _guide_materials(summary):
     return out
 
 
+def _prepare_guide_evidence(videos):
+    from src import source_frame_evidence
+
+    for video in videos:
+        if supplements.is_video(video.get("source_sheet") or ""):
+            source_frame_evidence.prepare(DB_PATH, video)
+
+
+def _guide_plan_risks(summary, plan, publish, sources=()):
+    ctx = _fact_ctx(summary)
+    official_blobs = ctx["official_blobs"] + [
+        source["text"] for source in sources if source.get("role") == "official_supplement"]
+    return fact_gate.check(dict(plan, publish=publish), summary.get("content") or "",
+                           extra_items=ctx["open_items"], official_blobs=official_blobs)
+
+
+def _preflight_guide_mother(summary):
+    from src import guide_mother
+
+    ids = [item["video_id"] for item in _guide_materials(summary) if item["is_video"]]
+    if ids:
+        _prepare_guide_evidence(content_store.get_videos_by_ids(DB_PATH, ids))
+    sources, revision = guide_mother.source_snapshot(DB_PATH, summary["id"])
+    recorded = guide_mother._json_dict(summary.get("structured_data")).get("summary_source_revision")
+    primary_sources = [source for source in sources if not source.get("role")]
+    if recorded and recorded != guide_mother._source_revision(primary_sources):
+        raise guide_mother.MotherError("整理稿生成后素材已修订，请先重新生成整理稿，再拆文案。")
+    return sources, revision, _verified_topic_title(summary, sources)
+
+
 def _guide_frames_for(summary, cfg, progress=None, may_judge=True):
     """这篇稿所有采用素材里"能当攻略证据的干净帧"，合起来给拆解层。
 
@@ -4939,11 +4988,29 @@ def api_source_corrections(video_id):
     from src import source_corrections
     try:
         if request.method == "GET":
-            return jsonify(source_corrections.inspect(DB_PATH, video_id))
+            out = source_corrections.inspect(DB_PATH, video_id)
+            if request.args.get("frames") == "1":
+                from src import frame_pool, source_frame_evidence
+                from urllib.parse import quote
+
+                videos = content_store.get_videos_by_ids(DB_PATH, [video_id])
+                frames = source_frame_evidence.read(videos[0]) if videos else []
+                out["frames"] = []
+                for frame in frames:
+                    try:
+                        relative = Path(frame["path"]).resolve().relative_to(frame_pool.POOL_DIR.resolve())
+                    except ValueError:
+                        continue
+                    out["frames"].append({
+                        "ts": frame["ts"], "near": frame["near"],
+                        "url": "/media/assets/frames/" + quote(relative.as_posix()),
+                        "lines": [line[:160] for line in frame["lines"][:8]],
+                    })
+            return jsonify(out)
         data = request.get_json(silent=True) or {}
         with _db_lock:
             result = source_corrections.save(DB_PATH, video_id, data.get("base_hash"),
-                                             data.get("patches"))
+                                         data.get("patches"), patch_revision=data.get("patch_revision"))
         return jsonify(result)
     except source_corrections.CorrectionError as exc:
         status = 409 if "变化" in str(exc) else 400
@@ -4990,17 +5057,17 @@ def _start_poster_plan(data):
         cfg = _editorial_config()
         _poster_status["progress"] = "核对主素材及已选补充资料..."
         supplement_entries = _prepare_poster_sources(summary)
-        _poster_status["progress"] = "从原始转写提取原意母稿..."
+        _poster_status["progress"] = "对照原片画面核对主素材转写..."
+        mother_sources, mother_source_rev, verified_theme = _preflight_guide_mother(summary)
+        _poster_status["progress"] = "从有效转写提取原意母稿..."
         mother = guide_mother.ensure_mother(DB_PATH, summary["id"], cfg,
                                             progress=lambda msg: _poster_status.update({"progress": msg}))
         model_usage.current().set_revisions(mother["source_revision"], mother["mother_revision"])
-        mother_sources, mother_source_rev = guide_mother.source_snapshot(DB_PATH, summary["id"])
         if mother_source_rev != mother["source_revision"]:
             raise guide_mother.MotherError("原文在拆稿期间更新，请重新提取母稿")
         _poster_status["progress"] = "LLM 拆解海报文案（模型：%s）..." % (cfg.get("model") or "?")
         source_text = guide_mother.audit_source_text(mother_sources)
         asr_text = source_text
-        verified_theme = _verified_topic_title(summary, mother_sources)
         from src import editorial_model, poster_content
         limits = ai_poster.limits_for(text_mode)
 
@@ -5025,7 +5092,9 @@ def _start_poster_plan(data):
             fact_errors = list(dict.fromkeys(
                 (field.get("detail") or field.get("text")) for field in fact_status.get("fields") or []
                 if field.get("state") == "blocked"))
-            return plan, publish, list(bad) + guide_mother.audit_problems(fidelity) + fact_errors, notes, fidelity, fact_status
+            carryover, _soft = _guide_plan_risks(summary, plan, publish, mother_sources)
+            return (plan, publish, list(bad) + guide_mother.audit_problems(fidelity) + fact_errors + carryover,
+                    notes, fidelity, fact_status)
 
         plan, publish, bad, notes, fidelity, fact_status = draft()
         semantic = fidelity.get("semantic") or {}
@@ -5154,10 +5223,11 @@ def api_poster_plan_page():
     def fn():
         from src import guide_mother
         cfg = _editorial_config()
+        _poster_status["progress"] = "对照原片画面核对主素材转写..."
+        mother_sources, mother_source_rev, verified_theme = _preflight_guide_mother(summary)
         mother = guide_mother.ensure_mother(DB_PATH, summary["id"], cfg,
                                             progress=lambda msg: _poster_status.update({"progress": msg}))
         model_usage.current().set_revisions(mother["source_revision"], mother["mother_revision"])
-        mother_sources, mother_source_rev = guide_mother.source_snapshot(DB_PATH, summary["id"])
         if mother_source_rev != mother["source_revision"]:
             raise guide_mother.MotherError("原文在重拆期间更新，请重新提取母稿")
         # 这一页重拆也要带着真帧清单：不带给它，模型不敢给 photos 编号，
@@ -5165,20 +5235,20 @@ def api_poster_plan_page():
         frames = _guide_frames_for(summary, _fast_config())
         _poster_status["progress"] = "只重拆第 %d 页（模型：%s）..." % (idx, cfg.get("model") or "?")
         page, bad, notes = ai_poster.build_page_plan(
-            summary, cfg, idx, pages, spine=spine, theme=theme, style_key=style_key,
+            summary, cfg, idx, pages, spine=spine, theme=verified_theme or theme, style_key=style_key,
             text_mode=text_mode, has_photo=has_photo, frames=frames, mother=mother)
         prev = _poster_status.get("plan") or {}
         merged = _merge_page_into_group(prev.get("plan"), idx, page)
         if merged:
             merged["source_revision"] = mother["source_revision"]
             merged["mother_revision"] = mother["mother_revision"]
+        source_text = guide_mother.audit_source_text(mother_sources)
         fidelity = guide_mother.audit_output(
-            mother, merged or page, prev.get("publish") or {}, cfg,
-            source_text=guide_mother.audit_source_text(mother_sources))
-        bad = list(bad) + guide_mother.audit_problems(fidelity)
+            mother, merged or page, prev.get("publish") or {}, cfg, source_text=source_text)
+        carryover, _soft = _guide_plan_risks(summary, merged or page, prev.get("publish") or {}, mother_sources)
+        bad = list(bad) + guide_mother.audit_problems(fidelity) + carryover
         # ① 单页重拆也是一次文案变更：对并回后的整组重跑本地事实闸（0 模型）
-        fact_status = _poster_fact_status(merged or page, prev.get("publish") or {},
-                                          _material_text(summary))
+        fact_status = _poster_fact_status(merged or page, prev.get("publish") or {}, source_text)
         _poster_status["plan"] = {"page": page, "index": idx, "violations": bad,
                                   "notes": notes, "chars": ai_poster.plan_chars(page),
                                   "model": cfg.get("model") or "",
@@ -5577,7 +5647,7 @@ def api_poster_preview():
     summary = _poster_get_summary(data.get("summary_id"))
     fact_status = None
     if summary:
-        fact_status = _poster_fact_status(plan, data.get("publish") or {}, _material_text(summary))
+        fact_status = _poster_fact_status_for_summary(summary, plan, data.get("publish") or {})
     # 草稿预览：派生规则只有 normalize() 一份，前端只传表单原值
     if isinstance(data.get("draft"), dict) and data.get("draft"):
         from src import poster_breakdown
@@ -5623,7 +5693,25 @@ def api_poster_fact_status():
     if not summary or not plan:
         return jsonify({"error": "缺 summary_id 或 plan，没法重判"}), 400
     publish = data.get("publish") if isinstance(data.get("publish"), dict) else {}
-    return jsonify(_poster_fact_status(plan, publish, _material_text(summary)))
+    return jsonify(_poster_fact_status_for_summary(summary, plan, publish))
+
+
+def _material_text(summary):
+    """事实核对与编辑用同一份已修订素材及已冻结的官方补充。"""
+    from src import guide_mother
+
+    sources, _revision = guide_mother.source_snapshot(DB_PATH, summary["id"])
+    return guide_mother.audit_source_text(sources)
+
+
+def _poster_fact_status_for_summary(summary, plan, publish):
+    from src import guide_mother
+
+    try:
+        asr_text = _material_text(summary)
+    except guide_mother.MotherError as e:
+        return {"scope": "error", "note": str(e), "fields": []}
+    return _poster_fact_status(plan, publish, asr_text)
 
 
 def _prune_previews(out_dir, keep=48):
@@ -8404,10 +8492,6 @@ def _save_tasks(cfg):
     return sync_tasks.save_intent(cfg, alive)
 
 
-def _all_member_ids(cfg):
-    return sync_tasks.all_member_ids(cfg)
-
-
 def _valid_ids(sub_ids):
     """过滤成还存在的订阅 id，返回 (有效, 已不存在)。"""
     alive = {s["id"] for s in _alive_subs()}
@@ -8730,6 +8814,25 @@ def _today_public_job(job):
     return {key: value for key, value in job.items() if key not in ("topic", "supplement_selection")}
 
 
+def _today_current_poster_plan(summary_id, saved):
+    """今日选题只续用基于当前来源与母稿的海报草案。"""
+    if not saved or not isinstance(saved.get("plan"), dict):
+        return None
+    from src import guide_mother
+
+    plan = saved["plan"]
+    try:
+        _sources, revision = guide_mother.source_snapshot(DB_PATH, summary_id)
+        if revision != plan.get("source_revision"):
+            return None
+        mother = guide_mother.load_mother(DB_PATH, summary_id)
+    except guide_mother.MotherError:
+        return None
+    if not mother.get("mother_revision") or mother["mother_revision"] != plan.get("mother_revision"):
+        return None
+    return saved
+
+
 def _today_edit_notice(summary_id, channel, saved=None):
     """稿件的拦截状态跟着磁盘草稿走，刷新或重启后仍然能找到修改入口。"""
     if not summary_id:
@@ -8739,7 +8842,7 @@ def _today_edit_notice(summary_id, channel, saved=None):
             return {"message": "公众号卡片草稿已保存，请打开草稿修改或重审。", "issues": []}
         return None
 
-    saved = saved if saved is not None else _poster_load_plan(summary_id)
+    saved = _today_current_poster_plan(summary_id, saved if saved is not None else _poster_load_plan(summary_id))
     if not saved:
         return None
     if ((saved.get("publish_channel") or "toutiao") != "toutiao"
@@ -9017,13 +9120,13 @@ def _today_run(job, channel):
                         raise RuntimeError("海报任务进度已切换，请查看保存的稿件")
                     return state
 
-                saved = _poster_load_plan(sid)
+                saved = _today_current_poster_plan(sid, _poster_load_plan(sid))
                 if _poster_status.get("running"):
                     if _poster_status.get("summary_id") != sid:
                         raise RuntimeError("另一篇海报正在处理，请等它完成")
                     poster_id = _poster_status["task_id"]
                     result = _today_wait(job, lambda: read_poster(poster_id), "正在处理头条图文")
-                    saved = result.get("plan") or saved
+                    saved = _today_current_poster_plan(sid, result.get("plan") or saved)
                 if not _today_package(sid, channel):
                     if not saved:
                         poster_id = _today_reply(_start_poster_plan({

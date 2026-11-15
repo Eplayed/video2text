@@ -999,6 +999,122 @@ def main():
        any("A/B 不同题型" in s for s in ai_poster.checklist_for("toutiao"))
        and any("三条候选里挑一条" in s for s in ai_poster.checklist_for("xhs")))
 
+    print("== L 纯文字攻略页与画面账（11-02 B 站那批：帧在盘上，判过的全不合格）==")
+    import tempfile
+    from pathlib import Path as _P
+    from PIL import Image
+    from src import frame_pool as _fp
+
+    pool_root = _P(tempfile.mkdtemp(prefix="fp_counts_"))
+    orig_pool = _fp.POOL_DIR
+    _fp.POOL_DIR = pool_root
+
+    def _write_pool(aid, frames):
+        d = pool_root / aid
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "frames.json").write_text(json.dumps({"aweme_id": aid, "frames": frames}),
+                                       encoding="utf-8")
+
+    keep = str(pool_root / "BVok" / "clean" / "v_f_001.jpg")
+    os.makedirs(os.path.dirname(keep), exist_ok=True)
+    with open(keep, "wb") as f:
+        f.write(b"x" * 64)
+    _write_pool("BVempty", [])
+    _write_pool("BVok", [{"i": 1, "file": keep, "checked": True, "clean": True},
+                         {"i": 2, "checked": False}])
+    _write_pool("BVbad", [{"i": n, "checked": True, "clean": False,
+                           "why": "角落有真人出镜或贴纸，裁横条切不掉"} for n in range(1, 9)])
+    _write_pool("BVunjudged", [{"i": n, "checked": False} for n in range(1, 19)])
+    got = _fp.counts_for(["BVempty", "BVok", "BVbad", "BVunjudged", "BVmissing"])
+    ck("L1 没抽过帧的 key 不进账：「没这一层」和「有帧但一张不能用」是两句话",
+       "BVempty" not in got and "BVmissing" not in got, str(sorted(got)))
+    ck("L1 判过 8 张全不合格 = usable 0（能用只认判过且干净、文件还在）",
+       got["BVbad"] == {"total": 8, "judged": 8, "usable": 0}, str(got.get("BVbad")))
+    ck("L1 一张没看图时 judged 0 但 total 报得出（界面上那句是「还没逐张看图」）",
+       got["BVunjudged"] == {"total": 18, "judged": 0, "usable": 0}, str(got.get("BVunjudged")))
+    ck("L1 干净帧文件不在了就不算能用（宁缺毋滥，不报虚数）",
+       got["BVok"] == {"total": 2, "judged": 1, "usable": 1}, str(got.get("BVok")))
+    os.remove(keep)
+    ck("L1 反面：文件被删掉之后 usable 掉到 0（这条判据不是永远放行）",
+       _fp.counts_for(["BVok"])["BVok"]["usable"] == 0, "")
+
+    gp = {"style_key": "guide_ink", "layout_key": "guide", "kicker": "先确认服",
+          "title": "种族平衡又变天：第五次天赋改动清单", "subtitle": "改的是被动不是主动",
+          "bignum": {"v": "5", "label": "第五次改动", "note": "公告一次写了五条"},
+          "cards": [{"t": "牛头人", "d": "耐久被动 5% 提到 8%"},
+                    {"t": "人类", "d": "人类精魂 10% 降到 7%"},
+                    {"t": "兽人", "d": "暴击触发改内置冷却"}],
+          "warn": {"t": "别照测试服练手法", "d": "进正式服还会再调"},
+          "ask": {"q": "先练哪个种族？", "options": ["牛头人", "人类"]},
+          "footer": "数值取自素材口播，以正式服为准。"}
+    png0, chk0 = ts.typeset_guide(None, gp, ratio="9:16", skin="guide_ink", page=(1, 4))
+    img0 = Image.open(io.BytesIO(png0))
+    ck("L2 一张画面都没有，攻略页照样排得出来（纯文字版式，不是断路）",
+       img0.size == (1080, 1920) and not (chk0 or {}).get("problems"),
+       str((img0.size, (chk0 or {}).get("problems"))))
+    ck("L2 没有照片位时不许留空框：版面问题清单里不该出现「放不下/空」这类",
+       not any(("空" in str(x) or "放不下" in str(x)) for x in ((chk0 or {}).get("problems") or [])),
+       str((chk0 or {}).get("problems")))
+    # 池子还指在临时目录里：下面 L3 那两条要用同一批假池子
+    sys.path.insert(0, str(ROOT / "web"))
+    import app as webapp                                    # noqa: E402
+    calls = {"judge": 0}
+
+    def _fake_ensure(aid, cfg, limit=8, progress_cb=None):
+        calls["judge"] += 1
+        return _fp.load(aid)
+
+    orig_load, orig_ensure, orig_mats = _fp.load, _fp.ensure_judged, webapp._guide_materials
+    orig_usable = _fp.usable
+    try:
+        _fp.ensure_judged = _fake_ensure
+        webapp._guide_materials = lambda s: [{"video_id": 1, "aweme_id": "BVbad",
+                                              "title": "判满 8 张全不合格"}]
+        out1 = webapp._guide_frames_for({}, {"api_key": "k"}, may_judge=True)
+        ck("L3 判满一屏还是 0 张能用 → 拆解那一步不再自动加判（同一笔钱不花第二遍）",
+           out1 == [] and calls["judge"] == 0, str((out1, calls)))
+        webapp._guide_materials = lambda s: [{"video_id": 2, "aweme_id": "BVunjudged",
+                                              "title": "18 张一张没看过"}]
+        out2 = webapp._guide_frames_for({}, {"api_key": "k"}, may_judge=True)
+        ck("L3 反面：从没判过的池子照旧会去看图（不许把闸写成永远拦）",
+           calls["judge"] == 1, str((out2, calls)))
+        calls["judge"] = 0
+        webapp._guide_materials = lambda s: [{"video_id": 1, "aweme_id": "BVbad",
+                                              "title": "判满 8 张全不合格"}]
+        webapp._guide_frames_for({}, {"api_key": "k"}, may_judge=False)
+        ck("L3 出图补图那一档本来就不判帧（may_judge=False 一律 0 次）",
+           calls["judge"] == 0, str(calls))
+    finally:
+        _fp.POOL_DIR = orig_pool
+        _fp.load, _fp.ensure_judged = orig_load, orig_ensure
+        _fp.usable = orig_usable
+        webapp._guide_materials = orig_mats
+
+    # ── L4 · 卡片说明顶到字数上限：收短要停在标点（11-02 成品上印出过「…收益归」）
+    _d42 = "1%暴击改宠物5%伤害。升级期宠物占30%伤害时仅提升1.5%，后期不带宠收益归零。"
+    _c42 = ai_poster._clip_d(_d42, 40)
+    ck("L4 超上限的说明收短停在标点，成品上不许出现半截词",
+       len(_c42) <= 40 and _c42.endswith("1.5%") and "收益归" not in _c42, _c42)
+    ck("L4 反面：没超上限的说明一个字都不许动",
+       ai_poster._clip_d("无情天赋暴击加成从2%降至1%。", 40) == "无情天赋暴击加成从2%降至1%。")
+    _pg4, _nt4 = ai_poster.normalize_page(
+        {"title": "种族改动", "cards": [{"t": "兽人挨刀", "d": _d42}]},
+        ai_poster.limits_for("typeset"), "guide_night", False, 1)
+    ck("L4 超长说明保留完整并进入容量问题",
+       _pg4["cards"][0]["d"] == _d42
+       and any("卡片说明超" in n for n in ai_poster.lint_plan(_pg4, ai_poster.limits_for("typeset"))),
+       json.dumps(_nt4, ensure_ascii=False))
+    _pf4, _nf4 = ai_poster.fit_plan(
+        {"title": "无限服种族改动", "subtitle": "牛头人移速叠满60%", "footer": "",
+         "style_key": "guide_night",
+         "cards": [{"t": "兽人挨刀", "d": _d42},
+                   {"t": "牛头人起飞", "d": "每移动5秒叠加2%移速，上限60%，裸奔等同骑马。"}]},
+        limit=70, lim=ai_poster.limits_for("typeset"))
+    ck("L4 容量不足不删条件、不截句，返回拆页提示",
+       _pf4["cards"][0]["d"] == _d42
+       and len(_pf4["cards"]) == 2 and any("拆页" in n for n in _nf4),
+       json.dumps(_pf4["cards"], ensure_ascii=False))
+
     print()
     if FAILS:
         print("FAIL %d 项：%s" % (len(FAILS), "、".join(FAILS)))

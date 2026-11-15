@@ -77,6 +77,20 @@ def extract_aweme_id_from_url(url: str) -> str:
     return ""
 
 
+_WORK_URL_RE = re.compile(r"/(?:video|note|slides)/(\d+)")
+
+
+def is_work_url(url: str) -> bool:
+    """链接指向单条作品（视频或图文），而不是作者主页。
+
+    抖音 App 分享「图文作品」的短链展开后是 www.douyin.com/note/<id>，这种链接里
+    根本没有 sec_uid——按老路径直接报「无法从链接提取 sec_uid」，看着像订阅功能坏了，
+    实际是这条输入形状没有解析路径。认作者要走浏览器那条（src/browser_fetch.py
+    的 browser_fetch_author），它打开作品页再从作者主页把这一条作品对回来。
+    """
+    return bool(_WORK_URL_RE.search(url or ""))
+
+
 def load_existing_aweme_ids(excel_path: str) -> set[str]:
     """读取 Excel 中已存在的视频 ID，用于主页批量抓取去重。
 

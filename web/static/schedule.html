@@ -241,7 +241,21 @@ body.in-frame .wrap{padding-top:14px}
   padding:4px 0;border-top:1px dotted var(--border);cursor:pointer}
 .sr-cand input{margin:0;accent-color:var(--module-2)}
 .sr-cand .src{color:var(--text-tertiary);font-size:11.5px}
+.src.warn{color:#8a5a24}
+/* 素材日期按"距今几天"上色（档位在 schedule-series.js 的 SR_DATE_TIERS，一处一份）：
+   <3 天绿 / 3–5 天浅绿 / 5–7 天橙 / ≥7 天红棕（这一档号主没定，补的是"旧料必须看得出来"）。
+   颜色只在这一份 CSS 里，JS 只挂类名，别在 JS 里再抄一遍色值。 */
+.dt{font-size:11.5px;margin-left:4px;white-space:nowrap}
+.dt-fresh{color:#2c6e33;font-weight:600}
+.dt-ok{color:#5f8f4f}
+.dt-warn{color:#b25e12}
+.dt-old{color:#a03a2c}
+.dt-none{color:var(--text-tertiary)}
 .sr-cand .fb{font-size:11px;padding:0 5px;border-radius:99px;background:var(--accent-muted);color:var(--text-secondary)}
+/* 非视频源那条的标记：自己一套 class，不借 .fb（借了会被"候选只有 Forever 徽章"那类判据算错）。
+   候选区与已采用区都要用——已采用那一区里也躺着非视频料（free-a0b82c 就是公众号文章）。 */
+.sr-cand .sr-novid,.sr-ado-rows .sr-novid{font-size:11px;padding:0 5px;border-radius:99px;white-space:nowrap;
+  background:rgba(217,105,74,.12);color:var(--danger,#d9694a);border:1px solid rgba(217,105,74,.35)}
 .sr-cand .fb.f-yes{background:#e3ece1;color:#3d6a3a}
 .sr-cand .fb.f-unknown{background:#f7e7c9;color:#8a5a24}
 /* 视频素材那一行下面挂的「相关非视频」子集（2026-10-28 号主：照勾选素材那套形式，父行可展开、子集也多选）。

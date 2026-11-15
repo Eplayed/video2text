@@ -718,6 +718,7 @@ textarea{resize:vertical;min-height:84px}
 .pk-ttline{display:flex;gap:7px;align-items:baseline;font-size:12.5px;line-height:1.5}
 .pk-ttline .k{flex:0 0 34px;font-size:10.5px;font-weight:800;color:var(--text-tertiary);letter-spacing:.3px}
 .pk-ttline .t{flex:1;min-width:0;word-break:break-all}
+.pk-ttline input.t{width:100%;padding:5px 7px;font:inherit;line-height:1.4}
 .pk-ttline .n{flex:0 0 auto;font-size:10.5px;color:var(--text-tertiary)}
 .pk-ttline .btn{flex:0 0 auto;padding:1px 7px;font-size:11px}
 .pk-warns{font-size:11.5px;line-height:1.7;color:var(--module-5);margin:2px 0 10px}
@@ -3266,17 +3267,6 @@ async function asSetRunAt(v) {
   loadAutoSync();
 }
 
-// 「全部跑一遍」那颗全局按钮删了之后，这个函数暂时没有调用方。留着不删：
-// 后端 /api/sync/tasks/run 的 all:true 那条路还在，号主要想恢复入口，挂个按钮就行，
-// 不用重新猜参数怎么传。每行那颗「立刻跑」走的是下面的 asRunOne(key)。
-async function asRun(all) {
-  const r = await asPost('/api/sync/tasks/run', all ? {all: true} : {});
-  if (!r) return;
-  setStatus('running', '已提交自动同步（' + (r.tasks || 0) + ' 个任务 / ' + (r.ids || []).length + ' 个订阅），进度看下方同步状态');
-  startSubPolling();
-  setTimeout(loadAutoSync, 1500);
-}
-
 async function asRunOne(key) {
   const r = await asPost('/api/sync/tasks/run', {key: key});
   if (!r) return;
@@ -4387,7 +4377,6 @@ async function pkFocusFidelityIssue(ref) {
   await pkLoadSource();
   pkFocusMotherPoint(ref);
 }
-function pkSetFidelity(f) {
 function pkSupplementReceiptHtml(rows) {
   if (!rows || !rows.length) return '';
   return '<div class="pk-verify mild"><b>补充资料</b><ul>' + rows.map(row => {
@@ -4397,6 +4386,7 @@ function pkSupplementReceiptHtml(rows) {
   }).join('') + '</ul></div>';
 }
 
+function pkSetFidelity(f) {
   _pkFidelity = f || null;
   const box = document.getElementById('pk-result');
   if (!box) return;
@@ -4499,19 +4489,20 @@ function pkTitleRows(which) {
   const pub = _pkLastPublish || {};
   const list = (which === 'tt' ? pub.tt_titles : pub.xhs_titles) || [];
   const keys = which === 'tt' ? ['A 位', 'B 位'] : ['①', '②', '③'];
-  if (!list.length) {
-    return '<div class="pk-ttline"><span class="t" style="color:var(--text-tertiary)">'
-         + '（这一档的发布标题还没生成：图面主标题不算。点「① 拆文案」重拆一次就有）</span></div>';
-  }
-  return list.map(function (t, i) {
+  // 标题为空或被事实闸拦时直接在这里写，不能逼人再花一次拆文案额度。
+  return Array.from({length: Math.max(list.length, keys.length)}, function (_, i) {
+    const t = list[i] || '';
     return '<div class="pk-ttline"><span class="k">' + (keys[i] || (i + 1)) + '</span>'
-         + '<span class="t">' + esc(t) + '</span><span class="n">' + t.length + ' 字</span>'
+         + '<input class="t" id="pk-title-' + which + '-' + i + '" value="' + esc(t) + '" maxlength="' + (which === 'tt' ? 30 : 20) + '"'
+         + ' placeholder="可直接改标题，不用重拆" oninput="pkCount();this.nextElementSibling.textContent=this.value.length+\' 字\'">'
+         + '<span class="n">' + t.length + ' 字</span>'
          + '<button class="btn ghost sm" onclick="pkCopyTitle(\'' + which + '\',' + i + ',this)">复制</button></div>';
   }).join('');
 }
 function pkCopyTitle(which, i, btn) {
   const pub = _pkLastPublish || {};
-  const t = ((which === 'tt' ? pub.tt_titles : pub.xhs_titles) || [])[i] || '';
+  const el = document.getElementById('pk-title-' + which + '-' + i);
+  const t = el ? el.value.trim() : (((which === 'tt' ? pub.tt_titles : pub.xhs_titles) || [])[i] || '');
   if (t) pkCopyAny(btn, t);
 }
 function pkCopyAny(btn, text) {
@@ -4646,9 +4637,9 @@ function pkLayout(key) {
 }
 function pkLayoutKey() {
   const sel = document.getElementById('pk-layout-key-top');
+  if (!_pkLayouts.length) return (_pkPages[_pkCur] || {}).layout_key || '';
   return sel ? sel.value : '';
 }
-  if (!_pkLayouts.length) return (_pkPages[_pkCur] || {}).layout_key || '';
 function pkRenderLayoutOptions() {
   const sel = document.getElementById('pk-layout-key-top');
   if (!sel || !_pkLayouts.length) return;
@@ -4895,8 +4886,12 @@ function pkReadPublish() {
                  : (base.xhs_tags || []),
     // 标题候选与后端算好的 warnings 没有输入框，必须原样带走——
     // 这里漏一个键，切一次渠道或点一次「换一套」就把它们清空了（和当年 pkCarryGuide 同一个洞）。
-    tt_titles: base.tt_titles || [],
-    xhs_titles: base.xhs_titles || [],
+    tt_titles: document.querySelector('[id^="pk-title-tt-"]')
+      ? Array.from(document.querySelectorAll('[id^="pk-title-tt-"]')).map(e => e.value.trim()).filter(Boolean)
+      : (base.tt_titles || []),
+    xhs_titles: document.querySelector('[id^="pk-title-xhs-"]')
+      ? Array.from(document.querySelectorAll('[id^="pk-title-xhs-"]')).map(e => e.value.trim()).filter(Boolean)
+      : (base.xhs_titles || []),
     warnings: base.warnings || []
   };
   return out;
@@ -5883,24 +5878,64 @@ function pkFactBy() {
 // 「上一次任务失败」就 return——版面整个不渲染，人对着"先把这些卖点改掉"
 // 却没有任何可改的东西。两处共用这一份，写两遍迟早一个有一个没有。
 function pkJumpBtnHtml(text) {
-  // 被点名的条目多半带着「第X页·卡片Y」：给一颗直达的按钮，滚过去把光标放进那张卡。
-  // 解析不出位置（比如拦的是配文）就不给按钮，别放一颗点了没反应的。
-  const m = /第\s*(\d+)\s*页[·•]?\s*卡片\s*(\d+)/.exec(String(text || ''));
-  if (!m) return '';
-  return '<div style="margin:2px 0 4px"><button class="btn ghost sm" onclick="pkJumpCard('
-    + m[1] + ',' + m[2] + ')" title="翻到被点名的那一页，把光标放到那张卡片上">✎ 去改这句</button></div>';
+  const s = String(text || '');
+  const m = /第\s*(\d+)\s*页[·•]?\s*卡片\s*(\d+)/.exec(s);
+  if (m) return '<div style="margin:2px 0 4px"><button class="btn ghost sm" onclick="pkJumpCard('
+    + m[1] + ',' + m[2] + ')" title="翻到被点名的卡片">✎ 去改这句</button></div>';
+  const top = /^(?:第\s*(\d+)\s*页[·•]?\s*)?(主标题|副标题|尾注)/.exec(s);
+  if (top) {
+    const id = top[2] === '主标题' ? 'pk-title' : (top[2] === '副标题' ? 'pk-subtitle' : 'pk-footer');
+    return '<div style="margin:2px 0 4px"><button class="btn ghost sm" onclick="pkJumpPageInput('
+      + (top[1] || 1) + ',\'' + id + '\')" title="定位到图上文字">✎ 去改这句</button></div>';
+  }
+  // 发布文案和标题也会被事实闸拦；它们有编辑框，不能让人只能重拆。
+  const title = /配文·(tt_titles|xhs_titles)(\d+)/.exec(s);
+  const ids = {copy_text: 'pk-copy', xhs_copy: 'pk-copy', digest: 'pk-digest',
+               keyword_reply: 'pk-kw', source_note: 'pk-src'};
+  const field = /配文·([a-z_]+)/.exec(s);
+  const id = title ? ('pk-title-' + (title[1] === 'tt_titles' ? 'tt' : 'xhs') + '-' + (Number(title[2]) - 1))
+                   : (field && ids[field[1]]);
+  if (!id) return '';
+  const channel = field && field[1] === 'xhs_copy' ? 'xhs' : '';
+  return '<div style="margin:2px 0 4px"><button class="btn ghost sm" onclick="pkJumpInput(\''
+    + id + '\',\'' + channel + '\')" title="定位到这段发布文案">✎ 去改这句</button></div>';
+}
+function pkJumpInput(id, channel) {
+  // 错误清单覆盖两渠道；目标字段若藏在另一档，先切到那档再定位。
+  if (channel === 'xhs' || id.indexOf('pk-title-xhs-') === 0) {
+    if (_pkChannel !== 'xhs') pkSetChannel('xhs');
+  } else if (id === 'pk-copy' && _pkChannel === 'wechat' && _pkForm === 'article') {
+    pkSetForm('newspic');
+  } else if (id.indexOf('pk-title-tt-') === 0 && _pkChannel === 'xhs') {
+    pkSetChannel('toutiao');
+  } else if (id === 'pk-kw' && (_pkChannel === 'xhs' || _pkChannel === 'wechat' && _pkForm === 'article')) {
+    pkSetChannel('toutiao');
+  }
+  const el = document.getElementById(id);
+  if (!el) return;
+  if (el.scrollIntoView) el.scrollIntoView({block:'center', behavior:'smooth'});
+  el.focus();
 }
 function pkJumpCard(pg, card) {
   const i = (pg || 1) - 1;
   const multi = _pkPages.length > 1;
-  if (multi && i !== _pkCur && i >= 0 && i < _pkPages.length) pkSwitchPage(i);
+  if (multi && i !== _pkCur && i >= 0 && i < _pkPages.length) pkSwitchEditPage(i);
   setTimeout(function () {
     const el = document.getElementById('pk-ct-' + ((card || 1) - 1))
       || document.getElementById('pk-cd-' + ((card || 1) - 1));
-    if (!el) return;
-    if (el.scrollIntoView) el.scrollIntoView({block: 'center', behavior: 'smooth'});
-    el.focus();
+    if (el) pkJumpInput(el.id);
   }, multi ? 400 : 0);
+}
+function pkSwitchEditPage(i) {
+  // 错误列表跳转只换编辑框；普通切页会自动预览并覆盖错误/逐条凭据面板。
+  pkFlushForm();
+  pkRenderPlan(_pkLastPlan, _pkLastPublish, i);
+}
+function pkJumpPageInput(pg, id) {
+  const i = (pg || 1) - 1;
+  const multi = _pkPages.length > 1;
+  if (multi && i !== _pkCur && i >= 0 && i < _pkPages.length) pkSwitchEditPage(i);
+  setTimeout(function () { pkJumpInput(id); }, multi ? 400 : 0);
 }
 function pkFactFailHtml(msg, hard) {
   let override;
@@ -7126,6 +7161,7 @@ async function pkLoadSource() {
   catch (e) { box.innerHTML = '<div class="pk-src">原文读取失败：' + esc(e.message) + '</div>'; return; }
   if (!d || d.error) { box.innerHTML = '<div class="pk-src">' + esc((d && d.error) || '原文读取失败') + '</div>'; return; }
   _pkSource = {id: _pkId,
+    videoIds: (d.sources || []).filter(s => s.role === 'video').map(s => Number(s.video_id)).filter(Number.isInteger),
     content: (d.sources || []).map(s => '【' + (s.role === 'official_supplement' ? '官方补充 ' : '素材 ') + s.video_id + (s.official_date ? ' · ' + s.official_date : '') + (s.corrected ? ' · 已核对术语或原片' : '') + '】\n' + (s.transcript || '')).join('\n\n'),
     rawContent: (d.sources || []).filter(s => s.corrected).map(s => '【素材 ' + s.video_id + ' · 未改动 ASR】\n' + (s.raw_transcript || '')).join('\n\n'),
     mother: d.mother || {}, source_revision: d.source_revision || ''};
@@ -7167,22 +7203,77 @@ function pkRenderSource() {
   const badNums = nums.filter(n => src.indexOf(n) < 0);
   const hasPlan = !!(plan.title || (plan.cards || []).length);
   const motherHead = pkMotherSummaryHtml();
+  const frameControls = (_pkSource.videoIds || []).map(id => '<div class="pk-guide">'
+    + '<button type="button" class="btn" onclick="pkCheckFrames(' + id + ')">核对素材 ' + id + ' 的原片画面</button>'
+    + '<div id="pk-frame-evidence-' + id + '"></div></div>').join('');
   const rawNote = _pkSource.rawContent
     ? '<details class="pk-guide"><summary>查看修订前的 ASR 原文</summary><div class="pk-src">'
       + esc(_pkSource.rawContent) + '</div></details>' : '';
   if (!hasPlan) {
     box.innerHTML = motherHead + '<div class="pk-src">' + esc(src.slice(0, 4000)) + (src.length > 4000 ? '…（原文 ' + src.length + ' 字，往下滚动看这一段就够）' : '') + '</div>'
-      + rawNote + '<div class="pk-diff">这是这次出图的依据（来源文本）。点「① AI 拆解文案」后回到这里，'
+      + rawNote + frameControls + '<div class="pk-diff">这是这次出图的依据（来源文本）。点「① AI 拆解文案」后回到这里，'
       + '会把图上文字与来源文本做字面对照；完整判断看上方原意核对。</div>';
     return;
   }
   box.innerHTML = motherHead + '<div class="pk-src">' + (html || '（原始转写为空）') + '</div>'
-    + rawNote + '<div class="pk-diff">'
+    + rawNote + frameControls + '<div class="pk-diff">'
     + (miss.length ? '<span class="miss">⚠️ 原文里找不到这些卡片标题（模型改写或编造）：</span>' + miss.map(esc).join('、') + '<br>' : '')
     + (badNums.length ? '<span class="miss">⚠️ 原文里没有这些数字：</span>' + badNums.map(esc).join('、') + '<br>' : '')
     + (!miss.length && !badNums.length ? '<span class="hit">字面上能找到标题与数字；主体和条件仍看原意核对</span>' : '')
     + '<span style="color:var(--text-tertiary)">　亮底色只表示字面相同，不代表语义已核。</span></div>';
 }
+async function pkCheckFrames(videoId) {
+  const panel = document.getElementById('pk-frame-evidence-' + videoId);
+  if (!panel) return;
+  panel.textContent = '正在识别原片画面文字…';
+  const url = '/api/source-corrections/' + videoId;
+  try {
+    const material = await fetch(url + '?frames=1').then(r => r.json());
+    if (material.error) throw new Error(material.error);
+    const candidates = (material.frames || []).map(frame =>
+      '<div class="pk-src"><a target="_blank" rel="noopener" href="' + esc(frame.url) + '">原帧 '
+      + esc(frame.ts) + '</a> · ' + esc((frame.lines || []).join(' / ') || '画面文字未识别')
+      + (frame.near ? '<br>附近口播：' + esc(frame.near) : '') + '</div>').join('');
+    panel.innerHTML = '<p class="pk-diff">画面识别供内部核对，请打开原帧确认数字、动作和术语。</p>'
+      + (candidates || '<p class="pk-diff">暂无可供核对的帧，仍可填写原片或其他依据。</p>')
+      + '<form><p><label>原转写的连续文字<br><textarea name="old" maxlength="300" required></textarea></label></p>'
+      + '<p><label>核过的写法<br><textarea name="replacement" maxlength="300" required></textarea></label></p>'
+      + '<p><label>核对依据与时间点<br><textarea name="evidence" maxlength="500" required></textarea></label></p>'
+      + '<button type="submit" class="btn">保存定点修订</button><span role="status"></span></form>';
+    const form = panel.querySelector('form');
+    form.addEventListener('submit', async event => {
+      event.preventDefault();
+      const message = form.querySelector('[role="status"]');
+      const button = form.querySelector('button');
+      if (material.stale) {
+        message.textContent = '原始转写已变化，先核对原始转写和既有修订。';
+        return;
+      }
+      button.disabled = true;
+      const fields = new FormData(form);
+      try {
+        const record = await fetch(url, {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({base_hash: material.base_hash, patch_revision: material.patch_revision, patches: [
+            ...(material.patches || []),
+            {old: fields.get('old'), new: fields.get('replacement'), evidence: fields.get('evidence')}
+          ]})
+        }).then(r => r.json());
+        if (record.error) throw new Error(record.error);
+        _pkSource = null;
+        await pkLoadSource();
+        setStatus('done', '定点修订已保存，请重新生成整理稿和拆页。');
+      } catch (error) {
+        message.textContent = error.message;
+      } finally {
+        button.disabled = false;
+      }
+    });
+  } catch (error) {
+    panel.textContent = '读取画面失败：' + error.message;
+  }
+}
+
 function pkMotherSummaryHtml() {
   const mother = (_pkSource || {}).mother || {};
   const points = mother.points || [];
@@ -7207,13 +7298,6 @@ function pkFocusMotherPoint(id) {
     + esc(String((point.source_ref || {}).start || 0)) + '</small>';
   box.scrollIntoView({block:'center', behavior:'smooth'});
 }
-function pkSrcToggle() {
-  const d = document.getElementById('pk-srcpanel');
-  if (!d) return;
-  d.open = !d.open;
-  if (d.open) pkLoadSource();
-}
-
 // ── 公众号图文（图片消息形态 · 底稿可选：留空＝转载模式，填写＝亲测模式） ──
 // 模板/三轴名单不在前端写死，统一由 /api/wechat/templates 下发（见 loadWxAxisOptions）
 const WX_DRAFT_MIN = 300;

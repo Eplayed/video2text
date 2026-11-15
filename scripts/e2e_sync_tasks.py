@@ -235,6 +235,47 @@ def main():
         import shutil
         shutil.rmtree(tmp, ignore_errors=True)
 
+    # ── K/L/M 源类任务与界面模板串：三条都是"跑起来看不出来"的静态对表 ──────────
+    print("== K 源类清单里每一个源都必须有执行体（清单说有、代码没写就是假账）==")
+    import re as _re
+    app_src = (ROOT / "web" / "app.py").read_text(encoding="utf-8")
+    for src_name, label in st.SOURCE_LABELS.items():
+        ck("%s（%s）在 _run_source_task 里有分支" % (src_name, label),
+           _re.search(r'if src == "%s":' % _re.escape(src_name), app_src) is not None)
+    ck("认不出的源仍然记失败（不许静默跳过）",
+       "工作台还不认识这个源" in app_src)
+    ck("NGA 导入只在快照目录真有文件时才建任务（空目录建一条天天红的更糟）",
+       "if not nga_import.board_files" in app_src)
+    ck("NGA 任务在启动时就注册（等页面来拉 = 没人打开就永远不抓，暴雪那条就是这么漏的）",
+       "_nt = _nga_task()" in app_src)
+
+    print("== L 转写档位只有一份（订阅那条以前写死 base，比手动采集差一档）==")
+    ck("web/app.py 里不再出现写死的 \"base\" 档位",
+       'process_row(ws, row, cookie, "base"' not in app_src)
+    ck("ASR_MODEL_DEFAULT 是 small（10-12 实测 base→small 错字 11→3）",
+       _re.search(r'^ASR_MODEL_DEFAULT = "small"', app_src, _re.M) is not None)
+    ck("三条采集路都用同一份档位", app_src.count("ASR_MODEL_DEFAULT") >= 4,
+       "出现 %d 次（常量 1 + 调用 3）" % app_src.count("ASR_MODEL_DEFAULT"))
+
+    print("== M 界面模板串的属性引号必须成对（少一个收尾引号，那颗芯片就整颗碎掉）==")
+    # 真因回放：` onclick="asToggleMembers('${...}')` 少一个双引号 → 浏览器把后面的 `>`
+    # 吞进属性值，「N 个订阅 ▸」渲染成 0×0、点不开，号主因此看不到订阅成员（HEAD 8f712de 引入）。
+    html = (ROOT / "web" / "templates" / "index.html").read_text(encoding="utf-8")
+    bad = []
+    for i, line in enumerate(html.splitlines(), 1):
+        for m in _re.finditer(r"`(?:[^`\\]|\\.)*`", line):
+            if len(_re.findall(r'(?<!\\)"', m.group(0))) % 2:
+                bad.append("line %d: %s" % (i, m.group(0)[:70]))
+    ck("index.html 每个 JS 模板串里的双引号都成对（%d 处可疑）" % len(bad), not bad,
+       "；".join(bad[:3]))
+    js = (ROOT / "web" / "static" / "schedule-series.js").read_text(encoding="utf-8")
+    bad_js = []
+    for i, line in enumerate(js.splitlines(), 1):
+        for m in _re.finditer(r"`(?:[^`\\]|\\.)*`", line):
+            if len(_re.findall(r'(?<!\\)"', m.group(0))) % 2:
+                bad_js.append("line %d" % i)
+    ck("排产表那份 JS 同样过一遍（同一类坑不分文件）", not bad_js, "；".join(bad_js[:3]))
+
     print()
     if FAILS:
         print("FAIL %d 项：%s" % (len(FAILS), "、".join(FAILS)))

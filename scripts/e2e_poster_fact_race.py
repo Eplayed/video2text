@@ -34,6 +34,7 @@ function __el(id) { if (!__boxes[id]) __boxes[id] = {innerHTML: ''}; return __bo
 let __plan = null, __publish = null;
 let _pkId = 108;
 function esc(s) { return String(s == null ? '' : s); }
+function pkJumpBtnHtml() { return ''; } // 跳转按钮不在竞态测试范围内
 function pkReadPayload() { return __plan; }
 function pkReadPublish() { return __publish; }
 const document = {getElementById: function (id) {

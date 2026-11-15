@@ -42,11 +42,11 @@ def _run_material(summary_id: str) -> int:
     if not s:
         print("找不到整理稿 id=%s" % summary_id)
         return 2
-    if s.get("summary_type") not in ("wechat_material", "toutiao_mix"):
-        print("提示：这条是 %s，回指口径按【关键数据】/【金句摘录】分节，可能不适用"
-              % (s.get("summary_type") or "未标类型"))
+    # 形态决定判据：那九节只属于 wechat_material，其余走攻略档口径（2026-10-27 修，
+    # 原来这里只打一行"可能不适用"就照旧判，等于把 40 篇非公众号稿判成不能发）
     sources = content_store.material_source_text(db, s)
-    result = draft_audit.audit_material(s.get("content") or "", sources)
+    result = draft_audit.audit_material(s.get("content") or "", sources,
+                                        summary_type=s.get("summary_type") or "")
     print("\n━━━━━━ 整理稿体检 · 稿 %s ━━━━━━" % summary_id)
     for level, name, detail in result["rows"]:
         print("  [%-4s] %-14s %s" % (level, name, detail))

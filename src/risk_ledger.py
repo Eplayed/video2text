@@ -68,7 +68,7 @@ def norm(text: str) -> str:
     return s[:40]
 
 
-# 分级判据只有一份，在 `fact_gate.claim_kind`（机制数值／二元机制／其他）：
+# 分级判据只有一份，在 `fact_gate.claim_kind`（机制数值／二元机制／译名核对／其他）：
 # 台账分级和发布闸必须同一口径，两边各写一份迟早对不上（这仓库反复踩过）。
 classify = fact_gate.claim_kind
 

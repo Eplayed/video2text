@@ -30,6 +30,7 @@ Python 3.9 兼容：不用 match / X|Y 语法。
 """
 import io
 import json
+from math import isfinite
 import os
 import re
 import shutil
@@ -390,6 +391,50 @@ def near_text(segments, ts):
     return "".join(out)[:120]
 
 
+_ACTION_CUE = re.compile(r"点击|勾选|输入|打开|切换|连按|坐标|(?:一键|拉怪|输出)宏|/console")
+
+
+def _evidence_frames(video_path, out_dir, duration_sec, segments, regular):
+    """在原片可用时补采操作口播附近的帧，单独用于核对，不进入正式配图池。"""
+    regular_times = [60 * int(ts.split(":")[0]) + int(ts.split(":")[1]) for _, ts in regular]
+    targets = []
+    for seg in segments or ():
+        if not _ACTION_CUE.search(str(seg.get("text") or "")):
+            continue
+        try:
+            start, end = float(seg["start"]), float(seg["end"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not isfinite(start) or not isfinite(end) or start < 0 or end < start:
+            continue
+        timestamp = round(start + min(1.0, (end - start) / 2))
+        if not 0 <= timestamp < duration_sec:
+            continue
+        if min((abs(timestamp - value) for value in regular_times + targets), default=9) > 1:
+            targets.append(timestamp)
+    if not targets:
+        return []
+    evidence_dir = out_dir / "evidence"
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    results = []
+    for index, timestamp in enumerate(_even_sample(targets, 4), len(regular) + 1):
+        file = evidence_dir / ("t_%06d.jpg" % timestamp)
+        try:
+            result = subprocess.run(
+                [_ffbin("ffmpeg"), "-hide_banner", "-loglevel", "error", "-y",
+                 "-ss", str(timestamp), "-i", str(video_path), "-vf", "scale=%d:-1" % FRAME_W,
+                 "-frames:v", "1", "-q:v", "3", str(file)],
+                capture_output=True, timeout=12)
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if result.returncode or not file.is_file():
+            continue
+        ts = "%02d:%02d" % divmod(timestamp, 60)
+        results.append({"i": index, "ts": ts, "file": str(file),
+                        "near": near_text(segments, ts), "evidence_only": True})
+    return results
+
+
 def build(video_path, aweme_id, ai_config=None, segments=None, progress_cb=None,
           judge=False):
     """抽帧 + 逐帧裁掉后期横幅，落 frames.json，返回清单 dict。
@@ -451,6 +496,9 @@ def build(video_path, aweme_id, ai_config=None, segments=None, progress_cb=None,
             "candidates": len(usable),
             "checked": bool(judge and ai_config and ai_config.get("api_key")),
             "tokens": tokens, "engine": "frame_pool"}
+    extra = _evidence_frames(video_path, out_dir, dur, segments, frames)
+    if extra:
+        meta["evidence_frames"] = extra
     _dump(aweme_id, meta)
     return meta
 
@@ -640,6 +688,30 @@ def dropped(pool):
     return out
 
 
+def counts_for(aweme_ids):
+    """一批素材的画面账：`{aweme_id: {"total","judged","usable"}}`，**只读盘、不花钱**。
+
+    为什么数在帧池这一层：排产格与海报弹窗都要念同一句"这条有没有图"，判据必须就是
+    `usable()` 那一份（文件在、判过、判为干净），不能让调用方各自去数 JSON——
+    11-02 号主问"B 站素材没有关键帧图片吗"，实际是 18 张都在盘上、判过的 8 张全不合格，
+    而这句话以前只有海报弹窗（要先有整合稿）才看得到。
+    没抽过帧的 key 不出现在结果里：**"没这一条"和"有池子但一张没用"是两句话**。
+    """
+    out = {}
+    for aid in sorted({str(a or "").strip() for a in (aweme_ids or [])}):
+        if not aid:
+            continue
+        pool = load(aid)
+        frames = (pool or {}).get("frames") or []
+        if not frames:
+            continue
+        out[aid] = {"total": len(frames),
+                    "judged": sum(1 for f in frames
+                                  if f.get("checked") or f.get("judge_failed")),
+                    "usable": len(usable(pool))}
+    return out
+
+
 def ask_failed(pool):
     """判过但没拿到结论的帧（空回答／模型异常／裁后回读失败）：要人眼看，不许当干净。"""
     return [it for it in (pool or {}).get("frames") or [] if it.get("judge_failed")]
@@ -656,11 +728,260 @@ def caption_for(item):
     return str(item.get("subject") or "").strip()
 
 
-def index_text(items):
-    """给拆解提示词用的帧清单：只给编号/时间/画面描述/那两句口播"""
+def index_text(items, mark_sharp=True):
+    """给拆解提示词用的帧清单：编号/时间/画面描述/那两句口播，外加一句"这张清不清晰"。
+
+    标这个是因为号主 10-22 看着成品说"图片发虚"——那两张本来就是作者用虚化背景贴的界面卡，
+    模型不知道，照挑不误。清晰度免费量，偏虚的直接在清单里写明，让它优先挑清楚的那几张。
+    """
     lines = []
     for it in items:
-        lines.append("F%d｜%s｜画面：%s｜这一帧在说：%s" % (
+        tag = ""
+        if mark_sharp:
+            f = it.get("file") or ""
+            if f and os.path.exists(f):
+                sh = sharpness(f)
+                tag = "｜清晰" if sh >= HARDEN_MIN_SHARP else "｜偏虚（别选这张）"
+        lines.append("F%d｜%s｜画面：%s｜这一帧在说：%s%s" % (
             it.get("i", 0), it.get("ts", ""), it.get("subject") or "（未描述）",
-            (it.get("near") or "（无）")[:46]))
+            (it.get("near") or "（无）")[:46], tag))
     return "\n".join(lines)
+
+
+# ── 出图前把真要印的那几张再收拾一遍（号主 2026-10-22 看图点名的两件事）──────────
+# 1「图片字幕出现了，底部的字幕不要」：宽问题（一次问齐有无/位置/能不能裁/画面是什么）
+#   实测会漏——同一帧池里 f_010/f_012/f_013 明明底部有一行白字黑边字幕，模型却答 where=none、
+#   post_words=[]，于是被判成干净帧印上去了。**问题越窄答得越准**，所以印之前只问这一件。
+# 2「图片发虚，没有精准截取到帧」：这类帧是"中间一块界面 + 四周一大片虚化背景"，
+#   整幅塞进版面等于把虚化背景也放大印出来。让模型给一个"最该保留的矩形"，按它裁掉虚边。
+# 两条都**只在成品目录里动文件**：生产帧池的 frames.json 与原帧/clean 帧一律不改，
+# 裁错了顶多这一版样张重来，不会把素材账搞坏。
+# 底部、顶部分开两问，各问各的那一条边。为什么不合并成一问：
+# 2026-10-22 实测合并问会收到 {"bottom_text": true, "top_text": true, "band_top": 0, "band_bot": 100}
+# ——模型懒得定位，直接把整幅报成"有字"，代码就没法裁，只能整帧作废（明明只是底部一行字幕）。
+# 问"只看最下面那块"这种**限定区域**的窄问题，它才给得出可用的区间；给不出还有兜底位置。
+Q_BOTTOM = ('这一帧要印在攻略页上。只看画面**最下面三分之一**那一块区域：'
+            '那里有没有一行视频作者做后期压上去的字幕（白字黑边那种；'
+            '游戏自己的面板、按钮、任务栏、聊天框不算）？'
+            '只输出一行 JSON：{"has_text": false, "band_top": 0, "band_bot": 0}。'
+            'has_text 为 true 时，band_top、band_bot 给这一行字幕在**整幅画面**竖直方向的'
+            '百分比区间（0-100）；这种字幕一般只占 8-18%，别把整幅都圈进去。')
+# 中间那一块单独问：裁顶/裁底之后，原本靠中的字幕会挪进"中间"，两条边的检查就漏了它
+# （实测 F12 裁掉顶部标题后，「团本人数：≥3人」正落在画面中间，还是印出去了）。
+Q_MID = ('这一帧要印在攻略页上。只看画面**中间那一半**（上下各留四分之一不看）：'
+         '那里有没有视频作者做后期压上去的字幕或花字？'
+         '游戏自己的面板文字、按钮名、职业名（防护/神圣/惩戒这种）不算。'
+         '只输出一行 JSON：{"has_text": false}。')
+
+Q_TOP = ('这一帧要印在攻略页上。只看画面**最上面五分之一**那一块区域：'
+         '那里有没有视频作者做后期压上去的标题条或花字（游戏自己的界面标题不算）？'
+         '只输出一行 JSON：{"has_text": false, "band_top": 0, "band_bot": 0}。'
+         'has_text 为 true 时，band_top、band_bot 给这块字在**整幅画面**竖直方向的'
+         '百分比区间（0-100）；这种标题条一般只占 10-25%，别把整幅都圈进去。')
+
+# 模型说"有字"却不给可用区间时的兜底裁切位置（抖音这类字幕的实际分布）
+FALLBACK_BOTTOM = (88.0, 100.0)
+FALLBACK_TOP = (0.0, 12.0)
+HARDEN_MAX_CUTS = 3         # 一帧最多动几刀（超过就当它救不回来）
+STRIP_PAD = 6.0             # 模型报的字幕区间往外多切 6 个百分点：它报的边界偏小，留半截字比多裁一条边更难看
+BAND_USABLE_SPAN = 32.0       # 一条字幕/标题条报超过这么多百分比就当它没定位准，走兜底
+
+# 内容框单独一问：跟字幕那一问混在一起时，模型会只答前一个字段、box 留空。
+# 而且**它给的是像素坐标**（实测 [182,165,843,660]），不是百分比——两种都要能收。
+Q_BOX = ('这是要印在攻略页上的一帧游戏画面。只输出一行 JSON：'
+         '{"box": [0, 0, 100, 100], "subject": ""}。'
+         'box＝这一帧里**有内容的那块矩形**（左上、右下两个点）：四周那圈虚化的、'
+         '看不清在什么的背景不要，只圈住真正能当证据的部分（界面面板、角色、卡片）。'
+         '整幅都是有效内容才填 [0, 0, 100, 100]。subject＝一句话说清这块内容是什么，不超过 18 字。')
+
+HARDEN_MIN_KEEP = 40.0    # 内容框至少要保留这么多百分比面积，低于它当作没给（裁太狠就没画面了）
+HARDEN_DISCARD = 12.0     # 保留 88% 以上就别裁，白折腾一次
+HARDEN_MAX_STRIP = 40.0   # 底部字幕条超过 40% 高，裁完剩不了什么，宁可这一帧不用
+HARDEN_TOP_MAX = 35.0     # 顶部标题条允许切到 35%：那种大标题本来就占得高（实测 30% 会卡掉一张好帧）
+HARDEN_MIN_SHARP = 14.0   # 中心区域边缘能量低于它=这张本来就虚，别印（号主 10-22 点名"发虚"）
+
+
+def sharpness(path):
+    """免费清晰度：中间 60% 区域的边缘能量均值。
+
+    为什么不用拉普拉斯方差那套老指标：这条产线的"虚"不是失焦，是**作者自己把游戏画面
+    放大虚化当背景、中间贴两块界面卡**——整帧方差被那两块卡拉高，只有看中心区域才分得开。
+    实测同一帧池：走廊/角色那几张 21-24，职业选择那两张 11.7 / 4.7（正是号主说发虚的两张）。
+    读不到图返回 999（当清晰），不许因为量不出来就把好帧判死。
+    """
+    try:
+        import numpy as np
+        from PIL import Image, ImageFilter
+    except ImportError:
+        return 999.0
+    try:
+        im = Image.open(str(path)).convert("L")
+        W, H = im.size
+        nw = min(360, W)
+        im = im.resize((nw, max(1, int(nw * H / float(W)))))
+        e = np.asarray(im.filter(ImageFilter.FIND_EDGES), dtype=np.float32)
+        h, w = e.shape
+        core = e[int(h * 0.2):int(h * 0.8) or 1, int(w * 0.2):int(w * 0.8) or 1]
+        return float(core.mean())
+    except Exception:
+        return 999.0
+
+
+def _parse_json_line(txt):
+    import json as _json
+    s = str(txt or "").strip()
+    a, b = s.find("{"), s.rfind("}")
+    if a < 0 or b <= a:
+        return {}
+    try:
+        d = _json.loads(s[a:b + 1])
+    except Exception:
+        return {}
+    return d if isinstance(d, dict) else {}
+
+
+def _box_of(d, W, H):
+    """模型给的内容矩形 → 像素框；不合理就返回 None（宁可不裁）。
+
+    实测这个模型答的是**像素**、另一个答的是百分比，所以两种都收：
+    任一值 >100 就按像素解释（并按画面尺寸夹住），否则按百分比换算。
+    """
+    box = d.get("box")
+    if not isinstance(box, (list, tuple)) or len(box) != 4:
+        return None
+    try:
+        v = [float(x) for x in box]
+    except (TypeError, ValueError):
+        return None
+    if max(v) > 100.0:                     # 像素口径
+        x0, y0, x1, y1 = v
+    else:                                  # 百分比口径
+        x0, y0 = W * v[0] / 100.0, H * v[1] / 100.0
+        x1, y1 = W * v[2] / 100.0, H * v[3] / 100.0
+    x0, x1 = sorted((x0, x1)); y0, y1 = sorted((y0, y1))
+    px = (max(0, int(x0)), max(0, int(y0)), min(W, int(x1)), min(H, int(y1)))
+    if px[2] - px[0] < 8 or px[3] - px[1] < 8:
+        return None
+    keep = float((px[2] - px[0]) * (px[3] - px[1])) / float(max(1, W * H)) * 100.0
+    if keep < HARDEN_MIN_KEEP or keep > 100.0 - HARDEN_DISCARD:
+        return None
+    return px, round(keep, 1)
+
+
+def harden_frame(path, ai_config, out_dir, name=None, progress=None):
+    """把真要印上版的那一帧再核一遍并裁干净，返回 (成品路径, 记录)。
+
+    两件事分开问（问题越窄答得越准，实测混在一起问时 box 那个字段模型直接不答）：
+    ① 底部有没有作者压的字幕——有就裁掉那条边，裁完再核一次；还裁不干净就**不许上版**；
+    ② 有内容的矩形是哪块——按它裁掉四周虚化的边（前景仍然不许切到面板本体，
+       所以保留面积低于 40% 就当它没给）。
+    只往 out_dir（成品包）里写文件，生产帧池一个字节都不动；判不了就原样用并如实写 why，
+    不许把"没核过"报成"核过了"。
+    """
+    from PIL import Image
+    rec = {"src": str(path), "strip": None, "box": None, "still_text": None,
+           "subject": "", "ok": False, "why": "", "tokens": 0, "sharp": None,
+           "too_soft": False}
+    src = str(path)
+    if not os.path.exists(src):
+        rec["why"] = "帧文件不存在"
+        return src, rec
+    sh = sharpness(src)
+    rec["sharp"] = round(sh, 1)
+    if sh < HARDEN_MIN_SHARP:
+        # 这一帧本身就是虚的（作者拿虚化背景贴卡片），再怎么裁也不会变清楚——别印
+        rec["too_soft"] = True
+        rec["why"] = ("这张画面本身是虚的（中心边缘能量 %.1f，低于 %g），"
+                      "换一张清晰的或你自己传一张截图" % (sh, HARDEN_MIN_SHARP))
+        return src, rec
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    cur = out_dir / (name or ("harden_%s" % os.path.basename(src)))
+    if str(cur) != src:
+        shutil.copyfile(src, str(cur))
+    def _ask_band(question, fallback):
+        """问一条边。返回 (有没有, 区间或 None)；模型没答上返回 (None, None)。"""
+        got, spent = _ask_vision(cur, question, ai_config) or ({}, 0)
+        rec["tokens"] += int(spent or 0)
+        if not isinstance(got, dict) or not got:
+            return None, None
+        if not got.get("has_text"):
+            return False, None
+        try:
+            bt, bb = float(got.get("band_top") or 0), float(got.get("band_bot") or 0)
+        except (TypeError, ValueError):
+            bt = bb = 0.0
+        if bb <= bt or (bb - bt) > BAND_USABLE_SPAN:
+            bt, bb = fallback       # 报了有字却圈不准（实测会整幅圈 0-100）→ 用兜底位置
+        return True, (bt, bb)
+
+    cut = None
+    # 一条帧上实测最多叠三层后期字（顶部标题 + 中间一行 + 底部字幕）。多留一趟只做复核不动刀，
+    # 免得裁完第 3 层还没检查就被判成还剩字。
+    for attempt in range(1, HARDEN_MAX_CUTS + 2):
+        cut = None
+        has, band = _ask_band(Q_BOTTOM, FALLBACK_BOTTOM)
+        if has is None:
+            rec["why"] = rec["why"] or "看图模型没回答，这一帧没再核就直接用了"
+            return str(cur), rec
+        if has:
+            bt, bb = band
+            edge = max(0.0, bt - STRIP_PAD)        # 底部那条：往上多切一点，别留半截
+            if (100.0 - edge) <= HARDEN_MAX_STRIP:
+                cut = ("bottom", edge, (bt, bb))
+        if cut is None:
+            has2, band2 = _ask_band(Q_TOP, FALLBACK_TOP)
+            if has2 is None:
+                rec["why"] = rec["why"] or "看图模型没回答，这一帧没再核就直接用了"
+                return str(cur), rec
+            if has2:
+                bt2, bb2 = band2
+                edge2 = min(100.0, bb2 + STRIP_PAD)     # 顶部那条：往下多切一点
+                if edge2 <= HARDEN_TOP_MAX + STRIP_PAD:
+                    cut = ("top", edge2, (bt2, bb2))
+        if cut is None:
+            # 两条边都干净了，最后问一次中间：压在中间的后期字裁不掉（一刀就把证据本体切两半），
+            # 只能整帧作废——判帧那一步本来就是这个口径，别在出图这一步放水。
+            mid, spent3 = _ask_vision(cur, Q_MID, ai_config) or ({}, 0)
+            rec["tokens"] += int(spent3 or 0)
+            if isinstance(mid, dict) and mid.get("has_text"):
+                rec["still_text"] = True
+                rec["why"] = "后期字压在画面中间，裁一刀就把证据本体切两半，这一帧不上版"
+                return str(cur), rec
+            rec["why"] = ""
+            break
+        if attempt > HARDEN_MAX_CUTS:      # 这一趟只许复核，不许再裁
+            break
+        side, edge, span = cut
+        im = Image.open(str(cur)).convert("RGB")
+        W, H = im.size
+        box = ((0, 0, W, max(1, int(H * edge / 100.0))) if side == "bottom"
+               else (0, min(H - 1, int(H * edge / 100.0)), W, H))
+        if progress:
+            progress("裁掉%s的后期字条（画面 %.0f%%-%.0f%%）" % ("底部" if side == "bottom" else "顶部",
+                                                            span[0], span[1]))
+        nxt = out_dir / ("strip_%s" % os.path.basename(str(cur)))
+        im.crop(box).save(str(nxt), quality=92)
+        cur = nxt
+        rec["strip"] = [round(span[0], 1), round(span[1], 1), side]
+    if cut is not None:
+        # 两趟各裁一条还剩着字：这一帧不许上版（宁可这页没图，也不把别人的字幕带出去）
+        rec["still_text"] = True
+        rec["why"] = "后期字叠了 %d 层还裁不干净，这一帧不上版" % HARDEN_MAX_CUTS
+        return str(cur), rec
+    got2, spent2 = _ask_vision(cur, Q_BOX, ai_config) or ({}, 0)
+    rec["tokens"] += int(spent2 or 0)
+    if isinstance(got2, dict) and got2:
+        rec["subject"] = str(got2.get("subject") or "").strip()[:24]
+        im = Image.open(str(cur)).convert("RGB")
+        parsed = _box_of(got2, *im.size)
+        if parsed:
+            px, keep = parsed
+            nxt = out_dir / ("tight_%s" % os.path.basename(str(cur)))
+            im.crop(px).save(str(nxt), quality=92)
+            cur = nxt
+            rec["box"] = {"px": list(px), "keep": keep}
+            if progress:
+                progress("按内容框裁掉虚化边（保留 %.0f%%）" % keep)
+    rec["ok"] = True
+    return str(cur), rec

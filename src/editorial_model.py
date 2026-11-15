@@ -160,7 +160,8 @@ def review_topic(requested, videos, config, checker=None):
         raise ValueError("主素材的可核对正文不足，请更换或补齐转写")
     prompt = """你是选题核对编辑。判断主视频能否支撑一个单一、可核对的主题。
 选题标题只给方向。只能从 sources 的正文选择证据。标题夸张、只提到术语或没给完整步骤时，
-收窄到素材明确说过的具体机制、观察或建议。没有可用证据时输出 ready=false。
+收窄到素材明确说过的具体机制、观察或建议。选题含多个职业或操作时，优先定位一个能单独回答的读者问题，
+片头口号和关注引导不能充当行动依据。没有可用证据时输出 ready=false。
 ready=true 时，quote 是一段连续原文，12 至 320 字，保留主体与条件。topic 是其中逐字
 出现的 2 至 24 字的主题名词短语。video_id 是 quote 所在的主素材 ID。
 输出 JSON：{"ready":true,"topic":"主题名词短语","video_id":"素材 ID","quote":"原句证据"}。

@@ -208,7 +208,7 @@ LAYOUTS = {
     "guide": {"label": "攻略页（真帧+栏目名+页码）", "rows": "stack", "art": "band_top",
               "min_cards": 1, "max_cards": 4, "needs_photo": False,
               "art_floor": 0.30, "art_cap": 0.52,
-              "when": "多页图文攻略：一页一个论点，配 1-2 张素材真帧 + 大字数字"},
+              "when": "多页图文攻略：一页一个论点，配 1 张素材真帧 + 大字数字"},
 }
 # 老数据里存的键（内置皮肤原来写的是 stack，用户模板 JSON 里也是）照样认，不做迁移
 LAYOUT_ALIAS = {"stack": "top_art"}
@@ -773,6 +773,25 @@ def _photo_bytes(p):
     return None
 
 
+def _photo_natural_hs(photos, width):
+    """每张图按 `width` 等比缩放后的自然高度（拿不到尺寸的跳过，不抛错）。
+
+    只用来给图槽封顶：槽比自然高还高，多出来的那一截就是模糊垫底的空洞。
+    """
+    out = []
+    for p in photos or []:
+        b = _photo_bytes(p) if isinstance(p, dict) else None
+        if not b:
+            continue
+        try:
+            w, h = Image.open(io.BytesIO(b)).size
+        except Exception:
+            continue
+        if w:
+            out.append(int(int(width) * float(h) / float(w)))
+    return out
+
+
 def _fit_contain(im, w, h):
     """真帧按"整张装得下"缩放并居中，不裁。
 
@@ -878,11 +897,13 @@ def _chip(draw, xy, text, font, fg, bg, pad_x, pad_y, radius, outline=None):
     return w
 
 
-def typeset_guide(base_png, plan, ratio="9:16", skin=None, page=None):
+def typeset_guide(base_png, plan, ratio="9:16", skin=None, page=None, photo=None):
     """把"一页攻略"排成对标那种样子：栏目名 + 页码 + 结论标题 + 真帧带图注 +
     大字数字 + 要点 + 对照 + 警示 + 互动 + 口径脚注。
 
     base_png 传 None 时自己画纯色底（攻略页不需要 AI 插画，0 元那条路）。
+    photo 是用户在「＋ 用你的图」上传的那一张：它占的就是这一页的画面位（一页一张是
+    号主 10-22 定的硬上限，所以顶掉这一页那张素材帧，不是并排放两张）。
     plan 用到的字段：kicker / title / subtitle / photos[{path|bytes,caption}] /
     bignum{v,label,note} / cards[{t,d}] / contrast[{t,d}] / warn{t,d} /
     ask{q,options[]} / footer。缺哪个就不画哪个，顺序固定成 GUIDE_BLOCKS。
@@ -917,6 +938,8 @@ def typeset_guide(base_png, plan, ratio="9:16", skin=None, page=None):
     footer = (plan.get("footer") or "").strip()
     cards = [c for c in (plan.get("cards") or []) if (c.get("t") or c.get("d"))]
     photos = [_photo_src(p) for p in (plan.get("photos") or []) if p]
+    if photo:
+        photos = [{"bytes": photo, "caption": "你上传的图", "uploaded": True}]
     bignum = plan.get("bignum") if isinstance(plan.get("bignum"), dict) else None
     contrast = [c for c in (plan.get("contrast") or []) if (c.get("t") or c.get("d"))]
     warn = plan.get("warn") if isinstance(plan.get("warn"), dict) else None
@@ -1030,6 +1053,14 @@ def typeset_guide(base_png, plan, ratio="9:16", skin=None, page=None):
     per_photo = 0
     cap_hi = int(H * float(skin.get("art_cap", 0.52)) * 1.18)
     if photos:
+        # 槽高不许超过"这张图按整幅宽等比缩放后的自然高"。
+        # 为什么：竖屏画布上放一张 16:9 横帧，contain 之后本来只有约 28% 屏高，
+        # 而槽按 art_cap×1.18 给到 61% → 上下各一大条模糊垫底，看着就是"图没贴牢、浮在卡里"
+        # （2026-10-22 真帧四页预演目视抓到的）。前景仍然一律不裁（真帧是证据，10-13 定的），
+        # 省下来的高度交给下面 n_sp 那套均分给文字块——字更大、洞更小。
+        nat = _photo_natural_hs(photos, inner)
+        if nat:
+            cap_hi = min(cap_hi, max(nat) + int(H * 0.012))
         # caps_total 已经把"图上方留空 + 图注 + 组后间距"算进去了，剩下的才是图本身
         per_photo = min(int((room - caps_total) / float(len(photos))), cap_hi)
         if per_photo < int(H * 0.14):
@@ -1262,7 +1293,7 @@ def typeset(base_png, plan, ratio="9:16", skin=None, photo=None, page=None):
     # 攻略页那种"异构块流式排"另走一条渲染路径（真帧 + 图注 + 大字数字 + 对照 +
     # 警示 + 互动）；plan 里没有这些零件就绝对走不到下面那句，老产物字节不变。
     if _is_guide(plan):
-        return typeset_guide(base_png, plan, ratio=ratio, skin=skin, page=page)
+        return typeset_guide(base_png, plan, ratio=ratio, skin=skin, page=page, photo=photo)
     img = Image.open(io.BytesIO(base_png)).convert("RGB")
     W, H = img.size
     skin = _resolve_skin((plan or {}).get("style_key"), skin)

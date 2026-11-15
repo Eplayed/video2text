@@ -110,6 +110,37 @@ def main():
     check("话说清了解除路径（补原句／带版本日期的实测／删改）",
           all(("官方" in h or "实测" in h) and "删" in h for h in hard), "")
 
+    print("\n== 2b. 反面：模型自己写的「译名待核」提示不许卡死出图（105 那次）==")
+    NAME_LINE = ("风险核查提示：素材中提及的“沉墨之城”、“石魔要塞”、“黑石要塞”、“塑能者平台”"
+                 "等专有名词，因上游未提供标准拆包对照，保留素材原话，请人工进游戏核对实际译名。")
+    check("这句自查提示分档是「译名核对」，不是二元机制（“保留素材原话”不是机制结论）",
+          fact_gate.claim_kind(NAME_LINE) == "译名核对", fact_gate.claim_kind(NAME_LINE))
+    name_view = {"title": "入坑指南", "pages": [{"title": "第3页", "warn": {"t": "译名以游戏内为准",
+                 "d": "沉墨之城等名称是素材原话，进游戏核对"}}],
+                 "publish": {"xhs_copy": "沉墨之城这类地名照素材原话写的", "xhs_titles": ["新地图译名"]}}
+    name_items = [{"raw": NAME_LINE, "tokens": ["沉墨之城", "石魔要塞"], "kind": "译名核对",
+                   "status": "open"}]
+    nh, ns = fact_gate.mechanism_gate(name_items, fact_gate._fields(name_view), [])
+    check("成品里真出现这些译名也不硬拦（拦了就等于罚诚实标注的人）",
+          not nh, str(nh)[:160])
+    check("它仍然留在待核清单里（提示照给，不是当作没这回事）",
+          len(fact_gate.risk_items("## 事实核查清单\n- [ ] " + NAME_LINE)) == 1)
+    check("反面：真机制结论不许被这条放宽带走（“切目标保留连击点”仍是二元机制）",
+          fact_gate.claim_kind("换目标后保留连击点，不再掉层") == "二元机制",
+          fact_gate.claim_kind("换目标后保留连击点，不再掉层"))
+    # 106 号包：同一条链上第二句被误伤的自查提示（说法不一样，所以判据必须判"类"不是判样本词）
+    L106 = ("风险核查：素材中提到的“令人标记保报主动攻击红”推测为“猎人标记宝宝主动攻击宏”，"
+            "已按合理语境修正；“小路”疑为作者自称，保留原意处理。建议人工核对具体宏名称"
+            "是否为游戏内标准叫法。")
+    check("106 那句也归译名核对（推测为／已按…修正／核对宏名称·叫法，两样都齐）",
+          fact_gate.claim_kind(L106) == "译名核对", fact_gate.claim_kind(L106))
+    check("反面：只提“名称”没有“我们怎么处理的词”不算译名核对（真机制结论照样拦）",
+          fact_gate.claim_kind("宏名称待核：切目标不掉连击点") == "二元机制",
+          fact_gate.claim_kind("宏名称待核：切目标不掉连击点"))
+    check("反面：只说“已按公告修正”但宾语不是名称，也不许放走（那是改了机制说法）",
+          fact_gate.claim_kind("已按合理语境修正：切目标不掉连击点") == "二元机制",
+          fact_gate.claim_kind("已按合理语境修正：切目标不掉连击点"))
+
     print("\n== 3. 验收②：不接台账（只有新稿自己那份漏写的清单）→ 洞在哪 ==")
     h0, s0 = fact_gate.check(view, content103)
     check("不接台账时一条都拦不住（所以继承必须做在稿子外面，不靠模型自觉）",

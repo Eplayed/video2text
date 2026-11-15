@@ -86,21 +86,23 @@ def main():
     print("整合稿 #%s《%s》 拆解模型=%s" % (summary["id"], summary["title"][:30], ai_config["model"]))
 
     print("排版模式=%s 出图张数=%d" % (text_mode, copies))
+    # 文案只在这一处拆一次；generate_poster 现在强制用已拆 plan，漏传不会暗中重拆。
+    plan, publish, bad, notes = ai_poster.build_text_plan(summary, ai_config, text_mode=text_mode)
+    if bad:
+        print("FAIL 文案不合格：%s" % "；".join(bad))
+        return 1
     if plan_only:
-        plan, publish, bad, notes = ai_poster.build_text_plan(summary, ai_config, text_mode=text_mode)
         print(json.dumps(plan, ensure_ascii=False, indent=2))
         print("violations=%s notes=%s visual=%s" % (bad, notes, ai_poster.lint_visual(plan)))
         art = ai_poster.build_art_prompt(plan) if text_mode == "typeset" else ai_poster.build_prompt_text(plan)
         print("---- PROMPT ----\n%s" % art)
-        if bad:
-            print("FAIL 文案不合格")
-            return 1
         print("ALL_OK")
         return 0
 
     manifest = ai_poster.generate_poster(
         summary, ai_config, progress_cb=lambda m: print("  ·", m),
-        text_mode=text_mode, copies=copies, force=("force" in sys.argv))
+        text_mode=text_mode, copies=copies, force=("force" in sys.argv),
+        plan=plan, publish=publish)
     print("产物：%s" % (ai_poster.OUTPUT_DIR / str(summary["id"])))
     print("文案计划：%s / %s / %d 张卡片，合计 %d 字"
           % (manifest["plan"]["title"], manifest["plan"]["subtitle"],

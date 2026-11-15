@@ -67,19 +67,29 @@ def exe(db, sql, args=()):
 
 
 FIXTURES = [
-    # (id, sheet, row, title, author, date, 正文, 该不该进 A3 候选)
+    # (id, sheet, row, title, author, date, 正文, 该不该进 A3 候选, category, game)
     (900001, "抖音视频数据", "9001", "无限服插件怎么装：三步备份再卸载", "某作者", "2026-10-20",
-     "先说清这是无限服的插件管理" + "字" * 400, "yes"),
+     "先说清这是无限服的插件管理" + "字" * 400, "yes", "游戏攻略", ""),
     (900002, "微信文章", "9002", "Forever 界面整理：先调这三块", "另一作者", "2026-10-21",
-     "Forever 的姓名板与动作条" + "字" * 300, "yes"),
+     "Forever 的姓名板与动作条" + "字" * 300, "yes_nonvideo", "游戏攻略", ""),
     (900003, "抖音视频数据", "9003", "POE2 流放之路插件推荐", "别的游戏号", "2026-10-21",
-     "流放之路的插件与无限毫无关系" + "字" * 300, "off"),
+     "流放之路的插件与无限毫无关系" + "字" * 300, "off", "游戏攻略", ""),
     (900004, "微信文章", "9004", "魔兽世界插件更新说明", "转述号", "2026-10-19",
-     "只说插件更新，没说是哪个服" + "字" * 300, "unknown"),
+     "只说插件更新，没说是哪个服" + "字" * 300, "unknown_nonvideo", "游戏攻略", ""),
     (900005, "抖音视频数据", "9005", "无限服插件翻车回退实录", "某作者", "2026-10-18",
-     "短" * 50, "thin"),
+     "短" * 50, "thin", "游戏攻略", ""),
     (900006, "暴雪官方", "9006", "暴雪公告：某项调整", "暴雪官方", "2026-10-22",
-     "官方公告正文，没提无限服三个字" + "字" * 300, "blizzard"),
+     "官方公告正文，没提这三个字" + "字" * 300, "blizzard", "游戏攻略", ""),
+    # ↓ 2026-10-30 号主三条口径的反面样本（第一级只列视频、只列判得出无限服归属的）
+    (900007, "抖音视频数据", "9007", "魔兽世界插件界面调整", "某作者", "2026-10-21",
+     "只提了暴雪和怀旧，判不出是哪个服" + "字" * 300, "unknown_video", "游戏攻略", ""),
+    (900008, "抖音视频数据", "9008", "面试官：无限服插件怎么设计架构", "技术号", "2026-10-21",
+     "讲的是 Agent 与插件系统，顺带提了无限服" + "字" * 300, "off_topic", "AI技术", ""),
+    (900009, "抖音视频数据", "9009", "插件目录怎么备份", "某作者", "2026-10-21",
+     "整段没出现无限服三个字" + "字" * 300, "game_tagged", "游戏攻略", "魔兽世界：无限"),
+    (900010, "微信文章", "9010", "无限服插件怎么装：三步备份再卸载（图文版）", "转述号",
+     "2026-10-21", "把 900001 那条视频的话写成图文" + "字" * 300, "sup_for_900001",
+     "游戏攻略", ""),
 ]
 
 
@@ -90,12 +100,12 @@ def build_db(tmp, name="t.db"):
     db = tmp / name
     shutil.copyfile(str(PROD_DB), str(db))
     exe(db, "DELETE FROM videos")
-    for vid, sheet, row, title, author, date, body, _tag in FIXTURES:
+    for vid, sheet, row, title, author, date, body, _tag, cat, game in FIXTURES:
         # videos 表有三列 NOT NULL 且无默认值（source_sheet / source_row / updated_at），
         # 少给一个整条 e2e 直接 IntegrityError——列名以 PRAGMA 实测为准，不凭记忆写。
         exe(db, "INSERT INTO videos (id, source_sheet, source_row, title, author,"
-                " published_at, transcript, category, updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
-            (vid, sheet, int(row), title, author, date + " 10:00:00", body, "游戏攻略",
+                " published_at, transcript, category, game, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (vid, sheet, int(row), title, author, date + " 10:00:00", body, cat, game,
              "2026-10-22 10:00:00"))
     for t in ("plan_slots", "plan_candidates", "plan_match_runs", "plan_publish_audit",
               "plan_slot_flags", "plan_tasks", "publish_stats"):
@@ -152,13 +162,13 @@ def main():
        not any(900003 in v for v in cand.values()))
     ck("900005 正文太短只算线索，不占候选位",
        not any(900005 in v for v in cand.values()))
-    ck("900004 进了候选但标 unknown（判不了归属，不自动采用）",
-       900004 in cand.get("s1a3", {}) and cand["s1a3"][900004]["forever"] == "unknown",
-       (cand.get("s1a3", {}).get(900004) or {}).get("forever"))
-    ck("900006 只因为来源是暴雪官方 → 仍判 unknown（任务书点名的那条）",
-       cand.get("s1a3", {}).get(900006, {}).get("forever") == "unknown" or
-       900006 not in cand.get("s1a3", {}),
-       (cand.get("s1a3", {}).get(900006) or {}).get("forever"))
+    ck("900004（微信文章、判不出归属）不进第一级候选 —— 非视频料的位置在子集里，不在这一级",
+       900004 not in cand.get("s1a3", {}), sorted(cand.get("s1a3", {})))
+    ck("900006 只因为来源是暴雪官方 → 仍判 unknown（任务书点名的那条），且非视频不进第一级",
+       ps.forever_call("暴雪公告：某项调整", "暴雪官方",
+                       "官方公告正文，没提这三个字" + "字" * 300, "暴雪官方")[0] == "unknown"
+       and 900006 not in cand.get("s1a3", {}),
+       sorted(cand.get("s1a3", {})))
     ck("每条候选都带可解释理由（命中词/来源/日期/字数/归属依据）",
        all("｜" in (r["reason"] or "") for v in cand.values() for r in v.values()))
     # 2026-10-29：这一支以前写死 `sheet == "blizzard"`，而调用方传的是库里的表名「暴雪官方」，
@@ -169,6 +179,22 @@ def main():
            v == "unknown" and "暴雪官方公告" in why, why)
     ck("匹配确实跑过并记账", st["positions"] > 0 and st["added"] > 0,
        "位置 %d 新增 %d" % (st["positions"], st["added"]))
+    # 2026-11-01：号主点的是「魔兽无限服这个话题」，不是"无限服"那三个字。素材里这个产品的
+    # 写法是《魔兽世界：无限》/ 魔兽无限 / 无限版，一律被判成"归属不明"，132 条同题材进不了表。
+    # 判据认写法之后，"无限"单独出现仍然只算弱线索（反面样本钉住，别把时光服/怀旧服也放进来）。
+    for t, b in (("魔兽世界无限 新种族介绍", "这版本改动很多" + "字" * 300),
+                 ("《魔兽世界：无限》实机体验炸裂", "跟正式服的区别" + "字" * 300),
+                 ("魔兽无限版首发坦克全解析", "天赋与配装" + "字" * 300),
+                 ("无限国服预约奖励怎么看", "礼包内容" + "字" * 300)):
+        v, why = ps.forever_call(t, "某魔兽号", b, "B站视频")
+        ck("产品名写法「%s」判得出归属" % t[:12], v == "yes" and "出现「" in why, why[:44])
+    ck("反面：只有「无限」两个字仍然只算弱线索（时光服/怀旧服不许被放进来）",
+       ps.forever_call("时光服真的会凉吗", "某号",
+                       "这版本有无限可能，但没提产品全名" + "字" * 300, "抖音视频数据")[0] == "unknown",
+       "")
+    ck("反面：跨游戏那条先挡，补写法不等于开闸（流放之路里说魔兽无限也不进）",
+       ps.forever_call("流放之路 魔兽无限怎么比", "POE 号",
+                        "无限服的对标分析" + "字" * 300, "抖音视频数据")[0] == "off", "")
     empty = [k for k, v in ((s["slot_key"], cand.get(s["slot_key"])) for s in ps.slots(db))
              if not v]
     ck("匹配到零条的位置就是零，不拿历史素材填位", "s1b8" in empty or not empty,
@@ -178,6 +204,130 @@ def main():
        "added=%s seen=%s" % (st2["added"], st2["seen"]))
     ck("候选总数没变", len(q(db, "SELECT * FROM plan_candidates")) == len(
         [r for v in cand.values() for r in v.values()]))
+
+    print("== B2 第一级判据（号主 2026-10-30：只列视频素材、只列判得出无限服归属的）==")
+    a3 = cand.get("s1a3", {})
+    ck("非视频素材一条都不进第一级（900002 微信 yes / 900004 / 900006 / 900010）",
+       not any(x in a3 for x in (900002, 900004, 900006, 900010)), sorted(a3))
+    ck("视频素材但只有弱线索（900007 判不出是哪个服）→ 不占候选位",
+       900007 not in a3, sorted(a3))
+    ck("分类是「AI技术」的视频，正文提了无限服也不进（900008 就是那篇「面试官」）",
+       900008 not in a3, sorted(a3))
+    ck("game 字段写着无限服的视频（900009，正文没强词）照样进 —— 订阅预设是权威值",
+       900009 in a3, sorted(a3))
+    ck("挡掉的三类各报一笔，界面才说得出「候选为什么变少」",
+       set(st["blocked"]) >= {"non_video", "unattributed", "off_topic"}, st["blocked"])
+    ck("A3 第一级现在只剩视频那两条", sorted(a3) == [900001, 900009], sorted(a3))
+    ok, code, _w = ps.level1_ok("NGA无限板块", "论坛选题", "yes", "魔兽世界：无限")
+    ck("判据有先后：同一条既非视频又判得出，只报「非视频」这一条原因（不重复计数）",
+       (ok, code) == (False, "non_video"), code)
+    ck("未打标（category 空）不误伤：视频 + 判得出归属照样进",
+       ps.level1_ok("抖音视频数据", "", "yes", "")[0] is True)
+    ck("反面：视频 + 未打标 + 判不出归属 → 仍挡（没打标不等于能进）",
+       ps.level1_ok("抖音视频数据", "", "unknown", "")[1] == "unattributed")
+    # 只改写入这一侧不够：库里 10-30 之前的存量候选有一半是论坛帖/公众号文章，
+    # 页面上照旧摆着——所以读看板也过同一份判据，并把挡掉的条数说出口。
+    exe(db, "INSERT INTO plan_candidates (slot_key, video_id, forever, reason, run_date,"
+            " added_at, last_seen) VALUES ('s1a6', 900004, 'unknown', '旧存量', "
+            "'2026-10-29', '2026-10-29 22:00', '2026-10-29 22:00')")
+    bfix = ps.board(db, today=dt.date(2026, 10, 30), base=poster_base)
+    s6 = slot_map(bfix)["s1a6"]
+    ck("读侧同样挡掉存量非视频候选：candidates 里查不到它",
+       all(int(c["video_id"]) != 900004 for c in s6["candidates"]), s6["candidate_total"])
+    ck("但不撒手：candidate_hidden 与 hidden_note 说得出挡了几条、为什么",
+       s6["candidate_hidden"] == 1 and "非视频素材" in s6["hidden_note"],
+       (s6["candidate_hidden"], s6["hidden_note"]))
+    s3 = slot_map(bfix)["s1a3"]
+    ck("每条视频候选带 sup_n（名下有几条强相关非视频料），界面据此决定按钮画不画",
+       all(isinstance(c.get("sup_n"), int) for c in s3["candidates"]),
+       [(c["video_id"], c["sup_n"]) for c in s3["candidates"]])
+    ck("900001 有那条图文版当子集 → sup_n=1；900009 没有 → sup_n=0（0 就不该有按钮）",
+       {c["video_id"]: c["sup_n"] for c in s3["candidates"]}.get(900001) == 1 and
+       {c["video_id"]: c["sup_n"] for c in s3["candidates"]}.get(900009) == 0,
+       [(c["video_id"], c["sup_n"]) for c in s3["candidates"]])
+    ck("非视频那条不给 sup_n（它自己就是子集，不该再挂一层）",
+       all(int(c["video_id"]) != 900004 for c in s6["candidates"]))
+
+    print("== B3 订阅作者归属（号主 2026-11-01：没有订阅的视频素材不要去抓取）==")
+    OWN = ({"uid-尤安": "尤安的魔兽世界", "uid-阿落": "魔兽阿落"},
+           {"尤安的魔兽世界", "魔兽阿落"})
+    _o = ps.level1_ok("抖音视频数据", "游戏攻略", "yes", "魔兽世界：无限", owner=OWN,
+                      row={"source": "subscription", "author": "荔枝新闻",
+                           "author_sec_uid": "uid-尤安"})
+    ck("订阅盖的是尤安、行上作者是别人 → 挡，理由点名这两个名字",
+       _o[:2] == (False, "not_owner") and "尤安的魔兽世界" in _o[2] and "荔枝新闻" in _o[2],
+       _o[2])
+    ck("作者对得上照常进（反面：不许把正常订阅素材挡了）",
+       ps.level1_ok("抖音视频数据", "游戏攻略", "yes", "魔兽世界：无限", owner=OWN,
+                    row={"source": "subscription", "author": "尤安的魔兽世界",
+                         "author_sec_uid": "uid-尤安"})[0] is True)
+    ck("账号改过名要放行：作者命中名单里**另一个**订阅号",
+       ps.level1_ok("抖音视频数据", "游戏攻略", "yes", "魔兽世界：无限", owner=OWN,
+                    row={"source": "subscription", "author": "魔兽阿落",
+                         "author_sec_uid": "uid-尤安"})[0] is True)
+    ck("手动／CLI 采的不归这条管（source 不是 subscription）",
+       ps.level1_ok("抖音视频数据", "游戏攻略", "yes", "魔兽世界：无限", owner=OWN,
+                    row={"source": "", "author": "苏丹你好", "author_sec_uid": ""})[0] is True)
+    ck("suid 空（老数据没盖过章）证不了就别挡",
+       ps.level1_ok("抖音视频数据", "游戏攻略", "yes", "魔兽世界：无限", owner=OWN,
+                    row={"source": "subscription", "author": "荔枝新闻",
+                         "author_sec_uid": ""})[0] is True)
+    ck("suid 已不在订阅名单（号被删了）也别挡",
+       ps.level1_ok("抖音视频数据", "游戏攻略", "yes", "魔兽世界：无限", owner=OWN,
+                    row={"source": "subscription", "author": "荔枝新闻",
+                         "author_sec_uid": "uid-已退订"})[0] is True)
+    ck("行上没作者名不挡（宁可漏判不误杀）",
+       ps.level1_ok("抖音视频数据", "游戏攻略", "yes", "魔兽世界：无限", owner=OWN,
+                    row={"source": "subscription", "author": "",
+                         "author_sec_uid": "uid-尤安"})[0] is True)
+    ck("B 站／微信／NGA 这些行不受这条影响",
+       ps.level1_ok("B站视频", "游戏攻略", "yes", "魔兽世界：无限", owner=OWN,
+                    row={"source": "subscription", "author": "随便谁",
+                         "author_sec_uid": "uid-尤安"})[0] is True)
+    ck("判据先后：作者不对排第一（同一条不许两个原因都计一遍）",
+       ps.level1_ok("抖音视频数据", "AI技术", "unknown", "", owner=OWN,
+                    row={"source": "subscription", "author": "荔枝新闻",
+                         "author_sec_uid": "uid-尤安"})[1] == "not_owner", "")
+    # 上面全是纯函数：判据写对不代表两个调用点真传了名单。这里在独立副本上跑一遍真 SQL，
+    # 顺带把 fixture 的订阅名单换成可控的两条（副本里带着生产那份真名单，计数会飘）。
+    dbo = build_db(tmp, "t-owner.db")
+    ps.seed(dbo)
+    exe(dbo, "DELETE FROM videos")
+    exe(dbo, "DELETE FROM subscriptions")
+    for su, au in (("MSfake01", "尤安的魔兽世界"), ("MSfake02", "魔兽阿落")):
+        exe(dbo, "INSERT INTO subscriptions (sec_uid, user_url, author, category, game,"
+                 " platform, created_at) VALUES (?,?,?,?,?,?,?)",
+            (su, "https://www.douyin.com/user/" + su, au, "游戏攻略", "魔兽世界",
+             "douyin", "2026-10-01 00:00:00"))
+    for i, (au, su, src) in enumerate((("荔枝新闻", "MSfake01", "subscription"),
+                                       ("尤安的魔兽世界", "MSfake01", "subscription"),
+                                       ("黑洞科普", "", "manual"))):
+        exe(dbo, "INSERT INTO videos (id, source_sheet, source_row, title, author,"
+                 " published_at, transcript, category, game, source, author_sec_uid,"
+                 " updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (900030 + i, "抖音视频数据", str(9200 + i), "无限服插件怎么回退 %d" % i, au,
+             "2026-10-21 10:00:00", "无限服插件的备份与回退" + "字" * 300, "游戏攻略",
+             "魔兽世界：无限", src, su, "2026-10-22 10:00:00"))
+    sto = ps.match_positions(dbo, now=dt.datetime(2026, 11, 1, 22, 0))
+    ids_o = {int(r["video_id"]) for r in q(dbo, "SELECT video_id FROM plan_candidates")}
+    ck("写候选这一侧真挡住了：900030（别人的）不进，900031（本人的）进",
+       900030 not in ids_o and 900031 in ids_o, sorted(ids_o))
+    ck("手动采那条（900032）不受这条判据牵连，照样能进", 900032 in ids_o, sorted(ids_o))
+    ck("挡掉那一笔在 stats 里报得出数，夜里跑完 run.note 念得出",
+       sto["blocked"].get("not_owner") == 1, sto["blocked"])
+    exe(dbo, "INSERT INTO plan_candidates (slot_key, video_id, forever, reason, run_date,"
+             " added_at, last_seen) VALUES ('s1a3', 900030, 'yes', '旧存量', "
+             "'2026-10-29', '2026-10-29 22:00', '2026-10-29 22:00')")
+    bo = ps.board(dbo, today=dt.date(2026, 11, 1), base=poster_base)
+    so = slot_map(bo)["s1a3"]
+    ck("读侧也挡住库里那条存量候选，并且 hidden_note 说得出挡的是哪一类",
+       all(int(c["video_id"]) != 900030 for c in so["candidates"])
+       and "作者不是这个订阅号" in so["hidden_note"], so["hidden_note"])
+    txt = (ROOT / "src" / "plan_series.py").read_text(encoding="utf-8")
+    ck("写与读两个调用点都带 owner（新增调用点忘了传＝这条判据静默失效）",
+       txt.count("owner=owner_map") == 2 and txt.count("level1_ok(") == 3,
+       "owner= 传参 %d 处 / level1_ok( 共 %d 处（含定义）"
+       % (txt.count("owner=owner_map"), txt.count("level1_ok(")))
 
     print("== C/D 发布真相与旧本地勾选：这两种格子夜间不再刷 ==")
     ps.register_slot(db, "s1a3", {"channel": "toutiao", "title": "无限服插件怎么装",
@@ -362,6 +512,59 @@ def main():
     ck("关总开关后一律不跑", (ps.save_cfg(False, "22:00"),
        not ps.due_run(db, dt.datetime(2026, 10, 31, 23, 0))["due"])[1])
     ps.save_cfg(True, "22:00")
+
+    print("== I2 素材层在上一轮之后又动了 → 补刷一轮（一天可以好几轮）==")
+    exe(db, "DELETE FROM plan_match_runs")
+    ps.save_cfg(True, "06:30", since="2026-10-22")
+    vid = q(db, "SELECT MIN(id) AS id FROM videos")[0]["id"]
+    exe(db, "INSERT INTO plan_match_runs (run_key, kind, run_date, started_at, finished_at,"
+            " status, attempts) VALUES (?,?,?,?,?,'ok',1)",
+        (ps.night_key(dt.date(2026, 11, 2)), "night", "2026-11-02",
+         "2026-11-02 06:30:00", "2026-11-02 06:30:05"))
+    exe(db, "UPDATE videos SET updated_at = '2026-11-02 05:00:00'")
+    ck("反面：定时那轮之后素材一条没动 → 不补刷（不许变成每分钟一轮）",
+       not ps.fresh_run(db, dt.datetime(2026, 11, 2, 10, 0))["due"],
+       ps.fresh_run(db, dt.datetime(2026, 11, 2, 10, 0))["why"])
+    exe(db, "UPDATE videos SET updated_at = '2026-11-02 09:05:00' WHERE id = ?", (vid,))
+    fr = ps.fresh_run(db, dt.datetime(2026, 11, 2, 10, 0))
+    ck("09:05 才入库的料（NGA 快照那种），当天 10:00 这一眼就要补刷",
+       fr["due"] and "补刷" in fr["why"], fr["why"])
+    ck("补刷的账键带时刻：一天可以好几轮，且不与今晚那一行撞",
+       fr["run_key"].startswith("fresh:2026-11-02:") and fr["run_key"] !=
+       ps.night_key(dt.date(2026, 11, 2)), fr["run_key"])
+    exe(db, "UPDATE videos SET updated_at = '2026-11-02 09:55:00' WHERE id = ?", (vid,))
+    exe(db, "UPDATE plan_match_runs SET finished_at='2026-11-02 09:50:00'"
+            " WHERE run_key=?", (ps.night_key(dt.date(2026, 11, 2)),))
+    ck("料是新，但距上一轮才 30 分钟 → 先按节流等一等（打标那种成批重写不该刷满账本）",
+       not ps.fresh_run(db, dt.datetime(2026, 11, 2, 10, 20))["due"],
+       ps.fresh_run(db, dt.datetime(2026, 11, 2, 10, 20))["why"])
+    exe(db, "UPDATE plan_match_runs SET finished_at='2026-11-02 06:30:05'"
+            " WHERE run_key=?", (ps.night_key(dt.date(2026, 11, 2)),))
+    ck("总开关关了连补刷也不问", (ps.save_cfg(False, "06:30"),
+       not ps.fresh_run(db, dt.datetime(2026, 11, 2, 10, 0))["due"])[1])
+    ps.save_cfg(True, "06:30")
+    st = ps.run_match(db, now=dt.datetime(2026, 11, 2, 10, 30), kind="fresh", actor="定时器")
+    row = q(db, "SELECT note, status FROM plan_match_runs WHERE run_key=?",
+            ("fresh:2026-11-02:103000",))[0]
+    ck("补刷真写了账，并且记的是「素材更新后补刷」",
+       st["run_key"] == "fresh:2026-11-02:103000" and row["status"] == "ok"
+       and row["note"].startswith("素材更新后补刷"), row)
+    night = q(db, "SELECT status, attempts FROM plan_match_runs WHERE run_key=?",
+              (ps.night_key(dt.date(2026, 11, 2)),))[0]
+    ck("补刷不吃今晚那一行的重试次数（失败了还得留给定时那轮重试）",
+       night["status"] == "ok" and night["attempts"] == 1, dict(night))
+    ck("补刷之后当晚仍不再跑定时那轮（幂等靠的是一天一行，不是多写几行）",
+       not ps.due_run(db, dt.datetime(2026, 11, 2, 21, 0))["due"],
+       ps.due_run(db, dt.datetime(2026, 11, 2, 21, 0))["why"])
+    n_before = q(db, "SELECT COUNT(*) c FROM plan_candidates")[0]["c"]
+    ps.run_match(db, now=dt.datetime(2026, 11, 2, 11, 0), kind="fresh", actor="定时器")
+    ck("同一批料再补刷一轮不长重复候选（唯一键兜住）",
+       q(db, "SELECT COUNT(*) c FROM plan_candidates")[0]["c"] == n_before, n_before)
+    app_src = (ROOT / "web" / "app.py").read_text(encoding="utf-8")
+    tick_body = app_src[app_src.index("def _planmatch_tick"):app_src.index("def _planmatch_loop")]
+    ck("那颗钟真的问了补刷（只写在 plan_series 里等于没接）",
+       "plan_series.fresh_run(DB_PATH, now)" in tick_body
+       and 'kind=kind' in tick_body, tick_body[:40])
 
     print("== J 配置：时刻写错要报错，文件坏了不许白屏 ==")
     try:
@@ -599,6 +802,93 @@ def main():
        got7 == list(range(900027, 900021, -1)), [keep[v] for v in got7])
     ck("M5b 插入顺序=日期倒序（不是升序，那正是'新料挤掉旧料'判据写反的样子）",
        got7 == sorted(got7, reverse=True), got7)
+
+    # ---- M5c 排序第二档：贴题的旧料要顶得过只沾一个词的新料（11-02 号主点名）----
+    db10 = build_db(tmp, "t10.db")
+    ps.seed(db10)
+    exe(db10, "DELETE FROM videos")
+    # s1a3 的检索词是「插件 / AddOn / 界面 插件」三个；这一档数的就是命中几个
+    for i, d in enumerate(dates):                       # 10-01 … 10-08，都是新→旧同一批
+        hits3 = d in ("2026-10-01", "2026-10-02")       # 只有最旧那两条三个词全沾
+        title = "无限服 AddOn 界面 插件 回退实录 %s" % d if hits3 \
+            else "无限服插件回退实录 %s" % d
+        exe(db10, "INSERT INTO videos (id, source_sheet, source_row, title, author,"
+                 " aweme_id, published_at, transcript, category, updated_at)"
+                 " VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (920010 + i, "抖音视频数据", str(9300 + i), title, "某作者",
+             "DY%03d" % i, d + " 10:00:00", "无限服插件的备份与回退" + "字" * 300, "游戏攻略",
+             "2026-10-22 10:00:00"))
+    ps.match_positions(db10, now=dt.datetime(2026, 11, 9, 22, 0), only_slots=["s1a3"])
+    got9 = [r["video_id"] for r in q(db10, "SELECT video_id FROM plan_candidates"
+                                          " WHERE slot_key='s1a3' ORDER BY id")]
+    ck("M5c 候选还是只留 %d 条（上限没被放宽）" % ps.CAND_CAP, len(got9) == ps.CAND_CAP, got9)
+    ck("M5c 命中 3 个词的两条**最旧**的料进了候选（贴题压过新鲜）",
+       920010 in got9 and 920011 in got9, [keep.get(v, v) for v in got9])
+    ck("M5c 被挤出去的是命中 1 个词里最旧那两条（10-03、10-04），不是那两条贴题的",
+       920012 not in got9 and 920013 not in got9 and 920017 in got9,
+       [dates[i - 920010] for i in got9])
+    ck("M5c 理由里写得出命中几个词（排序档变了，人问「凭什么它排第一」要有答案）",
+       q(db10, "SELECT reason FROM plan_candidates WHERE slot_key='s1a3' AND video_id=?",
+         (920010,))[0]["reason"].startswith("命中 3 个词"),
+         q(db10, "SELECT reason FROM plan_candidates WHERE slot_key='s1a3' AND video_id=?",
+           (920010,))[0]["reason"][:40])
+    ck("M5c 反面：命中数相同时仍旧按日期新→旧（没把日期那档弄丢）",
+       got9[:2] == [920011, 920010] and got9[2:] == sorted(got9[2:], reverse=True), got9)
+    bd9 = slot_map(ps.board(db10))
+    dts9 = [c.get("date") for c in (bd9["s1a3"].get("candidates") or [])]
+    ids9 = [int(c["video_id"]) for c in bd9["s1a3"]["candidates"]]
+    ck("M5c 看板那一格按素材日期倒序（最接近现在的排最上面，号主 11-02 拍的读侧口径）",
+       dts9 == sorted(dts9, reverse=True) and dts9[0] == "2026-10-08", str(dts9))
+    ck("M5c 排最上面那条只命中 1 个词：读侧认时间，选哪 6 条才认贴题（两件事不许混）",
+       ids9[0] == 920017 and int(bd9["s1a3"]["candidates"][0].get("nk") or 0) == 1, str(ids9))
+    ck("M5c 刷新两次顺序一模一样（同一份数据不该每次打开上下位都换）",
+       [c.get("date") for c in slot_map(ps.board(db10))["s1a3"]["candidates"]] == dts9, "")
+    # 再塞一条"晚一轮补进来、日期也更近"的候选：读侧只认日期，它就该排到贴题老料上面
+    exe(db10, "INSERT INTO plan_candidates (slot_key, video_id, forever, reason, nk,"
+             " run_date, added_at, last_seen) VALUES (?,?,?,?,?,?,?,?)",
+        ("s1a3", 920013, "yes", "命中 1 个词｜抖音视频数据｜正文 306 字｜晚一轮补进来的", 1,
+         "2026-12-09", "2026-12-09 22:00:00", "2026-12-09 22:00:00"))
+    dts10 = [c.get("date") for c in (slot_map(ps.board(db10))["s1a3"]["candidates"] or [])]
+    ck("M5c 反面：日期更近的那条排到贴题老料上面（读侧不许再拿命中数压日期）",
+       dts10 == sorted(dts10, reverse=True) and "2026-10-04" in dts10
+       and dts10.index("2026-10-04") < dts10.index("2026-10-02"), str(dts10))
+    ck("M5c 命中数落在候选行上（不是只能从理由文本里猜）",
+       {int(r["video_id"]): r["nk"] for r in q(
+           db10, "SELECT video_id, nk FROM plan_candidates WHERE slot_key='s1a3'")}
+       == {920010: 3, 920011: 3, 920013: 1, 920014: 1, 920015: 1, 920016: 1, 920017: 1}, "")
+    # 画面账要落在**行上**，界面才念得出"这条有没有图"（判据在 frame_pool.counts_for 那一份）
+    seen_keys = {}
+    orig_counts = ps.frame_pool.counts_for
+
+    def _stub_counts(ids):
+        seen_keys["ids"] = sorted(ids)
+        return {a: {"total": 18, "judged": 8, "usable": 0} for a in ids}
+
+    ps.frame_pool.counts_for = _stub_counts
+    try:
+        bdw = slot_map(ps.board(db10))
+        roww = [r for r in bdw["s1a3"]["candidates"] if int(r["video_id"]) == 920017][0]
+        ck("M5c 看板把画面账挂到候选行上（排产格才念得出「18 张帧判过 8，0 张能用」）",
+           roww.get("frames") == {"total": 18, "judged": 8, "usable": 0}, roww.get("frames"))
+        ck("M5c 只数视频素材行的 aweme_id（非视频料没有「帧」这一层，不许拿 0 糊上去）",
+           seen_keys["ids"] and all(str(k).startswith("DY") for k in seen_keys["ids"]),
+           str(seen_keys["ids"][:4]))
+    finally:
+        ps.frame_pool.counts_for = orig_counts
+    r17 = q(db10, "SELECT reason FROM plan_candidates WHERE slot_key='s1a3' AND video_id=?",
+            (920017,))[0]["reason"]
+    ck("M5d 理由里不再抄日期（上色那枚标签才是日期的家），来源与字数仍然在",
+       "2026-10" not in r17 and "抖音视频数据" in r17 and "正文" in r17, r17[:64])
+    ck("M5d 看板行上仍读得出日期（上色要拿它算距今几天）",
+       [c.get("date") for c in bdw["s1a3"]["candidates"]
+        if int(c["video_id"]) == 920017] == ["2026-10-08"], "")
+    js = (ROOT / "web" / "static" / "schedule-series.js").read_text(encoding="utf-8")
+    ck("M5d 日期上色真挂在候选行与已采用行上（只挂一边就是「有的有色、有的没色」）",
+       "srDateTag(c)" in js and "srDateTag(a)" in js and "SR_DATE_TIERS" in js, "")
+    ck("M5d 反面：旧那句裸日期写法不许留在已采用行上（同一条不许念两遍）",
+       "esc(a.date || '无日期')" not in js, "")
+    ck("M5d 存量候选理由里那份旧日期在渲染时摘掉（没被重新选中的行永远不会自己改写）",
+       "srReasonNoDate(c.reason)" in js and "(?=｜)" in js, "")
 
     print("== N Codex 三次复验：两个登记入口交叉调用 + 三条服务端边界 ==")
     from src import ops_store

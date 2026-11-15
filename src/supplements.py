@@ -188,6 +188,68 @@ def candidates(db_path, mains, window_days: int = DEFAULT_WINDOW_DAYS,
     return {"list": out[:limit], "count_all": len(out), "scanned": len(pool)}
 
 
+GRAM = 3          # 预筛用的 gram 长度，必须等于 MIN_FRAGMENT，否则"精确"这条不成立
+
+
+def _grams(title: str):
+    n = normalize(title)
+    return {n[i:i + GRAM] for i in range(max(0, len(n) - GRAM + 1))}
+
+
+def _gram_index(pool) -> Dict[str, List[int]]:
+    idx = {}
+    for i, r in enumerate(pool):
+        for g in _grams(r.get("title") or ""):
+            idx.setdefault(g, []).append(i)
+    return idx
+
+
+def _share_gram(index, title: str) -> List[int]:
+    hit = set()
+    for g in _grams(title):
+        bucket = index.get(g)
+        if bucket:
+            hit.update(bucket)
+    return sorted(hit)
+
+
+def counts_for(db_path, mains, window_days: int = DEFAULT_WINDOW_DAYS) -> Dict[int, int]:
+    """一次扫池，给每条主素材数出"有几条强相关非视频料"。排产看板拿它决定
+    「相关非视频」那颗按钮画不画——没有子集却摆一颗按钮，点开来一句"没找到"，是浪费人的手。
+
+    为什么不复用 candidates() 逐条查：那是一次 1261 条整池 difflib（实测 0.2 秒），
+    看板一屏有 50 多条视频候选，逐条查要 2 秒以上，页面加载不能等这个。
+    这里的 3-gram 倒排预筛是**精确**的：`score()` 要求标题有 ≥3 字公共片段，
+    而任何 ≥3 字公共片段必然含一对相同的 3-gram，所以没有共同 3-gram 的一对
+    不可能命中判据。实测（真库 53 条主素材 × 1261 条池）0.19 秒、与整池扫**逐条一致**；
+    判据本身仍然只有 `score()` 一份，这里不加也不改任何条件。
+    """
+    with_id = [m for m in (mains or []) if m.get("id")]
+    out = {int(m["id"]): 0 for m in with_id}
+    wanted = [m for m in with_id if (m.get("title") or "").strip()]
+    if not wanted:
+        return out
+    con = sqlite3.connect("file:%s?mode=ro" % db_path, uri=True)
+    try:
+        pool = _pool_rows(con)
+    finally:
+        con.close()
+    main_ids = {int(m["id"]) for m in wanted}
+    pool = [r for r in pool if r["id"] not in main_ids]
+    index = _gram_index(pool)
+    for m in wanted:
+        mid = int(m["id"])
+        n = 0
+        for i in _share_gram(index, m.get("title") or ""):
+            cand = pool[i]
+            if score(m.get("title") or "", cand.get("title") or "",
+                     m.get("published_at") or "", cand.get("published_at") or "",
+                     window_days):
+                n += 1
+        out[mid] = n
+    return out
+
+
 def brief_lines(items) -> List[str]:
     """把采用的补充料渲染成提示词里的那几行（带出处与分级，写死配角身份）。"""
     lines = []
@@ -234,6 +296,7 @@ def rows_by_ids(db_path, ids, limit: int = MAX_ITEMS, snaps=None) -> List[Dict[s
         if not r:
             continue
         body = (r.get("transcript") or "").strip()
+        body_limit = 16000 if r.get("source_sheet") == "暴雪官方" else PER_ITEM_CHARS
         out.append({"id": i, "sheet": r.get("source_sheet") or "",
                     "title": r.get("title") or "", "author": r.get("author") or "",
                     "date": (r.get("published_at") or "")[:10],
@@ -286,7 +349,6 @@ def brief_block(items) -> str:
               "③ 补充料里没有的，不许因为这里列了就编。\n"
             + ("\n".join(bodies) + "\n" if bodies else ""))
 
-        body_limit = 16000 if r.get("source_sheet") == "暴雪官方" else PER_ITEM_CHARS
 
 
 def prepare_evidence(items, primary_text):

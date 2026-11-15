@@ -273,9 +273,17 @@ def upsert_task(db_path, slot_key, channel, form, meta, videos, con=None):
     try:
         row = _latest_row(con, slot_key, channel, form)
         if row:
+            # **移掉了某条主素材，就把这一版的补充料一起清掉**（号主 2026-10-30：换素材时之前勾的子集没取消）。
+            # 补充料的归属是那条主素材——标题共同片段与发布日窗口都指着它，它一被移走，配角就没有归属了，
+            # 留着等于把上一篇的参考料塞进这一篇的提示词。
+            # 只认"移除"：**纯新增不清**（原来那些素材都还在，挂在它们下面的配角仍然有效）。
+            old_ids = [int(x) for x in (_j(row["video_ids"], []) if row["video_ids"] else [])]
+            removed = [x for x in old_ids if x not in ids]
             con.execute(
                 "UPDATE plan_tasks SET video_ids=?, sources=?, title=?, hook=?, note=?,"
-                " plan_date=?, updated_at=? WHERE id=?",
+                " plan_date=?, updated_at=?"
+                + (", supplement_ids='[]', supplement_sources='[]'" if removed else "")
+                + " WHERE id=?",
                 (json.dumps(ids), json.dumps(srcs, ensure_ascii=False),
                  meta.get("title") or row["title"], meta.get("hook") or row["hook"],
                  meta.get("note") or row["note"], meta.get("date") or row["plan_date"],

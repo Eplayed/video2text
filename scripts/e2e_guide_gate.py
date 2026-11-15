@@ -241,6 +241,12 @@ def main():
         ck("拦下两条只填一条 → 仍然 incomplete（放行要逐条，不是一句总括）",
            ov4["complete"] is False and len(ov4["missing"]) == 1,
            "missing=%d" % len(ov4["missing"]))
+        ck("缺哪一格点得出来（没出处／没结论／没署名），不是只回一句 incomplete",
+           any("出处" in x for x in ov0["need"]) and any("核验结论" in x for x in ov2["need"])
+           and any("核验人" in x for x in ov0["need"]),
+           json.dumps(ov2["need"], ensure_ascii=False)[:90])
+        ck("凭据填全了就不该再报缺格（need 只剩空列表，放行才走得动）",
+           ov1["need"] == [], json.dumps(ov1["need"], ensure_ascii=False))
 
     if FIX:
         print("\n夹具问题（不算内容判据失败）：\n  - " + "\n  - ".join(FIX))

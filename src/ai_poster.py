@@ -1768,8 +1768,10 @@ def build_text_plan(summary, ai_config, theme="", title="", style_key="", text_m
               + guide_rules_text(frames, lim["total"],
                                  MOTHER_META_RULE if mother else META_RULE) + mother_rules)
     if ai_config.get("editorial") and text_mode == "typeset":
-        prompt += ("\n先按母稿要点确定主线、必保信息和同主题补充，再按主题分组。"
-                   "所有页用 layout_key=guide。内容多就增页，单职业页不要混写其他职业。"
+        prompt += ("\n先确定本篇要回答的一个问题，再按操作阶段、对象或职责分组，最后分配页面。"
+                   "封面直接给答案，片头口号和点赞引导不占攻略卡片。"
+                   "同组短要点放在同页，卡片内保留完整适用条件。"
+                   "所有页用 layout_key=guide。内容多就增页，单职业页只放该职业的卡片。"
                    "官方补充的关键点和未在主视频出现的相关职业也必须有对应卡片。"
                    "单一职业标题下只写该职业的卡片、副标题、警示与互动。"
                    "统一栏目名用简短主题名（最多16字）。")
@@ -3063,6 +3065,12 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
         _publish_view(plan, pub), summary.get("content") or "",
         extra_items=(fact_ctx or {}).get("open_items"),
         official_blobs=(fact_ctx or {}).get("official_blobs"))
+    # 旧闸只认上游已标待核的数。模型新添一个原素材和官方原文都没有的
+    # 「15分钟/60%」不会进待核清单，这一层按成品实际字段补查缺口。
+    fact_hard.extend(fact_gate.unsourced_numbers(
+        _publish_view(plan, pub),
+        asr_text or summary.get("transcript") or summary.get("content") or "",
+        (fact_ctx or {}).get("official_blobs")))
     fact_gaps = fact_gate.guide_gaps(plan) if plan_is_guide(plan) else []
     # ── 实体专名核对（11-02 号主拍的）──────────────────────────────────────
     # 种族与职业这两类，官网是**一次列全的完整枚举**，所以"枚举里没有"在这一类上算硬证据：
@@ -3297,15 +3305,9 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
     # 判帧那一次问的是七个字段的宽问题，实测会答 where=none 漏掉底部字幕——
     # **问题越窄答得越准**，所以这里只问"最下面三分之一有没有一行字幕 + 该保留哪块矩形"。
     # 只往成品包里写文件，生产帧池（frames.json / raw / clean）一个字节都不动。
-    hardened = list(reused_frames or [])
-    used_photos = [(pi, ph) for pi, p in enumerate(pages, 1)
-                   for ph in (p.get("photos") or [])
-                   if (not ph.get("_drop") and ph.get("path") and os.path.exists(str(ph.get("path"))))]
-    if reused_frames is None and used_photos and ai_config and ai_config.get("api_key"):
-        try:
     from .poster_content import frame_related
 
-            from . import frame_pool
+    hardened = list(reused_frames or [])
     # 最终稿可能在弹窗改过，重验当前页与所选帧，不沿用上一版结论。
     frame_by_path = {str(item.get("file")): item for item in frame_items or []}
     if plan.get("editorial_frames"):
@@ -3320,6 +3322,12 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
                     caption = ph.get("caption")
                 if not frame_related(page, caption):
                     ph.update(_drop="画面无法确认与本页内容相符", page=pi)
+    used_photos = [(pi, ph) for pi, p in enumerate(pages, 1)
+                   for ph in (p.get("photos") or [])
+                   if (not ph.get("_drop") and ph.get("path") and os.path.exists(str(ph.get("path"))))]
+    if reused_frames is None and used_photos and ai_config and ai_config.get("api_key"):
+        try:
+            from . import frame_pool
         except ImportError:
             import frame_pool
         _pg("核对要印上版的 %d 张画面：底部有没有字幕、四周虚化的边裁不裁" % len(used_photos))
@@ -3406,13 +3414,13 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
                 (out_dir / ("base%s.png" % suffix if n == 1 else "base_%d.png" % i)).write_bytes(raw)
                 _pg("排版第 %d 张（真字体，字不会画错）..." % (pi if multi else i))
                 png, ts_chk = typeset_poster(raw, page_plan, ratio, photo=pphoto, page=pg_tag)
-                # 回读校验在这条路上是负资产：字是程序画的、不可能错，而那个视觉模型
-                # 实测会把画错的赛字读成对的、还会自己脑补出多出来的字，只会误报。
                 overflow = [msg for msg in (ts_chk or {}).get("problems") or []
                             if any(word in msg for word in ("放不下", "未完整", "已截", "超出版面", "可能截字"))]
                 if overflow:
                     raise PosterError("第 %d 页排版未通过：%s。原文仍在拆稿草稿中，请拆页或调整文字后重试"
                                       % (pi, "；".join(overflow)))
+                # 回读校验在这条路上是负资产：字是程序画的、不可能错，而那个视觉模型
+                # 实测会把画错的赛字读成对的、还会自己脑补出多出来的字，只会误报。
                 v = {"skipped": True, "ok": True, "not_needed": True,
                      "missing": [], "extra": "", "transcript": ""}
             else:

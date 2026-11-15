@@ -285,6 +285,92 @@ def main():
           and (vj.get("materials") or [{}])[0].get("is_video") is True,
           json.dumps({k: vj.get(k) for k in ("usable", "no_video_source")}, ensure_ascii=False))
 
+    print("\n== H 批量计数 counts_for：那颗按钮画不画，靠它一次数完 ==")
+    dbp = str(app.DB_PATH)
+    mains = [{"id": 21, "title": "无限服职业推荐—圣骑士！", "published_at": "2026-10-21"},
+             {"id": 22, "title": "魔兽世界正版护颈枕特价", "published_at": "2026-10-26"},
+             {"id": 23, "title": "10分钟带你解析AI应用三层核心概念", "published_at": "2026-10-23"}]
+    got = SP.counts_for(dbp, mains)
+    each = {int(m["id"]): len(SP.candidates(dbp, [m])["list"]) for m in mains}
+    check("与逐条 candidates() 数出来一模一样（3-gram 预筛只是省时间，不改判据）",
+          got == each, "%s vs %s" % (got, each))
+    check("21 数出 1 条、22/23 数出 0 条 —— 0 的那两行界面就不该再画「相关非视频」",
+          got.get(21) == 1 and got.get(22) == 0 and got.get(23) == 0, str(got))
+    notitle = SP.counts_for(dbp, [{"id": 99, "title": "", "published_at": ""}])
+    check("没标题的主素材记 0 而不是漏键（看板拿 id 取值不能 KeyError）",
+          notitle.get(99) == 0, str(notitle))
+
+    # 边界：公共片段只落在两个标题的**最尾**时，3-gram 的窗口不能差一格
+    con = sqlite3.connect(dbp)
+    for vid, sheet, title, date in ((41, "抖音视频数据", "先看这里无限服团本顺序", "2026-10-24"),
+                                    (42, "NGA无限板块", "魔兽攻略讲团本顺序", "2026-10-25")):
+        con.execute("INSERT INTO videos (%s) VALUES (%s)"
+                    % (COLS, ",".join("?" for _ in COLS.split(","))),
+                    (vid, "aw%d" % vid, sheet, 900 + vid, "https://x/%d" % vid, "", "",
+                     "作者%d" % vid, title, "已完成", date, "", "正文" * 200, "", "", "",
+                     "2026-10-28 10:00:00", "游戏攻略", "", "魔兽世界：无限", "",
+                     "subscription", 0, 0, "", "[]", 0))
+    con.commit()
+    con.close()
+    tail = SP.counts_for(dbp, [{"id": 41, "title": "先看这里无限服团本顺序",
+                                "published_at": "2026-10-24"}])
+    check("公共片段只在标题最尾（「团本顺序」）也数得出来——gram 窗口没差一格",
+          tail.get(41) == 1, str(tail))
+
+    print("\n== I 换了主素材：这一格原来勾的补充料要一起清掉（号主 10-30）==")
+    import src.content_store as cs2
+    import src.plan_tasks as pt2
+    dbp2 = str(app.DB_PATH)
+    ti = new_task(app, c, "sI", [21])
+    c.post("/api/plan/supplements", json={"task_id": ti["id"], "video_ids": [31]})
+    check("先确认这一格挂着 1 条补充料",
+          (pt2.get_task(dbp2, ti["id"]).get("supplement_ids") or []) == [31])
+    v22 = cs2.get_videos_by_ids(dbp2, [22])
+    t_after, action = pt2.save_sources(dbp2, "sI", "toutiao", "guide",
+                                       {"title": "换了素材的标题", "hook": "", "note": "",
+                                        "plan_date": "2026-10-30"}, v22)
+    check("pending 没开工 → 换素材走就地改（不新增版本）", action == "updated", action)
+    check("换了主素材就把旧补充料清空：提名是照旧素材的标题与发布日算的，留着等于塞进这一篇",
+          (t_after.get("supplement_ids") or []) == [], t_after.get("supplement_ids"))
+    c.post("/api/plan/supplements", json={"task_id": t_after["id"], "video_ids": [31]})
+    t3, a3 = pt2.save_sources(dbp2, "sI", "toutiao", "guide",
+                              {"title": "只改标题不改素材", "hook": "", "note": "",
+                               "plan_date": "2026-10-30"}, v22)
+    check("反面：素材清单没变、只改标题不许顺手清掉补充料",
+          a3 == "updated" and (t3.get("supplement_ids") or []) == [31],
+          str((a3, t3.get("supplement_ids"))))
+    v21b = cs2.get_videos_by_ids(dbp2, [21, 22])
+    t3b, a3b = pt2.save_sources(dbp2, "sI", "toutiao", "guide",
+                                {"title": "再加一条素材", "hook": "", "note": "",
+                                 "plan_date": "2026-10-30"}, v21b)
+    check("只加一条（原来那些素材都还在）不许清补充料——配角仍然对得上留下的主素材",
+          a3b == "updated" and (t3b.get("supplement_ids") or []) == [31]
+          and sorted(t3b.get("video_ids") or []) == [21, 22],
+          str((a3b, t3b.get("video_ids"), t3b.get("supplement_ids"))))
+    pt2.claim_running(dbp2, t3b["id"])
+    v21 = cs2.get_videos_by_ids(dbp2, [21])
+    t_new, a_new = pt2.save_sources(dbp2, "sI", "toutiao", "guide",
+                                    {"title": "开工后又换素材", "hook": "", "note": "",
+                                     "plan_date": "2026-10-30"}, v21)
+    check("已开工那版换素材 → 开新版，新版一条补充料都不带",
+          a_new == "versioned" and (t_new.get("supplement_ids") or []) == [],
+          str((a_new, t_new.get("supplement_ids"))))
+    check("旧那版的证据（含补充料快照）原样冻住，不被新版追改",
+          (pt2.get_task(dbp2, t3b["id"]).get("supplement_ids") or []) == [31])
+    check("排产表那侧也丢本地镜像（否则采用后那次 POST 会把旧子集塞回新版）",
+          "移掉了" in js and "delete SRPICK_SUP[key]" in js)
+    check("已采用那几行画成复选框，默认勾着（勾着=留在这一版，取消=移出）",
+          "pk[a.video_id] ? ' checked' : ''" in js)
+    check("勾选状态只在没动过时才从服务端灌种子（人清空过的那格不许被偷偷填回去）",
+          "if (SRPICK[s.slot_key] || !(s.adopted_ids || []).length) return;" in js)
+    check("采用完用 delete 而不是写空对象（空对象会被当成「人清空过」，种子就不灌了）",
+          "var done = function () { delete SRPICK[key];" in js)
+    check("勾在「这次没被采用的那条素材」下面的子集，采用时也不带过去",
+          "ids.indexOf(p) >= 0" in js)
+    tpl = (ROOT / "web" / "templates" / "index.html").read_text(encoding="utf-8")
+    check("弹窗那份缓存键带上了素材清单（pending 就地换素材时 id/状态/稿 id 全都不变）",
+          "_pt.task.video_ids || []).join(',')" in tpl)
+
     print("\n━━ 补充资料契约：%d 项通过 / %d 项失败 ━━" % (len(PASS), len(FAIL)))
     if FAIL:
         print("失败：%s" % FAIL)

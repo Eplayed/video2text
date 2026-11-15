@@ -153,7 +153,12 @@ def sync(db_path: str, data_dir: str = DATA_DIR_DEFAULT, backfill: bool = False,
     if backfill:
         picked = files
     else:
-        picked = [f for f in files if snapshot_date(f) > last]
+        # **含**上一号快照那一天，不是只要比它新：采集侧每天 08:40 与 20:40 各写一次
+        # 同一个 `board-<日期>.json`，用 `>` 判就变成"早上那批进过库之后，这一天再也没人读过"。
+        # 11-02 实测：11-01 那份 138 条里只有 6 条进过库，**132 条被永久跳过**。
+        # 重读不花钱也不写重：下面 `todo` 按 aweme_id 跟库里的已知帖去重，
+        # 一晚一次的量是几十条 JSON，导入本身幂等（见 collect/build_items）。
+        picked = [f for f in files if snapshot_date(f) >= last]
         if not picked and force:
             picked = files[-1:]
         if not picked:

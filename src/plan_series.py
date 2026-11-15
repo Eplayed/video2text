@@ -39,6 +39,9 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from . import frame_pool      # 画面账（关键帧几张能用）判据只有那一份 `counts_for`
+from . import supplements    # 「这条素材有没有视频可抽」的判据只有那一份（VIDEO_SHEETS）
+
 ROOT = Path(__file__).resolve().parents[1]
 # 配置单独一份、不进 git（与 config/sync_tasks.json 同一套纪律：运行数据不入库）
 MATCH_STORE = Path(os.environ.get("V2T_PLAN_MATCH_STORE") or
@@ -258,6 +261,7 @@ CREATE TABLE IF NOT EXISTS plan_candidates (
     video_id INTEGER NOT NULL,
     forever TEXT NOT NULL DEFAULT 'unknown',
     reason TEXT DEFAULT '',
+    nk INTEGER DEFAULT 0,
     run_date TEXT DEFAULT '',
     added_at TEXT, last_seen TEXT,
     UNIQUE(slot_key, video_id)
@@ -323,6 +327,11 @@ def _migrate(con) -> None:
     cols = {c[1] for c in con.execute("PRAGMA table_info(plan_slots)")}
     if "parent_slot" not in cols:
         con.execute("ALTER TABLE plan_slots ADD COLUMN parent_slot TEXT DEFAULT ''")
+    ccols = {c[1] for c in con.execute("PRAGMA table_info(plan_candidates)")}
+    if "nk" not in ccols:
+        # 老库补这一列：看板排序要与写候选用同一档判据（命中几个词），
+        # 不存下来就只能拿文本去猜或者按日期排，那正是"表里排第一的其实最不贴题"的来路
+        con.execute("ALTER TABLE plan_candidates ADD COLUMN nk INTEGER DEFAULT 0")
     if "series" not in cols:
         return
     rows = con.execute("SELECT slot_key, position FROM plan_slots"
@@ -1104,8 +1113,10 @@ def board(db_path, today=None, base=None, channel: str = DEFAULT_CHANNEL,
             tasks.setdefault(d["slot_key"], d)      # version DESC，第一条就是当前版
         cands = {}
         if _has_table(con, "plan_candidates"):
-            for r in con.execute("SELECT * FROM plan_candidates ORDER BY run_date DESC,"
-                                 " last_seen DESC, id DESC").fetchall():
+            # 这里只管"取哪些行"，**不管顺序**：顺序在组装完行之后按素材日期排（见下面 `cand.sort`），
+            # 因为日期不在候选表里，是现读 videos 才有的。两处各排一次会互相打脸。
+            for r in con.execute("SELECT * FROM plan_candidates"
+                                 " ORDER BY run_date DESC, last_seen DESC, id DESC").fetchall():
                 cands.setdefault(r["slot_key"], []).append(dict(r))
         flags = {}
         if _has_table(con, "plan_slot_flags"):
@@ -1138,11 +1149,15 @@ def board(db_path, today=None, base=None, channel: str = DEFAULT_CHANNEL,
             for i in range(0, len(want_ids), 400):     # 分块：一次几千个 IN 参数会顶到 SQLite 上限
                 chunk = want_ids[i:i + 400]
                 for r in con.execute(
-                        "SELECT id, title, author, published_at, source_sheet, source_row%s"
-                        " FROM videos WHERE id IN (%s)" % (
-                            ", aweme_id" if compact else "", ",".join("?" * len(chunk))),
+                        "SELECT id, title, author, published_at, source_sheet, source_row,"
+                        " IFNULL(aweme_id,'') AS aweme_id,"
+                        " IFNULL(category,'') AS category, IFNULL(game,'') AS game,"
+                        " IFNULL(source,'') AS source, IFNULL(author_sec_uid,'') AS author_sec_uid"
+                        " FROM videos WHERE id IN (%s)" % ",".join("?" * len(chunk)),
                         chunk).fetchall():
                     vinfo[int(r["id"])] = dict(r)
+        # 订阅名单读一次，跟上面那份 vinfo 一起喂给同一份判据（`level1_ok` 的第 0 条）
+        owner_map = douyin_owner_map(con)
     finally:
         con.close()
 
@@ -1153,10 +1168,21 @@ def board(db_path, today=None, base=None, channel: str = DEFAULT_CHANNEL,
         adopted = [int(x) for x in (task.get("video_ids") or [])]
         all_c = cands.get(key) or []
         cand = []
+        hidden = {}
         for c in all_c:
             if int(c["video_id"]) in adopted:
                 continue
             info = vinfo.get(int(c["video_id"])) or {}
+            # 库里存量的旧候选也要过这道判据（10-30 之前那几晚把论坛帖、公众号文章、
+            # 甚至"面试官：如何安全地让Agent访问数据库"写进了候选）：只改写入这一侧，
+            # 页面上看到的还是那一堆——所以读和写共用 `level1_ok` 一份，谁都不许自己判。
+            ok, code, _why = level1_ok(info.get("source_sheet") or "",
+                                       info.get("category") or "",
+                                       c.get("forever") or "", info.get("game") or "",
+                                       owner=owner_map, row=info)
+            if not ok:
+                hidden[code] = hidden.get(code, 0) + 1
+                continue
             c = dict(c)
             c["title"] = info.get("title") or ""
             c["author"] = info.get("author") or ""
@@ -1166,6 +1192,15 @@ def board(db_path, today=None, base=None, channel: str = DEFAULT_CHANNEL,
             if compact:
                 c["aweme_id"] = info.get("aweme_id") or ""
             cand.append(c)
+        # 这一格看到的顺序：**素材日期倒序，最接近现在的排最上面**（号主 11-02 拍的读侧口径）。
+        # 只改"看到的顺序"，不改"哪几条进得来"——入选仍是拆解那一侧按贴题数选（`match_positions`
+        # 的 `got.sort`），两边各管一件事，别在这里偷偷把候选池也换成"只要最新"。
+        # 同一天再按命中词数多在前、"确定属无限服"在前；最后两个键先排好再稳定排一次，
+        # 让刷新两次的顺序一模一样（不然同一份数据每次刷新都可能换个上下位）。
+        cand.sort(key=lambda x: (str(x.get("run_date") or ""), int(x.get("id") or 0)),
+                  reverse=True)
+        cand.sort(key=lambda x: (-_day_ordinal(x["date"]), -int(x.get("nk") or 0),
+                                 0 if x.get("forever") == "yes" else 1))
         live_pub = [p for p in (pub_rows.get(key) or [])
                     if (key, p["ref_id"]) not in revoked]
         flag = flags.get(key)
@@ -1181,6 +1216,12 @@ def board(db_path, today=None, base=None, channel: str = DEFAULT_CHANNEL,
                   # 判据写在这里一份，界面与接口都不许再各推一遍。
                   "adoptable": not (s["series"] == "s2" and s["origin"] == "map"),
                   "adopted_ids": adopted, "candidates": cand, "candidate_total": len(cand),
+                  # 被第一级判据挡掉的条数与一句话原因：候选从 6 条变 2 条得说清是"挡掉的"
+                  # 而不是"匹配坏了"（库里 10-30 之前的存量候选本来就有一半是非视频料）
+                  "candidate_hidden": sum(hidden.values()),
+                  "hidden_note": "、".join("%s %d 条" % (LEVEL1_BLOCKED.get(k, k), v)
+                                           for k, v in sorted(hidden.items(),
+                                                              key=lambda x: -x[1])),
                   # 已采用那几条的行数据：排产页拿它把"父行"画出来（含 sheet/row 才能跳详情、
                   # 才能按表判"这条是视频素材、下面挂子集"）
                   "adopted_rows": [{"video_id": i,
@@ -1208,6 +1249,39 @@ def board(db_path, today=None, base=None, channel: str = DEFAULT_CHANNEL,
     if compact:
         return {"today": today.isoformat(), "channel": ch, "slots": out,
                 "status": status_line(db_path, today=now0)}
+    # 「相关非视频」那颗按钮只在**真数得出子集**的时候画（号主 10-30：没子集就别摆按钮，
+    # 点开来一句"没找到"是浪费人的手）。一次批量数完，不逐条懒查：逐条是要人点开了才知道没有，
+    # 而一屏 50 多条 × 0.2 秒会把这块面板卡死。判据仍是 supplements.score() 那一份。
+    need = {}
+    for s in out:
+        for row in list(s["candidates"]) + list(s["adopted_rows"]):
+            info = vinfo.get(int(row["video_id"])) or {}
+            if not supplements.is_video(info.get("source_sheet") or ""):
+                continue
+            need[int(row["video_id"])] = {"id": int(row["video_id"]),
+                                          "title": info.get("title") or "",
+                                          "published_at": info.get("published_at") or ""}
+    counts = supplements.counts_for(db_path, list(need.values())) if need else {}
+    for s in out:
+        for row in list(s["candidates"]) + list(s["adopted_rows"]):
+            row["sup_n"] = counts.get(int(row["video_id"]))
+    # 画面账（共几张帧／判过几张／几张能用）：判据在 `frame_pool.counts_for` 那一份，
+    # 这里只决定"哪些行该数"——只有视频素材行有这一层，非视频料给 None（"没这一层"
+    # 和"有帧但一张不能用"是两句话，糊成一句就又是"看着像坏了"）。
+    # 为什么数进看板：号主挑素材第一问就是"这条有没有图"，以前只有海报弹窗（要先有整合稿）
+    # 才看得到，B 站那批 18 张帧明明在盘上，排产格上却像"没有关键帧"（11-02 点名）。
+    aids = set()
+    for s in out:
+        for row in list(s["candidates"]) + list(s["adopted_rows"]):
+            info = vinfo.get(int(row["video_id"])) or {}
+            aid = str(info.get("aweme_id") or "").strip()
+            if aid and supplements.is_video(info.get("source_sheet") or ""):
+                aids.add(aid)
+    fcounts = frame_pool.counts_for(list(aids)) if aids else {}
+    for s in out:
+        for row in list(s["candidates"]) + list(s["adopted_rows"]):
+            info = vinfo.get(int(row["video_id"])) or {}
+            row["frames"] = fcounts.get(str(info.get("aweme_id") or "").strip())
     # 关联关系在算完状态之后再挂：子稿的档位/发布情况要用上面那份结果，不能拿原始行糊上去
     by_key = {s["slot_key"]: s for s in out}
     kids = {}
@@ -1289,7 +1363,13 @@ def _day_ordinal(raw) -> int:
 #   强 = 标题/正文里出现「无限服」或「Forever」 → yes
 #   弱 = 只有"无限/时光服/怀旧"这类词，或只因为来源是暴雪官方 → unknown（标"待人工判定"）
 #   否 = 命中别的游戏名单 → 直接不进候选（跨服假阳性是这一单的反例项）
-_STRONG = re.compile(r"无限服|Forever", re.I)
+# 「无限服」这三个字只是号主点名的一个写法，不是他要的那件事。
+# 素材里这个产品的实际写法是《魔兽世界：无限》/ 魔兽无限（官方名 WoW: Forever），
+# 只认"无限服|Forever"会把 132 条同题材素材判成"归属不明"（11-01 现算：正文≥200 的 1270 行里
+# 现在判 yes 的只有 250 行；补上这几个写法多判 yes 132 行，抽样全是"魔兽无限新种族/无限版坦克"
+# 这类同产品内容）。"无限"单独出现仍然只算弱线索——挡的还是那些只讲时光服、怀旧服的。
+# 没放"无限世界"这一档：现库里靠它才会多判 yes 的行数是 0，只留风险不留收益。
+_STRONG = re.compile(r"无限服|Forever|魔兽世界[:：]?\s*无限|魔兽无限|无限国服", re.I)
 _WEAK = re.compile(r"无限|时光服|怀旧|艾泽拉斯|暴雪")
 _OFFGAME = re.compile(r"流放|POE|暗黑|Diablo|蜘蛛侠|原神|王者|火影|明日方舟|蛋仔|苹果|iPhone|华为", re.I)
 
@@ -1309,6 +1389,95 @@ def forever_call(title: str, author: str, body: str, sheet: str) -> Tuple[str, s
     if m2:
         return "unknown", "只有「%s」这类弱线索，判不了 Forever 归属 → 待人工判定" % m2.group(0)
     return "unknown", "正文没有可判归属的字样 → 待人工判定"
+
+
+# 库里出现过的**非游戏**分类（2026-10-30 现算自 videos.category 的分布）。
+# 这些是订阅账号顺带进来的别的赛道，一条都不该出现在魔兽排产表的第一级：
+# 「面试官：如何安全地让Agent访问数据库」「小米 18 Pro 背屏体验」当时就是靠正文里
+# 一句"设置/配置"撞上检索词挤进候选位，把真正讲无限服的视频挤掉了。
+NON_GAME_CATEGORIES = ("AI技术", "前端面试", "编程开发", "数码评测", "职场成长",
+                       "汽车资讯", "产品设计", "商业财经")
+# 挡下来时给人看的四种说法（写候选的报表与看板上那句"另有 N 条"共用这一份）
+LEVEL1_BLOCKED = {"non_video": "非视频素材", "off_topic": "别的赛道",
+                  "unattributed": "判不出无限服归属",
+                  "not_owner": "作者不是这个订阅号（采集混进来的别人视频）"}
+
+
+def douyin_owner_map(con) -> Tuple[Dict[str, str], set]:
+    """订阅名单：抖音 sec_uid → 昵称，外加那份昵称集合（改名时兜一层）。
+
+    表不存在或没有抖音订阅就返回空——空名单等于这条判据不生效，**判据只能证伪，
+    不能因为读不到名单就把素材全挡掉**（那会把"库还没建订阅"伪装成"一条都不合格"）。
+    """
+    if not _has_table(con, "subscriptions"):
+        return {}, set()
+    m: Dict[str, str] = {}
+    try:
+        for r in con.execute("SELECT sec_uid, author FROM subscriptions "
+                             "WHERE platform='douyin'"):
+            s = str(r["sec_uid"] or "").strip()
+            if s:
+                m[s] = str(r["author"] or "").strip()
+    except sqlite3.Error:
+        return {}, set()
+    return m, {v for v in m.values() if v}
+
+
+def owner_ok(sheet: str, source: str, author: str, suid: str,
+             subs: Dict[str, str], names: set) -> bool:
+    """订阅采回来的抖音行，作者必须是那个订阅号自己。
+
+    库里只有一份 sec_uid：`author_sec_uid` 是**入库之后按订阅盖上去的**（Excel 里没这列），
+    行上的 `author` 才是详情接口回的真实昵称。两个对不上＝别人号的视频被当成本订阅的新料。
+    库里现存 14 行就是这个形状（10-16「笨小孩」7 行至今还在、11-01「尤安」6 行、
+    「豆豆的日常」1 行），采集那两道闸修好之前漏进来的。
+
+    三条不许越界：
+      · 只圈 `source=='subscription'`——手动粘链接／CLI 采的那 176 行本来就该收任何作者，
+        拿订阅名单去卡它们等于把号主自己的输入判成脏数据；
+      · 认不出来就放行（suid 空、suid 已不在订阅名单、行上没作者名）：证不了就别挡；
+      · 账号改过名要放行（作者的昵称命中**任何**一个订阅）：改名不等于变成别人。
+    """
+    if (sheet or "") != "抖音视频数据" or (source or "") != "subscription":
+        return True
+    a = str(author or "").strip()
+    sub_author = subs.get(str(suid or "").strip()) or ""
+    if not a or not sub_author:
+        return True
+    return a == sub_author or a in names
+
+
+def level1_ok(sheet: str, category: str, verdict: str, game: str,
+              owner=None, row=None) -> Tuple[bool, str, str]:
+    """这条素材能不能当排产表**第一级**候选。返回 (能不能, 代码, 给人看的一句话)。
+
+    判据只有这一份，写候选（`match_positions`）与读看板（`board`）共用——
+    只改写入那一侧的话，页面上摆着的还是旧存量那一堆（号主 2026-10-30 三条口径）：
+
+    0. **订阅采回来的行，作者要对得上那个订阅号**：`owner` 给 `douyin_owner_map(con)` 那份名单、
+       `row` 给这一行本身（要读它的 source／author／author_sec_uid）。别人号的老片子哪怕
+       正文撞上了检索词，也不配占第一级的位置；
+    1. **只收视频素材**：论坛帖／公众号文章／暴雪公告给不出关键帧，它们的位置是
+       挂在视频素材下面的「相关非视频」子集（`supplements` 那一层），不是第一级；
+    2. **别的赛道整类挡掉**：category 命中 `NON_GAME_CATEGORIES` 就不进——未打标（空）不挡，
+       没打标不等于打错标，挡它是另一件事（靠第 3 条）；
+    3. **归属要判得出来**：`forever_call` 给 yes，或 `game` 字段（订阅预设，权威值）写着无限服。
+       "待人工判定"那一批不再占第一级的位置：他要的是"第一级素材就只有魔兽无限服的话题"，
+       判不了归属的摆在那里等于让人替机器做判断。
+    """
+    if owner and row is not None and not owner_ok(
+            sheet, row.get("source") or "", row.get("author") or "",
+            row.get("author_sec_uid") or "", owner[0], owner[1]):
+        return False, "not_owner", "作者不是这个订阅号（订阅盖的是「%s」，行上是「%s」）" % (
+            owner[0].get(row.get("author_sec_uid") or "") or "", row.get("author") or "")
+    if not supplements.is_video(sheet):
+        return False, "non_video", "非视频素材：改挂在该视频素材下面的「相关非视频」子集里"
+    cat = (category or "").strip()
+    if cat in NON_GAME_CATEGORIES:
+        return False, "off_topic", "分类是「%s」，与魔兽无限服无关" % cat
+    if (verdict or "") != "yes" and "无限" not in (game or ""):
+        return False, "unattributed", "判不出无限服归属（待人工判定的不再占候选位）"
+    return True, "", ""
 
 
 def _match_terms(kws: List[str], hay_title: str, hay_author: str, hay_body: str) -> List[str]:
@@ -1343,7 +1512,8 @@ def match_positions(db_path, now=None, only_slots=None, cap: int = CAND_CAP,
     day = now.date().isoformat()
     con = sqlite3.connect(str(db_path))
     con.row_factory = sqlite3.Row
-    stats = {"added": 0, "seen": 0, "skipped": [], "positions": 0, "empty": 0, "detail": []}
+    stats = {"added": 0, "seen": 0, "skipped": [], "positions": 0, "empty": 0, "detail": [],
+             "blocked": {}}
     try:
         slots = [_slot_dict(r) for r in con.execute(
             "SELECT * FROM plan_slots ORDER BY position").fetchall()]
@@ -1374,7 +1544,11 @@ def match_positions(db_path, now=None, only_slots=None, cap: int = CAND_CAP,
                 adopted.setdefault(r["slot_key"], set(int(x) for x in _j(r["video_ids"], [])))
         videos = [dict(r) for r in con.execute(
             "SELECT id, source_sheet, source_row, title, author, published_at,"
-            " COALESCE(transcript,'') AS tr, category FROM videos").fetchall()]
+            " COALESCE(transcript,'') AS tr, category, IFNULL(game,'') AS game,"
+            " IFNULL(source,'') AS source, IFNULL(author_sec_uid,'') AS author_sec_uid"
+            " FROM videos").fetchall()]
+        # 订阅名单读一次，与看板同一份判据（别人号的行不许在写候选这一侧漏过去）
+        owner_map = douyin_owner_map(con)
         for s in slots:
             key = s["slot_key"]
             if published.get(key):
@@ -1395,24 +1569,37 @@ def match_positions(db_path, now=None, only_slots=None, cap: int = CAND_CAP,
                 verdict, basis = forever_call(title, author, body, v.get("source_sheet") or "")
                 if verdict == "off":
                     continue
+                ok, code, why = level1_ok(v.get("source_sheet") or "", v.get("category") or "",
+                                          verdict, v.get("game") or "",
+                                          owner=owner_map, row=v)
+                if not ok:
+                    # 挡下来要报数，不然"候选变少"看起来像匹配坏了（号主第一次就是这么报障的）
+                    stats["blocked"][code] = stats["blocked"].get(code, 0) + 1
+                    continue
                 if len(body) < MIN_TL:
                     continue          # 太短的只算线索，不占候选位
                 got.append({"video_id": int(v["id"]), "verdict": verdict, "basis": basis,
-                            "kws": kws, "date": (v.get("published_at") or "")[:10],
+                            "kws": kws, "nk": len(kws), "date": (v.get("published_at") or "")[:10],
                             "tl": len(body), "title": title[:60],
                             "sheet": v.get("source_sheet") or "", "row": str(v.get("source_row") or "")})
-            # 可解释排序：先能确定属 Forever 的、再按日期**新→旧**、再按正文有料。
-            # 这一行原来写的是 `(tier, x["date"], x["tl"])` + `reverse=False`：注释说"按日期新"，
-            # 实际是**升序**，于是候选超过上限 6 时，留下的正是最旧那几条、新料被挤掉
-            # （Codex 二次复验第 5 条后半，e2e 的 M5b 用 8 条不同日期的夹具钉住它）。
+            # 可解释排序：① 能确定属 Forever 的；② **命中这个位置关键词的个数**；
+            # ③ 日期新→旧；④ 正文有料。四个符号都不许写反：③写反就变回"候选超上限时
+            # 留下最旧那几条"（e2e 的 M5b 用 8 条同题不同期的夹具钉住它）。
+            # ②是 11-02 加的一档，号主点名"匹配到最合适的素材"。只按日期排的时候实测过：
+            # 42 格里 40 格的候选都比上限多，于是顶上来的正是**最新**那几条而不是最贴题的
+            # 那几条——s1a2 那一格日期档第一条只命中 5 个词，而库里同一格有命中 18 个词的料，
+            # 换成贴题档要换掉 212 条候选。命中数相同的（多数情况）仍旧是新的在前。
             got.sort(key=lambda x: (0 if x["verdict"] == "yes" else 1,
-                                   -_day_ordinal(x["date"]), -x["tl"]))
+                                    -x["nk"], -_day_ordinal(x["date"]), -x["tl"]))
             got = got[:cap]
             if not got:
                 stats["empty"] += 1
             for g in got:
-                reason = "命中「%s」｜%s｜%s｜正文 %d 字｜%s" % (
-                    "、".join(g["kws"])[:30], g["sheet"] or "-", g["date"] or "无日期",
+                # 理由里**不再写日期**：界面上日期是一枚按"距今几天"分档上色的标签（`srDateTag`），
+                # 埋在理由里既重复、又没法上色（11-02 号主要求 <3 天绿 / 3–5 天浅绿 / 5–7 天橙）。
+                # 日期本身仍在行上（看板从 videos 现读进 `c["date"]`），不靠这段文案带。
+                reason = "命中 %d 个词「%s」｜%s｜正文 %d 字｜%s" % (
+                    g["nk"], "、".join(g["kws"])[:30], g["sheet"] or "-",
                     g["tl"], g["basis"])
                 # 新建还是撞了唯一键，SQLite 两种情况 rowcount 都是 1，拿它计数会让
                 # "重复运行不产生重复候选"这条断言永远看着像过（其实数在瞎涨）。
@@ -1421,20 +1608,21 @@ def match_positions(db_path, now=None, only_slots=None, cap: int = CAND_CAP,
                                    (key, g["video_id"])).fetchone()
                 if have:
                     con.execute("UPDATE plan_candidates SET last_seen=?, reason=?,"
-                                " forever=? WHERE slot_key=? AND video_id=?",
-                                (_now(), reason, g["verdict"], key, g["video_id"]))
+                                " forever=?, nk=? WHERE slot_key=? AND video_id=?",
+                                (_now(), reason, g["verdict"], g["nk"], key, g["video_id"]))
                     stats["seen"] += 1
                 else:
                     con.execute(
                         "INSERT INTO plan_candidates (slot_key, video_id, forever, reason,"
-                        " run_date, added_at, last_seen) VALUES (?,?,?,?,?,?,?)",
-                        (key, g["video_id"], g["verdict"], reason, day, _now(), _now()))
+                        " nk, run_date, added_at, last_seen) VALUES (?,?,?,?,?,?,?,?)",
+                        (key, g["video_id"], g["verdict"], reason, g["nk"], day, _now(), _now()))
                     stats["added"] += 1
             stats["detail"].append({"slot_key": key, "n": len(got)})
         con.commit()
     finally:
         con.close()
     stats["skipped_n"] = len(stats["skipped"])
+    stats["blocked_n"] = sum(stats["blocked"].values())
     return stats
 
 
@@ -1453,6 +1641,9 @@ def _runs(db_path, limit: int = 5) -> List[Dict[str, Any]]:
 NIGHT_ATTEMPTS = 3          # 当晚自动重试上限，超过就只留记录等人手动，不再半夜反复敲库
 CATCHUP_LOOKBACK = 1        # 补跑只往前看**昨晚**：错过三晚也只补一次，
                             # 第二天早上再看时"昨晚"已经有账了，不会连着几天各补一轮
+FRESH_COOLDOWN_MIN = 60     # 因"素材又动了"补刷的最小间隔；一轮实测 2–3 秒、不花钱，
+                            # 节流只为别让账本被成批重写 updated_at 的那几步刷满
+KIND_NOTE = {"manual": "手动", "night": "定时", "fresh": "素材更新后补刷"}
 
 
 def night_key(day) -> str:
@@ -1586,22 +1777,74 @@ def due_run(db_path, now=None) -> Dict[str, Any]:
             "why": "没到今晚 %s，也没有错过的账要补" % cfg["run_at"]}
 
 
+def fresh_key(now) -> str:
+    """补刷那一次的账键（一天可以有多轮，所以带时刻到秒）。"""
+    d = now.date().isoformat() if hasattr(now, "date") else str(now or "")[:10]
+    return "fresh:%s:%s" % (d, now.strftime("%H%M%S"))
+
+
+def fresh_run(db_path, now=None, cooldown_min: int = FRESH_COOLDOWN_MIN) -> Dict[str, Any]:
+    """素材层在上一轮匹配**之后**又动过 → 该再刷一轮。返回 {"due","why"}。
+
+    为什么不能只有定时那一轮：`run_at` 之后的取料都在它后面——B 站自动链实测跑到窗口
+    关闭（07:00）、NGA 快照 09:05 才入、傍晚补抓 18:30 才入。这些料当天进不了排产表，
+    要等第二天定时那轮，号主看到的就是"表好几天不动"。
+    判据只问一句：`videos` 里最新的 `updated_at` 比上一次**成功**那轮的完成时刻晚吗。
+    匹配自己只写 `plan_candidates` / `plan_match_runs`，不碰 `videos`，所以不会自己勾着自己转圈。
+    `cooldown_min` 是节流：打标/同步会成批重写 `updated_at`，不设间隔会变成每分钟一轮。
+    """
+    cfg = load_cfg()
+    now = cn_now(now)
+    if not cfg.get("enabled"):
+        return {"due": False, "why": "总开关关着（配置：%s）" % MATCH_STORE.name}
+    ensure(db_path)
+    con = sqlite3.connect(str(db_path))
+    try:
+        row = con.execute("SELECT finished_at FROM plan_match_runs WHERE status='ok'"
+                          " ORDER BY COALESCE(finished_at, started_at) DESC LIMIT 1").fetchone()
+        newest = con.execute("SELECT MAX(IFNULL(updated_at, '')) FROM videos").fetchone()[0]
+    finally:
+        con.close()
+    last = (row[0] if row else "") or ""
+    if not last:
+        return {"due": False, "why": "还没有成功的一轮，等定时那轮（%s）先跑" % cfg.get("run_at")}
+    if not newest or newest <= last:
+        return {"due": False, "why": "素材层在上一轮（%s）之后没动过" % last}
+    try:
+        spent_min = (now - dt.datetime.strptime(last, "%Y-%m-%d %H:%M:%S")).total_seconds() / 60.0
+    except ValueError:
+        spent_min = 10 ** 9        # 账上的时刻读不出格式，按"早就过完冷却"处理，别因此不刷
+    if spent_min < int(cooldown_min or 0):
+        return {"due": False, "why": "上一轮才 %d 分钟前，等满 %d 分钟再看（素材最新 %s）" % (
+            int(spent_min), int(cooldown_min or 0), newest)}
+    return {"due": True, "run_key": fresh_key(now), "kind": "fresh",
+            "why": "素材层在上一轮匹配（%s）之后又动了（最新 %s）→ 补刷一轮" % (last, newest)}
+
+
 def run_match(db_path, now=None, kind: str = "night", actor: str = "",
               only_slots=None, channel: str = DEFAULT_CHANNEL) -> Dict[str, Any]:
     """跑一轮匹配（含抢账与记账）。抢不到返回 {"skipped":true,...}，不抛。"""
     now = cn_now(now)
     day = now.date().isoformat()
-    if kind == "manual":
-        key = "manual:%s:%s" % (day, now.strftime("%H%M%S"))
-    else:
+    if kind == "night":
         key = night_key(day)
+    else:
+        # 手动与补刷都是一天可以好几轮，键里带时刻才撞不上别人的账
+        key = "%s:%s:%s" % (kind, day, now.strftime("%H%M%S"))
     who = "%s/%s" % (kind, actor or "system")
     if not claim_run(db_path, key, kind, day, who):
         return {"skipped": True, "run_key": key,
                 "reason": "这一轮已经有人在跑（或今晚已跑过），本轮不重复触发"}
     try:
         st = match_positions(db_path, now, only_slots=only_slots, channel=channel)
-        finish_run(db_path, key, True, st, "手动" if kind == "manual" else "定时")
+        note = KIND_NOTE.get(kind, kind)
+        blocked = st.get("blocked") or {}
+        if blocked:
+            # 候选比上一轮少，要说清是**按口径挡掉的**而不是匹配坏了（10-30 第一级判据）
+            detail = "、".join("%s %d" % (LEVEL1_BLOCKED.get(k, k), v)
+                               for k, v in sorted(blocked.items(), key=lambda x: -x[1]))
+            note += "｜挡掉 %d 条：%s" % (int(st.get("blocked_n") or 0), detail)
+        finish_run(db_path, key, True, st, note)
         st.update({"run_key": key, "skipped": st.get("skipped") or []})
         return st
     except Exception as e:

@@ -81,7 +81,9 @@ def frame_related(page, caption):
     if visual_terms:
         return any(term in text for term in visual_terms)
     if len(owner) == 1 and image_owner == owner:
-        # 只说明职业角色的画面可作同职业配图。技能界面需对上具体名称。
+        # 纯职业展示可以用角色图。操作页需显示对应界面、技能或命令。
+        if re.search(r"勾选|输入|点击|按住|切换|快捷键|/console", text):
+            return False
         return bool(re.search(r"角色|职业原画", caption)) and not re.search(r"技能|天赋|面板", caption)
     labels.extend(re.findall(r"[/][a-z][a-z_]+|[\u4e00-\u9fff]{3,}", caption))
     return any(len(label) >= 3 and label in caption and label in text

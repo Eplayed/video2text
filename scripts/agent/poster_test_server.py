@@ -167,6 +167,17 @@ def main():
         ai_poster.fact_gate = fact_gate
         fact_gate.check = lambda plan, content, **kw: ([], [])
         fact_gate.copy_is_cut = lambda text: ""
+        # 11-02 之后能把条目塞进 fact_hard / 停掉待发资格的不止 fact_gate.check：
+        # 机制断言登记闸（ai_poster.evaluate_claims）与专名闸（term_check.roster_check）。
+        # 「闸口失效」的模拟必须连这几层一起关，否则反向验证测的是"关漏了"不是"闸坏了"
+        # （11-03 实测：只关 check，generate 仍被登记闸拦在出图之前）。
+        ai_poster.evaluate_claims = lambda *a, **kw: {
+            "checked": 0, "hard": [], "soft": [], "mech": [],
+            "unjudged": "", "uncovered": False, "skipped": "gate=off 模拟失效",
+            "entry_problems": []}
+        from src import term_check                        # noqa: E402
+        term_check.roster_check = lambda *a, **kw: {
+            "suspect": [], "ok": [], "skipped": "gate=off 模拟失效"}
     print("READY port=%d db=%s poster_out=%s gate=%s" % (a.port, db, poster_out, a.gate), flush=True)
     app.app.run(host="127.0.0.1", port=a.port, debug=False, use_reloader=False, threaded=True)
     return 0

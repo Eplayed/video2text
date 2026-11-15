@@ -71,3 +71,11 @@ product/
 
 # 角色 skill 里有账号名、粉丝/收益实测数字、合规口径，仓库是 PUBLIC，只留本机
 .qoder/skills/media-*
+
+# yt-dlp 用的 B 站 cookie（从 config.env.local 生成，凭据，别提交）
+config/bilibili_cookies.txt
+
+# 本机运行库与调研批次输入
+/video_index.db
+/data/workbench.sqlite3
+/data/consult_bvids.txt

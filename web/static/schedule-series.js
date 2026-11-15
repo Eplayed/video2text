@@ -14,9 +14,22 @@ var SRPICK = {};            // 界面上勾了哪几条候选（只是待提交�
    判据、分级、上限全在后端 src/supplements.py 一份（真库实测命中率 5%，宁缺毋滥），
    这里只做三件事：点开才查（懒查，一次约 0.2s）、把勾选暂存在本地、点「采用这一格」时一起交回去。 */
 var SRVideoSheets = ['抖音视频数据', 'B站视频'];   // 权威在 src/supplements.py 的 VIDEO_SHEETS，e2e 有对表断言
+/* 候选行上的来源标记。非视频那条**给不出关键帧**，这件事必须在勾选之前就看见——
+   2026-10-29 号主在「视频素材」这一栏勾了一条 NGA 帖，一路走到海报「② 看版面」才发现
+   一张关键帧都没有，而那一栏的名字就叫视频素材。名单权威在后端那一份，这里只出人话标签。 */
+var SR_SRC_LABEL = {'NGA无限板块': '论坛帖', '微信文章': '公众号文章',
+                    '暴雪官方': '官方公告', '抖音图文': '图文'};
+function srSrcTag(c) {
+  var sh = c.sheet || '';
+  if (SRVideoSheets.indexOf(sh) >= 0) return '';
+  return '<span class="sr-novid" title="这条不是视频：没有画面可抽，海报攻略页要的「关键帧」它给不出。'
+    + '要出图就换一条视频素材，或把它当补充资料勾在视频下面">'
+    + esc(SR_SRC_LABEL[sh] || (sh || '未知来源')) + ' · 无关键帧</span>';
+}
 var SRSUB = {};             // 'slot:父素材id' → {list, scanned, err, max, not_video}
 var SRSUB_OPEN = {};        // 同一个键 → 是否展开着（重画时保持）
 var SRPICK_SUP = {};        // slot → {子素材id: 父素材id}，同样是"待提交的选择"
+var SRNOTE = {};            // slot → 一句"这次替你做了什么"（中性那条，不占报错的红框）
 var SRFORM = {};            // 展开着登记表单的槽号
 var SR_OPEN = {};           // 哪几格被人展开过（重画时保持）
 
@@ -98,7 +111,9 @@ function srRunBar() {
   if (last) {
     bits.push('<span>上次' + (last.status === 'ok' ? '成功' : '失败') + ' <b>' +
               esc(last.finished_at || last.started_at || '') + '</b>（新增 ' + (last.added || 0) +
-              ' · 重复 ' + (last.seen || 0) + ' · 跳过 ' + (last.skipped || 0) + '）</span>');
+              ' · 重复 ' + (last.seen || 0) + ' · 跳过 ' + (last.skipped || 0) + '）' +
+              // 挡掉多少条不合第一级口径的，只有服务端那一份数（前端不许自己估）
+              (last.note ? '<span class="hint"> ' + esc(last.note) + '</span>' : '') + '</span>');
   }
   bits.push('<button class="btn sm" onclick="srMatchNow(this)">现在匹配</button>');
   bits.push('<span class="sep"></span>');
@@ -112,6 +127,15 @@ function srRunBar() {
 
 function renderSeries() {
   if (!SR) return;
+  // 「已采用」那几行的复选框默认勾着 = 库里这一版的主素材清单。只在**没动过**的时候灌
+  // （`SRPICK[key]` 不存在）；人取消勾选后那个键一定存在（`srPick` 只删条目、不删整格），
+  // 所以清空过的格子不会被偷偷灌回去——界面说的必须是人点的，不是我以为的。
+  (SR.slots || []).forEach(function (s) {
+    if (SRPICK[s.slot_key] || !(s.adopted_ids || []).length) return;
+    var m = {};
+    (s.adopted_ids || []).forEach(function (i) { m[i] = true; });
+    SRPICK[s.slot_key] = m;
+  });
   srRunBar();
   srBody();
 }
@@ -180,6 +204,7 @@ function srCard(s) {
              '<span class="sr-tt">' + esc(s.title || s.slot_key) + '</span>' + srBadge(s) +
              '<span class="sr-mini">' + esc(mini.join(' · ')) + '</span></summary>';
   var why = '<div class="sr-why">' + esc(s.stage_why || '') + '</div>';
+  var did = SRNOTE[s.slot_key] ? '<div class="sr-note">' + esc(SRNOTE[s.slot_key]) + '</div>' : '';
   var cand = '';
   if ((s.candidates || []).length) {
     var picked = SRPICK[s.slot_key] || {};
@@ -189,13 +214,19 @@ function srCard(s) {
              ' onchange="srPick(this)">' +
              '<span class="fb f-' + esc(c.forever) + '">' +
              (c.forever === 'yes' ? 'Forever' : '待人工判定') + '</span>' +
+             srSrcTag(c) +
              '<a href="' + esc(srHref(c)) + '" target="_blank" rel="noreferrer">' +
              esc(c.title || '（无标题）') + '</a>' +
-             '<span class="src">' + esc(c.reason || '') + '</span></label>';
+             '<span class="src">' + esc(srReasonNoDate(c.reason)) + '</span>' + srDateTag(c)
+             + srFramesTag(c) + '</label>';
       // 只有视频素材那一行下面挂子集；非视频那条本身也能被采用当主素材，不动它
       if (SRVideoSheets.indexOf(c.sheet || '') < 0) return '<div class="sr-ci">' + one + '</div>';
       return '<div class="sr-ci">' + one + srSubToggleHtml(s.slot_key, c) + srSubHtml(s.slot_key, c) + '</div>';
     }).join('') + '</div>';
+  } else if ((s.candidate_hidden || 0) > 0) {
+    // 候选变少/变空要当场说清是"按口径挡掉的"，不是"匹配坏了"——10-29 那次报障就是这么来的
+    cand = '<div class="sr-note">这一格没有可列的第一级候选：' + esc(s.hidden_note || '不合判据的')
+         + '不算在内。第一级只列视频素材，论坛帖／公众号文章要挂在视频素材下面的「相关非视频」里。</div>';
   } else if (s.stage === 'unmatched' && !s.task) {
     cand = '<div class="sr-note">这一格今晚没匹配到素材（零就是零，不拿旧料填位）。</div>';
   }
@@ -203,20 +234,28 @@ function srCard(s) {
   if ((s.adopted_ids || []).length) {
     // 采用之后父行会从候选里挪走（候选是候选、已采用是已采用，这条规矩不动），
     // 但子集得跟着人走——所以已采用那几条也画成可展开的父行，采用后还能继续勾补充料
-    ado = '<div class="sr-ado"><b>已采用 ' + s.adopted_ids.length + ' 条</b>：素材 id ' +
+    var pk = SRPICK[s.slot_key] || {};
+    ado = '<div class="sr-ado"><b>已采用 ' + s.adopted_ids.length + ' 条</b>'
+          // 号主 2026-10-30 问"已采用是不是不能再勾了"：以前这几行没有复选框，
+          // 点「采用」又是整组替换，于是"想再加一条"必然把旧的挤掉。现在它们默认勾着，
+          // 勾着＝留在这一版，取消＝从这一版移出，再勾一条候选＝新增，语义终于对上那颗按钮。
+          + '<span class="src">（勾着的算这一版的主素材：取消勾选＝移出，再勾候选＝新增）</span>'
+          + '：素材 id ' +
           esc(s.adopted_ids.join('、')) + (s.task ? ' ｜ 任务 ' + esc(s.task.status) +
           (s.task.summary_id ? '（稿 id=' + s.task.summary_id + '）' : '') : '') + '</div>'
       // 注意：这一节**不叫 .sr-cand**——它是"已采用"，不是候选。
       // 借那个 class 会被"折叠时候选列表不占屏"那条判据算进去（走查真的抓到了）
       + '<div class="sr-ado-rows">' + (s.adopted_rows || []).map(function (a) {
-          var one = '<label><span class="fb f-yes">已采用</span>'
+          var one = '<label><input type="checkbox" data-slot="' + esc(s.slot_key) + '" data-vid="' +
+                  esc(a.video_id) + '"' + (pk[a.video_id] ? ' checked' : '') +
+                  ' onchange="srPick(this)"><span class="fb f-yes">已采用</span>' + srSrcTag(a)
                   + '<a href="' + esc(srHref(a)) + '" target="_blank" rel="noreferrer">'
                   + esc(a.title || ('素材 ' + a.video_id)) + '</a>'
                   + '<span class="src">' + esc(a.author || '') + '｜' + esc(a.sheet || '表未记录')
-                  + '｜' + esc(a.date || '无日期') + '</span></label>';
+                  + '</span>' + srDateTag(a) + srFramesTag(a) + '</label>';
           if (SRVideoSheets.indexOf(a.sheet || '') < 0) return '<div class="sr-ci is-ado">' + one + '</div>';
           return '<div class="sr-ci is-ado" data-pvid="' + a.video_id + '">' + one
-               + srSubToggleHtml(s.slot_key, a) + srSubHtml(s.slot_key, a) + '</div>';
+                 + srSubToggleHtml(s.slot_key, a, true) + srSubHtml(s.slot_key, a) + '</div>';
         }).join('') + '</div>';
   }
   var acts = [];
@@ -255,7 +294,7 @@ function srCard(s) {
              (s.stage === 'ready' || s.stage === 'layout');
   return '<details class="' + cls + '" id="src-' + esc(s.slot_key) + '"' +
          (open ? ' open' : '') + ' ontoggle="srToggleCard(this)">' + head +
-         '<div class="sr-in">' + why + review + ado + cand + kids +
+         '<div class="sr-in">' + why + did + review + ado + cand + kids +
          '<div class="sr-act">' + acts.join('') + '</div>' + form + '</div></details>';
 }
 
@@ -315,9 +354,76 @@ function srSupStarted(slot) {
   return !!t && (t.status === 'running' || t.status === 'done'
                  || (t.status === 'failed' && t.summary_id));
 }
-function srSubToggleHtml(slot, c) {
+function srSlotHasSup(slot) {
+  // 这一格里有没有已经存着的补充料（人勾的、或任务行里存着的）
+  return srSupIds(slot).length > 0;
+}
+// 素材日期按"距今几天"上色（号主 11-02 定的档）：<3 天绿、3–5 天浅绿、5–7 天橙。
+// 整 3 天算浅绿、整 5 天算橙（他说的是"大于3小于5"，边界不自己发明第二套说法）；
+// ≥7 天他没定，这里补一档更深的红棕——旧料要一眼看得出来，不能到了 7 天又变回普通灰字。
+// 天数拿**看板那一天**算，不拿浏览器时钟：看板是夜里刷的，人可能隔天早上才打开页面，
+// 用浏览器时间会让同一条素材在两个人屏幕上颜色不一样。
+var SR_DATE_TIERS = [
+  {lt: 3, cls: 'dt-fresh', name: '三天内'},
+  {lt: 5, cls: 'dt-ok', name: '三到五天'},
+  {lt: 7, cls: 'dt-warn', name: '五到七天'},
+  {lt: 1e9, cls: 'dt-old', name: '七天以上'}
+];
+function srDateDaysAgo(d) {
+  // 只认 YYYY-MM-DD；拿组件构造日期（`new Date('2026-11-02')` 按 UTC 解析，
+  // 东八区会整体差一天，颜色就错一档）
+  var m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(d || ''));
+  var t = /^(\d{4})-(\d{2})-(\d{2})/.exec(String((SR && SR.today) || ''));
+  if (!m || !t) return null;
+  var a = new Date(+t[1], +t[2] - 1, +t[3]).getTime();
+  var b = new Date(+m[1], +m[2] - 1, +m[3]).getTime();
+  if (isNaN(a) || isNaN(b)) return null;
+  return Math.round((a - b) / 86400000);
+}
+function srDateTag(x) {
+  var d = String((x && x.date) || '').slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return '<span class="dt dt-none">无日期</span>';
+  var ago = srDateDaysAgo(d);
+  if (ago === null || ago < 0)      // 看板那天读不出、或素材日期在将来：不猜颜色
+    return '<span class="dt dt-none">' + esc(d) + '</span>';
+  var tier = SR_DATE_TIERS[SR_DATE_TIERS.length - 1];
+  for (var i = 0; i < SR_DATE_TIERS.length; i++) {
+    if (ago < SR_DATE_TIERS[i].lt) { tier = SR_DATE_TIERS[i]; break; }
+  }
+  return '<span class="dt ' + tier.cls + '" title="素材发布 ' + esc(d) + '，距看板这天 '
+    + ago + ' 天（' + tier.name + '）">' + esc(d) + '</span>';
+}
+function srReasonNoDate(r) {
+  // 旧候选的理由里带着日期（「…｜2026-10-31｜正文 1200 字…」），而现在日期是行上一枚
+  // 按"距今几天"上色的标签，同一天念两遍就成噪音。理由要等下一轮匹配才会重写，
+  // 而且**没被选中的存量候选根本不会被重写**，所以这里渲染时摘掉那一段。
+  // 摘的是我们自己拼的固定格式（前后都有全角竖线），不是去猜自然语言。
+  return String(r || '').replace(/｜\d{4}-\d{2}-\d{2}(?=｜)/, '');
+}
+function srFramesTag(c) {
+  // 画面账由后端一次批量数出来（`src/frame_pool.counts_for`，判据与海报弹窗同一份：
+  // 文件在、判过、判为干净才算"能用"）。
+  // 为什么摆到排产格上：号主挑素材第一问就是"这条有没有图"，而这句话以前只有海报弹窗
+  // （要先有整合稿）才看得到——B 站那批 18 张帧明明在盘上，格子里却像"没有关键帧"（11-02）。
+  // 三种状态分开说，别糊成一句"没有画面"：没抽过帧 / 抽了没看图 / 看了全不合格。
+  if (SRVideoSheets.indexOf(c.sheet || '') < 0) return '';
+  var f = c.frames;
+  if (!f) return '<span class="src warn">没抽过帧</span>';
+  if (f.usable) return '<span class="src">画面 ' + f.usable + '/' + f.total + ' 张能用</span>';
+  return '<span class="src warn">' + (f.judged
+    ? f.total + ' 张帧判过 ' + f.judged + ' 张，一张都不能用'
+    : f.total + ' 张帧还没逐张看图（看图那一步才花钱）') + '</span>';
+}
+function srSubToggleHtml(slot, c, isAdo) {
+  // sup_n 由后端一次批量数出来（src/supplements.counts_for）。数出 0 条就不画这颗按钮：
+  // 点开来只会得到一句"没找到强相关的"，那是浪费人的手（号主 2026-10-30）。
+  // 只有**明确数出 0** 才不画——null 是没数过（例如刚采用、还没刷看板），别拿"没数过"当"没有"。
+  // 例外：已采用那一行，只要这一格里还存着补充料就留着——勾过的东西得看得见、能取消，
+  // 判据以后漂移了它可能已经不在提名名单里（第一版把这条兜底加在**所有**候选行上，
+  // 走查当场抓到：s1a1 那格因此多挂 6 颗点开是空的按钮）。
+  if (c.sup_n === 0 && !(isAdo && srSlotHasSup(slot))) return '';
   var k = srSubKey(slot, c.video_id), L = SRSUB[k];
-  var n = (L && !L.error) ? (' ' + (L.list || []).length) : '';
+  var n = (L && !L.error) ? (' ' + (L.list || []).length) : (c.sup_n ? (' ' + c.sup_n) : '');
   return '<button class="sr-more" onclick="srSubToggle(\'' + esc(slot) + '\',' + c.video_id + ',this)">'
     + (SRSUB_OPEN[k] ? '▾' : '▸') + ' 相关非视频' + n + '</button>';
 }
@@ -338,7 +444,7 @@ function srSubHtml(slot, c) {
            '<span class="fb f-yes">' + esc(x.tier || '素材') + '</span>' +
            '<a href="' + esc(srHref({sheet: x.sheet, row: x.row})) + '" target="_blank" rel="noreferrer">' +
            esc(x.title || '（无标题）') + '</a>' +
-           '<span class="src">' + esc(x.author || '') + '｜' + esc(x.date || '无日期') + '｜' +
+           '<span class="src">' + esc(x.author || '') + '｜' + srDateTag(x) + '｜' +
            esc(x.why || '') + '</span></label>';
   }).join('');
   if (!rows) return box + '<div class="sr-subt">没找到强相关的（扫了 ' + (L.scanned || 0) +
@@ -384,17 +490,44 @@ function srPickSup(el) {
 function srAdopt(key, btn) {
   var ids = srIds(key);
   if (!ids.length) { alert('先勾一条或多条候选素材（勾了才算你要的那几条）'); return; }
-  var sup = srSupIds(key);
-  if (sup.length > srSupMax(key)) {
-    alert('补充料勾了 ' + sup.length + ' 条，最多 ' + srSupMax(key) + ' 条——先去掉几条再采用');
+  var supAll = srSupIds(key);
+  if (supAll.length > srSupMax(key)) {
+    alert('补充料勾了 ' + supAll.length + ' 条，最多 ' + srSupMax(key) + ' 条——先去掉几条再采用');
     return;
+  }
+  // **补充料跟着它那条主素材走**（号主 2026-10-30）。两种情况都要丢，否则后端清了也会被这次
+  // POST 塞回新版：① 这一版有素材被**移掉**了 → 挂在它下面的配角没有归属，整格重来；
+  // ② 某条配角是勾在**这次没被采用的那条候选**下面 → 只丢那一条，其余保留。
+  // ① 只认"移除了旧的"：只加不减（原来勾着的素材都还在）不清补充料——后端是同一份口径。
+  var t0 = (SRMAP[key] || {}).task || {};
+  var oldIds = (t0.video_ids || []).map(Number);
+  var removed = oldIds.filter(function (i) { return ids.indexOf(i) < 0; });
+  var sup = supAll;
+  if (supAll.length && removed.length) {
+    SRNOTE[key] = '移掉了 ' + removed.length + ' 条主素材：这一格原来勾的 ' + supAll.length
+      + ' 条补充料已清空（提名是照被移掉那条素材算的），要按留下的素材重新勾。';
+    sup = [];
+    delete SRPICK_SUP[key];
+  } else if (supAll.length) {
+    var par = srSupCur(key);
+    var kept = supAll.filter(function (i) {
+      var p = Number(par[i] || 0);
+      return !p || ids.indexOf(p) >= 0;      // p=0 是服务端存的、认不出父级的那条
+    });
+    if (kept.length !== supAll.length) {
+      SRNOTE[key] = '有 ' + (supAll.length - kept.length)
+        + ' 条补充料是勾在没被采用的那条素材下面的，这次不带过去。';
+      sup = kept;
+    }
   }
   btn.disabled = true;
   srApi('/api/plan/series/adopt', {slot_key: key, channel: 'toutiao',
                                    form: (SRMAP[key] || {}).form || 'guide', video_ids: ids})
     .then(function (d) {
       if (d.error) { btn.disabled = false; alert(d.error); return; }
-      var done = function () { SRPICK[key] = {}; delete SRPICK_SUP[key]; loadSeries(); };
+      // 采用完把这份"待提交勾选"整格**删掉**（不是写成空对象）：空对象会被 renderSeries
+      // 当成"人清空过"，种子就不灌了，下一版已采用那几行的复选框会全是空的
+      var done = function () { delete SRPICK[key]; delete SRPICK_SUP[key]; loadSeries(); };
       // 子集里勾的那些跟着这次采用一起交（服务端会自己判"这一版能不能改"）
       if (!sup.length || !d.task || !d.task.id) {
         if (sup.length) srErr('主素材采用了，但这一格没拿到任务行 id——补充料没存，去工作台那一格勾一下');

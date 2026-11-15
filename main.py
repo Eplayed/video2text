@@ -439,8 +439,12 @@ def set_cell(ws, row: int, col_name: str, value):
 
 def process_row(ws, row_idx: int, cookie: str,
                 asr_model: str, ai_config: dict,
-                parser) -> bool:
-    """处理单行，返回是否成功"""
+                parser, expect_sec_uid: str = "") -> bool:
+    """处理单行，返回是否成功
+
+    `expect_sec_uid`：订阅这条路传本订阅的 sec_uid，详情回的作者对不上就不转写。
+    手动粘链接那条路不传——那本来就该收任何作者的作品。
+    """
     url = (ws.cell(row_idx, COL["链接"]).value or "").strip()
     if not url:
         return False
@@ -475,6 +479,17 @@ def process_row(ws, row_idx: int, cookie: str,
     set_cell(ws, row_idx, "标签", info["hashtags"])
     set_cell(ws, row_idx, "封面URL", info["cover_url"])
     set_cell(ws, row_idx, "视频链接", info["real_url"])
+
+    # ── 作者归属硬闸（2026-11-01）──────────────────────────────────────────
+    # 列表里混进别人（侧栏推荐位）时，详情接口回的 author_sec_uid 是唯一能当场识破的证据。
+    # 拦在这里而不是拦在入库后：下载 + ASR 是这一行最贵的一段，钱和脏数据一起省掉。
+    if (expect_sec_uid and info.get("author_sec_uid")
+            and info["author_sec_uid"] != expect_sec_uid):
+        ws.cell(row_idx, COL["状态"], STATUS["失败"])
+        set_cell(ws, row_idx, "备注", "作者不属于本订阅（实际：%s）"
+                 % (info.get("author") or info["author_sec_uid"]))
+        print(f"[Row {row_idx}] ✗ 作者对不上本订阅，跳过转写: {info.get('author', '')}")
+        return False
 
     # 3. ASR 转写（如果还没有文案）
     existing_asr = (ws.cell(row_idx, COL["口播原文"]).value or "").strip()

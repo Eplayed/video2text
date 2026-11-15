@@ -8,6 +8,8 @@
 判定分三档：可以发（零 FAIL 零 WARN）/ 改完再发（只有 WARN）/ 不能发（有 FAIL）。
 机器只判形：句式黑名单在 `tools/banned_patterns.js`（2026-10-19 从 media-workbench/server.js 搬来，
 由 verify_toutiao.js require），本文件不复制那份表；游戏机制对不对、数字准不准，仍要人按整合稿【风险核查】核。
+「机检没跑成」一律判 FAIL（见 `_verify_js`）：没检查 ≠ 检查通过，WARN 点一下就过、不落理由，
+FAIL 才能逼出一条 override_reason 让事后翻得出"这篇是在质检门失效时发的"。
 """
 from __future__ import annotations
 
@@ -69,6 +71,22 @@ HOOK_PATTERNS = [
 VERDICT_LABEL = {"pass": "可以发", "warn": "改完再发", "fail": "不能发"}
 
 
+# 公众号发布稿的三行"管线语法"：verify_draft.js 要求它们必须在稿里
+# （图N：→ 排版时渲染成截图位卡片；配图任务：→ 告诉作者截哪一屏；发布状态：→ 质检门读它），
+# 而上面的 LEAK_PATTERNS 是按头条「复制区」口径写的，把这三行一律判成"中间产物泄漏"。
+# 两道门互斥的直接后果：公众号长稿在这套产线下**永远拿不到 audit_draft.py 退出码 0**
+# （2026-10-19 实测复现，见 docs 交接档）。号主当天拍板：给 draft_audit 加窄豁免——
+# 只豁免这三类行、只在识别为公众号发布稿时豁免、豁免了什么必须在报告里显形。
+# 头条线一份字节没改：那条线的稿子里没有下面这两个标记。
+WECHAT_MARKERS = ("## 公众号摘要", "## 发布前自查清单")
+WECHAT_PIPELINE_RE = re.compile(
+    r"^[ \t]*(?:图\s*\d+\s*[：:][^\n]*|配图任务[：:][^\n]*|发布状态[：:][^\n]*)[ \t]*$", re.M)
+
+
+def _is_wechat_draft(md: str) -> bool:
+    return all(m in (md or "") for m in WECHAT_MARKERS)
+
+
 def _run(cmd: Sequence[str]) -> Tuple[int, str]:
     try:
         proc = subprocess.Popen(list(cmd), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -84,13 +102,35 @@ def extract_body(md: str) -> str:
 
     不切就会被 ai_score.py 误判——它曾把发布元数据和图池当正文一起算，
     给一份「不能发」的稿子打出 7.9/100 的真人味。
+
+    公众号发布稿没有【正文】这个标记，它用的是「## 正文」这一节，后面跟着摘要段和
+    发布前自查清单（2026-10-19 第一篇教程稿实测：整份文件当正文算，自查清单里
+    「bis-01-rail-doll.png」这种文件名被切成 01 当数字去查出处）。所以这里补一条
+    公众号口径：切到 ## 正文 到 摘要/自查清单 之间，与 verify_draft.js 算字数用的是
+    同一段，两道门判的正文才是同一份文字。
     """
     i = md.find("【正文】")
     if i < 0:
+        j = md.find("## 正文")
+        if j >= 0 and _is_wechat_draft(md):
+            rest = md[j + len("## 正文"):]
+            cuts = [k for k in (rest.find("## 公众号摘要"), rest.find("## 发布前自查清单")) if k > 0]
+            return (rest[:min(cuts)] if cuts else rest).strip()
         return md
     rest = md[i + len("【正文】"):]
     m = re.search(r"\n\s*━{3,}", rest)
     return (rest[:m.start()] if m else rest).strip()
+
+
+def _num_tokens(text: str) -> set:
+    """抽正文里要核的数。两步归一，都是为了让"格式"别冒充"查无出处"：
+    ① 去掉数字之间的千分位逗号——「6,626」在原正则下会被切成「626」，而素材里写 6626；
+    ② 整段去掉 ISO 日期（2026-10-16 这种）——日期不是数据声明，它的出处是决策记录，
+       留在反查池里只会让每篇带日期的教程稿白吃一条 WARN（年份本来就被 1900-2099 滤掉，
+       月日没滤是同一个漏洞的另一半）。等级区间那种「29-38」不在此列，照查。"""
+    t = re.sub(r"\d{4}-\d{1,2}-\d{1,2}", " ", text or "")
+    t = re.sub(r"(?<=\d),(?=\d)", "", t)
+    return set(re.findall(NUMBER, t))
 
 
 def manifest_prose(data: Dict[str, Any]) -> Tuple[str, str]:
@@ -127,11 +167,11 @@ def _audit_prose(text: str, rows: List[Tuple[str, str, str]], tag: str = "正文
     if not re.search(NARRATOR, probe) and "我" not in probe:
         rows.append((narrator_level, tag + "叙述者缺席",
                      "没有一个带具体动作的「我」，只剩通稿腔——这就是「一眼 AI 写的」主因"))
-    return set(re.findall(NUMBER, text))
+    return _num_tokens(text)
 
 
 def _cross_check(nums: set, sources_text: str, rows: List[Tuple[str, str, str]]) -> None:
-    src_nums = set(re.findall(NUMBER, sources_text))
+    src_nums = _num_tokens(sources_text)
     ghost = sorted(n for n in nums if n not in src_nums and not (1900 <= int(n) <= 2099))
     if ghost:
         rows.append(("WARN", "数字出处",
@@ -163,8 +203,19 @@ def _ai_score(prose: str, rows: List[Tuple[str, str, str]]) -> Optional[float]:
 
 def _verify_js(draft_path: str, rows: List[Tuple[str, str, str]],
                sources_path: Optional[str] = None) -> None:
+    """跑生产层机检。三条"没跑成"的分支一律判 FAIL，不判 WARN（2026-10-19）。
+
+    为什么：WARN 在审核台点一下就过、不落理由；FAIL 必须写放行理由进 override_reason
+    （review_store.approve）。"机检根本没跑"和"查出个小问题"是两件事——前者若只判 WARN，
+    事后翻不出这篇是在质检门失效状态下发的。本项目已经栽过同类：界面写 0 元、后端照样扣钱。
+    触发条件不是假设：VERIFY_JS 在 ~/Documents/自媒体/_content_factory 下，那是个仓库外的
+    目录，搬家/换机/清理都会让它消失，而消失了稿子照样能发出去。
+    """
     if not os.path.exists(VERIFY_JS):
-        rows.append(("WARN", "机检", "找不到 verify_toutiao.js（生产层仓库没在预期位置）"))
+        rows.append(("FAIL", "机检未跑",
+                     "找不到 verify_toutiao.js（预期位置 %s）——本次**没有机检**，"
+                     "禁用句式/字数/AI 味全都没查。要么恢复生产层仓库，"
+                     "要么在审核台写明理由人工放行" % VERIFY_JS))
         return
     # 必须传绝对路径：_run 把 cwd 切到生产层仓库目录，相对路径在那边找不到稿子，
     # verify_toutiao.js 只打一行用法说明就退 2 —— 机检行一条都解析不到，
@@ -185,12 +236,12 @@ def _verify_js(draft_path: str, rows: List[Tuple[str, str, str]],
             got += 1
             rows.append(("INFO", "机检·总结论", line.strip().lstrip("❌✅ ")))
     if code == 99:
-        rows.append(("WARN", "机检", out))
+        rows.append(("FAIL", "机检未跑", "调用失败，本次**没有机检**：%s" % out))
     elif got == 0:
-        rows.append(("WARN", "机检",
+        rows.append(("FAIL", "机检未跑",
                      "verify_toutiao.js 没有任何可解析输出（退出码 %s，输出开头：%s）——"
-                     "多半是稿子里没有「复制区」标记，或 node 调用失败；这次等于没机检，别当已通过"
-                     % (code, out.strip()[:90])))
+                     "多半是稿子里没有「复制区」标记，或 node 调用失败；"
+                     "这次**等于没机检**，别当已通过" % (code, out.strip()[:90])))
 
 
 def _compliance(text: str, rows: List[Tuple[str, str, str]]) -> None:
@@ -286,7 +337,36 @@ def audit(md_text: Optional[str] = None, manifest: Optional[Dict[str, Any]] = No
                 rows.append(("INFO", "机检",
                              "跳过：稿子里没有「头条号 · 复制区」标记，verify_toutiao.js 不认这种结构，"
                              "本次只查了泄漏/叙述者/AI 味"))
-        nums = _audit_prose(prose, rows)
+        scan_text = prose
+        if _is_wechat_draft(md_text or ""):
+            hits = WECHAT_PIPELINE_RE.findall(prose)
+            scan_text = WECHAT_PIPELINE_RE.sub("", prose)
+            rows.append(("INFO", "泄漏扫描",
+                         "公众号发布稿：%d 行管线行（图N：／配图任务：／发布状态：）不计泄漏，"
+                         "其余照查——这三行是 verify_draft.js 要求在稿里的，两门互斥已按 2026-10-19 拍板处理"
+                         % len(hits)))
+            # 两道门不能说两种话。2026-10-27 实测：97 号在成稿窗被拦下（正文中段挂着
+            # 「### 发布前还要回查的三件事」），这份体检却判「可以发」——号主拿后一份当真实，
+            # 就会把编辑待办发出去。判据调 graphics 那一处实现，不在这里抄第二份。
+            # 没跑成按上面 10-19 那条同口径判 FAIL（"等于没查"不能混成已通过）。
+            try:
+                from .graphics.channels.wechat import editor_todos
+                todos = editor_todos(prose)
+            except Exception as e:
+                rows.append(("FAIL", "正文混没混编辑待办",
+                             "这道查没跑成（%s）——本次**没有查这一项**，别当已通过" % str(e)[:70]))
+            else:
+                if todos:
+                    rows.append(("FAIL", "正文混没混编辑待办",
+                                 "%d 处：%s。公开正文只留读者视角的限制，"
+                                 "「发稿前我们还要查什么」写进文末「发布前自查清单」"
+                                 % (len(todos), "；".join(x["text"][:26] for x in todos[:3]))))
+                else:
+                    rows.append(("PASS", "正文混没混编辑待办",
+                                 "正文里没有「发稿前还要核实」这类编辑向的话"))
+        # 要核的数只从"读者会看到的那段"里取：管线行（图N 说明／配图任务／发布状态）
+        # 发布前会被真图替换掉，里面「bis-01-rail-doll.png」「1,440 宽」这种不是数据声明
+        nums = _audit_prose(scan_text, rows)
     # 图文包的卡片文案（copy_text）也在扫描范围内：违规"获取方式"卡就是 LLM 自己加的
     _compliance(prose if manifest is None else prose + "\n" + copy_text, rows)
     if sources_text:
@@ -327,19 +407,30 @@ def load_manifest(path: str) -> Dict[str, Any]:
         return json.load(fh)
 
 
-# ── 整理稿（素材档案）体检 ────────────────────────────────────────
-# 为什么不复用 audit()：素材档案是中间产物，禁用句式、字数区间、AI 味评分对它没意义
-# （它本来就该写成清单）。它真正的风险是 LLM 那条路此前零校验——【关键数据】【金句摘录】
-# 可能被写成原文里不存在的东西，而这些一旦进了正文就是编造。所以这里只查两件事：
-# 结构塌没塌、有没有编造。
+# ── 整理稿（公众号文章档）体检 ────────────────────────────────────
+# 为什么不复用 audit()：整理稿写成清单体，禁用句式、字数区间、AI 味评分对它没意义。
+# 它真正的风险有两个：① LLM 把【关键数据】【金句摘录】写成原文里没有的东西；
+# ② 2026-10-26 起这一档的成品定义变了——按《公众号当前策略》交的是**一篇完整文章**，
+#    不再是"给下游写稿引擎的骨架"。所以这里除了"结构塌没塌、有没有编造"，
+#    还要查**正文到底写没写**：只有小节标题、或还留着"待写"占位，就是没成稿，必须退回整合稿。
+#    （号主 10-26 原话口径：不合格就退回整合稿，不许带着骨架去发。）
 
-MATERIAL_SECTIONS = ["【标题候选】", "【导语】", "【核心论点】", "【关键数据】",
-                     "【正文骨架】", "【金句摘录】", "【风险核查】"]
+MATERIAL_SECTIONS = ["【标题候选】", "【导语】", "【适用范围】", "【核心论点】", "【正文】",
+                     "【关键数据】", "【金句摘录】", "【风险核查】", "【来源】"]
+# 旧形态（素材档案只有骨架）就靠这两枚标记认：读得懂老稿，但不放它过闸
+LEGACY_BODY_TAG = "【正文骨架】"
+# 占位词：规则版骨架与被截断的正文都会留这种字样，出现就是没写完
+BODY_PLACEHOLDER = re.compile(r"待写|待补充|只给小节|仅提供骨架|只给骨架")
+SOURCING_MARKS = ("[已核]", "[他述]", "[本站]", "[待核]")
 _NUM_TOKEN = re.compile(r"\d+(?:\.\d+)?%?")
-# 素材档案阶段不查这两条：它就是转写产物，【金句摘录】里写「口播说」是正当词汇。
+# 素材档案阶段不查这几条：它就是转写产物，【金句摘录】里写「口播说」是正当词汇。
 # 直接套成稿的 LEAK_PATTERNS 会把 9/10 篇判成「不能发」，全是假阳性。
-MATERIAL_LEAK_PATTERNS = [p for p in LEAK_PATTERNS
-                          if p[1] not in ("转写口径术语", "口播字样")]
+# 2026-10-26 再放两条，因为是这一档的成品定义变了之后**新出现的假阳性**（不是我挑出来的旧账）：
+#   结构标签——【正文】现在就是这一档的正式节名（文章主体），成稿才禁止它出现；
+#   来源视频编号——策略要求整合稿"能回查来源"，多源稿必须标「视频1/视频3」说清谁说的，
+#     这条在旧版提示词里也要求过，只是以前没写死在结构里，撞上的概率低。
+MATERIAL_LEAK_SKIP = ("转写口径术语", "口播字样", "结构标签", "来源视频编号")
+MATERIAL_LEAK_PATTERNS = [p for p in LEAK_PATTERNS if p[1] not in MATERIAL_LEAK_SKIP]
 _QUOTE_NOTE = re.compile(r"[（(](?:原话|原文|原|口播)[）)]|——.*$|—{2,}.*$")
 _LIST_HEAD = re.compile(r"^\s*(?:[-*·]|\d+[.、)])\s*")
 _CN_DIGIT = {"0": "零", "1": "一", "2": "二", "3": "三", "4": "四",
@@ -423,21 +514,216 @@ def _claim_text(section: str) -> str:
     return "\n".join(out)
 
 
-def audit_material(md_text: str, source_text: str = "") -> Dict[str, Any]:
-    """整理稿体检：结构完整性 + 数字与金句能否回指原素材。
+def _article_body(md_text: str, rows: List[Tuple[str, str, str]]) -> None:
+    """查【正文】到底写没写：小节数、有没有段落、占位词、四类标注在不在。
+
+    判据只认结构，不抄字数线——号主没给公众号成稿字数口径，这里写死一个数就变成
+    "机器拿我编的数判他能不能发"。
+    """
+    body = _section_body(md_text, "【正文】")
+    if not body.strip():
+        return                      # 整节没了由「分节完整」判，这里不重复报一条
+    lines = [l.strip() for l in body.splitlines() if l.strip()]
+    heads = [l for l in lines if l.startswith("##")]
+    prose = [l for l in lines if not l.startswith("##")]
+    hit = BODY_PLACEHOLDER.search(body)
+    if hit:
+        rows.append(("FAIL", "正文写没写",
+                     "【正文】还留着「%s」这种占位，等于没成稿——配 AI 重新生成或自己写完再体检"
+                     % hit.group(0)))
+    if len(heads) < 2:
+        rows.append(("FAIL", "正文分节",
+                     "【正文】只有 %d 个小节（要 3-5 个 `## ` 小节，每节给能照做的步骤或明确的判断依据）"
+                     % len(heads)))
+    elif not prose:
+        rows.append(("FAIL", "正文有内容", "【正文】全是小节标题，一行内容都没有"))
+    elif max(len(p) for p in prose) < 40:
+        rows.append(("FAIL", "正文有内容",
+                     "【正文】每节都只有一句话（最长 %d 字），读者照不做起不来"
+                     % max(len(p) for p in prose)))
+    else:
+        rows.append(("PASS", "正文有内容", "【正文】%d 个小节、%d 行正文" % (len(heads), len(prose))))
+    marked = sum(body.count(m) for m in SOURCING_MARKS)
+    if not marked:
+        rows.append(("FAIL", "来源类型标注",
+                     "【正文】一处标注都没有：策略要求每条结论标 [已核]/[他述]/[本站]/[待核]，"
+                     "不标就分不清哪些是本人核实过的、哪些只是转述别人"))
+    else:
+        rows.append(("PASS", "来源类型标注", "【正文】里 %d 处标注" % marked))
+        pending = body.count("[待核]") + body.count("[他述]")
+        if pending:
+            rows.append(("INFO", "待核与转述",
+                         "【正文】有 %d 处 [待核]/[他述]：这些不许在文章里写成能照做的建议" % pending))
+
+
+# 每一档的**结构契约**只在这里登记一份，且必须与 `content_store` 那条提示词写的需求一致
+# （e2e W28 有一条"提示词里找不到这个标签就算漂移"的守卫）。
+# 没登记在这张表里的形态：只查通用项，**不判分节**——
+# 拿一套没核对过的结构去拦稿子，就是本轮在修的那个错（公众号素材那九节拦了 41 篇）。
+FORM_SECTIONS = {
+    # 头条决策化整合稿：提示词要求"标签原样输出、顺序不变"，只有【变化对比】可省
+    "toutiao_mix": {"required": ["【标题候选】", "【时间线】", "【对你的影响】", "【行动建议】",
+                                 "【原话摘录】", "【风险核查】"],
+                    "optional": ["【变化对比】"]},
+}
+
+
+def _finish_material(rows, md):
+    fails = [r for r in rows if r[0] == "FAIL"]
+    warns = [r for r in rows if r[0] == "WARN"]
+    verdict = "fail" if fails else "warn" if warns else "pass"
+    return {"rows": rows, "verdict": verdict, "label": VERDICT_LABEL[verdict],
+            "fails": len(fails), "warns": len(warns), "score": None,
+            "prose_chars": len(_norm(md)), "report": render(rows, verdict, warns, fails)}
+
+
+# 攻略档（game_guide / toutiao_mix …）按 `## 小标题` 成篇，供程序化排版切块
+GUIDE_MIN_SECTIONS = 3
+
+
+def _md_sections(md):
+    """按**二级** `## ` 切节，返回 [(标题, 正文)]。
+
+    两个都测出来的坑：
+      · 只写 `s.startswith("##")` 会把 `### 小标题` 也当分节，于是
+        "## 大标题"紧跟"### 子标题"的稿子被切成一个空节 → 凭空报「有标题没内容」
+        （库里 稿 44、稿 92 就是这么被误判的）；`###` 及以下归给父节。
+      · 正文开头的引子不算小节：稿子一上来就是 `## ` 时，把空引子当小节也会凭空报空节。
+    """
+    out, title, buf = [], None, []
+    for line in (md or "").splitlines():
+        if line.startswith("## ") or line.strip() == "##":
+            if title is not None:
+                out.append((title, "\n".join(buf).strip()))
+            title = line.lstrip("#").strip() or "(无题)"
+            buf = []
+        elif title is not None:
+            buf.append(line)
+    if title is not None:
+        out.append((title, "\n".join(buf).strip()))
+    return out
+
+
+# 全文数字回指在这一档只能当提示，不能当闸：没有【关键数据】那种锚点，
+# 正文里混着 aweme id（19 位）、链接里的数字、`001.` 这种条目编号——
+# 实测库里 4 篇被判「数字找不到」的，理由全是这类噪音（01、7685199393477135662、001…）。
+# 所以：先剥链接与条目编号、丢掉 ≥8 位的 id，剩下的对不上也只报 WARN 让人看一眼。
+_LINK_RE = re.compile(r"https?://\S+|//\S*\.\S+")
+_LIST_HEAD_RE = re.compile(r"^\s*(?:[-*]\s+)?[（(]?\d{1,3}[)）.、]", re.M)
+# （条目常写成「- 001. xxx」，只认行首数字会漏掉带 - 的那种，库里实测漏掉过 001）
+
+
+def _prose_numbers(md):
+    txt = _LIST_HEAD_RE.sub("", _LINK_RE.sub(" ", md or ""))
+    return sorted({t for t in _NUM_TOKEN.findall(txt)
+                   if 1 < len(re.sub(r"\D", "", t)) < 8})
+
+
+def _audit_other_form(md, source_text, summary_type):
+    """**不是**「公众号文章素材」那一档的整理稿，该查什么。
+
+    为什么单独一条（2026-10-27 号主撞出来的）：`audit_material` 原来不分形态，
+    拿公众号素材那九节去量所有整理稿——库里 13 篇 game_guide + 27 篇 toutiao_mix
+    一律判「缺 9 节、不能发」。他刚生成的那篇攻略稿五节齐
+    （适用场景/步骤/机制解释/避坑提醒/事实核查清单，正是提示词要求的那五块），
+    体检照样报不能发。**判据用错档就是假阳性**，代价是号主以为刚做的稿子废了。
+    这一档不查【关键数据】/【金句摘录】/四类溯源标注（那是公众号素材的口径），
+    但查：成没成篇、小节够不够、节里有没有内容、占位截断、中间产物泄漏、合规、
+    数字能不能回指素材。
+    """
+    rows = []
+    rows.append(("INFO", "体检口径",
+                 "这一档是「%s」，不查公众号素材那九节与 [已核]/[他述]/[本站]/[待核] 标注；"
+                 "查成篇、结构契约、空节、占位、泄漏、合规、数字回指" % (summary_type or "未标注形态")))
+    chars = len(_norm(md))
+    if chars < 200:
+        rows.append(("FAIL", "成没成篇", "全文 %d 字，太短不像一篇稿（重新生成或自己写完再体检）" % chars))
+    else:
+        rows.append(("PASS", "成没成篇", "%d 字" % chars))
+    empty = []
+    spec = FORM_SECTIONS.get(summary_type)
+    if spec:
+        miss = [t for t in spec["required"] if t not in md]
+        if miss:
+            rows.append(("FAIL", "分节", "缺 %d 个固定标签：%s（提示词要求原样输出、顺序不变，"
+                         "缺节下游按节抽取会拿到空）" % (len(miss), "、".join(miss))))
+        else:
+            rows.append(("PASS", "分节", "%d 个固定标签齐%s"
+                         % (len(spec["required"]),
+                            "（可选节 %s 在）" % "、".join(spec["optional"])
+                            if any(o in md for o in spec["optional"]) else "（可选节没出，允许）")))
+        for tag in spec["required"] + spec["optional"]:
+            if tag in md and len(_norm(_section_body(md, tag))) < 10:
+                empty.append(tag)
+    elif summary_type == "game_guide":
+        secs = _md_sections(md)
+        if len(secs) < GUIDE_MIN_SECTIONS:
+            rows.append(("FAIL", "分节", "只有 %d 个 `## ` 小节（这一档要按小节切块给排版用，"
+                         "少于 %d 节拼不出页）" % (len(secs), GUIDE_MIN_SECTIONS)))
+        else:
+            rows.append(("PASS", "分节", "%d 个小节：%s"
+                         % (len(secs), "、".join(t for t, _ in secs[:6]))))
+        empty = [t for t, b in secs if len(_norm(b)) < 10]
+    else:
+        rows.append(("INFO", "分节", "这一档没登记过结构契约（FORM_SECTIONS 里没有 %s），"
+                     "本轮**不判分节**——要判先去提示词里把它的固定标签登记进来"
+                     % (summary_type or "未标类型")))
+    if empty:
+        rows.append(("FAIL", "空节", "有标题没内容：%s" % "、".join(empty)))
+    hit = BODY_PLACEHOLDER.search(md)
+    if hit:
+        rows.append(("FAIL", "占位没填", "留着「%s」这种占位，等于没写完" % hit.group(0)))
+    for pat, label in MATERIAL_LEAK_PATTERNS:
+        if re.search(pat, md):
+            rows.append(("FAIL", "中间产物泄漏", "%s 命中" % label))
+    _compliance(md, rows)
+    if source_text:
+        src = _norm(source_text)
+        tokens = _prose_numbers(md)
+        bad = [t for t in tokens if not _number_found(t, src)]
+        if bad:
+            rows.append(("WARN", "数据可回指",
+                         "%d/%d 个数字在素材与标题里找不到：%s——这一档没有【关键数据】那种锚点，"
+                         "剥掉链接与条目编号后仍对不上的，人工回原文看一眼（不拦发布）"
+                         % (len(bad), len(tokens), "、".join(bad[:8]))))
+        elif tokens:
+            rows.append(("PASS", "数据可回指", "%d 个数字全部能在素材里找到" % len(tokens)))
+        else:
+            rows.append(("INFO", "数据可回指", "正文里没有可核对的 ≥2 位数字（链接与条目编号已剥掉）"))
+    else:
+        rows.append(("INFO", "回指校验", "没传原素材：本轮只查了结构与泄漏，数字**没有回指**"))
+    return _finish_material(rows, md)
+
+
+def audit_material(md_text: str, source_text: str = "", summary_type: str = "wechat_material") -> Dict[str, Any]:
+    """整理稿体检：成稿形态 + 结构完整性 + 正文写没写 + 数字与金句能否回指原素材。
 
     source_text 要一起传标题与标签——很多数字（如「53K星」）来自标题，只比对口播
     会把它们误判成编造。没传源文本时只查结构，并如实写明"没做回指"，
     不许让人以为"没列出来就是都过了"。
+    `summary_type` 决定用哪套判据：那九节只属于 wechat_material，
+    其余形态（game_guide / toutiao_mix …）走 `_audit_other_form`。
     """
     rows: List[Tuple[str, str, str]] = []
     md = md_text or ""
-    missing = [s for s in MATERIAL_SECTIONS if s not in md]
-    if missing:
-        rows.append(("FAIL", "分节完整",
-                     "缺 %d 节：%s（下游出图按节解析，缺节会拼出空卡）" % (len(missing), "、".join(missing))))
+    # 九节口径只属于 wechat_material；不分形态硬套 = 40 篇假阳性（见 _audit_other_form）
+    if summary_type and summary_type != "wechat_material":
+        return _audit_other_form(md, source_text, summary_type)
+    if LEGACY_BODY_TAG in md and "【正文】" not in md:
+        # 存量 8 篇就是这一形态。判 FAIL 不是刁难：策略把公众号成品改成完整文章之后，
+        # 骨架稿发出去就是一堆空话，得让人知道这一步没做完。
+        rows.append(("FAIL", "成稿形态",
+                     "还是旧的素材档案形态（只有【正文骨架】、没有【正文】）。"
+                     "公众号交的是完整文章——重新生成这一档，或由本人把正文写出来再体检"))
     else:
-        rows.append(("PASS", "分节完整", "7 节齐"))
+        missing = [s for s in MATERIAL_SECTIONS if s not in md]
+        if missing:
+            rows.append(("FAIL", "分节完整",
+                         "缺 %d 节：%s（【正文】是主体成品，其余短节给出图与登记用，缺节会拼出空卡）"
+                         % (len(missing), "、".join(missing))))
+        else:
+            rows.append(("PASS", "分节完整", "%d 节齐" % len(MATERIAL_SECTIONS)))
+        _article_body(md, rows)
     for name in MATERIAL_SECTIONS:
         if name in md and len(_section_body(md, name)) < 10:
             rows.append(("FAIL", "空节", "%s 有标题没内容" % name))
@@ -489,9 +775,4 @@ def audit_material(md_text: str, source_text: str = "") -> Dict[str, Any]:
             rows.append(("PASS", "金句是否原文", "%d 条金句与原文重合度都在 50%% 以上" % len(quotes)))
     else:
         rows.append(("INFO", "回指校验", "没传原素材：本轮只查了结构与泄漏，数字与金句**没有回指**"))
-    fails = [r for r in rows if r[0] == "FAIL"]
-    warns = [r for r in rows if r[0] == "WARN"]
-    verdict = "fail" if fails else "warn" if warns else "pass"
-    return {"rows": rows, "verdict": verdict, "label": VERDICT_LABEL[verdict],
-            "fails": len(fails), "warns": len(warns), "score": None,
-            "prose_chars": len(_norm(md)), "report": render(rows, verdict, warns, fails)}
+    return _finish_material(rows, md)

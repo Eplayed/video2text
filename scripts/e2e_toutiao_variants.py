@@ -323,6 +323,20 @@ def main():
             else:
                 print("  ✓ 同种子选图可复现；6 个种子出现 %d 种素材组合，随机已接到渠道层" % len(seen))
 
+    # S. 进度条要的是真实步数：每出一张卡回调一次（第 k/N），没步数的阶段报 None
+    seen = []
+    ms, _html = run_case("S 进度步数",
+                         progress_cb=lambda msg, d=None, t=None: seen.append((msg, d, t)))
+    ns = len(ms["cards"])
+    steps = [(d, t) for (_m, d, t) in seen if d]
+    if len(steps) != ns or [d for d, _t in steps] != list(range(1, ns + 1)) \
+            or any(t != ns for _d, t in steps):
+        print("  ✗ 头条线没按张报真实步数：%s（卡数 %d）" % (steps, ns)); ok = False
+    elif not any(d is None for (_m, d, _t) in seen):
+        print("  ✗ 连「没有步数」的阶段也报了数，界面会画出一个假进度"); ok = False
+    else:
+        print("  ✓ 头条线按张报真实步数（1/%d 到 %d/%d），无步数阶段报 None" % (ns, ns, ns))
+
     shutil.rmtree(OUT, ignore_errors=True)
     print("\n%s" % ("ALL_OK" if ok else "HAS_FAIL"))
     sys.exit(0 if ok else 1)

@@ -78,13 +78,14 @@ def inspect(db_path, video_id):
         effective = "" if stale else effective_text(conn, video_id, raw, row["title"])
         return {"video_id": int(video_id), "title": row["title"],
                 "raw_text": raw, "base_hash": raw_hash(raw),
-                "patches": patches, "effective_text": effective,
+                "patches": patches, "patch_revision": raw_hash(saved["patches_json"] if saved else ""),
+                "effective_text": effective,
                 "stale": stale, "updated_at": saved["updated_at"] if saved else ""}
     finally:
         conn.close()
 
 
-def save(db_path, video_id, base_hash, patches):
+def save(db_path, video_id, base_hash, patches, *, only_if_missing=False, patch_revision=None):
     conn = sqlite3.connect(str(db_path), timeout=5)
     conn.row_factory = sqlite3.Row
     try:
@@ -96,6 +97,13 @@ def save(db_path, video_id, base_hash, patches):
         raw = str(row["transcript"])
         if base_hash != raw_hash(raw):
             raise CorrectionError("原始转写版本已变化，请重新读取再修订")
+        saved = (conn.execute("SELECT patches_json FROM video_source_corrections WHERE video_id=?",
+                              (int(video_id),)).fetchone()
+                 if _table_exists(conn) else None)
+        if only_if_missing and saved:
+            return None
+        if patch_revision is not None and patch_revision != raw_hash(saved["patches_json"] if saved else ""):
+            raise CorrectionError("其他修订已保存，请重新读取再继续")
         effective = normalize_wow(_apply(raw, patches), row["title"])
         conn.execute("CREATE TABLE IF NOT EXISTS video_source_corrections ("
                      "video_id INTEGER PRIMARY KEY, base_hash TEXT NOT NULL, "

@@ -220,21 +220,46 @@ def register_publish(db_path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         pub_date = datetime.now().strftime("%Y-%m-%d")
     elif not re.match(r"^\d{4}-\d{2}-\d{2}$", pub_date):
         raise ValueError("发布日期要写成 2026-10-18 这样，现在填的是「%s」" % pub_date)
+    # 排产槽号（odur / ban / gift…）：`scripts/daily_brief.py` 判"这一格发过没有"就靠它，
+    # 比拿标题去匹配可靠得多（台账里那批 2026-10-18 导入的老行没有槽号，只能标"疑似"）。
+    # **只收白名单字符，清洗后跟原值不一样就报错**——悄悄存个 `scriptodur--` 这种怪值，
+    # 比直接拒绝更难查（槽号是日报的键，键错了整条判据就废了）。
+    # 清洗放在复用判据**之前**：下面要比的就是这一格，晚算一步等于拿没验过的值去比。
+    raw_slot = str(payload.get("slot_key") or "").strip()
+    slot = re.sub(r"[^0-9A-Za-z_\-]", "", raw_slot)[:24]
+    if slot:
+        if slot != raw_slot:
+            raise ValueError("排产槽号只能用字母/数字/-/_（如 odur、day1），你填的是「%s」" % raw_slot[:24])
+    all_rows = list_articles(db_path, channel)
     ref_id = str(payload.get("ref_id") or "").strip()
-    if not ref_id:
-        same = [a for a in list_articles(db_path, channel)
-                if (a.get("title") or "").strip() == title and (a.get("pub_date") or "") == pub_date]
+    if ref_id:
+        # 显式给了键：**那一行属于别的槽就拒绝**（Codex 二次复验第 2 条）。
+        # 原来这里什么都不查，任何入口拿别人的 ref_id 都能把那一行的 slot_key 原地改掉，
+        # 于是"另一篇"的发布事实被静默搬走——排产那格回读就成了"没发过"。
+        hit = next((a for a in all_rows if (a.get("ref_id") or "") == ref_id), None)
+        if hit and (hit.get("slot_key") or "") != slot:
+            raise ValueError(
+                "这条登记（%s）已经挂在槽号「%s」上，不能改成「%s」——"
+                "要挪位置请先撤销再重新登记（静默改槽会让两篇稿的发布事实互相顶掉）"
+                % (ref_id, hit.get("slot_key") or "（无槽）", slot or "（无槽）"))
+    else:
+        # 没给键时按"渠道+标题+日期"**且槽号也一致**才复用：
+        # 带槽的请求只认同样的那一格（连点两次不长第二条），不带槽的请求不许落到带槽的行上。
+        # 代价是：同一篇真稿若一次从运营页登记（无槽）、一次从排产页登记（有槽），
+        # 台账里会留两行——两行都比"互相顶掉"好查，且各自指得清是谁登记的。
+        same = [a for a in all_rows
+                if (a.get("title") or "").strip() == title and (a.get("pub_date") or "") == pub_date
+                and (a.get("slot_key") or "") == slot]
         if same:
             ref_id = same[0]["ref_id"]
         else:
             # 键撞到秒就完了：2026-10-21 实测连点两条不同标题的登记，`reg:<秒>` 相同 →
             # 第二条把第一条那行**原地 UPDATE 成自己的标题**，台账里凭空少一行。
-            # 所以这把键只在"同渠道同标题同一天"时复用，被别的标题占了就往后加序号。
+            # 所以这一把新键**只要被占用就换号**，不再拿"标题相同"当放行条件。
             base = "reg:%s" % datetime.now().strftime("%Y%m%d%H%M%S")
-            taken = {(a.get("ref_id") or ""): (a.get("title") or "").strip()
-                     for a in list_articles(db_path, channel)}
+            taken = {(a.get("ref_id") or "") for a in all_rows}
             ref_id, n = base, 1
-            while taken.get(ref_id) and taken[ref_id] != title:
+            while ref_id in taken:
                 n += 1
                 ref_id = "%s-%d" % (base, n)
     fields = {"title": title, "pub_date": pub_date, "source": "人工登记"}
@@ -242,15 +267,7 @@ def register_publish(db_path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         val = str(payload.get(key) or "").strip()
         if val:
             fields[key] = val
-    # 排产槽号（odur / ban / gift…）：`scripts/daily_brief.py` 判"这一格发过没有"就靠它，
-    # 比拿标题去匹配可靠得多（台账里那批 2026-10-18 导入的老行没有槽号，只能标"疑似"）。
-    # **只收白名单字符，清洗后跟原值不一样就报错**——悄悄存个 `scriptodur--` 这种怪值，
-    # 比直接拒绝更难查（槽号是日报的键，键错了整条判据就废了）。
-    raw_slot = str(payload.get("slot_key") or "").strip()
-    slot = re.sub(r"[^0-9A-Za-z_\-]", "", raw_slot)[:24]
     if slot:
-        if slot != raw_slot:
-            raise ValueError("排产槽号只能用字母/数字/-/_（如 odur、day1），你填的是「%s」" % raw_slot[:24])
         fields["slot_key"] = slot
     existed = bool(_existing(db_path, channel, ref_id))
     row = upsert_article(db_path, channel, ref_id, fields)

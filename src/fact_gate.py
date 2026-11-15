@@ -121,6 +121,23 @@ def risk_section(content: str) -> Dict[str, Any]:
     return {"start": start, "end": end, "inline": inline}
 
 
+def is_table_noise(s0: str) -> bool:
+    """Markdown 表格的表头/分隔线行——不是待核事实，入台账和读台账都要滤掉。
+
+    2026-11-02 复验：108 的核查清单是表格，「| 核查项 | 主素材…」这种行被当风险
+    计进台账（54 条里大半是表头），来源说明里出现"未逐项核验 54 条"。入项
+    （`risk_items`）过滤只防新数据，库里已经落进去的脏行还要在读取侧
+    （`web.app._fact_ctx`）用同一判据再滤一遍，两边共用这一个函数。
+    """
+    s0 = str(s0 or "").strip()
+    if not s0.startswith("|"):
+        return False
+    if re.fullmatch(r"\|[\s:\-|]*\|?", s0):
+        return True                                   # 分隔线 | --- | --- |
+    head = s0.strip("|").split("|")[0].strip()
+    return head in ("核查项", "核查项？") or head.startswith("核查项")
+
+
 def risk_items(content: str) -> List[Dict[str, Any]]:
     """把整理稿那一节核查清单解析成结构化条目：[{raw, tokens, heavy}]。
 
@@ -137,6 +154,9 @@ def risk_items(content: str) -> List[Dict[str, Any]]:
     for ln in lines[start + 1:end]:
         s0 = ln.strip()
         if not s0 or _MEDIA_LINE.match(s0):
+            continue
+        # Markdown 表头/分隔线不是待核事实（判据见 is_table_noise）
+        if is_table_noise(s0):
             continue
         s = _ITEM_PREFIX.sub("", s0).replace("**", "").strip()
         if len(s) < 4:
@@ -175,16 +195,37 @@ def _usable_token(tok: str) -> bool:
     return len(t) >= 4
 
 
+# 这一类句子**不是机制断言**，拿证据门去卡就等于把"越诚实越发不出去"写进产线：
+# 模型在【风险核查】里写"这个专有名词/宏名/译名是照素材原话留的、我按语境推测修正过，请进游戏核对"。
+# 105、106 两次都是这么把出图卡死的（号主 2026-10-30：流程走不下去了）——`_BINARY` 里那个「保留」
+# 撞上"保留素材原话/保留原意"，地名与宏名被当成"二元机制结论进了警示正文"。
+# **判"类"不判"样本词"**：要同时出现①一个"我们怎么处理这个词"的标记、②一个名称类宾语，才算这一档。
+# 少了②就会把真机制结论放走——"切目标不掉连击点"那种句子不会同时提"名称/叫法"。
+_NAME_FIX_MARK = re.compile(r"推测为|疑为|疑是|保留原话|保留素材原话|保留原意|按合理语境修正"
+                            r"|已按.{0,8}(?:修正|校正|处理)|统一(?:校正|修正)|转写误差|拆包对照|校为正")
+_NAME_OBJECT = re.compile(r"译名|专有名词|名称|叫法|术语|地名|技能名|宏名|称呼")
+
+
+def is_name_check(raw: str) -> bool:
+    """这条待核说法是不是"译名/术语核对"那一类（只核词、不核机制）。"""
+    s = str(raw or "")
+    return bool(_NAME_FIX_MARK.search(s) and _NAME_OBJECT.search(s))
+
+
 def claim_kind(raw: str) -> str:
-    """这条待核说法是哪一类机制断言。
+    """这条待核说法是哪一类。
 
     只给**上游已经标过待核**的条目分级（判据在台账/清单里，不拿它去全文找茬——
     那会变成号主明确否掉的"全局关键词封杀"）。两档会触发发布前证据门：
       · 机制数值：带量词的机制改动（"弹跳递增40%、吃满200%法强"）；
       · 二元机制：非此即彼的机制结论（"切目标不掉连击点"）——这类最坏，
         因为它没有数字，读者一眼看不出是待核说法，而玩家会照着练号。
+    第三档 `译名核对` 明确**不进证据门**（见上面 `_NAME_FIX_MARK` 那段）。
+    老那条"重级措辞 + 出现在卖点位"照旧管它，条目也仍然留在待核清单里（提示照给）。
     """
     s = str(raw or "")
+    if is_name_check(s):
+        return "译名核对"
     if _MECH_NUM.search(s) and _MECH_WORD.search(s):
         return "机制数值"
     if _BINARY.search(s):
@@ -254,6 +295,29 @@ def _slot_of(label: str) -> str:
     if re.match(r"(?:tt|xhs)_titles\d+$", base):
         return "卖点"
     return "叙述"
+
+
+_ASSERTION_NUMBER = re.compile(r"(?<![A-Za-z0-9])\d+(?:\.\d+)?\s*(?:%|亿|万|分钟|小时|秒|级|元|倍)")
+
+
+def unsourced_numbers(plan: Dict[str, Any], source_text: str, official_blobs=None) -> List[str]:
+    """找成品新增的带单位数值；只认原素材或已留存的官方原文中的同一数值。
+
+    只查会印在图上或发布的字段，不查来源说明；不拦无单位的步骤序号，避免把
+    「三步/第2页」这类编辑结构误判成游戏数值。这是精确缺口检查，不证明语义正确。
+    """
+    evidence = re.sub(r"\s+", "", str(source_text or "") + "\n" +
+                      "\n".join(str(x or "") for x in (official_blobs or [])))
+    out = []
+    for label, value in _fields(plan or {}):
+        if label == "配文·source_note":
+            continue
+        for m in _ASSERTION_NUMBER.finditer(str(value or "")):
+            token = re.sub(r"\s+", "", m.group(0))
+            if token not in evidence:
+                out.append("%s 的「%s」在原素材及已留存官方原文中找不到：删掉，或逐条补可定位出处与核验结论"
+                           % (label, token))
+    return list(dict.fromkeys(out))
 
 
 def merge_items(parsed, ledger):
@@ -451,7 +515,7 @@ def copy_is_cut(text: str) -> str:
     return ""
 
 
-def check_override(hard, evidence, checked_by=""):
+def check_override(hard, evidence, checked_by="", extra=None):
     """人工放行要留**逐条凭据**：每一条待核都得有出处和结论，缺哪条就点名哪条。
 
     为什么要这一层（2026-10-21 Codex 复核 P1）：界面上那颗按钮写着"这些数我已人工核实"，
@@ -460,6 +524,10 @@ def check_override(hard, evidence, checked_by=""):
     现在：`evidence = [{"item": 闸口原话, "source": 出处/链接/实测位置, "result": 核出来的结论}]`，
     每条都要 source + result 都非空才算这条核过；`complete` 为假时成品仍然出（人是最终判断者），
     但 `publishable` 必须是 False，界面上也不许出现"已核实"字样。
+
+    `extra`：这道闸之外的**更严判据**，签名 `(item, source, result) -> (bool, [缺什么])`。
+    机制断言那类用它来卡"出处必须是具体那一页、还要带日期"（11-02 复核：给个官网新闻首页
+    也算"已核"，等于没卡）。传 None 时行为与以前逐字一致。
     """
     def _n(s):
         return re.sub(r"\s+", "", str(s or ""))
@@ -476,10 +544,27 @@ def check_override(hard, evidence, checked_by=""):
                 break
         src = str((hit or {}).get("source") or "").strip()[:300]
         res = str((hit or {}).get("result") or "").strip()[:300]
+        gaps = ([] if src else ["出处"]) + ([] if res else ["核验结论"])
+        ok = bool(src and res)
+        why = ""
+        if ok and extra:
+            ok2, miss2 = extra(h, src, res)
+            if not ok2:
+                ok = False
+                gaps += [str(x) for x in (miss2 or [])]
+                why = "、".join([str(x) for x in (miss2 or [])])
         rows.append({"item": str(h)[:300], "source": src, "result": res,
-                     "ok": bool(src and res)})
+                     "ok": ok, "gaps": gaps, "why": why})
     missing = [r["item"] for r in rows if not r["ok"]]
-    return {"rows": rows, "missing": missing,
+    # `need` 是给人看的那一句：光说" incomplete"没用，得点名缺哪一格
+    need = []
+    for i, r in enumerate(rows, 1):
+        if r["ok"]:
+            continue
+        need.append("第%d条没填%s" % (i, "、".join(r["gaps"]) or "凭据"))
+    if not str(checked_by or "").strip():
+        need.append("没填核验人（事后要能问到人）")
+    return {"rows": rows, "missing": missing, "need": need,
             "complete": bool(rows) and not missing,
             "checked_by": str(checked_by or "").strip()[:40]}
 

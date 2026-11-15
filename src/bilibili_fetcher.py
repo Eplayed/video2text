@@ -30,6 +30,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 import urllib.parse
@@ -56,6 +57,30 @@ REQUEST_INTERVAL = 1.2       # 秒；连打列表/详情/字幕最容易触发�
 TIMEOUT = 20
 YTDLP_BIN = "yt-dlp"         # 投稿清单的唯一可用来源，见 list_bvids 上方说明
 YTDLP_TIMEOUT = 180
+# 为什么不能只 shutil.which("yt-dlp")：工作台是被脚本拉起来的，实测它的 PATH 只有
+# ~/.qoder-cn/bin 那几个目录，而 pip 装的控制台脚本在 ~/Library/Python/3.9/bin，
+# 于是 which 找不到、B 站采集在界面上表现成"清单取不到"，而人在终端里手跑却一切正常。
+# 所以按三条路兜底，最后一条直接用当前解释器跑模块——pip 装过就一定在。
+YTDLP_FALLBACKS = [
+    os.path.expanduser("~/Library/Python/3.9/bin/yt-dlp"),
+    "/usr/local/bin/yt-dlp",
+    "/opt/homebrew/bin/yt-dlp",
+]
+
+
+def ytdlp_cmd() -> list:
+    """调用 yt-dlp 的命令前缀（列表）；三种途径都没有才返回 []。"""
+    found = shutil.which(YTDLP_BIN)
+    if found:
+        return [found]
+    for p in YTDLP_FALLBACKS:
+        if os.path.exists(p):
+            return [p]
+    try:
+        import yt_dlp  # noqa: F401 —— 这里只验证模块装没装，不调用它
+        return [(sys.executable or "python3"), "-m", "yt_dlp"]
+    except ImportError:
+        return []
 
 # 风控与登录态相关的返回码，必须分开报——"cookie 过期"和"被风控"用户的处理动作完全不同
 RISK_CODES = (-352, -403, -509)
@@ -258,7 +283,7 @@ def _write_cookie_file(cookie: str) -> str:
 
 def list_bvids(mid: str, cookie: str = "", cap: int = 60) -> dict:
     """按最新发布顺序拿投稿 bvid。返回 {"bvids": [...], "error": ""}。"""
-    exe = shutil.which(YTDLP_BIN) or ""
+    exe = ytdlp_cmd()
     if not exe:
         return {"bvids": [], "error":
                 "本机没有 yt-dlp，B 站投稿清单拿不到（直连接口必被 -403 风控）。"
@@ -267,8 +292,8 @@ def list_bvids(mid: str, cookie: str = "", cap: int = 60) -> dict:
         return {"bvids": [], "error": "B 站清单需要 cookie，先在 config/config.env.local 配 BILIBILI_COOKIE="}
     ck_path = _write_cookie_file(cookie)
     try:
-        cmd = [exe, "--no-warnings", "--quiet", "--flat-playlist", "--cookies", ck_path,
-               "--playlist-end", str(int(cap)), "--print", "%(id)s", SPACE_URL % mid]
+        cmd = exe + ["--no-warnings", "--quiet", "--flat-playlist", "--cookies", ck_path,
+                     "--playlist-end", str(int(cap)), "--print", "%(id)s", SPACE_URL % mid]
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=YTDLP_TIMEOUT)
         if proc.returncode != 0:
             err = (proc.stderr or "").strip().splitlines()
@@ -469,6 +494,418 @@ def sync_bilibili_user(
 
     return {"videos": out, "author": listing.get("author") or "",
             "error": "", "note": "；".join(notes)}
+
+
+# ── 合集（ugc_season）整档入库 ────────────────────────────────────
+#
+# 为什么要有这一条：订阅同步只翻 UP 主投稿列表、每轮 20 条（BILI_SYNC_LIMIT），
+# 而「好赛雷切片」这种把内容全塞进合集的号，投稿列表里根本看不到合集那 997 条
+# （实测订阅它 last_new_count=0）。号主要的是"合集整档"，那是另一个入口。
+
+_BVID_RE = re.compile(r"(BV[0-9A-Za-z]{5,}|av\d+)")
+
+
+def parse_bvid(raw: str) -> str:
+    """从稿件链接（或裸 bvid）里抠出 bvid。分享链接常带 ?spm_id_from=…&vd_source=… 尾巴。"""
+    m = _BVID_RE.search(raw or "")
+    return m.group(1) if m else ""
+
+
+def fetch_collection(bvid: str, cookie: str = "") -> dict:
+    """一条稿件 → 它所在合集的全量清单。**一次 view 接口就够，不逐条打详情**。
+
+    实测（2026-10-27，BV1ZT7j6WESN）：一次响应 1.7MB，带 997 条 episodes，每条自带
+    bvid/cid/title 和 arc{pic,pubdate,duration,stat,author}。所以"入 300 条元数据"是
+    几秒钟的事——BILI_SYNC_LIMIT 那句注释说的"几百条连打会撞风控"讲的是逐条补字幕，
+    不适用在这条路上，别照那个理由把这里也限成 20。
+    """
+    bvid = parse_bvid(bvid)
+    if not bvid:
+        return {"ok": False, "items": [], "error": "链接里认不出稿件编号（要 BV…/av… 这种视频链接）"}
+    data = _get(API + "/x/web-interface/view", cookie=cookie,
+                referer=VIDEO_URL % bvid, params={"bvid": bvid})
+    reason = _fail_reason(data.get("code"), data.get("message", ""))
+    if reason:
+        return {"ok": False, "items": [], "error": "合集清单取回失败：" + reason}
+    v = data.get("data") or {}
+    season = v.get("ugc_season") or {}
+    owner = v.get("owner") or {}
+    if not (season.get("sections") or []):
+        # 单条投稿没有 ugc_season。这时候不许静默返回 0 条——号主会以为"合集没抓到"，
+        # 实际是他贴的那条本来就不在合集里
+        return {"ok": False, "items": [], "single": {"aweme_id": bvid,
+                "title": v.get("title") or "", "mid": str(owner.get("mid") or ""),
+                "author": owner.get("name") or ""},
+                "error": "这条稿件不属于任何合集，它只是一条单独投稿"}
+    items = []
+    for sec in season.get("sections") or []:
+        for ep in sec.get("episodes") or []:
+            arc = ep.get("arc") or {}
+            pub = arc.get("pubdate") or arc.get("ctime") or 0
+            stat = arc.get("stat") or {}
+            one = ep.get("bvid") or ""
+            if not one:
+                continue
+            items.append({
+                "aweme_id": one,
+                "cid": ep.get("cid") or "",
+                "url": VIDEO_URL % one,
+                "title": arc.get("title") or ep.get("title") or "",
+                "cover_url": arc.get("pic") or "",
+                "author": arc.get("author") or owner.get("name") or "",
+                "published_at": time.strftime("%Y-%m-%d", time.localtime(pub)) if pub else "",
+                "duration_sec": _to_seconds(arc.get("duration") or 0),
+                "view_count": int(stat.get("view") or 0),
+                "section": sec.get("title") or "",
+                # 合集清单里没有字幕，也不在这一步去取（997 条逐条取必撞风控）
+                "transcript": "",
+                "subs_status": "未取字幕",
+            })
+    # 合集接口给的是"编排顺序"，不保证从新到旧；入库要按发布时间排，
+    # 否则"取最近 300 条"取到的是作者手动排的靠前那几集
+    items.sort(key=lambda x: (x.get("published_at") or "", x.get("aweme_id") or ""),
+               reverse=True)
+    return {"ok": True, "items": items, "error": "",
+            "season_id": season.get("id"), "title": season.get("title") or "",
+            "intro": season.get("intro") or "",
+            "mid": str(season.get("mid") or owner.get("mid") or ""),
+            "author": owner.get("name") or "",
+            "ep_count": int(season.get("ep_count") or (season.get("stat") or {}).get("ep_count")
+                            or len(items)),
+            "total": len(items)}
+
+
+def sync_bilibili_collection(url_or_bvid: str, known_bvids=None, limit: int = 300,
+                             cookie: str = "") -> dict:
+    """合集整档 → 待入库记录（不写库，写库交给调用方走 insert_bilibili_videos）。
+
+    与 sync_bilibili_user 同一套分层：这一层只出数据，app.py 负责加锁入库。
+    limit 是"最近多少条"（已按发布时间从新往老排过），去重按 bvid。
+    返回 {"videos","total","skipped","season","title","mid","author","error"}
+    """
+    known = set(known_bvids or [])
+    col = fetch_collection(url_or_bvid, cookie=cookie)
+    if not col.get("ok"):
+        return {"videos": [], "total": 0, "skipped": 0, "season": "", "title": "",
+                "mid": col.get("single", {}).get("mid", "") if col.get("single") else "",
+                "author": col.get("single", {}).get("author", "") if col.get("single") else "",
+                "error": col.get("error") or "合集取回失败"}
+    items = col["items"]
+    fresh = [it for it in items if it["aweme_id"] not in known]
+    picked = fresh[:int(limit)] if limit else fresh
+    return {"videos": picked, "total": len(items), "skipped": len(items) - len(fresh),
+            "season": col.get("title") or "", "mid": col.get("mid") or "",
+            "author": col.get("author") or "", "error": "",
+            "ep_count": col.get("ep_count") or len(items)}
+
+
+# ── B 站音频下载与转写（合集整档入库后补正文用） ──────────────────
+
+AUDIO_TIMEOUT = 300          # 秒；一条 7 分钟的片子取音频，正常几十秒
+
+
+def download_audio(bvid: str, workdir: str, cookie: str = "") -> tuple:
+    """yt-dlp 只下音频并转 wav，返回 (音频路径, 错误)。
+
+    为什么不下整片：这个合集实测 122.7 小时，整片哪怕最低画质也要几十 GB，而转写只要声音。
+    `-x --audio-format wav` 直接给出 16bit PCM，省掉 main.asr_transcribe 里那道抽音频。
+    """
+    exe = ytdlp_cmd()
+    if not exe:
+        return "", "本机没有 yt-dlp，装一下：pip3 install yt-dlp"
+    one = parse_bvid(bvid)
+    if not one:
+        return "", "链接里认不出稿件编号"
+    os.makedirs(workdir, exist_ok=True)
+    ck_path = _write_cookie_file(cookie) if cookie else ""
+    cmd = exe + ["--no-warnings", "--quiet", "-f", "bestaudio/best", "-x",
+                 "--audio-format", "wav", "--audio-quality", "1", "--no-playlist",
+                 # 直接落成 16k 单声道：whisper 本来就要这个规格。不指定的话 yt-dlp 按源
+                 # 44.1k 立体声出 wav，一条 4 小时的直播录像就是 2.6GB 临时文件（实测这个合集
+                 # 里最长的一条 15018 秒），16k 单声道把它压到 ~460MB
+                 "--postprocessor-args", "FFmpegCmd:-ar 16000 -ac 1",
+                 "-o", os.path.join(workdir, "%(id)s.%(ext)s")]
+    if ck_path:
+        cmd += ["--cookies", ck_path]
+    cmd.append(VIDEO_URL % one)
+    proc = None
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=AUDIO_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        return "", "音频下载超时（%ds）" % AUDIO_TIMEOUT
+    except Exception as e:
+        return "", "yt-dlp 调用异常: %s" % str(e)[:120]
+    finally:
+        if ck_path:
+            try:
+                os.unlink(ck_path)
+            except OSError:
+                pass
+    if proc is None or proc.returncode != 0:
+        tail = [ln for ln in ((proc.stderr if proc else "") or "").strip().splitlines() if ln]
+        return "", "取音频失败：%s" % ((tail[-1] if tail else "退出码异常")[:160])
+    wavs = [os.path.join(workdir, n) for n in os.listdir(workdir) if n.lower().endswith(".wav")]
+    if not wavs:
+        return "", "音频下载完成但没找到 wav（yt-dlp 可能没装 ffmpeg 解码）"
+    newest = max(wavs, key=os.path.getmtime)
+    if os.path.getsize(newest) < 4096:
+        return "", "音频文件是空的（这条可能被删了或是付费/会员专享）"
+    return newest, ""
+
+
+def transcribe_bvid(bvid: str, cookie: str = "", model_size: str = "base",
+                    workdir: str = "") -> tuple:
+    """一条 B 站稿件 → (转写文本, 错误)。取音频 → 转写 → 删临时文件。
+
+    模型调用和出口那两道规范化（繁转简、术语表回改）不在这里，走 main.transcribe_audio
+    那一份——抖音与 B 站共用，抄两份就会漂移。
+    workdir 由调用方给（落 output/ 下，半途挂了还能看见是哪个文件）。
+    """
+    tmp = workdir or tempfile.mkdtemp(prefix="bili_asr_")
+    path, err = download_audio(bvid, tmp, cookie=cookie)
+    if err:
+        return "", err
+    try:
+        from main import transcribe_audio
+    except Exception as e:
+        return "", "转写入口不可用: %s" % str(e)[:120]
+    try:
+        text, _segs = transcribe_audio(path, model_size=model_size, language="zh",
+                                       tag=str(bvid)[:12])
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+    if text.startswith("[转写失败]"):
+        return "", text
+    return text, ""
+
+
+VIDEO_TIMEOUT = 900          # 秒；整片（限 720p）比音频重，一条 5 分钟的片子实测几十秒
+
+# ── 下整片的资源闸（本机 2026-11-01 实测：数据卷只剩 28GB、已用 93%）──────
+MIN_FREE_GB = 6.0            # 低于这条空闲就不下整片：留 6GB 是给系统和工作台写库用的余量
+# 实测（2026-11-01，三条 14.3-14.5 分钟的稿件）：**2.1–3.0 MB/分钟**，下完一条只要 3-6 秒。
+# 这个上限不是我们挑的——B 站 720P/1080P 属于大会员档，游客与普通号只到 852x480，
+# 所以估到 14MB/分钟是凭空放大五倍。这里取实测最大值的两倍当余量。
+MB_PER_MIN = 6.0
+HEADROOM_X = 2               # 预估要乘的头寸：一条下完之前不能把盘子顶满
+STALE_TMP_MINUTES = 360      # 临时片老化线：作业被 kill 会留下半截 wav/mp4，超过 6 小时的清掉
+
+
+def free_gb(path: str = "") -> float:
+    """这台机器现在还剩多少 GB（按落临时文件的那个卷问，不按根卷猜）。"""
+    try:
+        import shutil
+        return round(shutil.disk_usage(path or tempfile.gettempdir()).free / 1024.0 ** 3, 2)
+    except Exception:
+        return -1.0
+
+
+def est_download_mb(duration_sec) -> float:
+    """按条长估整片体积（MB）。估不出来（0）就当很大，宁可不抽帧。"""
+    try:
+        d = float(duration_sec or 0)
+    except (TypeError, ValueError):
+        return 1e9
+    if d <= 0:
+        return 1e9
+    return d / 60.0 * MB_PER_MIN
+
+
+def may_download_video(free: float, duration_sec) -> tuple:
+    """这一条能不能下整片。返回 (能不能, 为什么)。
+
+    为什么不设"一轮累计上限"那种闸：空闲是**这台机器此刻**的事实，别的程序也在写，
+    记自己的累计字节会漂；每条下之前重新问一次 `free_gb` 才是真判据。
+    """
+    if free < 0:
+        return False, "读不到磁盘空闲"
+    est = est_download_mb(duration_sec)
+    if free < MIN_FREE_GB:
+        return False, "空闲只剩 %.1fGB（低于 %.0fGB 底线）" % (free, MIN_FREE_GB)
+    if est * HEADROOM_X > free * 1024.0:
+        return False, "这条估 %.0fMB，×%d 头寸超过空闲" % (est, HEADROOM_X)
+    return True, ""
+
+
+def sweep_stale_tmp(workdir: str, keep_minutes: int = STALE_TMP_MINUTES) -> tuple:
+    """清掉临时目录里的**陈年残片**，返回 (删除个数, 释放字节)。
+
+    为什么必须有这一条：作业被 kill（改代码后重启工作台就会这样）时，`finally` 里那句
+    `os.remove` 根本不执行，半截 wav/mp4 就一直躺在盘上——11-01 实测那个目录已经躺了 149MB。
+    判据只用 mtime：正在下的那个文件时间戳是新鲜的，不会误删；也不认文件名，
+    yt-dlp 的 .part 和我们的 wav 一起收拾。
+    """
+    import time as _t
+    cutoff = _t.time() - max(1, int(keep_minutes or STALE_TMP_MINUTES)) * 60
+    n = freed = 0
+    try:
+        names = os.listdir(workdir)
+    except OSError:
+        return 0, 0
+    for name in names:
+        p = os.path.join(workdir, name)
+        try:
+            if not os.path.isfile(p) or os.path.getmtime(p) >= cutoff:
+                continue
+            size = os.path.getsize(p)
+            os.remove(p)
+            n += 1
+            freed += size
+        except OSError:
+            continue
+    return n, freed
+
+
+def download_video(bvid: str, workdir: str, cookie: str = "",
+                   max_height: int = 720) -> tuple:
+    """把整片下到本地，返回 (视频路径, 错误)。
+
+    为什么非下整片不可：关键帧是**画面**，`download_audio` 那条只有声音，抽不出帧。
+    `max_height` 只是上限，**实际拿到哪一档由账号权益决定**：11-01 实测这个 cookie 只给到
+    852x480——B 站把 720P/1080P 划进大会员档。所以抽出来的帧宽 852px，而排版那条带要
+    900-950px（`frame_pool.FRAME_W`），等于放大 1.06-1.11 倍，略软但能用；
+    要真清晰只能买大会员，或这批素材只走纯文字版式——这条归号主拍，不是我能替他降的。
+    下整片只用在"要抽帧"的那一批；长录像仍然走 `download_audio`（见 transcribe_bvid 的注释）。
+    """
+    exe = ytdlp_cmd()
+    if not exe:
+        return "", "本机没有 yt-dlp，装一下：pip3 install yt-dlp"
+    one = parse_bvid(bvid)
+    if not one:
+        return "", "链接里认不出稿件编号"
+    os.makedirs(workdir, exist_ok=True)
+    ck_path = _write_cookie_file(cookie) if cookie else ""
+    h = int(max_height or 720)
+    # B 站是 DASH 分轨：单文件档位（`best[height<=720]`）根本不存在，
+    # 11-01 实跑 40 条全部报 "Requested format is not available"。
+    # 所以要"视频轨+音频轨"一起要，交给 ffmpeg 合流成 mp4（本机有 ffmpeg）；
+    # 最后兜 `b*` 是不限高度——宁可得差点也不能一条都抽不出帧。
+    fmt = ("bv*[height<=%d]+ba*[height<=%d]/bv*[height<=%d]+ba/b[height<=%d]/b*"
+           % (h, h, h, h))
+    cmd = exe + ["--no-warnings", "--quiet", "-f", fmt,
+                 "--merge-output-format", "mp4", "--no-playlist",
+                 "-o", os.path.join(workdir, "%(id)s.%(ext)s")]
+    if ck_path:
+        cmd += ["--cookies", ck_path]
+    cmd.append(VIDEO_URL % one)
+    proc = None
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=VIDEO_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        return "", "整片下载超时（%ds）" % VIDEO_TIMEOUT
+    except Exception as e:
+        return "", "yt-dlp 调用异常: %s" % str(e)[:120]
+    finally:
+        if ck_path:
+            try:
+                os.unlink(ck_path)
+            except OSError:
+                pass
+    if proc is None or proc.returncode != 0:
+        _drop_partial(workdir, one)
+        tail = [ln for ln in ((proc.stderr if proc else "") or "").strip().splitlines() if ln]
+        return "", "取整片失败：%s" % ((tail[-1] if tail else "退出码异常")[:160])
+    vids = [os.path.join(workdir, n) for n in os.listdir(workdir)
+            if n.lower().endswith((".mp4", ".flv", ".mkv", ".webm"))]
+    if not vids:
+        _drop_partial(workdir, one)
+        return "", "整片下载完成但没找到视频文件（yt-dlp 可能没合流成功）"
+    newest = max(vids, key=os.path.getmtime)
+    if os.path.getsize(newest) < 4096:
+        _drop_partial(workdir, one)
+        return "", "视频文件是空的（这条可能被删了或是会员专享）"
+    return newest, ""
+
+
+def _drop_partial(workdir: str, bvid: str) -> None:
+    """下失败时把这个稿件的半截文件清掉。失败不响——省盘子的事不该卡住整条链。"""
+    try:
+        for n in os.listdir(workdir):
+            if bvid.lower() in n.lower() or n.endswith((".part", ".ytdl")):
+                p = os.path.join(workdir, n)
+                if os.path.isfile(p):
+                    os.remove(p)
+    except OSError:
+        pass
+
+
+def transcribe_with_frames(bvid: str, cookie: str = "", model_size: str = "small",
+                           workdir: str = "", pool_key: str = "") -> tuple:
+    """一条 B 站稿件走完整条链：下整片 → 转写 → 抽关键帧 → 删临时片。
+
+    返回 `(文本, 备注, 帧数)`。三条不能改的地方：
+      · **顺序**：抽帧必须在删片之前。片一删就只能靠海报弹窗那颗「补画面」重下，
+        而那颗只认抖音（拿的是 aweme_id），B 站素材就永远补不回来；
+      · **转写在前**：帧池的 `near` 字段要拿分句时间戳去对画面，先抽帧只能空着；
+      · **抽帧不判帧**（`judge=False`，0 元）：判帧推迟到出图那一次，理由写在
+        `frame_pool.build` 的注释里（批量 20 条就是 38 万 token，出图一次只要 8 张）。
+    备注非空**不代表转写失败**——转写成功的文本照样要落库，只是这一条没抽到帧。
+    pool_key 用 BV 号：素材库与攻略页都按 `aweme_id` 取帧池，B 站那一列存的就是 BV 号。
+    """
+    tmp = workdir or tempfile.mkdtemp(prefix="bili_asr_")
+    path, err = download_video(bvid, tmp, cookie=cookie)
+    if err:
+        return "", err, 0
+    try:
+        from main import transcribe_audio
+    except Exception as e:
+        return "", "转写入口不可用: %s" % str(e)[:120], 0
+    try:
+        text, segs = transcribe_audio(path, model_size=model_size, language="zh",
+                                      tag=str(bvid)[:12])
+        if text.startswith("[转写失败]"):
+            return "", text, 0
+        note = ""
+        frames = 0
+        try:
+            try:
+                from src import frame_pool
+            except ImportError:
+                import frame_pool
+            meta = frame_pool.build(path, pool_key or bvid, segments=segs)
+            frames = len(meta.get("frames") or [])
+        except Exception as e:
+            # 抽帧坏了不许把已到手的正文一起丢掉：照旧落库，备注里写明没抽到帧
+            note = "转写成功但抽帧失败：%s" % str(e)[:80]
+        return text, note, frames
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+
+def extract_frames_only(bvid: str, cookie: str = "", workdir: str = "",
+                        pool_key: str = "") -> tuple:
+    """已经转写过的稿件补关键帧：下整片 → 抽帧 → 删片。返回 (帧数, 备注)。
+
+    为什么单开这一条：`transcribe_bvid` 只下音频，那批素材之后**没有任何入口能补画面**
+    ——「补画面」那颗只认抖音那条链的 aweme_id，B 站的 BV 号进不去（号主 11-01 点名要帧）。
+    代价要说清：这一档不重跑转写，所以拿不到分句时间戳，帧的 `near` 字段是空的，
+    图注只能等下一次真转写才有话可锚——比"一帧都没有"强，但别当成完整链的产物。
+    """
+    tmp = workdir or tempfile.mkdtemp(prefix="bili_frames_")
+    path, err = download_video(bvid, tmp, cookie=cookie)
+    if err:
+        return 0, err
+    try:
+        try:
+            from src import frame_pool
+        except ImportError:
+            import frame_pool
+        try:
+            meta = frame_pool.build(path, pool_key or bvid)
+            return len(meta.get("frames") or []), ""
+        except Exception as e:
+            return 0, "抽帧失败：%s" % str(e)[:80]
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
 
 
 def resolve_author(mid: str, cookie: str = "") -> str:
