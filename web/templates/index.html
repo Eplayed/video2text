@@ -975,6 +975,7 @@ textarea{resize:vertical;min-height:84px}
 .copy-link{cursor:pointer;color:var(--module-2);font-size:12px;text-decoration:underline}
 </style>
   <link rel="stylesheet" href="/static/today-ops.css?v=20261116">
+  <link rel="stylesheet" href="/static/guide-checklist.css?v=3">
 </head>
 <body>
 <div class="layout">
@@ -1696,11 +1697,32 @@ textarea{resize:vertical;min-height:84px}
           <label class="pk-check" title="攻略页复用当前正文，另出 3:4 公众号配图与正文"><input type="checkbox" id="pk-also-wechat">一并生成公众号图文攻略</label>
         </div>
         <div class="pk-actions">
-          <button class="btn ghost sm" onclick="posterPlan()">① 拆文案</button>
+          <button type="button" class="btn sm" onclick="pkChecklistOpen()">攻略清单</button>
+          <button type="button" class="btn ghost sm" id="pk-current-package" hidden onclick="gotoPosterPage(_pkId, _pkChannel)">查看当前成品</button>
+          <button type="button" class="btn ghost sm" id="pk-existing-revision" hidden onclick="pkHydrate(_pkId, true)">打开自由草稿</button>
+          <button class="btn ghost sm" onclick="pkStartFreeRevision()">自由拆稿（新草稿）</button>
           <button class="btn ghost sm" id="pk-preview-top" onclick="posterPreview()" title="不花钱、当场出：用出图时同一个排版函数先看版面">② 看版面 · 免费</button>
           <button class="btn sm pk-go" id="pk-go-top" onclick="posterGenerate()" title="画面用素材真帧或你回传的底图，0 元。出图档（模型画底图）已撤，一张都没有会当场拦你">③ 出图 · 0 元</button>
           <button class="btn ghost sm" id="pk-manual-btn" onclick="pkManualToggle()" title="要模型画的画面就走这条：复制提示词去豆包出图，回来传上这张，整条 0 元">③b 豆包 · 回传底图</button>
         </div>
+        <section class="guide-sheet" id="pk-checklist" hidden aria-label="攻略清单">
+          <div class="guide-sheet-header">
+            <strong>核对攻略清单</strong>
+            <label>模板 <select id="pk-checklist-kind">
+              <option value="equipment">装备清单</option>
+              <option value="class">职业改动</option>
+              <option value="steps">任务步骤</option>
+            </select></label>
+            <button type="button" class="btn ghost sm" id="pk-checklist-prepare" onclick="pkChecklistPrepare()">准备清单</button>
+          </div>
+          <p class="pk-hint">对照原句核对每条内容，勾选后按分组分页。每张卡片正文最多 40 字。头条号与小红书用 9:16，公众号用 3:4。上方风格和配图选项用于自由稿。</p>
+          <div id="pk-checklist-msg" role="status"></div>
+          <div class="guide-sheet-actions" id="pk-checklist-actions" hidden>
+            <button type="button" class="btn ghost sm" onclick="pkChecklistSave(false)">保存清单</button>
+            <button type="button" class="btn sm" onclick="pkChecklistSave(true)">按清单生成图文</button>
+          </div>
+          <div id="pk-checklist-editor"></div>
+        </section>
         <div id="pk-layout-hint" style="font-size:11.5px;color:var(--text-secondary);margin:2px 0 8px;min-height:16px"></div>
         <!-- 这条素材有没有"能当证据的干净画面"：不说的话，0 元那条攻略页路线在界面上是隐形的 -->
         <div id="pk-frames-hint" style="display:none;font-size:11.5px;line-height:1.6;margin:0 0 8px"></div>
@@ -1714,7 +1736,7 @@ textarea{resize:vertical;min-height:84px}
         <details class="pk-guide" id="pk-guide">
           <summary>怎么用 · 三步</summary>
           <ol>
-            <li><b>① 拆文案</b>（约 30 秒）：先看「主线」那句成不成链，散了就重拆，别拿着散文案花钱。</li>
+            <li><b>攻略清单</b>：先核对有原句依据的条目，再按清单出图。需要自由文案时，可另建草稿。</li>
             <li><b>② 看版面</b>（免费）：字号、折行、配色都是真的，只有那块灰框出图时换成这一页的画面（素材真帧或你回传的图）。</li>
             <li><b>③ 出图</b>（0 元）：画面用素材真帧/你回传的底图；出完自动打分，满分 25、18 以下会建议换一张。</li>
             <li><b>③b 豆包</b>（0 元）：按页复制提示词去豆包出图，回来传上这张，说明在「复制全文」里。</li>
@@ -1726,7 +1748,7 @@ textarea{resize:vertical;min-height:84px}
         <div class="pk-manual" id="pk-manual" style="display:none"></div>
         <!-- 文案编辑区末尾再放一次动作条：改完就在眼前，不用滚回顶部找按钮 -->
         <div class="pk-actions">
-          <button class="btn ghost sm" onclick="posterPlan()">① 重新拆文案</button>
+          <button class="btn ghost sm" onclick="pkStartFreeRevision()">自由拆稿（新草稿）</button>
           <button class="btn ghost sm" id="pk-preview-bot" onclick="posterPreview()">② 看版面 · 免费</button>
           <button class="btn sm pk-go" id="pk-go-bot" onclick="posterGenerate()" title="画面用素材真帧或你回传的底图，0 元">③ 出图 · 0 元</button>
           <button class="btn ghost sm" id="pk-manual-btn-2" onclick="pkManualToggle()">③b 豆包 · 回传底图</button>
@@ -3799,8 +3821,9 @@ async function deleteToutiaoPackage(id) {
 let _pkId = null;
 let _pkLast = null;
 
-function openPosterDialog(id) {
+function openPosterDialog(id, options = {}) {
   _pkId = id;
+  pkChecklistReset();
   _pkLast = null;
   _pkSource = null;          // 原文缓存按整理稿存，换一条必须重取
   _pkPhoto = null;           // 配图也是这条素材的，换整理稿要清掉
@@ -3827,17 +3850,23 @@ function openPosterDialog(id) {
   pkPhotoLabel();
   loadPosterStyles();
   loadPosterTemplates();
+  if (options.channel) pkSetChannel(options.channel);
   pkHydrate(id);
+  if (options.checklist) pkChecklistOpen();
 }
 // 重新打开同一条整理稿时，把后台那份结果原样端回来：不用为看一眼上次的文案再跑一次拆解。
 // 归属对不上就什么都不画——这一句和 pollPoster 里的 task_id 校验是同一件事的两半。
-async function pkHydrate(id) {
+async function pkHydrate(id, draft = false) {
   let st;
   // 带着 id 问：内存里没有这条时（重启过/被别的任务顶掉）后端会从成品包里的备份接回来，
   // 不然一次重启就把人花过钱等过的拆解吃掉
-  try { st = await fetch('/api/poster/status?summary_id=' + encodeURIComponent(id)).then(r => r.json()); }
+  try { st = await fetch('/api/poster/status?summary_id=' + encodeURIComponent(id)
+    + (draft ? '&draft=1' : '')).then(r => r.json()); }
   catch (e) { return; }
   if (_pkId !== id || st.running || st.summary_id !== id) return;
+  document.getElementById('pk-current-package').hidden = !st.package;
+  if (!draft) document.getElementById('pk-existing-revision').hidden = !st.revision_available;
+  if (draft) document.getElementById('pk-checklist').hidden = true;
   // 上次失败不再提前 return（2026-11-03）：原来一句「上一次任务失败」就把版面吞了，
   // 人对着"先把这些卖点改掉"却没有任何可改的东西，点③还会静默重跑一次拆解、
   // 再被拦一次（每次拦的句子还不一样）。现在错误照显示（带逐条出口），版面照恢复。
@@ -3851,7 +3880,8 @@ async function pkHydrate(id) {
     _pkGuideOnly = !!st.plan.guide_only;           // 攻略页那份是空的：这一档不出底图
     _pkManual = pkTakeManual(_pkManualRaw);
     // 渠道/形态跟着上次的状态走：重开弹窗不该悄悄回到头条档（界面说一套、发出去是另一套）
-    _pkChannel = st.plan.publish_channel || 'toutiao';
+    if (document.getElementById('pk-checklist').hidden)
+      _pkChannel = st.plan.publish_channel || 'toutiao';
     _pkForm = _pkChannel === 'wechat' ? (st.plan.form || 'article') : 'newspic';
     if (_pkChannel === 'wechat') _pkFormWechat = _pkForm;
     pkSyncChannelChrome();
@@ -3860,7 +3890,7 @@ async function pkHydrate(id) {
     pkRenderPlan(st.plan.plan, st.plan.publish);
     pkSetFidelity(st.plan.fidelity);
   }
-  if (st.package && st.package.id === id && !errMsg) { renderPosterResult(id); return; }
+  if (!draft && st.package && st.package.id === id && !errMsg) { renderPosterResult(id); return; }
   if (st.plan && st.plan.plan && !st.plan.editorial) {
     if (!errMsg) {
       document.getElementById('pk-result').innerHTML = '<div class="pk-verify mild">这是上一次拆好的草稿。'
@@ -5263,6 +5293,13 @@ function pkCount() {
   // 说得对不对看下面那格事实状态——两件事混在一句话里，绿灯就成了"内容也对了"
   el.textContent = txt + (bad.length ? '　⚠️ ' + bad.join('；') : '　✅ 版面合格（仅版面/字数，事实状态见下）');
 }
+function pkStartFreeRevision() {
+  if (!document.getElementById('pk-current-package').hidden
+      && !confirm('将创建自由拆稿草稿，当前成品会保留。继续？')) return;
+  document.getElementById('pk-checklist').hidden = true;
+  posterPlan();
+}
+
 async function posterPlan() {
   if (!_pkId) { alert('请先选择整合稿'); return; }
   // 页数两个来源的优先级：**人在「拆几页」里点过的数 > 页签里已经摊开的页数**。
@@ -6835,7 +6872,7 @@ function pkArticleCopy(markdown) {
     .join('\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
-function pkMountPublishTabs(host, copyButton, manifest) {
+function pkMountPublishTabs(host, copyButton, manifest, channel) {
   const primary = manifest.publish_channel || 'toutiao';
   const tabs = document.createElement('div');
   tabs.className = 'pk-publish-tabs';
@@ -6929,7 +6966,7 @@ function pkMountPublishTabs(host, copyButton, manifest) {
     select(keys[next]);
     panels.get(keys[next]).button.focus();
   });
-  select(panels.has(primary) ? primary : 'toutiao');
+  select(panels.has(channel) ? channel : panels.has(primary) ? primary : 'toutiao');
 }
 
 function copyPosterPrompt() {
@@ -7011,7 +7048,7 @@ async function loadPosterList() {
   loadPosterAdoption();          // 采纳率这块小卡片跟在列表后面取，不挡列表出图
 }
 
-async function openPosterDetail(id) {
+async function openPosterDetail(id, channel) {
   const requestId = ++_pkDetailRequest;
   const copy = document.getElementById('pk-detail-copy');
   copy.disabled = true;
@@ -7115,7 +7152,7 @@ async function openPosterDetail(id) {
   _pkPubSeed = ((m.publish || {}).tt_titles || [])[0]
     || ((m.publish || {}).xhs_titles || [])[0] || (m.plan || {}).title || '';
   pkPubBar(m.summary_id || m.id, null, m.publish_channel || 'toutiao', 'pk-detail-state');
-  pkMountPublishTabs(document.getElementById('pk-detail-publish-tabs'), copy, m);
+  pkMountPublishTabs(document.getElementById('pk-detail-publish-tabs'), copy, m, channel);
   document.getElementById('pk-detail-ck').innerHTML = (m.checklist || []).map(s => '<li>' + esc(s) + '</li>').join('');
   document.getElementById('pk-detail-edit').onclick = function () { openPosterDialog(m.summary_id || m.id); };
   document.getElementById('pk-detail-reveal').onclick = function () { posterReveal(m.id); };
@@ -7142,10 +7179,10 @@ async function deletePosterOne(id) {
 }
 
 // 出图成功后光在弹窗里贴一张图不够：得能一步走到成品页，跟同步结果那个跳转一样。
-function gotoPosterPage(id) {
+function gotoPosterPage(id, channel) {
   closePosterDialog();
   switchPage('poster');
-  if (id) openPosterDetail(id);
+  if (id) openPosterDetail(id, channel);
 }
 
 // ── 文案对照原始转写 ──
@@ -11697,6 +11734,7 @@ function bkRender() {
     + bkLedger() + bkHook();
 }
 </script>
-  <script src="/static/today-ops.js?v=20261116"></script>
+  <script src="/static/guide-checklist.js?v=2"></script>
+  <script src="/static/today-ops.js?v=20261116b"></script>
 </body>
 </html>

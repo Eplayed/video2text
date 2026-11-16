@@ -53,14 +53,16 @@
   function openTopic(topic, channel) {
     const id = Number(topic.summary_id || (topic.job || {}).summary_id);
     if (topic.has_package && id) {
-      if (channel === 'wechat') {
+      if (channel === 'wechat' && !topic.poster_package) {
         switchPage('wechat');
         openWechatDetail(id);
       } else {
-        gotoPosterPage(id);
+        gotoPosterPage(id, channel);
       }
     } else if (id) {
-      if (channel === 'wechat') {
+      if (topic.form === 'guide') {
+        openPosterDialog(id, {channel, checklist: true});
+      } else if (channel === 'wechat') {
         openWechatGenDialog(id);
         if (topic.edit_notice || (topic.job || {}).error) wxShowBlockedDraft(id);
       }
@@ -208,6 +210,12 @@
       actions.className = 'today-actions';
       if (topic.has_package) {
         actions.append(button('查看待审稿', () => openTopic(topic, data.channel), true));
+        if (topic.form === 'guide' && topic.summary_id) {
+          actions.append(button('编辑攻略清单',
+            () => openPosterDialog(topic.summary_id, {channel: data.channel, checklist: true})));
+        }
+      } else if (!job.running && topic.form === 'guide' && (topic.summary_id || job.summary_id)) {
+        actions.append(button('核对攻略清单', () => openTopic(topic, data.channel), true));
       } else if (notice) {
         actions.append(button('修改草稿', () => openTopic(topic, data.channel), true));
       } else {

@@ -211,6 +211,7 @@ quote 必须逐字复制 text 中的连续文本，不能改标点、合并跨�
         from .editorial_model import GUIDE_EDITOR_RULES
         prompt += "\n" + GUIDE_EDITOR_RULES
         prompt += ("\n每个事实的 quote 要把版本、阶段、条件、否定与数值的单位一起摘下。"
+                   "可独立核对的事实分开提取，用尽可能短的连续原句完整保留各自条件。"
                    "conditions 只标会改变事实适用范围的短语，如触发前提、装备要求、适用版本或例外。"
                    "从 quote 中连续逐字复制；仅填写确实出现的条件，允许为空数组。"
                    "掉落者、物品名称、结论本身和作者举的使用场景不是条件；不要拼接或改写原句。"
@@ -596,13 +597,15 @@ def audit_output(mother, plan, publish, ai_config, checker=None, source_text="")
             if reason:
                 coverage_issues.append({"point_id": pid, "quote": point["quote"],
                                         "problem": reason, "kind": "source_review"})
+        review_text = ("\n".join(point["quote"] for point in points.values())
+                       if plan.get("checklist_revision") else source_text)
         if not any(item.get("problem") == TALENT_RANK_REVIEW for item in coverage_issues):
             coverage_issues.extend({"quote": quote, "problem": TALENT_RANK_REVIEW,
                                     "kind": "source_review"}
-                                   for quote in unclear_talent_rank_spans(source_text))
+                                   for quote in unclear_talent_rank_spans(review_text))
         coverage_issues.extend({"quote": quote, "problem": "指令仅见于未核对的口播转写，请对照操作画面",
                                 "kind": "source_review"}
-                               for quote in dict.fromkeys(unclear_command_spans(source_text)))
+                               for quote in dict.fromkeys(unclear_command_spans(review_text)))
     output = _output_text(plan, publish)
     fields = _field_texts(plan, publish)
     revision = audit_revision(mother, plan, publish, source_text)
@@ -671,8 +674,11 @@ def audit_revision(mother, plan, publish, source_text=""):
     pages = plan.get("pages") or [plan]
     bindings = [[sorted(str(pid) for pid in (card.get("point_ids") or []))
                  for card in page.get("cards") or []] for page in pages]
-    return _digest(["all-visible-fields-v3", mother["mother_revision"], _output_text(plan, publish),
-                    _field_texts(plan, publish), bindings, _digest(source_text)])
+    key = ["all-visible-fields-v3", mother["mother_revision"], _output_text(plan, publish),
+           _field_texts(plan, publish), bindings, _digest(source_text)]
+    if plan.get("checklist_revision"):
+        key.append("approved-checklist-scope-v1")
+    return _digest(key)
 
 
 def audit_problems(check):

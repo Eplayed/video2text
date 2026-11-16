@@ -4375,8 +4375,9 @@ _poster_status = {"running": False, "done": True, "progress": "", "error": "",
 _poster_task_seq = 0
 
 
-def _poster_plan_file(sid):
-    return Path(str(OUTPUT_DIR)) / "poster" / str(int(sid)) / "plan.json"
+def _poster_plan_file(sid, *, checklist=False):
+    return Path(str(OUTPUT_DIR)) / "poster" / str(int(sid)) / (
+        "checklist-plan.json" if checklist else "plan.json")
 
 
 def _poster_save_plan(sid, payload):
@@ -4387,15 +4388,16 @@ def _poster_save_plan(sid, payload):
     落盘后重开弹窗、重启服务都接得回来。写失败不影响这次结果，只少一份备份。
     """
     try:
-        p = _poster_plan_file(sid)
+        checklist = bool((payload.get("plan") or {}).get("checklist_revision"))
+        p = _poster_plan_file(sid, checklist=checklist)
         _atomic_json(p, payload)
     except Exception as e:
         print("[poster] 文案备份没写成（不影响这次结果）:", e)
 
 
-def _poster_load_plan(sid):
+def _poster_load_plan(sid, *, checklist=False):
     try:
-        p = _poster_plan_file(sid)
+        p = _poster_plan_file(sid, checklist=checklist)
         if not p.is_file():
             return None
         d = json.loads(p.read_text(encoding="utf-8"))
@@ -4419,17 +4421,34 @@ def _verified_topic_title(summary, sources):
     raise guide_mother.MotherError("选题对应的主视频原句已变化，请核对素材并重新生成整理稿")
 
 
+def _poster_approved_plan(manifest):
+    if not manifest or not manifest.get("publishable", True) or not _mother_package_current(manifest):
+        return None
+    plan = manifest.get("plan")
+    if not isinstance(plan, dict):
+        return None
+    fidelity = plan.get("fidelity") or {}
+    if plan.get("mother_revision") and not fidelity.get("ready"):
+        return None
+    return {"plan": plan, "publish": manifest.get("publish") or {}, "fidelity": fidelity,
+            "guide_only": ai_poster.guide_only_plan(plan), "text_mode": manifest.get("text_mode"),
+            "publish_channel": manifest.get("publish_channel") or "toutiao",
+            "form": manifest.get("form") or "", "violations": []}
+
+
 def _poster_fidelity(sid, mother, plan, publish, cfg, source_text):
     """只复用服务端已通过且输入逐字相同的审核；客户端自带的 PASS 不算。"""
     from src import guide_mother
     revision = guide_mother.audit_revision(mother, plan, publish, source_text)
-    saved = _poster_load_plan(sid) or {}
-    check = saved.get("fidelity") or {}
-    if (check.get("ready") and (check.get("coverage") or {}).get("input_revision") == revision
-            and (check.get("semantic") or {}).get("input_revision") == revision
-            and check.get("source_revision") == mother.get("source_revision")
-            and check.get("mother_revision") == mother.get("mother_revision")):
-        return check, True
+    saved = _poster_load_plan(sid, checklist=bool(plan.get("checklist_revision"))) or {}
+    approved = _poster_approved_plan(ai_poster.get_package(sid)) or {}
+    for candidate in (saved, approved):
+        check = candidate.get("fidelity") or {}
+        if (check.get("ready") and (check.get("coverage") or {}).get("input_revision") == revision
+                and (check.get("semantic") or {}).get("input_revision") == revision
+                and check.get("source_revision") == mother.get("source_revision")
+                and check.get("mother_revision") == mother.get("mother_revision")):
+            return check, True
     check = guide_mother.audit_output(mother, plan, publish, cfg, source_text=source_text)
     violations = [item for item in saved.get("violations") or []
                   if not item.startswith(("原意覆盖：", "原意忠实性：", "原文待核："))]
@@ -4439,7 +4458,8 @@ def _poster_fidelity(sid, mother, plan, publish, cfg, source_text):
     return check, False
 
 
-def _poster_promote_staged(sid, stage, source_revision, mother_revision, target=None):
+def _poster_promote_staged(sid, stage, source_revision, mother_revision, target=None,
+                           checklist_revision=None):
     """持锁复核后替换成品；成功后把旧包归档，提交失败则恢复旧包。"""
     import shutil
     from src import guide_mother
@@ -4455,10 +4475,15 @@ def _poster_promote_staged(sid, stage, source_revision, mother_revision, target=
         current_source, current_mother = guide_mother.current_revisions(conn, sid)
         if current_source != source_revision or current_mother != mother_revision:
             raise ai_poster.PosterError("出图期间原文或母稿已变化，本次旧结果未覆盖现有成品")
+        if checklist_revision:
+            from src import guide_checklist
+            if guide_checklist.view(conn, sid)[0].get("revision") != checklist_revision:
+                raise ai_poster.PosterError("出图期间清单已有新版本，本次未替换现有成品")
         if target.exists():
-            old_plan = target / "plan.json"
-            if old_plan.is_file() and not (stage / "plan.json").exists():
-                shutil.copyfile(old_plan, stage / "plan.json")
+            for name in ("plan.json", "checklist-plan.json"):
+                old_plan = target / name
+                if old_plan.is_file() and not (stage / name).exists():
+                    shutil.copyfile(old_plan, stage / name)
             os.replace(str(target), str(backup))
             moved_old = True
         os.replace(str(stage), str(target))
@@ -5020,6 +5045,118 @@ def api_source_corrections(video_id):
         return jsonify({"error": "修订未保存，请查看服务日志"}), 500
 
 
+def _prepare_poster_checklist(summary, kind, progress=None):
+    from src import guide_checklist, guide_mother
+
+    sid = summary["id"]
+    old = guide_checklist.load(DB_PATH, sid)
+    _sources, revision, _theme = _preflight_guide_mother(summary)
+    mother = guide_mother.load_mother(DB_PATH, sid)
+    if (old and old.get("source_revision") == revision
+            and old.get("mother_revision") == mother.get("mother_revision")):
+        return old
+    mother = guide_mother.ensure_mother(
+        DB_PATH, sid, _editorial_config(required=True), progress=progress)
+    if mother["source_revision"] != revision:
+        raise guide_checklist.ChecklistError("原文已更新，请重新准备清单")
+    sheet = guide_checklist.from_mother(mother, kind, summary["title"])
+    return guide_checklist.save(DB_PATH, sid, sheet, revision, mother["mother_revision"],
+                                old.get("revision") or "")
+
+
+@app.route("/api/poster/checklist/<int:summary_id>", methods=["GET", "POST"])
+def api_poster_checklist(summary_id):
+    from src import guide_checklist, guide_mother
+
+    try:
+        sheet = guide_checklist.load(DB_PATH, summary_id)
+        if request.method == "POST":
+            data = request.get_json(silent=True)
+            if not isinstance(data, dict) or not sheet:
+                raise guide_checklist.ChecklistError("请先准备攻略清单")
+            updated = guide_checklist.edit(sheet, data)
+            sheet = guide_checklist.save(DB_PATH, summary_id, updated, sheet["source_revision"],
+                                         sheet["mother_revision"], data.get("revision"))
+        if not sheet:
+            return jsonify({"sheet": None, "kinds": guide_checklist.KINDS, "stale": False})
+        sources, revision = guide_mother.source_snapshot(DB_PATH, summary_id)
+        mother = guide_mother.load_mother(DB_PATH, summary_id)
+        stale = (revision != sheet["source_revision"]
+                 or mother.get("mother_revision") != sheet["mother_revision"])
+        points = {point["point_id"]: point for point in mother.get("points", [])}
+        materials = {source["video_id"]: source for source in sources}
+        urls = {video["id"]: video.get("source_url") or "" for video in
+                content_store.get_videos_by_ids(DB_PATH, list(materials))}
+        for row in sheet["rows"]:
+            row["evidence"] = []
+            for ref in row["point_ids"]:
+                point = points.get(ref)
+                if not point:
+                    continue
+                vid = point["source_ref"]["video_id"]
+                material = materials.get(vid) or {}
+                row["evidence"].append({
+                    "quote": point["quote"], "conditions": point.get("conditions") or [],
+                    "review_reason": point.get("review_reason") or "", "title": material.get("title") or "",
+                    "url": material.get("url") or urls.get(vid) or "",
+                })
+        return jsonify({"sheet": sheet, "kinds": guide_checklist.KINDS, "stale": stale})
+    except (guide_checklist.ChecklistError, guide_mother.MotherError) as exc:
+        return jsonify({"error": str(exc)}), 409
+
+
+@app.route("/api/poster/checklist/<int:summary_id>/prepare", methods=["POST"])
+def api_poster_checklist_prepare(summary_id):
+    from src import guide_checklist
+
+    if not _original_graphics_enabled():
+        return _original_graphics_disabled()
+    summary = _poster_get_summary(summary_id)
+    data = request.get_json(silent=True) or {}
+    kind = data.get("kind") if isinstance(data, dict) else None
+    if not summary or not isinstance(kind, str) or kind not in guide_checklist.KINDS:
+        return jsonify({"error": "请选择整理稿和攻略模板"}), 400
+
+    def run():
+        _prepare_poster_checklist(summary, kind, progress=lambda msg: _poster_status.update(progress=msg))
+        _poster_status["progress"] = "清单已准备，请逐条核对"
+
+    if not _poster_start("checklist", run, summary_id):
+        return jsonify({"error": "另有海报任务正在处理"}), 409
+    return jsonify({"task_id": _poster_status["task_id"], "summary_id": summary_id}), 202
+
+
+@app.route("/api/poster/checklist/<int:summary_id>/render", methods=["POST"])
+def api_poster_checklist_render(summary_id):
+    from src import guide_checklist, guide_mother
+
+    try:
+        sheet = guide_checklist.load(DB_PATH, summary_id)
+        data = request.get_json(silent=True) or {}
+        if not isinstance(data, dict) or not sheet or data.get("revision") != sheet["revision"]:
+            raise guide_checklist.ChecklistError("请保存当前清单再出图")
+        channel = data.get("channel")
+        if channel not in ("toutiao", "xhs", "wechat"):
+            raise guide_checklist.ChecklistError("请选择发布渠道")
+        mother = guide_mother.load_mother(DB_PATH, summary_id)
+        plan, publish, audit_mother = guide_checklist.compiled(sheet, mother)
+        previous = ai_poster.get_package(summary_id) or {}
+        also_wechat = (channel == "wechat" or data.get("also_wechat") is True
+                       or bool(previous.get("wechat_companion")))
+        old_plan = previous.get("plan") or {}
+        if (old_plan.get("checklist_revision") == sheet["revision"]
+                and _poster_approved_plan(previous)
+                and (not also_wechat or previous.get("wechat_companion"))):
+            return jsonify({"status": "reused", "summary_id": summary_id})
+        return _start_poster_graphics({
+            "summary_id": summary_id, "title": sheet["title"], "plan": plan, "publish": publish,
+            "ratio": "9:16", "publish_channel": "toutiao", "form": "newspic",
+            "text_mode": "typeset", "review": False, "also_wechat": also_wechat,
+        }, checklist_mother=audit_mother)
+    except (guide_checklist.ChecklistError, guide_mother.MotherError) as exc:
+        return jsonify({"error": str(exc)}), 409
+
+
 @app.route("/api/poster/plan", methods=["POST"])
 def api_poster_plan():
     return _start_poster_plan(request.get_json(force=True) or {})
@@ -5278,7 +5415,7 @@ def api_poster_generate():
     return _start_poster_graphics(request.get_json(force=True) or {})
 
 
-def _start_poster_graphics(data):
+def _start_poster_graphics(data, *, checklist_mother=None):
     """出图只用已拆并审过的 plan；空 plan 要回到拆文案，不暗中收费重拆。"""
     if not _original_graphics_enabled():
         return _original_graphics_disabled()
@@ -5296,7 +5433,9 @@ def _start_poster_graphics(data):
     plan = data.get("plan") if isinstance(data.get("plan"), dict) else None
     publish = data.get("publish") if isinstance(data.get("publish"), dict) else None
     if not plan:
-        return jsonify({"error": "还没有可编辑的文案，请先点①拆文案；③不会暗中重新拆解或花额度"}), 400
+        return jsonify({"error": "还没有可编辑的文案，请先准备攻略清单或自由拆文案"}), 400
+    if plan.get("checklist_revision") and checklist_mother is None:
+        return jsonify({"error": "请从攻略清单出图，程序会从已保存的清单读取正文"}), 409
     from src import guide_mother
     try:
         mother = guide_mother.load_mother(DB_PATH, summary["id"])
@@ -5348,8 +5487,9 @@ def _start_poster_graphics(data):
         if (current.get("mother_revision") != plan.get("mother_revision")
                 or current_source != plan.get("source_revision")):
             raise ai_poster.PosterError("原始转写或母稿已更新，请重新拆稿")
+        audit_mother = checklist_mother if checklist_mother is not None else current
         fidelity, _reused = _poster_fidelity(
-            summary["id"], current, plan, publish or {}, _editorial_config(),
+            summary["id"], audit_mother, plan, publish or {}, _editorial_config(),
             guide_mother.audit_source_text(_sources))
         if not fidelity["ready"]:
             raise ai_poster.PosterError("原意核对未通过：%s；草稿已保留，请按原文修改后重试" %
@@ -5394,12 +5534,19 @@ def _start_poster_graphics(data):
                 poster_companion.add_mini_promo(stage, manifest, asset)
             poster_companion.rebase_photos(manifest, stage, ai_poster.OUTPUT_DIR / str(summary["id"]))
             _atomic_json(stage / "manifest.json", manifest)
-            previous = _poster_load_plan(summary["id"]) or {}
+            previous = _poster_load_plan(summary["id"], checklist=checklist_mother is not None) or {}
             plan_run_id = (previous.get("model_usage") or {}).get("run_id") or ""
             _attach_model_run(stage / "manifest.json", model_usage.current().run_id,
                               plan_run_id=plan_run_id)
+            if (checklist_mother is not None and also_wechat
+                    and not (manifest.get("wechat_companion") or {}).get("publishable")):
+                raise ai_poster.PosterError("公众号版本还有发布检查未通过，已保留当前成品")
+            if not manifest.get("publishable", True):
+                previous_package = _poster_approved_plan(ai_poster.get_package(summary["id"]))
+                if previous_package or checklist_mother is not None:
+                    raise ai_poster.PosterError("新版本还有发布检查未通过，已保留当前成品，请检查本次草稿")
             _poster_promote_staged(summary["id"], stage, plan["source_revision"],
-                                   plan["mother_revision"])
+                                   plan["mother_revision"], checklist_revision=plan.get("checklist_revision"))
         finally:
             if stage.exists():
                 shutil.rmtree(stage)
@@ -5857,9 +6004,21 @@ def api_poster_status():
                        "error": "", "progress": "", "model_usage": {}, "model_run_id": ""})
     if sid and not st.get("running"):
         manifest = ai_poster.get_package(sid)
+        explicit_draft = request.args.get("draft") == "1"
+        saved = _poster_load_plan(sid) or {}
+        if explicit_draft:
+            st.update(summary_id=sid, plan=saved or None, done=bool(saved),
+                      error="", fact_hard=[], model_usage=saved.get("model_usage") or {})
         st["package"] = {"id": sid, "url": manifest["url"]} if manifest and manifest.get("url") else None
         if st["package"]:
             st.update({"summary_id": sid, "done": True})
+            approved = _poster_approved_plan(manifest)
+            if approved and not explicit_draft:
+                legacy_plan = saved.get("plan") or {}
+                st.update(plan=approved, error="", fact_hard=[], progress="已打开当前通过核对的成品",
+                          revision_available=bool(saved and not legacy_plan.get("checklist_revision")
+                              and (saved.get("violations") or legacy_plan != approved["plan"]
+                                   or saved.get("publish") != approved["publish"])))
     lookup_id = sid or int(st.get("summary_id") or 0)
     if lookup_id and (st.get("running") or not st.get("model_usage")
                       or st.get("summary_id") != _poster_status.get("summary_id")):
@@ -8794,13 +8953,19 @@ _today_jobs = {}
 _today_lock = threading.Lock()
 
 
-def _today_package(summary_id, channel):
-    if channel == "wechat":
-        return wechat_graphics.get_package(summary_id)
+def _today_poster_package(summary_id, channel):
     package = ai_poster.get_package(summary_id)
-    if package and (package.get("publish_channel") or "toutiao") == "toutiao":
+    if package and ((package.get("publish_channel") or "toutiao") == channel
+                    or (channel == "wechat" and package.get("wechat_companion"))):
         return package
     return None
+
+
+def _today_package(summary_id, channel):
+    package = _today_poster_package(summary_id, channel)
+    if package or channel != "wechat":
+        return package
+    return wechat_graphics.get_package(summary_id)
 
 
 def _today_board(channel):
@@ -8886,7 +9051,9 @@ def api_ops_today():
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
     for topic in topics:
-        if not topic["has_package"]:
+        if topic["has_package"] and channel == "wechat":
+            topic["poster_package"] = bool(_today_poster_package(topic["summary_id"], channel))
+        elif not topic["has_package"] and topic["form"] != "guide":
             topic["edit_notice"] = _today_edit_notice(topic["summary_id"], channel)
     blocked = max((topic for topic in topics if topic.get("edit_notice")),
                   key=lambda topic: topic["summary_id"], default=None)
@@ -9095,6 +9262,15 @@ def _today_run(job, channel):
             if _today_package(sid, channel):
                 job["progress"] = "已有图文包，打开查看审核结果"
                 return
+            if form == "guide":
+                from src import guide_checklist
+                summary = _poster_get_summary(sid)
+                if not summary:
+                    raise RuntimeError("整理稿不存在")
+                kind = guide_checklist.suggest_kind(topic["title"] + " " + topic.get("angle", ""))
+                _prepare_poster_checklist(summary, kind, progress=lambda msg: job.update(progress=msg))
+                job["progress"] = "攻略清单已就绪，请核对后出图"
+                return
             if channel == "wechat":
                 if _wx_task_status.get("running") and _wx_task_status.get("summary_id") != sid:
                     raise RuntimeError("另一篇公众号图文正在生成，请等它完成")
@@ -9185,7 +9361,7 @@ def api_ops_today_generate():
         selection = _today_supplement_selection(topic, channel, data) if "supplement_ids" in data else None
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 409
-    if not topic["has_package"]:
+    if not topic["has_package"] and topic["form"] != "guide":
         notice = _today_edit_notice(topic["summary_id"], channel)
         if notice:
             return jsonify({"error": notice["message"], "edit_required": True}), 409

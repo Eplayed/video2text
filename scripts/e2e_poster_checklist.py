@@ -1,0 +1,91 @@
+#!/usr/bin/env python3
+"""攻略清单的固定分页、编辑范围、来源绑定和版本并发。"""
+from copy import deepcopy
+import sys
+import tempfile
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from src import content_store, guide_checklist, guide_mother
+
+
+def main():
+    phrases = [
+        "在哀嚎洞穴，皮萨斯掉落滑行腰索。使用可解除定身，冷却30分钟。",
+        "在死亡矿井，曲奇掉落搅汤棒。装备后烹饪速度提高25%。",
+        "在诺莫瑞根，水藤的来源待核，输入 abc。",
+    ]
+    with tempfile.TemporaryDirectory(prefix="v2t-checklist-") as tmp:
+        db = Path(tmp) / "fixture.db"
+        conn = content_store.connect(db)
+        conn.execute("INSERT INTO videos(id,source_sheet,source_row,title,transcript,updated_at) "
+                     "VALUES(1,'test',1,'魔兽无限装备清单',?,'2026-11-16')", ("\n".join(phrases),))
+        conn.execute("INSERT INTO ai_summaries(id,video_id,summary_type,title,content,structured_data,"
+                     "status,source_video_ids,created_at,updated_at) "
+                     "VALUES(1,1,'game_guide','地下城装备清单','内容','{}','draft','[1]',"
+                     "'2026-11-16','2026-11-16')")
+        conn.commit()
+        conn.close()
+        points = [{"quote": quote, "display_text": quote, "priority": "must", "subject": name,
+                   "conditions": conditions, "review_reason": reason}
+                  for quote, name, conditions, reason in zip(
+                      phrases, ["滑行腰索", "搅汤棒", "水藤"], [["使用"], ["装备后"], []],
+                      ["", "", "来源待核"])]
+        mother = guide_mother.ensure_mother(db, 1, {"editorial": True},
+                                           extractor=lambda *_: {"points": points})
+        draft = guide_checklist.from_mother(mother, "equipment", "地下城装备清单")
+        assert [row["group"] for row in draft["rows"]] == ["哀嚎洞穴", "死亡矿井", "诺莫瑞根"]
+        assert not any(row["included"] for row in draft["rows"])
+        first = guide_checklist.save(db, 1, draft, mother["source_revision"],
+                                     mother["mother_revision"], "")
+        edit = deepcopy(first)
+        edit["rows"][0]["included"] = True
+        edit["rows"][1]["included"] = True
+        edit["rows"][0]["point_ids"] = ["客户端伪造引用"]
+        revised = guide_checklist.edit(first, edit)
+        assert revised["rows"][0]["point_ids"] == first["rows"][0]["point_ids"]
+        current = guide_checklist.save(db, 1, revised, mother["source_revision"],
+                                       mother["mother_revision"], first["revision"])
+        plan, publish, scope = guide_checklist.compiled(current, mother)
+        assert (plan, publish, scope) == guide_checklist.compiled(current, mother)
+        assert [p["title"] for p in plan["pages"]] == ["哀嚎洞穴", "死亡矿井"]
+        assert len(scope["points"]) == 2 and "诺莫瑞根" not in publish["copy_text"]
+        assert publish["copy_text"] == publish["xhs_copy"]
+        audit = guide_mother.audit_output(scope, plan, publish, {"editorial": True},
+                                          checker=lambda *_: {"issues": []}, source_text="\n".join(phrases))
+        assert not any(issue.get("kind") == "source_review" for issue in audit["coverage"]["issues"])
+        assert guide_checklist.suggest_kind("11月在线热修蓝贴") == "class"
+        assert guide_checklist.suggest_kind("接取任务攻略") == "steps"
+        row = deepcopy(current)
+        row["rows"][0]["cards"][0]["d"] = "皮萨斯掉落。使用可解除定身，冷却30分钟。"
+        changed, changed_publish, _ = guide_checklist.compiled(row, mother)
+        assert changed["pages"][0] != plan["pages"][0]
+        assert changed["pages"][1] == plan["pages"][1] and changed_publish != publish
+        row["rows"][0]["cards"][0]["d"] = "皮萨斯掉落。使用可解除定身，冷却15分钟。"
+        try:
+            guide_checklist.compiled(row, mother)
+        except guide_checklist.ChecklistError as exc:
+            assert "15分钟" in str(exc)
+        else:
+            raise AssertionError("篡改数字未拦截")
+        row["rows"][0]["cards"][0]["d"] = current["rows"][0]["cards"][0]["d"]
+        row["rows"][2]["included"] = True
+        try:
+            guide_checklist.compiled(row, mother)
+        except guide_checklist.ChecklistError as exc:
+            assert "原文待核" in str(exc)
+        else:
+            raise AssertionError("待核来源进入成品")
+        try:
+            guide_checklist.save(db, 1, revised, mother["source_revision"],
+                                 mother["mother_revision"], first["revision"])
+        except guide_checklist.ChecklistError as exc:
+            assert "已有新版本" in str(exc)
+        else:
+            raise AssertionError("旧版本覆盖新清单")
+        assert guide_checklist.load(db, 1) == current
+    print("POSTER_CHECKLIST_OK")
+
+
+if __name__ == "__main__":
+    main()
