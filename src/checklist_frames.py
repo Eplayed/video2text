@@ -1,7 +1,10 @@
 """已审关键帧的逐页确认、快照校验和排版输入。"""
 import hashlib
+from io import BytesIO
 from pathlib import Path
 from urllib.parse import quote
+
+from PIL import Image
 
 from . import frame_pool, guide_mother, poster_content
 from .guide_checklist import ChecklistError
@@ -79,6 +82,29 @@ def describe(plan, sheet, frames):
     return response
 
 
+CROP_SCALE = 10000
+FULL_CROP = [0, 0, CROP_SCALE, CROP_SCALE]
+
+
+def _crop_bounds(crop):
+    if crop is None:
+        return None
+    if (not isinstance(crop, list) or len(crop) != 4
+            or any(type(value) is not int or not 0 <= value <= CROP_SCALE for value in crop)
+            or not (crop[0] < crop[2] and crop[1] < crop[3])):
+        raise ChecklistError("裁剪范围无效，请重新框选")
+    return None if crop == FULL_CROP else crop
+
+
+def _pixel_box(bounds, size):
+    width, height = size
+    box = tuple(round(value * extent / CROP_SCALE)
+                for value, extent in zip(bounds, (width, height, width, height)))
+    if box[0] >= box[2] or box[1] >= box[3]:
+        raise ChecklistError("裁剪范围太小，请扩大选区")
+    return box
+
+
 def edit(plan, sheet, frames, body):
     pages = plan["pages"]
     keyed = {page_key(page): page for page in pages}
@@ -106,7 +132,16 @@ def edit(plan, sheet, frames, body):
     basis = body.get("basis") or ""
     if not isinstance(basis, str) or len(basis.strip()) > 200:
         raise ChecklistError("画面使用依据最多 200 字")
+    crop = _crop_bounds(body.get("crop"))
+    if crop:
+        try:
+            with Image.open(frame["file"]) as original:
+                _pixel_box(crop, original.size)
+        except OSError as exc:
+            raise ChecklistError("关键帧无法读取，请重新选择") from exc
     bindings[key] = {"id": frame_id, "anchor": anchor, "basis": basis.strip(), "digest": frame["digest"]}
+    if crop:
+        bindings[key]["crop"] = crop
     return dict(sheet, frames=bindings)
 
 
@@ -130,6 +165,8 @@ def attach(plan, sheet, frames, require_basis=False):
             "path": frame["file"], "frame": frame["id"], "caption": selected["anchor"],
             "ts": frame["time"], "judged": True, "sha256": frame["digest"],
         }]
+        if selected.get("crop"):
+            page["photos"][0]["crop"] = selected["crop"]
         materials.append({"ref": "%s %s" % (frame["id"], frame["time"]), "url": frame["source_url"],
                           "author": frame["author"], "usage": "被引用的画面",
                           "rights_basis": selected["basis"], "review": "可发布"})
@@ -147,7 +184,13 @@ def freeze(plan, folder):
                 raise ChecklistError("第 %d 页的关键帧已丢失，请重新选择" % index)
             if hashlib.sha256(data).hexdigest() != photo["sha256"]:
                 raise ChecklistError("第 %d 页的关键帧已更新，请重新预览" % index)
-            target = folder / "_frames" / ("page-%d%s" % (index, source.suffix))
+            crop = _crop_bounds(photo.get("crop"))
+            suffix = ".png" if crop else source.suffix
+            target = folder / "_frames" / ("page-%d%s" % (index, suffix))
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(data)
+            if crop:
+                with Image.open(BytesIO(data)) as original:
+                    original.crop(_pixel_box(crop, original.size)).convert("RGB").save(target, format="PNG")
+            else:
+                target.write_bytes(data)
             photo["path"] = str(target)

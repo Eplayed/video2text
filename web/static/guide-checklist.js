@@ -289,14 +289,38 @@ function pkFrameShow(data) {
     pkFrameShow(data);
   });
 
-  const candidates = document.createElement('select');
+  const candidates = document.createElement('div');
+  candidates.className = 'pk-frame-gallery';
+  candidates.setAttribute('role', 'radiogroup');
   candidates.setAttribute('aria-label', '本页关键帧');
-  candidates.append(new Option('文字页', ''));
-  for (const item of page.candidates) {
-    const label = [item.suggested ? '推荐' : '', item.time, item.subject || item.source].filter(Boolean).join(' · ');
-    candidates.append(new Option(label, item.id));
+  const selectedId = !page.stale && page.selected ? page.selected.id : '';
+  let crop = selectedId ? page.selected.crop || null : null;
+  for (const item of [{id: ''}, ...page.candidates]) {
+    const tile = document.createElement('label');
+    tile.className = 'pk-frame-tile';
+    const radio = document.createElement('input');
+    radio.type = 'radio';
+    radio.name = 'pk-page-frame';
+    radio.value = item.id;
+    radio.checked = item.id === selectedId;
+    const text = document.createElement('span');
+    text.className = 'pk-frame-tile-label';
+    text.textContent = item.id ?
+      [item.time, item.suggested ? '推荐' : '', item.subject || item.source].filter(Boolean).join(' · ')
+      : '文字页';
+    tile.append(radio);
+    if (item.id) {
+      const thumb = document.createElement('img');
+      thumb.src = thumbOf(item.url, 360);
+      thumb.alt = '';
+      tile.append(thumb);
+    }
+    tile.append(text);
+    candidates.append(tile);
   }
-  candidates.value = !page.stale && page.selected ? page.selected.id : '';
+  function frameChoice() {
+    return candidates.querySelector('input:checked').value;
+  }
 
   const anchor = document.createElement('select');
   anchor.setAttribute('aria-label', '画面对应的本页条目');
@@ -312,9 +336,9 @@ function pkFrameShow(data) {
   const details = document.createElement('p');
   details.textContent = page.stale ? '原配图已变化，请重新选图或设为文字页。' : '';
   const confirm = pkChecklistButton('确认本页配图', () => {
-    const frame = page.candidates.find(item => item.id === candidates.value);
-    pkFrameSave({page: page.key, id: candidates.value, anchor: anchor.value,
-      basis: basisInput.value, digest: frame ? frame.digest : ''});
+    const frame = page.candidates.find(item => item.id === frameChoice());
+    pkFrameSave({page: page.key, id: frameChoice(), anchor: anchor.value,
+      basis: basisInput.value, digest: frame ? frame.digest : '', crop});
   });
   const undo = pkChecklistButton('撤销本页改动', () => {
     pkFrameShow(data);
@@ -322,7 +346,7 @@ function pkFrameShow(data) {
   });
 
   function selectFrame(reset) {
-    const frame = page.candidates.find(item => item.id === candidates.value);
+    const frame = page.candidates.find(item => item.id === frameChoice());
     anchor.hidden = basis.hidden = info.hidden = !frame;
     info.replaceChildren();
     if (frame) {
@@ -337,6 +361,23 @@ function pkFrameShow(data) {
       const text = document.createElement('p');
       text.textContent = [frame.source, frame.time, frame.subject].filter(Boolean).join(' · ');
       info.append(figure, text, link);
+      if (crop) {
+        const canvas = document.createElement('canvas');
+        canvas.setAttribute('role', 'img');
+        canvas.setAttribute('aria-label', '已裁剪的画面');
+        figure.hidden = true;
+        info.insertBefore(canvas, text);
+        figure.addEventListener('load', () => pkPaintCrop(canvas, figure, crop), {once: true});
+        if (figure.complete && figure.naturalWidth) pkPaintCrop(canvas, figure, crop);
+        text.append(' · 已裁剪');
+      }
+      const cropButton = pkChecklistButton('裁剪图片', () => pkOpenFrameCrop(frame, crop, next => {
+        crop = next;
+        selectFrame(false);
+        markDirty();
+      }));
+      cropButton.dataset.frameCrop = '';
+      info.append(' ', cropButton);
       if (/^https?:/i.test(frame.source_url)) {
         const source = link.cloneNode();
         source.href = frame.source_url;
@@ -355,10 +396,18 @@ function pkFrameShow(data) {
     document.getElementById('pk-frame-previews').replaceChildren();
     pkFrameMessage('选择已更改，确认本页后保存到清单。');
   }
-  candidates.addEventListener('change', () => { selectFrame(true); markDirty(); });
+  candidates.addEventListener('change', () => {
+    crop = page.selected && page.selected.id === frameChoice() ? page.selected.crop || null : null;
+    selectFrame(true);
+    if (page.selected && page.selected.id === frameChoice()) {
+      anchor.value = page.selected.anchor;
+      basisInput.value = page.selected.basis;
+    }
+    markDirty();
+  });
   anchor.addEventListener('change', markDirty);
   basisInput.addEventListener('input', markDirty);
-  if (page.selected && candidates.value) anchor.value = page.selected.anchor;
+  if (page.selected && frameChoice()) anchor.value = page.selected.anchor;
   selectFrame(false);
 
   host.replaceChildren(chooser, candidates, details, info, anchor, basis, confirm, undo);
@@ -421,4 +470,138 @@ async function pkFramePreview(channel) {
   } catch (error) {
     if (token === pkChecklistEpoch) pkFrameMessage(error.message);
   }
+}
+
+async function pkFrameCropFromReview(id) {
+  if (pkFrameDirty) {
+    pkFrameMessage('请先确认本页配图，或撤销本页改动。');
+    return;
+  }
+  await pkChecklistFramesOpen();
+  if (!pkFrameLayout) return;
+  const matches = pkFrameLayout.pages.filter(p => p.candidates.some(frame => frame.id === id));
+  const page = matches.find(p => p.candidates.some(frame => frame.id === id && frame.suggested))
+    || matches.find(p => p.key === pkFramePageKey) || matches[0];
+  if (!page) {
+    pkFrameMessage('这张图没有符合条件的页面，请在逐页配图中查看候选。');
+    return;
+  }
+  pkFramePageKey = page.key;
+  pkFrameShow(pkFrameLayout);
+  const radio = [...document.querySelectorAll('.pk-frame-gallery input')].find(input => input.value === id);
+  if (radio) {
+    radio.click();
+    document.querySelector('[data-frame-crop]').click();
+  }
+}
+
+const PK_CROP_FULL = [0, 0, 10000, 10000];
+
+function pkPaintCrop(canvas, img, crop) {
+  const [left, top, right, bottom] = (crop || PK_CROP_FULL)
+    .map((value, i) => Math.round(value * (i % 2 ? img.naturalHeight : img.naturalWidth) / 10000));
+  const width = right - left;
+  const height = bottom - top;
+  if (width < 1 || height < 1) return;
+  const scale = Math.min(1, 520 / width, 300 / height);
+  canvas.width = Math.max(1, Math.round(width * scale));
+  canvas.height = Math.max(1, Math.round(height * scale));
+  canvas.getContext('2d').drawImage(img, left, top, width, height, 0, 0, canvas.width, canvas.height);
+}
+
+function pkOpenFrameCrop(frame, previous, applyCrop) {
+  const dialog = document.createElement('dialog');
+  dialog.className = 'pk-crop-dialog';
+  dialog.setAttribute('aria-label', '自由裁剪关键帧');
+  const title = document.createElement('h3');
+  title.textContent = ['裁剪关键帧', frame.time, frame.subject].filter(Boolean).join(' · ');
+  const tip = document.createElement('p');
+  tip.textContent = '在原图上拖出要保留的区域，重新拖动可调整。';
+  const error = document.createElement('p');
+  error.setAttribute('role', 'status');
+  const source = document.createElement('canvas');
+  source.setAttribute('aria-label', '裁剪框选画布');
+  const preview = document.createElement('canvas');
+  preview.setAttribute('role', 'img');
+  preview.setAttribute('aria-label', '裁剪效果');
+  const result = document.createElement('div');
+  result.className = 'pk-crop-preview';
+  result.append(preview);
+  const img = new Image();
+  let rect = previous ? [...previous] : [...PK_CROP_FULL];
+  let start = null;
+
+  const use = pkChecklistButton('应用裁剪', () => {
+    if (rect[2] - rect[0] < 10000 / img.naturalWidth || rect[3] - rect[1] < 10000 / img.naturalHeight) {
+      error.textContent = '裁剪范围太小，请重新框选。';
+      return;
+    }
+    applyCrop(rect.every((value, i) => value === PK_CROP_FULL[i]) ? null : rect);
+    dialog.close();
+  });
+  use.disabled = true;
+  const reset = pkChecklistButton('恢复原图', () => {
+    rect = [...PK_CROP_FULL];
+    paint();
+  });
+  const cancel = pkChecklistButton('取消', () => dialog.close());
+  const buttons = document.createElement('div');
+  buttons.className = 'guide-sheet-actions';
+  buttons.append(use, reset, cancel);
+  dialog.append(title, tip, error, source, result, buttons);
+  dialog.addEventListener('close', () => dialog.remove(), {once: true});
+  document.body.append(dialog);
+  dialog.showModal();
+
+  function paint() {
+    if (!img.naturalWidth) return;
+    const ctx = source.getContext('2d');
+    const w = source.width;
+    const h = source.height;
+    const [left, top, right, bottom] = rect.map((value, i) => value / 10000 * (i % 2 ? h : w));
+    ctx.drawImage(img, 0, 0, w, h);
+    ctx.fillStyle = 'rgba(0,0,0,.6)';
+    ctx.fillRect(0, 0, w, top);
+    ctx.fillRect(0, bottom, w, h - bottom);
+    ctx.fillRect(0, top, left, bottom - top);
+    ctx.fillRect(right, top, w - right, bottom - top);
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(left, top, right - left, bottom - top);
+    pkPaintCrop(preview, img, rect);
+  }
+
+  function point(event) {
+    const box = source.getBoundingClientRect();
+    return [event.clientX - box.left, event.clientY - box.top].map((value, i) =>
+      Math.min(10000, Math.max(0, Math.round(value / (i ? box.height : box.width) * 10000))));
+  }
+
+  source.addEventListener('pointerdown', event => {
+    if (!img.naturalWidth || (event.pointerType === 'mouse' && event.button !== 0)) return;
+    event.preventDefault();
+    start = point(event);
+    source.setPointerCapture(event.pointerId);
+  });
+  function drag(event) {
+    if (!start) return;
+    const [x, y] = point(event);
+    if (Math.abs(x - start[0]) < 10000 / img.naturalWidth
+        || Math.abs(y - start[1]) < 10000 / img.naturalHeight) return;
+    rect = [Math.min(start[0], x), Math.min(start[1], y), Math.max(start[0], x), Math.max(start[1], y)];
+    error.textContent = '';
+    paint();
+  }
+  source.addEventListener('pointermove', drag);
+  source.addEventListener('pointerup', event => { drag(event); start = null; });
+  source.addEventListener('pointercancel', () => { start = null; });
+  img.onload = () => {
+    const ratio = Math.min(1, 820 / img.naturalWidth, 450 / img.naturalHeight);
+    source.width = Math.max(1, Math.round(img.naturalWidth * ratio));
+    source.height = Math.max(1, Math.round(img.naturalHeight * ratio));
+    paint();
+    use.disabled = false;
+  };
+  img.onerror = () => { error.textContent = '画面读取失败，请关闭后重新选择。'; };
+  img.src = frame.url;
 }

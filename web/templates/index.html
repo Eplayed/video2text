@@ -975,7 +975,7 @@ textarea{resize:vertical;min-height:84px}
 .copy-link{cursor:pointer;color:var(--module-2);font-size:12px;text-decoration:underline}
 </style>
   <link rel="stylesheet" href="/static/today-ops.css?v=20261116">
-  <link rel="stylesheet" href="/static/guide-checklist.css?v=5">
+  <link rel="stylesheet" href="/static/guide-checklist.css?v=7">
 </head>
 <body>
 <div class="layout">
@@ -1708,7 +1708,7 @@ textarea{resize:vertical;min-height:84px}
         <section class="pk-frame-review" aria-labelledby="pk-frame-review-title">
           <strong id="pk-frame-review-title">素材关键帧审核</strong>
           <div id="pk-frames-hint" aria-live="polite"></div>
-          <p class="pk-frame-review-note">审核通过后，可以到「逐页配图」选择画面、确认对应条目和预览。</p>
+          <p class="pk-frame-review-note">审核通过后，可查看大图、裁剪，并勾选用到哪一页。</p>
         </section>
         <section class="guide-sheet" id="pk-checklist" hidden aria-label="攻略清单">
           <div class="guide-sheet-header">
@@ -1729,7 +1729,7 @@ textarea{resize:vertical;min-height:84px}
           </div>
           <section id="pk-page-frames" class="pk-page-frames" aria-label="逐页配图" hidden>
             <strong>逐页配图</strong>
-            <p>按页选择关键帧，确认画面展示的条目。没有合适画面的页可保留文字排版。</p>
+            <p>每页勾选一张缩略图，可拖框裁剪。确认画面展示的条目后保存。</p>
             <div id="pk-frame-status" role="status"></div>
             <div id="pk-frame-assignments"></div>
             <div class="guide-sheet-actions">
@@ -4249,7 +4249,7 @@ function pkStripHtml(items) {
     const u = used[it.name];
     h += '<div style="width:126px">'
       + '<img src="' + esc(thumbOf(it.url, 260)) + '" data-full="' + esc(it.url) + '" loading="lazy" onclick="window.open(this.dataset.full)" '
-      + 'title="点开看大图" style="width:126px;height:224px;object-fit:cover;border-radius:6px;'
+      + 'title="点开看大图" style="width:126px;height:92px;object-fit:contain;border-radius:6px;'
       + 'border:1px solid var(--border);cursor:zoom-in;display:block">'
       + '<div style="font-size:11px;line-height:1.35;margin-top:2px">' + esc(it.ts || '')
       + (u ? ' · <b style="color:var(--accent)">用在第 ' + u.join('、') + ' 页</b>'
@@ -4257,7 +4257,9 @@ function pkStripHtml(items) {
       + '<div style="font-size:10.5px;line-height:1.3;color:var(--text-tertiary)">来自「'
       + esc(who[it.video_id] || ('#' + it.video_id)) + '」</div>'
       + '<div style="font-size:11px;line-height:1.35;color:var(--text-tertiary)">'
-      + esc(it.subject || '（没写画面里是什么）') + '</div></div>';
+      + esc(it.subject || '（没写画面里是什么）') + '</div>'
+      + '<button type="button" class="btn ghost sm" data-frame="' + esc(String(it.name || '').split('/')[0] + '/' + it.i) + '"'
+      + ' onclick="pkFrameCropFromReview(this.dataset.frame)">裁剪并配图</button></div>';
   });
   return h + '</div>';
 }
@@ -11762,7 +11764,7 @@ function bkRender() {
     + bkLedger() + bkHook();
 }
 </script>
-  <script src="/static/guide-checklist.js?v=4"></script>
+  <script src="/static/guide-checklist.js?v=5"></script>
   <script src="/static/today-ops.js?v=20261116b"></script>
 </body>
 </html>

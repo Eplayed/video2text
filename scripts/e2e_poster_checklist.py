@@ -116,6 +116,28 @@ def main():
         else:
             raise AssertionError("更新过的帧未经重新确认进入出图")
         assert checklist_frames.describe(changed, bound, frames)["outdated"] == 1
+
+        from PIL import Image
+        fixture = Image.new("RGB", (80, 60), "#cc1122")
+        fixture.paste("#117733", (40, 0, 80, 60))
+        fixture.save(local, format="PNG")
+        frame["digest"] = sha256(local.read_bytes()).hexdigest()
+        chosen = dict(page=checklist_frames.page_key(plan["pages"][0]), id=frame["id"],
+                      digest=frame["digest"], anchor="滑行腰索", crop=[5000, 1000, 10000, 9000])
+        cropped = checklist_frames.edit(plan, current, frames, chosen)
+        cropped_plan = deepcopy(plan)
+        checklist_frames.attach(cropped_plan, cropped, frames)
+        checklist_frames.freeze(cropped_plan, Path(tmp) / "cropped")
+        with Image.open(cropped_plan["pages"][0]["photos"][0]["path"]) as result:
+            assert result.size == (40, 48) and result.getpixel((1, 1)) == (17, 119, 51)
+        restored = checklist_frames.edit(plan, cropped, frames, dict(chosen, crop=[0, 0, 10000, 10000]))
+        assert "crop" not in restored["frames"][chosen["page"]]
+        for bad in ([0, 0, 10001, 10000], [9000, 0, 8000, 10000], [0, 0, 1, 1]):
+            try:
+                checklist_frames.edit(plan, cropped, frames, dict(chosen, crop=bad))
+            except checklist_frames.ChecklistError:
+                continue
+            raise AssertionError("无效裁剪没有被拒绝")
     print("POSTER_CHECKLIST_OK")
 
 

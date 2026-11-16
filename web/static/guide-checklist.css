@@ -32,3 +32,17 @@
 #pk-frame-previews figure { margin: 0; }
 #pk-frame-previews img { display: block; width: 100%; max-height: 360px; object-fit: contain; }
 #pk-frame-previews figcaption { font-size: 12px; }
+
+.pk-frame-gallery { flex-basis: 100%; display: grid; grid-template-columns: repeat(auto-fill, minmax(138px, 1fr)); gap: 8px; min-width: 0; }
+.pk-frame-tile { cursor: pointer; padding: 7px; border: 1px solid var(--border); border-radius: 8px; min-width: 0; }
+.pk-frame-tile:has(input:checked) { border-color: var(--accent, #4a3d2e); background: var(--surface); box-shadow: inset 0 0 0 1px var(--accent, #4a3d2e); }
+.pk-frame-tile input[type=radio] { width: auto; margin: 2px 0 5px; }
+.pk-frame-tile img { display: block; width: 100%; height: 82px; object-fit: contain; background: #151712; border-radius: 4px; }
+.pk-frame-tile-label { display: block; margin-top: 5px; line-height: 1.35; overflow-wrap: anywhere; }
+.pk-frame-selected canvas { display: block; max-width: min(100%, 370px); height: auto; border-radius: 6px; }
+.pk-crop-dialog { position: fixed; inset: 0; margin: auto; width: min(880px, 93vw); max-height: 92vh; overflow: auto; padding: 16px; border: 1px solid var(--border); border-radius: 10px; color: var(--text); background: var(--surface, #fff); }
+.pk-crop-dialog::backdrop { background: #141512b8; }
+.pk-crop-dialog h3, .pk-crop-dialog p { margin: 0 0 8px; }
+.pk-crop-dialog > canvas { display: block; max-width: 100%; height: auto; cursor: crosshair; touch-action: none; margin: 0 auto; }
+.pk-crop-preview { margin-block: 8px; }
+.pk-crop-preview canvas { display: block; max-width: min(100%, 300px); max-height: 150px; object-fit: contain; }
