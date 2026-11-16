@@ -150,6 +150,18 @@ def main():
                   and content_store.get_summary(db, 1) is not None)
         else:
             raise AssertionError("无 AI 冒充母稿完成")
+    segment = {"segment_id": "belt", "video_id": 384746, "start": 0,
+               "text": "皮萨斯它掉落滑行腰索，装备后可使用，冷却30分钟。"}
+    result = {"points": [{"quote": segment["text"], "priority": "must",
+                          "conditions": ["皮萨斯掉落", "装备后", "冷却15分钟"]}]}
+    point = guide_mother._points_from_result(segment, result, "rev", editorial=True)[0]
+    check("有效原句不因模型条件缩写停稿，未经证实的条件不进入母稿",
+          point["quote"] == segment["text"] and point["conditions"] == ["装备后"])
+    from src.editorial_model import claim_issues
+    check("核实的原文条件和数值仍约束图文",
+          bool(claim_issues("冷却30分钟", [point], "card"))
+          and bool(claim_issues("装备后冷却15分钟", [point], "card"))
+          and not claim_issues("装备后冷却30分钟", [point], "card"))
     print("ALL_OK")
 
 

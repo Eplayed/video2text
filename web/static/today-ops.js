@@ -4,6 +4,8 @@
   const list = document.getElementById('today-topics');
   const sources = document.getElementById('today-sources');
   const context = document.getElementById('today-context');
+  const refresh = panel.querySelector('[data-today-refresh]');
+  const loadProgress = panel.querySelector('[data-today-load-progress]');
   let requestId = 0;
   let refreshTimer;
   let snapshot = null;
@@ -209,7 +211,9 @@
       } else if (notice) {
         actions.append(button('修改草稿', () => openTopic(topic, data.channel), true));
       } else {
-        const generate = button(job.running ? '生成中…' : failure ? '重试生成' : '生成待审稿',
+        const hasSummary = Boolean(topic.summary_id || job.summary_id);
+        const generate = button(job.running ? '生成中…' : hasSummary ? '继续生成图文'
+          : failure ? '重试生成' : '生成待审稿',
           () => start(topic, data.channel, generate, supplements ? supplements.selection() : {}), true);
         generate.disabled = busy || !data.generation_enabled;
         actions.append(generate);
@@ -235,6 +239,10 @@
         if (job.running) {
           progress.dataset.todayProgress = '';
           progress.setAttribute('role', 'status');
+          const bar = document.createElement('progress');
+          bar.className = 'today-job-progress';
+          bar.setAttribute('aria-label', '图文生成进度');
+          card.append(bar);
         }
         card.append(progress);
       }
@@ -262,19 +270,27 @@
     }
   }
 
-  async function load() {
+  async function load(manual = false) {
     const id = ++requestId;
     clearTimeout(refreshTimer);
     if (currentView !== 'dashboard') return;
+    refresh.disabled = true;
+    refresh.textContent = '刷新中…';
+    context.textContent = '正在读取今日选题…';
+    loadProgress.hidden = false;
     try {
       const data = await json('/api/ops/today?channel=' + encodeURIComponent(picker.value));
       if (id !== requestId || currentView !== 'dashboard') return;
+      const sameTopics = snapshot && snapshot.channel === data.channel
+        && JSON.stringify(snapshot.topics) === JSON.stringify(data.topics);
+      const generationChanged = snapshot && snapshot.generation_enabled !== data.generation_enabled;
       snapshot = data;
-      context.textContent = data.today + (data.last_match ? ' · 最近成功匹配 ' + String(data.last_match.finished_at || '').slice(5, 16) : ' · 暂无成功匹配')
+      const refreshed = manual ? (sameTopics ? '已刷新 · 当前选题无变化 · ' : '已刷新 · ') : '';
+      context.textContent = refreshed + data.today + (data.last_match ? ' · 最近成功匹配 ' + String(data.last_match.finished_at || '').slice(5, 16) : ' · 暂无成功匹配')
         + (data.match_error ? ' · 最新匹配失败：' + data.match_error : '')
         + (data.text_model ? ' · ' + data.text_model : ' · 待配置 DeepSeek V4 Pro')
         + (data.text_model && !data.generation_enabled ? ' · 图文生成已暂停' : '');
-      render(data);
+      if (!manual || !sameTopics || generationChanged) render(data);
       renderSources(data.sources);
       const active = data.topics.find(topic => topic.job && topic.job.running);
       if (active) refreshTimer = setTimeout(() => poll(id, data.channel, active.slot_key), 3000);
@@ -286,7 +302,13 @@
           refreshTimer = setTimeout(load, 5000);
         }
       } else {
-        list.replaceChildren(button('重试', load));
+        list.replaceChildren(button('重试', () => load(true)));
+      }
+    } finally {
+      if (id === requestId) {
+        refresh.disabled = false;
+        refresh.textContent = '刷新';
+        loadProgress.hidden = true;
       }
     }
   }
@@ -317,6 +339,6 @@
     list.replaceChildren(text('p', '正在加载选题…'));
     load();
   });
-  panel.querySelector('[data-today-refresh]').addEventListener('click', load);
+  refresh.addEventListener('click', () => load(true));
   window.loadTodayOps = load;
 })();

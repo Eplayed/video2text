@@ -211,7 +211,9 @@ quote 必须逐字复制 text 中的连续文本，不能改标点、合并跨�
         from .editorial_model import GUIDE_EDITOR_RULES
         prompt += "\n" + GUIDE_EDITOR_RULES
         prompt += ("\n每个事实的 quote 要把版本、阶段、条件、否定与数值的单位一起摘下。"
-                   "conditions 数组仅复制 quote 中有实际约束的原文字词，每一项都逐字包含于 quote。"
+                   "conditions 只标会改变事实适用范围的短语，如触发前提、装备要求、适用版本或例外。"
+                   "从 quote 中连续逐字复制；仅填写确实出现的条件，允许为空数组。"
+                   "掉落者、物品名称、结论本身和作者举的使用场景不是条件；不要拼接或改写原句。"
                    "不能把猜测改成事实。正文中的乱码、疑似识别错的数值或无法确认的专名，"
                    "原句逐字保留，在该点新增 review_reason，写清疑点；明确无疑点时填空字符串。"
                    "不要在 display_text 里修正读音或推算数值。"
@@ -258,12 +260,14 @@ def _points_from_result(segment, result, source_revision, *, editorial=False):
         conditions = item.get("conditions") or []
         if not isinstance(conditions, list):
             raise MotherError("要点 %s 的 conditions 应为数组" % point_id)
-        if editorial and any(str(x).strip() not in quote for x in conditions):
-            raise MotherError("原文条件必须逐字包含在本条引文中：%s" % quote[:60])
+        conditions = [str(x).strip() for x in conditions if str(x).strip()]
+        if editorial:
+            # 条件是引文内的索引。模型另写的注释不能作为证据，也不能使已定位的引文失效。
+            conditions = [condition for condition in conditions if condition in quote]
         points.append({"point_id": point_id, "quote": quote,
                        "display_text": str(item.get("display_text") or quote).strip(),
                        "priority": priority, "subject": str(item.get("subject") or "").strip(),
-                       "conditions": [str(x).strip() for x in conditions if str(x).strip()],
+                       "conditions": conditions,
                        "modality": "opinion" if item.get("modality") == "opinion" else "fact",
                        "source_ref": {"video_id": segment["video_id"],
                                       "start": start, "end": end}})

@@ -974,7 +974,7 @@ textarea{resize:vertical;min-height:84px}
 #modal-kf img{aspect-ratio:16/9;object-fit:cover;cursor:zoom-in}
 .copy-link{cursor:pointer;color:var(--module-2);font-size:12px;text-decoration:underline}
 </style>
-  <link rel="stylesheet" href="/static/today-ops.css">
+  <link rel="stylesheet" href="/static/today-ops.css?v=20261116">
 </head>
 <body>
 <div class="layout">
@@ -1038,6 +1038,7 @@ textarea{resize:vertical;min-height:84px}
           </div>
         </div>
         <div id="today-context" class="today-context" role="status"></div>
+        <progress class="today-load-progress" data-today-load-progress aria-label="读取今日选题" hidden></progress>
         <div id="today-topics" class="today-topics"><p>正在加载选题…</p></div>
         <details class="today-sources">
           <summary>素材源最近回执</summary>
@@ -11696,6 +11697,6 @@ function bkRender() {
     + bkLedger() + bkHook();
 }
 </script>
-  <script src="/static/today-ops.js"></script>
+  <script src="/static/today-ops.js?v=20261116"></script>
 </body>
 </html>
