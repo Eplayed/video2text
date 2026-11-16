@@ -975,7 +975,7 @@ textarea{resize:vertical;min-height:84px}
 .copy-link{cursor:pointer;color:var(--module-2);font-size:12px;text-decoration:underline}
 </style>
   <link rel="stylesheet" href="/static/today-ops.css?v=20261116">
-  <link rel="stylesheet" href="/static/guide-checklist.css?v=3">
+  <link rel="stylesheet" href="/static/guide-checklist.css?v=4">
 </head>
 <body>
 <div class="layout">
@@ -1705,6 +1705,11 @@ textarea{resize:vertical;min-height:84px}
           <button class="btn sm pk-go" id="pk-go-top" onclick="posterGenerate()" title="画面用素材真帧或你回传的底图，0 元。出图档（模型画底图）已撤，一张都没有会当场拦你">③ 出图 · 0 元</button>
           <button class="btn ghost sm" id="pk-manual-btn" onclick="pkManualToggle()" title="要模型画的画面就走这条：复制提示词去豆包出图，回来传上这张，整条 0 元">③b 豆包 · 回传底图</button>
         </div>
+        <section class="pk-frame-review" aria-labelledby="pk-frame-review-title">
+          <strong id="pk-frame-review-title">素材关键帧审核</strong>
+          <div id="pk-frames-hint" aria-live="polite"></div>
+          <p class="pk-frame-review-note">审核后可以查看候选画面。按攻略清单出图目前仍采用文字页。</p>
+        </section>
         <section class="guide-sheet" id="pk-checklist" hidden aria-label="攻略清单">
           <div class="guide-sheet-header">
             <strong>核对攻略清单</strong>
@@ -1724,8 +1729,6 @@ textarea{resize:vertical;min-height:84px}
           <div id="pk-checklist-editor"></div>
         </section>
         <div id="pk-layout-hint" style="font-size:11.5px;color:var(--text-secondary);margin:2px 0 8px;min-height:16px"></div>
-        <!-- 这条素材有没有"能当证据的干净画面"：不说的话，0 元那条攻略页路线在界面上是隐形的 -->
-        <div id="pk-frames-hint" style="display:none;font-size:11.5px;line-height:1.6;margin:0 0 8px"></div>
         <!-- 额度预警：拆解/出图都按模型算额度，快没了在这里先说，别等点了才吐一堆堆栈 -->
         <div id="pk-quota" class="pk-quota" style="display:none"></div>
         <div class="pk-hint" style="margin:0 0 8px">按钮上的“0 元”只指底图与排版。若文案变更触发模型复审，实际费用以本次请求记录和平台账单为准。</div>
@@ -4020,14 +4023,25 @@ function pkApplyDeadControls() {
 }
 // ── 这条素材有没有可用画面：0 元的攻略页路线以前在界面上完全隐形 ──
 async function pkFramesProbe(id) {
-  const box = document.getElementById('pk-frames-hint');
-  if (box) box.style.display = 'none';
   if (!id) return;
+  const box = document.getElementById('pk-frames-hint');
+  if (box && !_pkFrames) box.textContent = '正在读取关键帧…';
   try {
-    const d = await fetch('/api/poster/frames?summary_id=' + encodeURIComponent(id)).then(r => r.json());
-    if (_pkId !== id) return;              // 人已经翻到下一条，旧结果不许盖上来
-    _pkFrames = d || null;
-  } catch (e) { _pkFrames = null; }
+    const response = await fetch('/api/poster/frames?summary_id=' + encodeURIComponent(id), {cache: 'no-store'});
+    const data = await response.json();
+    if (!response.ok || data.error) throw new Error(data.error || 'HTTP ' + response.status);
+    if (_pkId !== id) return;
+    _pkFrames = data;
+  } catch (error) {
+    if (_pkId !== id) return;
+    _pkFrames = null;
+    if (box) {
+      box.style.display = '';
+      box.innerHTML = '读取关键帧失败（' + esc(error.message) + '）。'
+        + '<button type="button" class="btn ghost sm" onclick="pkFramesProbe(_pkId)">重试读取</button>';
+    }
+    return;
+  }
   pkRenderFramesHint();
 }
 // 补画面是一条后台任务（重下视频 + 抽帧 + 逐帧裁字幕 + 判帧），前端 3 秒问一次
@@ -4086,14 +4100,11 @@ function pkRenderFramesHint() {
   if (!f.usable) {
     box.style.display = '';
     if (f.total && !(f.judged > 0)) {
-      // 抽了帧但一张都没看过图。判帧花钱，号主定的口径是"只补真要发的那几条"，
-      // 所以这里只给一个不催的入口：不点也行，出图那一刻会自动看 8 张
-      box.innerHTML = '这条素材抽了 ' + f.total + ' 张画面，还没逐张看图（看图那一步才花钱）。'
-        + '<button class="btn ghost sm" onclick="pkJudgeFrames(this)" '
-        + 'title="逐张问一遍看图模型：有没有后期压上去的字、在哪、能不能裁一条边救回来。一次最多看 8 张">'
+      box.innerHTML = '已抽取 ' + f.total + ' 张关键帧，等待审核。'
+        + '<button type="button" class="btn ghost sm" onclick="pkJudgeFrames(this)" '
+        + 'title="用看图模型检查后期字幕、水印和裁剪效果。每批最多 8 张，按模型用量计费。">'
         + '先看图确认</button>'
-        + '<span style="color:var(--text-tertiary)">不点也行，出图那一刻会自动看 8 张 · '
-        + '<a href="javascript:void(0)" onclick="pkUseGuideLayout()">整组直接改成攻略页</a></span>';
+        + '<span class="pk-frame-review-note">每批最多审核 8 张，按模型用量计费。</span>';
       return;
     }
     if (f.total) {
@@ -4149,7 +4160,7 @@ function pkRenderFramesHint() {
   let html = '素材画面：<b>' + f.usable + '</b> 张能用'
     + '（抽了 ' + (f.total || 0) + ' 张，判过 ' + (f.judged || 0) + ' 张'
     + (drop ? '，扔掉 ' + drop + ' 张（最多的一种是「' + esc(why) + '」）' : '，判过的没一张带后期字')
-    + (left > 0 ? '；另有 ' + left + ' 张没看图，用到才看' : '') + '）';
+    + (left > 0 ? '，另有 ' + left + ' 张待审核' : '') + '）';
   // 一篇稿常常是几条素材合的：以前这里只报主素材那一条的数，
   // 主视频原片删了就显示"0 张能用"，而另一条明明有 18 张帧（2026-10-22 真试用抓到的）。
   const ms = f.materials || [];
@@ -4178,6 +4189,10 @@ function pkRenderFramesHint() {
         + '要画面走「③b 豆包 · 回传底图」，或回排产表换一条有画面的视频素材；'
         + '没判过的帧不会自动花钱判：点下面「整组改成攻略页」时才逐张看图。';
     }
+  }
+  if (left > 0 && ms.length <= 1) {
+    html += ' <button type="button" class="btn ghost sm" onclick="pkJudgeFrames(this)"'
+      + ' title="继续审核下一批，每批最多 8 张，按模型用量计费">继续审核</button>';
   }
   if (items.length) {
     html += ' <button class="btn ghost sm" onclick="pkToggleFrameStrip()"'
