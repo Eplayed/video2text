@@ -1122,6 +1122,7 @@ def typeset_guide(base_png, plan, ratio="9:16", skin=None, page=None, photo=None
 
     if photos:
         y += sp
+    photo_boxes = []
     for i, p in enumerate(photos):
         raw = _photo_bytes(p)
         y += PH_PAD
@@ -1138,7 +1139,20 @@ def typeset_guide(base_png, plan, ratio="9:16", skin=None, page=None, photo=None
             continue
         rad = int(W * 0.020)
         box_h = max(int(H * 0.10), per_photo)
-        bx = _photo_band(img, src, (m, y, W - m, y + box_h), skin, rad)
+        if p.get("crop"):
+            # 手工框选的画面已定稿，图框匹配其比例。充分利用版面空间，不加模糊底或二次裁切。
+            scale = min(inner / src.width, box_h / src.height)
+            width = max(1, min(inner, round(src.width * scale)))
+            height = max(1, min(box_h, round(src.height * scale)))
+            x = m + (inner - width) // 2
+            bx = (x, y, x + width, y + height)
+            resized = src.resize((width, height), Image.LANCZOS)
+            rad = min(rad, width // 2, height // 2)
+            mask = _rounded_mask(width, height, rad)
+            img.paste(resized, (x, y), mask)
+        else:
+            bx = _photo_band(img, src, (m, y, W - m, y + box_h), skin, rad)
+        photo_boxes.append(list(bx))
         draw = ImageDraw.Draw(img, "RGBA")     # 贴过图要重开一支笔，否则画在旧层上
         draw.rounded_rectangle(bx, radius=rad, outline=rule + (255,), width=2)
         y = bx[3] + CAP_GAP
@@ -1262,7 +1276,7 @@ def typeset_guide(base_png, plan, ratio="9:16", skin=None, page=None, photo=None
     chk = {"ok": not problems, "problems": problems, "canvas": "%dx%d" % (W, H),
            "engine": "pil-guide", "skin": plan.get("style_key") or DEFAULT_SKIN,
            "layout": "guide", "layout_label": LAYOUTS["guide"]["label"],
-           "cards": len(cards), "photos": len(photos),
+           "cards": len(cards), "photos": len(photo_boxes), "photo_boxes": photo_boxes,
            "blocks": [k for k, v in (
                ("kicker", kicker), ("title", title), ("subtitle", subtitle),
                ("photos", photos), ("bignum", bignum), ("cards", cards),

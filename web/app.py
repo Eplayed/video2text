@@ -5159,6 +5159,7 @@ def _checklist_frame_plan(summary_id, sheet):
         raise guide_checklist.ChecklistError("原文已更新，请重新准备清单")
     mother = guide_mother.load_mother(DB_PATH, summary_id)
     plan, publish, audit_mother = guide_checklist.compiled(sheet, mother)
+    plan["checklist_layout"] = 2
     frames = checklist_frames.candidates(_guide_materials(summary), OUTPUT_DIR)
     return plan, publish, audit_mother, frames
 
@@ -5225,12 +5226,13 @@ def api_poster_checklist_render(summary_id):
         if channel not in ("toutiao", "xhs", "wechat"):
             raise guide_checklist.ChecklistError("请选择发布渠道")
         plan, publish, audit_mother, frames = _checklist_frame_plan(summary_id, sheet)
-        image_proof = checklist_frames.attach(plan, sheet, frames, require_basis=True)
+        image_proof = checklist_frames.attach(plan, sheet, frames)
         previous = ai_poster.get_package(summary_id) or {}
         also_wechat = (channel == "wechat" or data.get("also_wechat") is True
                        or bool(previous.get("wechat_companion")))
         old_plan = previous.get("plan") or {}
         if (old_plan.get("checklist_revision") == sheet["revision"]
+                and old_plan.get("checklist_layout") == plan["checklist_layout"]
                 and _poster_approved_plan(previous)
                 and (not also_wechat or previous.get("wechat_companion"))):
             return jsonify({"status": "reused", "summary_id": summary_id})
@@ -5496,9 +5498,22 @@ def api_poster_plan_page():
                     "task_id": _poster_status["task_id"]})
 
 
+def _has_saved_checklist_frames(summary_id):
+    from src import guide_checklist
+    try:
+        if not int(summary_id or 0):
+            return False
+        return bool(guide_checklist.load(DB_PATH, int(summary_id)).get("frames"))
+    except (TypeError, ValueError):
+        return False
+
+
 @app.route("/api/poster/generate", methods=["POST"])
 def api_poster_generate():
-    return _start_poster_graphics(request.get_json(force=True) or {})
+    data = request.get_json(force=True) or {}
+    if data.get("workflow") != "free" and _has_saved_checklist_frames(data.get("summary_id")):
+        return jsonify({"error": "这篇已保存逐页配图，请用「生成清单图文」出图"}), 409
+    return _start_poster_graphics(data)
 
 
 def _start_poster_graphics(data, *, checklist_mother=None, checklist_image_proof=None):
@@ -5706,10 +5721,11 @@ def _start_poster_graphics(data, *, checklist_mother=None, checklist_image_proof
         rf = ["第 %d 页→%s" % (r.get("page"), r.get("frame") or "补不出")
               for r in (manifest.get("frames_refilled") or [])]
         rfb = ("，🔁 出图前核对换过画面：" + "、".join(rf)) if rf else ""
+        placed = (" · 已排入 %d 页配图" % len(checklist_image_proof)) if checklist_image_proof else ""
         if manifest.get("text_mode") == "typeset":
             warn = ("，⚠️ 版面提示：" + "；".join(ts_chk.get("problems") or [])) if ts_chk.get("problems") else ""
             _poster_status["progress"] = "✅ 海报已生成（%d 字，字由程序排版、不存在错字）%s%s%s%s" % (
-                manifest["text_chars"], score, warn, rfb, block + ev)
+                manifest["text_chars"], score, warn, rfb, placed + block + ev)
         else:
             _poster_status["progress"] = "✅ 海报已生成（%d 字）%s%s%s%s" % (
                 manifest["text_chars"], score,
@@ -5889,6 +5905,8 @@ def api_poster_preview():
     所以越界照样出图，只把版面自检的问题原样回给前端。
     """
     data = request.get_json(force=True) or {}
+    if data.get("workflow") != "free" and _has_saved_checklist_frames(data.get("summary_id")):
+        return jsonify({"error": "这篇已保存逐页配图，请用「预览清单」查看版面"}), 409
     plan = data.get("plan") if isinstance(data.get("plan"), dict) else None
     if not plan or not ai_poster.plan_has_text(plan):
         return jsonify({"error": "还没有可预览的文案，先点「① AI 拆解文案」"}), 400

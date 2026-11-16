@@ -99,7 +99,8 @@ def main():
         assert checklist_frames.describe(plan, bound, frames)["pages"][0]["selected"]["id"] == frame["id"]
         assert not checklist_frames.describe(plan, bound, frames)["pages"][1]["candidates"]
         preview = deepcopy(plan)
-        checklist_frames.attach(preview, bound, frames)
+        proof = checklist_frames.attach(preview, bound, frames)
+        assert proof[0]["review"] == "未审" and proof[0]["rights_basis"] == ""
         checklist_frames.freeze(preview, Path(tmp) / "preview")
         assert Path(preview["pages"][0]["photos"][0]["path"]).read_bytes() == local.read_bytes()
         local.write_bytes(b"updated frame")

@@ -1,9 +1,75 @@
 let pkChecklistSheet = null;
 let pkChecklistEpoch = 0;
+let pkWorkflow = 'auto';
+
+function pkChecklistModeLine() {
+  const count = pkFrameLayout
+    ? pkFrameLayout.pages.filter(page => page.selected && !page.stale).length
+    : Object.keys((pkChecklistSheet || {}).frames || {}).length;
+  return count ? '攻略清单 · 已保存 ' + count + ' 页配图' : '攻略清单';
+}
+
+function pkSetWorkflow(mode) {
+  pkWorkflow = mode;
+  const overlay = document.getElementById('pk-overlay');
+  overlay.classList.toggle('pk-workflow-checklist', mode === 'checklist');
+  overlay.classList.toggle('pk-workflow-simple', mode !== 'free');
+  for (const id of ['pk-preview-top', 'pk-preview-bot']) {
+    const button = document.getElementById(id);
+    button.textContent = mode === 'checklist' ? '② 预览清单' : '② 看版面 · 免费';
+    if (mode === 'checklist') button.style.display = '';
+    button.title = mode === 'checklist' ? '按已保存的清单和配图预览' : '预览当前自由稿版面';
+  }
+  for (const id of ['pk-go-top', 'pk-go-bot']) {
+    const button = document.getElementById(id);
+    button.textContent = pkGoLabel();
+    button.title = mode === 'checklist' ? '使用已保存的清单、关键帧和裁剪区域' : '生成当前图文';
+  }
+  if (mode === 'checklist') {
+    document.getElementById('pk-mode').textContent = pkChecklistModeLine();
+    if (_pkFrames) pkRenderFramesHint();
+  }
+}
+
+async function pkPosterAction(generate) {
+  if (!_pkId) return;
+  if (pkWorkflow === 'auto') {
+    const token = pkChecklistEpoch;
+    try {
+      const value = await pkChecklistRequest();
+      if (token !== pkChecklistEpoch) return;
+      if (value.sheet) {
+        document.getElementById('pk-checklist').hidden = false;
+        pkChecklistShow(value);
+      }
+    } catch (error) {
+      if (token === pkChecklistEpoch) {
+        const result = document.getElementById('pk-result');
+        result.textContent = '读取攻略清单失败。' + error.message;
+        result.scrollIntoView({block: 'nearest'});
+      }
+      return;
+    }
+  }
+  if (pkWorkflow !== 'checklist') return generate ? posterGenerate() : posterPreview();
+  if (!pkChecklistSheet || document.getElementById('pk-checklist-actions').hidden) {
+    document.getElementById('pk-checklist').scrollIntoView({block: 'nearest'});
+    return;
+  }
+  if (generate) return pkChecklistSave(true);
+  if (pkFrameDirty) {
+    pkFrameMessage('请先确认本页配图，再预览。');
+    document.getElementById('pk-frame-status').scrollIntoView({block: 'nearest'});
+    return;
+  }
+  if (await pkChecklistFramesOpen()) await pkFramePreview(_pkChannel);
+}
 
 function pkChecklistReset() {
   pkChecklistEpoch++;
   pkChecklistSheet = null;
+  pkSetWorkflow('auto');
+  document.querySelector('.pk-more-tools').open = false;
   pkFrameReset();
   for (const id of ['pk-checklist', 'pk-current-package', 'pk-existing-revision']) {
     document.getElementById(id).hidden = true;
@@ -103,15 +169,24 @@ function pkChecklistShow(value) {
   const kind = document.getElementById('pk-checklist-kind');
   const prepare = document.getElementById('pk-checklist-prepare');
   const actions = document.getElementById('pk-checklist-actions');
+  const copy = document.querySelector('.pk-checklist-copy');
   const stale = value.stale;
+  copy.hidden = !pkChecklistSheet || stale;
   document.getElementById('pk-checklist-msg').textContent = stale
     ? '原文或母稿已有更新，请重新准备清单。' : '';
-  if (pkChecklistSheet) kind.value = pkChecklistSheet.kind;
+  if (pkChecklistSheet) {
+    kind.value = pkChecklistSheet.kind;
+    pkSetWorkflow('checklist');
+  }
   editor.replaceChildren();
   prepare.hidden = Boolean(pkChecklistSheet && !stale);
   actions.hidden = !pkChecklistSheet || stale;
   kind.disabled = false;
   if (!pkChecklistSheet || stale) return;
+  const pending = pkChecklistSheet.rows.filter(row => !row.included).length;
+  copy.open = pending > 0;
+  document.getElementById('pk-checklist-copy-title').textContent = '核对文案 · '
+    + pkChecklistSheet.rows.length + ' 条' + (pending ? ' · ' + pending + ' 条未纳入' : '');
   const title = pkChecklistField('攻略标题', pkChecklistSheet.title, 30);
   title.querySelector('input').id = 'pk-checklist-title';
   editor.append(title, ...pkChecklistSheet.rows.map(pkChecklistRow));
@@ -150,12 +225,13 @@ async function pkChecklistSave(render) {
   if (!pkChecklistSheet) return;
   if (pkFrameDirty) {
     pkFrameMessage('请先确认本页配图，或撤销本页改动。');
+    document.getElementById('pk-frame-status').scrollIntoView({block: 'nearest'});
     return;
   }
   const token = pkChecklistEpoch;
   const actions = document.getElementById('pk-checklist-actions');
   const msg = document.getElementById('pk-checklist-msg');
-  const buttons = actions.querySelectorAll('button');
+  const buttons = [...actions.querySelectorAll('button'), document.getElementById('pk-go-top')];
   buttons.forEach(button => { button.disabled = true; });
   try {
     const value = await pkChecklistRequest('', pkChecklistForm());
@@ -255,6 +331,7 @@ async function pkChecklistFramesOpen() {
     pkFrameShow(data);
     pkFrameMessage('选择页面和关键帧，确认对应的条目后保存。');
     panel.scrollIntoView({block: 'nearest'});
+    return true;
   } catch (error) {
     if (token === pkChecklistEpoch) pkFrameMessage(error.message);
   }
@@ -264,6 +341,7 @@ function pkFrameShow(data) {
   pkFrameLayout = data;
   pkFrameDirty = false;
   pkChecklistSheet.revision = data.revision;
+  document.getElementById('pk-mode').textContent = pkChecklistModeLine();
   const host = document.getElementById('pk-frame-assignments');
   document.getElementById('pk-frame-previews').replaceChildren();
   const page = data.pages.find(p => p.key === pkFramePageKey) || data.pages[0];
@@ -327,12 +405,13 @@ function pkFrameShow(data) {
   anchor.append(new Option('选择画面对应的本页条目', ''));
   page.labels.forEach(name => anchor.append(new Option(name, name)));
 
-  const basis = pkChecklistField('画面使用依据（发布包需要，预览可留空）',
+  const basis = pkChecklistField('画面使用依据（选填，发布前核对）',
     page.selected && !page.stale ? page.selected.basis : '', 200);
   const basisInput = basis.querySelector('input');
   basisInput.placeholder = '如本人录制，或已获得作者许可';
-  const info = document.createElement('div');
+  const info = document.createElement('section');
   info.className = 'pk-frame-selected';
+  info.setAttribute('aria-label', '本页配图预览');
   const details = document.createElement('p');
   details.textContent = page.stale ? '原配图已变化，请重新选图或设为文字页。' : '';
   const confirm = pkChecklistButton('确认本页配图', () => {
@@ -360,13 +439,18 @@ function pkFrameShow(data) {
       link.textContent = '打开大图';
       const text = document.createElement('p');
       text.textContent = [frame.source, frame.time, frame.subject].filter(Boolean).join(' · ');
-      info.append(figure, text, link);
+      const caption = document.createElement('strong');
+      caption.textContent = '第 ' + page.page + ' 页配图预览';
+      const imageBox = document.createElement('div');
+      imageBox.className = 'pk-frame-image';
+      imageBox.append(figure);
+      info.append(caption, imageBox, text, link);
       if (crop) {
         const canvas = document.createElement('canvas');
         canvas.setAttribute('role', 'img');
         canvas.setAttribute('aria-label', '已裁剪的画面');
         figure.hidden = true;
-        info.insertBefore(canvas, text);
+        imageBox.append(canvas);
         figure.addEventListener('load', () => pkPaintCrop(canvas, figure, crop), {once: true});
         if (figure.complete && figure.naturalWidth) pkPaintCrop(canvas, figure, crop);
         text.append(' · 已裁剪');
@@ -427,7 +511,7 @@ async function pkFrameSave(body) {
     const data = await pkChecklistRequest('/frames', Object.assign({revision: pkFrameLayout.revision}, body));
     if (token !== pkChecklistEpoch) return;
     pkFrameShow(data);
-    pkFrameMessage(body.id ? (body.basis.trim() ? '本页配图已确认。' : '本页配图已保存，可先预览。出图前需填写使用依据。')
+    pkFrameMessage(body.id ? '本页配图已保存，预览和出图会使用这张图。'
       : body.discard_stale ? '已清除失效配图。' : '本页已设为文字页。');
   } catch (error) {
     if (token === pkChecklistEpoch) pkFrameMessage(error.message);
@@ -477,8 +561,7 @@ async function pkFrameCropFromReview(id) {
     pkFrameMessage('请先确认本页配图，或撤销本页改动。');
     return;
   }
-  await pkChecklistFramesOpen();
-  if (!pkFrameLayout) return;
+  if (!await pkChecklistFramesOpen()) return;
   const matches = pkFrameLayout.pages.filter(p => p.candidates.some(frame => frame.id === id));
   const page = matches.find(p => p.candidates.some(frame => frame.id === id && frame.suggested))
     || matches.find(p => p.key === pkFramePageKey) || matches[0];

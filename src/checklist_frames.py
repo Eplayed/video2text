@@ -145,7 +145,7 @@ def edit(plan, sheet, frames, body):
     return dict(sheet, frames=bindings)
 
 
-def attach(plan, sheet, frames, require_basis=False):
+def attach(plan, sheet, frames):
     saved = sheet.get("frames") or {}
     pages = plan["pages"]
     if set(saved) - {page_key(page) for page in pages}:
@@ -159,8 +159,6 @@ def attach(plan, sheet, frames, require_basis=False):
         if (not frame or selected["digest"] != frame["digest"] or not _allowed(frame, page, pages)
                 or selected["anchor"] not in {card["t"] for card in page["cards"]}):
             raise ChecklistError("第 %d 页的关键帧已变化，请重新确认" % index)
-        if require_basis and not selected["basis"]:
-            raise ChecklistError("第 %d 页缺少画面使用依据，请补填或设为文字页" % index)
         page["photos"] = [{
             "path": frame["file"], "frame": frame["id"], "caption": selected["anchor"],
             "ts": frame["time"], "judged": True, "sha256": frame["digest"],
@@ -169,7 +167,7 @@ def attach(plan, sheet, frames, require_basis=False):
             page["photos"][0]["crop"] = selected["crop"]
         materials.append({"ref": "%s %s" % (frame["id"], frame["time"]), "url": frame["source_url"],
                           "author": frame["author"], "usage": "被引用的画面",
-                          "rights_basis": selected["basis"], "review": "可发布"})
+                          "rights_basis": selected["basis"], "review": "可发布" if selected["basis"] else "未审"})
     return materials
 
 

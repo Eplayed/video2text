@@ -46,3 +46,19 @@
 .pk-crop-dialog > canvas { display: block; max-width: 100%; height: auto; cursor: crosshair; touch-action: none; margin: 0 auto; }
 .pk-crop-preview { margin-block: 8px; }
 .pk-crop-preview canvas { display: block; max-width: min(100%, 300px); max-height: 150px; object-fit: contain; }
+
+.pk-frame-selected { padding: 10px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; }
+.pk-frame-selected > strong { display: block; margin-bottom: 8px; }
+
+.pk-frame-image { width: fit-content; max-width: 100%; overflow: hidden; border-radius: 6px; }
+.pk-frame-image img:not([hidden]), .pk-frame-image canvas { display: block; max-width: min(100%, 520px); height: auto; border-radius: 0; }
+
+.pk-workflow-simple .pk-bar > label:not(.pk-checklist-control),
+.pk-workflow-simple :is(.pk-free-control, #pk-manual-btn, #pk-guide, #pk-tpls, #pk-quota, #pk-layout-hint, #pk-break, #pk-one),
+.pk-workflow-checklist #pk-open-checklist,
+.pk-workflow-checklist :is(.pk-free-control, #pk-plan, #pk-manual, #pk-manual-btn, #pk-guide, #pk-tpls, #pk-quota, #pk-layout-hint, #pk-break, #pk-one) { display: none !important; }
+.pk-more-tools { margin-left: auto; font-size: 13px; }
+.pk-more-tools summary, .pk-checklist-copy summary { cursor: pointer; }
+.pk-more-tools[open] { display: flex; flex-wrap: wrap; }
+.pk-more-tools[open] summary { margin-bottom: 6px; }
+.pk-checklist-copy { margin-top: 10px; }

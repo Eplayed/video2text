@@ -975,7 +975,7 @@ textarea{resize:vertical;min-height:84px}
 .copy-link{cursor:pointer;color:var(--module-2);font-size:12px;text-decoration:underline}
 </style>
   <link rel="stylesheet" href="/static/today-ops.css?v=20261116">
-  <link rel="stylesheet" href="/static/guide-checklist.css?v=7">
+  <link rel="stylesheet" href="/static/guide-checklist.css?v=9">
 </head>
 <body>
 <div class="layout">
@@ -1656,7 +1656,7 @@ textarea{resize:vertical;min-height:84px}
         <div class="tt-gen-title">🎨 AI 海报</div>
         <div class="tt-gen-sub">整合稿 #<span id="pk-id"></span> · <span id="pk-mode">字由程序排，不会错字</span></div>
         <div class="pk-bar">
-          <label>发到哪<select id="pk-channel" onchange="pkSetChannel(this.value)" title="决定发布文案与检查清单：小红书档不输出尾注与关键词回复（防「AI 托管」判定）；公众号档默认 3:4，形态默认「文章配图」（2026-10-26 起公众号交的是完整文章，图只是配图；确实要发图片消息再切过去）">
+          <label class="pk-checklist-control">发到哪<select id="pk-channel" onchange="pkSetChannel(this.value)" title="决定发布文案与检查清单：小红书档不输出尾注与关键词回复（防「AI 托管」判定）；公众号档默认 3:4，形态默认「文章配图」（2026-10-26 起公众号交的是完整文章，图只是配图；确实要发图片消息再切过去）">
             <option value="toutiao" selected>头条</option>
             <option value="xhs">小红书</option>
             <option value="wechat">公众号</option>
@@ -1694,15 +1694,18 @@ textarea{resize:vertical;min-height:84px}
           <label>配图<span class="pk-photo" id="pk-photo"><button type="button" class="btn ghost sm" onclick="pkPhotoPick()" title="有真实截图（坐骑、装备、界面）就传上来当主视觉：这条不出 AI 底图、0 元">＋ 用你的图</button></span></label>
           <label class="pk-grow">题材<input id="pk-theme" placeholder="选填，例：魔兽怀旧服 塔卡"></label>
           <label class="pk-check"><input type="checkbox" id="pk-review" checked>出图后打分</label>
-          <label class="pk-check" title="攻略页复用当前正文，另出 3:4 公众号配图与正文"><input type="checkbox" id="pk-also-wechat">一并生成公众号图文攻略</label>
+          <label class="pk-check pk-checklist-control" title="攻略页复用当前正文，另出 3:4 公众号配图与正文"><input type="checkbox" id="pk-also-wechat">一并生成公众号图文攻略</label>
         </div>
         <div class="pk-actions">
-          <button type="button" class="btn sm" onclick="pkChecklistOpen()">攻略清单</button>
+          <button type="button" class="btn sm" id="pk-open-checklist" onclick="pkChecklistOpen()">攻略清单</button>
           <button type="button" class="btn ghost sm" id="pk-current-package" hidden onclick="gotoPosterPage(_pkId, _pkChannel)">查看当前成品</button>
-          <button type="button" class="btn ghost sm" id="pk-existing-revision" hidden onclick="pkHydrate(_pkId, true)">打开自由草稿</button>
-          <button class="btn ghost sm" onclick="pkStartFreeRevision()">自由拆稿（新草稿）</button>
-          <button class="btn ghost sm" id="pk-preview-top" onclick="posterPreview()" title="不花钱、当场出：用出图时同一个排版函数先看版面">② 看版面 · 免费</button>
-          <button class="btn sm pk-go" id="pk-go-top" onclick="posterGenerate()" title="画面用素材真帧或你回传的底图，0 元。出图档（模型画底图）已撤，一张都没有会当场拦你">③ 出图 · 0 元</button>
+          <details class="pk-more-tools">
+            <summary>自由稿工具</summary>
+            <button type="button" class="btn ghost sm" id="pk-existing-revision" hidden onclick="pkHydrate(_pkId, true)">打开自由草稿</button>
+            <button type="button" class="btn ghost sm" onclick="pkStartFreeRevision()">新建自由稿</button>
+          </details>
+          <button class="btn ghost sm" id="pk-preview-top" onclick="pkPosterAction(false)" title="不花钱、当场出：用出图时同一个排版函数先看版面">② 看版面 · 免费</button>
+          <button class="btn sm pk-go" id="pk-go-top" onclick="pkPosterAction(true)" title="画面用素材真帧或你回传的底图，0 元。出图档（模型画底图）已撤，一张都没有会当场拦你">③ 出图 · 0 元</button>
           <button class="btn ghost sm" id="pk-manual-btn" onclick="pkManualToggle()" title="要模型画的画面就走这条：复制提示词去豆包出图，回来传上这张，整条 0 元">③b 豆包 · 回传底图</button>
         </div>
         <section class="pk-frame-review" aria-labelledby="pk-frame-review-title">
@@ -1720,12 +1723,11 @@ textarea{resize:vertical;min-height:84px}
             </select></label>
             <button type="button" class="btn ghost sm" id="pk-checklist-prepare" onclick="pkChecklistPrepare()">准备清单</button>
           </div>
-          <p class="pk-hint">对照原句核对每条内容，勾选后按分组分页。每张卡片正文最多 40 字。头条号与小红书用 9:16，公众号用 3:4。上方风格和配图选项用于自由稿。</p>
           <div id="pk-checklist-msg" role="status"></div>
           <div class="guide-sheet-actions" id="pk-checklist-actions" hidden>
             <button type="button" class="btn ghost sm" onclick="pkChecklistSave(false)">保存清单</button>
             <button type="button" class="btn ghost sm" onclick="pkChecklistFramesOpen()">逐页配图</button>
-            <button type="button" class="btn sm" onclick="pkChecklistSave(true)">按清单生成图文</button>
+
           </div>
           <section id="pk-page-frames" class="pk-page-frames" aria-label="逐页配图" hidden>
             <strong>逐页配图</strong>
@@ -1738,12 +1740,15 @@ textarea{resize:vertical;min-height:84px}
             </div>
             <div id="pk-frame-previews"></div>
           </section>
-          <div id="pk-checklist-editor"></div>
+          <details class="pk-checklist-copy">
+            <summary id="pk-checklist-copy-title">核对文案</summary>
+            <div id="pk-checklist-editor"></div>
+          </details>
         </section>
         <div id="pk-layout-hint" style="font-size:11.5px;color:var(--text-secondary);margin:2px 0 8px;min-height:16px"></div>
         <!-- 额度预警：拆解/出图都按模型算额度，快没了在这里先说，别等点了才吐一堆堆栈 -->
         <div id="pk-quota" class="pk-quota" style="display:none"></div>
-        <div class="pk-hint" style="margin:0 0 8px">按钮上的“0 元”只指底图与排版。若文案变更触发模型复审，实际费用以本次请求记录和平台账单为准。</div>
+        <div class="pk-hint pk-free-control" style="margin:0 0 8px">按钮上的“0 元”只指底图与排版。若文案变更触发模型复审，实际费用以本次请求记录和平台账单为准。</div>
         <div class="pk-tpls" id="pk-tpls" style="display:none"></div>
         <div class="pk-break" id="pk-break" style="display:none"></div>
         <div class="pk-one" id="pk-one" style="display:none"></div>
@@ -1762,14 +1767,14 @@ textarea{resize:vertical;min-height:84px}
         <!-- 豆包手动出图：复制每页提示词 → 外部出图 → 回传（排版档传底图、直出档传成品） -->
         <div class="pk-manual" id="pk-manual" style="display:none"></div>
         <!-- 文案编辑区末尾再放一次动作条：改完就在眼前，不用滚回顶部找按钮 -->
-        <div class="pk-actions">
+        <div class="pk-actions pk-free-control">
           <button class="btn ghost sm" onclick="pkStartFreeRevision()">自由拆稿（新草稿）</button>
-          <button class="btn ghost sm" id="pk-preview-bot" onclick="posterPreview()">② 看版面 · 免费</button>
-          <button class="btn sm pk-go" id="pk-go-bot" onclick="posterGenerate()" title="画面用素材真帧或你回传的底图，0 元">③ 出图 · 0 元</button>
+          <button class="btn ghost sm" id="pk-preview-bot" onclick="pkPosterAction(false)">② 看版面 · 免费</button>
+          <button class="btn sm pk-go" id="pk-go-bot" onclick="pkPosterAction(true)" title="画面用素材真帧或你回传的底图，0 元">③ 出图 · 0 元</button>
           <button class="btn ghost sm" id="pk-manual-btn-2" onclick="pkManualToggle()">③b 豆包 · 回传底图</button>
         </div>
         <details class="pk-prov" id="pk-prov">
-          <summary>编辑证据链 · 这篇我们新增了什么（<b>不是勾原创</b>，只是把依据留在能回查的地方）</summary>
+          <summary>来源与使用依据</summary>
           <div class="pk-prov-body" id="pk-prov-body">载入中…</div>
         </details>
         <div id="pk-result"></div>
@@ -3839,6 +3844,7 @@ let _pkLast = null;
 function openPosterDialog(id, options = {}) {
   _pkId = id;
   pkChecklistReset();
+  if (options.checklist) pkSetWorkflow('checklist');
   _pkLast = null;
   _pkSource = null;          // 原文缓存按整理稿存，换一条必须重取
   _pkPhoto = null;           // 配图也是这条素材的，换整理稿要清掉
@@ -3881,7 +3887,15 @@ async function pkHydrate(id, draft = false) {
   if (_pkId !== id || st.running || st.summary_id !== id) return;
   document.getElementById('pk-current-package').hidden = !st.package;
   if (!draft) document.getElementById('pk-existing-revision').hidden = !st.revision_available;
-  if (draft) document.getElementById('pk-checklist').hidden = true;
+  if (!draft && pkWorkflow === 'auto' && st.plan && st.plan.plan && st.plan.plan.checklist_revision) {
+    pkChecklistOpen();
+    return;
+  }
+  if (!draft && pkWorkflow === 'checklist') return;
+  if (draft) {
+    pkSetWorkflow('free');
+    document.getElementById('pk-checklist').hidden = true;
+  }
   // 上次失败不再提前 return（2026-11-03）：原来一句「上一次任务失败」就把版面吞了，
   // 人对着"先把这些卖点改掉"却没有任何可改的东西，点③还会静默重跑一次拆解、
   // 再被拦一次（每次拦的句子还不一样）。现在错误照显示（带逐条出口），版面照恢复。
@@ -3976,7 +3990,7 @@ function pkApplyModeChrome() {
   if (mode) mode.textContent = pkModeLine();
   ['pk-preview-top', 'pk-preview-bot', 'pk-layout-wrap'].forEach(function (id) {
     const el = document.getElementById(id);
-    if (el) el.style.display = direct ? 'none' : '';
+    if (el) el.style.display = direct && (id === 'pk-layout-wrap' || pkWorkflow !== 'checklist') ? 'none' : '';
   });
   const mbTxt = direct ? '③b 豆包 · 回传成品' : '③b 豆包 · 回传底图';
   ['pk-go-top', 'pk-go-bot'].forEach(function (id) {
@@ -4169,7 +4183,9 @@ function pkRenderFramesHint() {
   box.style.display = '';
   // 「8 张画面」和「3 页」是两件事，以前混在一句里说，号主以为点 ③ 会出 8 张图（2026-10-13）。
   // 所以这一行固定三段：素材画面有多少 → 这一组是几页 → 图从哪来、多少钱。
-  let html = '素材画面：<b>' + f.usable + '</b> 张能用'
+  let html = pkWorkflow === 'checklist'
+    ? '已审核 ' + (f.judged || 0) + '/' + (f.total || 0) + ' 张 · <b>' + f.usable + ' 张可用</b>'
+    : '素材画面：<b>' + f.usable + '</b> 张能用'
     + '（抽了 ' + (f.total || 0) + ' 张，判过 ' + (f.judged || 0) + ' 张'
     + (drop ? '，扔掉 ' + drop + ' 张（最多的一种是「' + esc(why) + '」）' : '，判过的没一张带后期字')
     + (left > 0 ? '，另有 ' + left + ' 张待审核' : '') + '）';
@@ -4210,9 +4226,10 @@ function pkRenderFramesHint() {
     html += ' <button class="btn ghost sm" onclick="pkToggleFrameStrip()"'
       + ' title="逐张看一遍这些画面，以及每一张被排到了第几页">'
       + (_pkStripOpen ? '收起' : '看这 ' + items.length + ' 张') + '</button>'
-      + ' <button type="button" class="btn ghost sm" onclick="pkChecklistFramesOpen()">去逐页配图</button>';
+      + (pkWorkflow !== 'checklist'
+        ? ' <button type="button" class="btn ghost sm" onclick="pkChecklistFramesOpen()">去逐页配图</button>' : '');
   }
-  html += isGuide
+  if (pkWorkflow !== 'checklist') html += isGuide
     ? '<br>这一组 <b>' + np + ' 页</b>，每页最多用 1 张相关画面作证据；没有相关画面可以保留文字页；'
         + '<b>出图 0 元</b>（这一档不叫 AI 画底图）'
     : '<br>出图出的是<b>页</b>：这一版 <b>' + np + ' 页</b>，底图由 AI 现画（'
@@ -4220,7 +4237,7 @@ function pkRenderFramesHint() {
         + '要用真帧就 <button class="btn ghost sm" onclick="pkUseGuideLayout()">整组改成攻略页</button>'
         + '，那一档 0 元';
   // 「整组改成攻略页」跑完那句结论写在这里，不写 pk-result（那边会被异步重排的预览盖掉）
-  if (_pkGuideNote) html += '<br><b>' + esc(_pkGuideNote) + '</b>';
+  if (pkWorkflow !== 'checklist' && _pkGuideNote) html += '<br><b>' + esc(_pkGuideNote) + '</b>';
   if (_pkStripOpen) html += pkStripHtml(items);
   box.innerHTML = html;
 }
@@ -5326,6 +5343,7 @@ function pkCount() {
 function pkStartFreeRevision() {
   if (!document.getElementById('pk-current-package').hidden
       && !confirm('将创建自由拆稿草稿，当前成品会保留。继续？')) return;
+  pkSetWorkflow('free');
   document.getElementById('pk-checklist').hidden = true;
   posterPlan();
 }
@@ -5586,6 +5604,7 @@ function pkPhotoLabel() {
 // ③ 那颗按钮写的是"这次要点几下、花几毛"，三处变量（真图 / 页数 / 出法）都会改它，
 // 所以算式只留这一份：pkPhotoLabel 和切档都要用，两边各写一遍迟早对不上。
 function pkGoLabel() {
+  if (pkWorkflow === 'checklist') return '③ 生成清单图文';
   const n = Math.max(1, _pkPages.length);
   const many = n > 1 ? n + ' 页 · ' : '';
   if (pkGuideChrome()) {
@@ -5607,6 +5626,7 @@ function pkGoLabel() {
   return '③ 出图 · ' + many + 'AI 画底图 ' + (n * 0.5).toFixed(1) + ' 元';
 }
 function pkModeLine() {
+  if (pkWorkflow === 'checklist') return pkChecklistModeLine();
   if (pkGuideChrome()) {
     if (_pkPhoto) return '画面用你上传的图，中文由程序排';
     return _pkPages.some(p => (p.photos || []).length > 0)
@@ -5704,7 +5724,7 @@ async function posterPreview() {
   box.innerHTML = '<div class="pk-verify mild">⏳ 正在按当前文案排'
     + (_pkPages.length > 1 ? '整组 ' + _pkPages.length + ' 页' : '一张') + '免费预览…</div>';
   const body = {plan: pkReadPayload(), ratio: document.getElementById('pk-ratio').value,
-                summary_id: _pkId, publish: pkReadPublish()};
+                summary_id: _pkId, publish: pkReadPublish(), workflow: pkWorkflow};
   if (_pkPhoto) body.photo = _pkPhoto.ref;
   const fsig = pkFactSig(body.plan, body.publish);   // 发出时的完整签名（11-02 竞态守卫）
   let r;
@@ -6138,7 +6158,7 @@ async function posterGenerate(force) {
   const companionTip = alsoWechat ? '\n同一份正文也会排成公众号 3:4 图文，发布仍由你操作。' : '';
   const auditCost = '\n费用说明：上述金额只算底图。若文案或原文版本变化，生成前可能调用语义复审模型；实际请求次数见任务记录，费用以平台账单为准。';
   if (!confirm(tip + artHint + companionTip + auditCost)) return;
-  const body = {summary_id: _pkId, ratio: document.getElementById('pk-ratio').value,
+  const body = {workflow: pkWorkflow, summary_id: _pkId, ratio: document.getElementById('pk-ratio').value,
                 theme: document.getElementById('pk-theme').value.trim(),
                 publish_channel: _pkChannel, form: _pkForm,
                 plan: plan, publish: pkReadPublish(),
@@ -11764,7 +11784,7 @@ function bkRender() {
     + bkLedger() + bkHook();
 }
 </script>
-  <script src="/static/guide-checklist.js?v=5"></script>
+  <script src="/static/guide-checklist.js?v=8"></script>
   <script src="/static/today-ops.js?v=20261116b"></script>
 </body>
 </html>
