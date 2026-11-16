@@ -5159,7 +5159,7 @@ def _checklist_frame_plan(summary_id, sheet):
         raise guide_checklist.ChecklistError("原文已更新，请重新准备清单")
     mother = guide_mother.load_mother(DB_PATH, summary_id)
     plan, publish, audit_mother = guide_checklist.compiled(sheet, mother)
-    plan["checklist_layout"] = 2
+    plan["checklist_layout"] = 4
     frames = checklist_frames.candidates(_guide_materials(summary), OUTPUT_DIR)
     return plan, publish, audit_mother, frames
 
@@ -5194,6 +5194,7 @@ def api_checklist_preview(summary_id):
             raise guide_checklist.ChecklistError("请重新打开逐页配图再预览")
         plan, _publish, _mother, frames = _checklist_frame_plan(summary_id, sheet)
         checklist_frames.attach(plan, sheet, frames)
+        plan = guide_checklist.with_cover(plan)
         ratio = "3:4" if data.get("channel") == "wechat" else "9:16"
         out_dir = OUTPUT_DIR / "poster" / "_preview"
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -5205,7 +5206,8 @@ def api_checklist_preview(summary_id):
             for index, (page, png, check) in enumerate(ai_poster.preview_pages(plan, ratio), 1):
                 key = hashlib.sha1(png).hexdigest()[:16]
                 (out_dir / (key + ".png")).write_bytes(png)
-                pages.append({"page": index, "title": page["title"], "check": check,
+                pages.append({"page": index - 1, "title": page["title"], "check": check,
+                              "role": page.get("role") or "",
                               "url": "/media/poster/_preview/" + key + ".png"})
         _prune_previews(out_dir)
         return jsonify({"pages": pages, "ratio": ratio})
@@ -5619,7 +5621,11 @@ def _start_poster_graphics(data, *, checklist_mother=None, checklist_image_proof
                        frame_items=frame_items)
         asset = OUTPUT_DIR / "promo" / "mini-dungeons.png"
         try:
-            render_plan = copy.deepcopy(plan)
+            outgoing_plan = plan
+            if checklist_mother is not None:
+                from src import guide_checklist
+                outgoing_plan = guide_checklist.with_cover(plan)
+            render_plan = copy.deepcopy(outgoing_plan)
             # 已逐页确认并看过的裁剪图保持原样。原帧审核负责裁剪与回读。
             if checklist_image_proof:
                 from src import checklist_frames, guide_checklist
@@ -5635,16 +5641,16 @@ def _start_poster_graphics(data, *, checklist_mother=None, checklist_image_proof
                 copies=copies, do_review=do_review, preview_clicks=clicks,
                 publish_channel=publish_channel, form=pk_form, output_dir=stage, **options)
             if checklist_image_proof:
-                _checklist_placed_frames(plan, manifest)
+                _checklist_placed_frames(outgoing_plan, manifest)
             if also_wechat:
                 cb("用同一份攻略正文排版公众号 3:4 图文…")
                 try:
                     manifest["wechat_companion"] = poster_companion.render_wechat(
-                        stage, summary, _fast_config(), plan, publish or {},
+                        stage, summary, _fast_config(), outgoing_plan, publish or {},
                         ai_poster.generate_poster, asset, primary=manifest, **options)
                     if checklist_image_proof:
                         wechat_manifest = json.loads((stage / "wechat" / "manifest.json").read_text(encoding="utf-8"))
-                        _checklist_placed_frames(plan, wechat_manifest)
+                        _checklist_placed_frames(outgoing_plan, wechat_manifest)
                 except ai_poster.PosterError as exc:
                     exc.args = ("公众号 3:4 排版未完成：%s" % exc,)
                     raise
@@ -5721,7 +5727,9 @@ def _start_poster_graphics(data, *, checklist_mother=None, checklist_image_proof
         rf = ["第 %d 页→%s" % (r.get("page"), r.get("frame") or "补不出")
               for r in (manifest.get("frames_refilled") or [])]
         rfb = ("，🔁 出图前核对换过画面：" + "、".join(rf)) if rf else ""
-        placed = (" · 已排入 %d 页配图" % len(checklist_image_proof)) if checklist_image_proof else ""
+        placed = " · 含封面" if checklist_mother is not None else ""
+        if checklist_image_proof:
+            placed += " · %d 页正文已配图" % len(checklist_image_proof)
         if manifest.get("text_mode") == "typeset":
             warn = ("，⚠️ 版面提示：" + "；".join(ts_chk.get("problems") or [])) if ts_chk.get("problems") else ""
             _poster_status["progress"] = "✅ 海报已生成（%d 字，字由程序排版、不存在错字）%s%s%s%s" % (

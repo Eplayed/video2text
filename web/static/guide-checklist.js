@@ -32,11 +32,13 @@ function pkSetWorkflow(mode) {
     const button = document.getElementById(id);
     button.textContent = mode === 'checklist' ? '② 预览清单' : '② 看版面 · 免费';
     if (mode === 'checklist') button.style.display = '';
+    if (id === 'pk-preview-top') button.disabled = mode === 'checklist' && !pkChecklistSheet;
     button.title = mode === 'checklist' ? '按已保存的清单和配图预览' : '预览当前自由稿版面';
   }
   for (const id of ['pk-go-top', 'pk-go-bot']) {
     const button = document.getElementById(id);
     button.textContent = pkGoLabel();
+    if (id === 'pk-go-top') button.disabled = mode === 'checklist' && !pkChecklistSheet;
     button.title = mode === 'checklist' ? '使用已保存的清单、关键帧和裁剪区域' : '生成当前图文';
   }
   if (mode === 'checklist') {
@@ -561,7 +563,7 @@ async function pkFramePreview(channel) {
       link.rel = 'noopener noreferrer';
       const img = document.createElement('img');
       img.src = page.url;
-      img.alt = '第 ' + page.page + ' 页 ' + page.title;
+      img.alt = (page.role === '封面' ? '封面 · ' : '第 ' + page.page + ' 页 · ') + page.title;
       const caption = document.createElement('figcaption');
       caption.textContent = [img.alt, page.check.photos ? '含配图' : '文字页',
         ...(page.check.problems || [])].join(' · ');

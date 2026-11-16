@@ -897,6 +897,73 @@ def _chip(draw, xy, text, font, fg, bg, pad_x, pad_y, radius, outline=None):
     return w
 
 
+def typeset_checklist_cover(base_png, plan, skin):
+    """用攻略标题和已确认的关键帧排版封面。"""
+    with Image.open(io.BytesIO(base_png)) as base:
+        width, height = base.size
+    image = _guide_bg(width, height, skin)
+    draw = ImageDraw.Draw(image, "RGBA")
+    margin = round(width * .085)
+    inner = width - 2 * margin
+    kicker = plan.get("kicker") or ""
+    text = (plan.get("title") or "").strip()
+    # 把游戏名完整排在栏目行，正文标题不在「地下城」中间断开。
+    for prefix in ("魔兽世界：无限", "魔兽世界无限", "魔兽无限服", "魔兽无限"):
+        if text.startswith(prefix) and text[len(prefix):].strip():
+            kicker = " · ".join(filter(None, (prefix, kicker)))
+            text = text[len(prefix):].lstrip()
+            break
+
+    title_font, title_lines, _size = _fit_head(text, skin["title_face"], round(height * .074),
+                                                inner, round(height * .048), round(height * .040))
+    line_height = round(title_font.size * 1.19)
+    heading_height = len(title_lines) * line_height + (round(height * .071) if kicker else 0)
+    problems = []
+    photos = plan.get("photos") or []
+    photo, photo_size = None, (0, 0)
+    gap = round(height * .048)
+    if photos:
+        try:
+            with Image.open(io.BytesIO(_photo_bytes(photos[0]) or b"")) as source:
+                photo = ImageOps.exif_transpose(source).convert("RGB")
+        except OSError:
+            problems.append("封面配图读不到文件")
+        if photo:
+            room = min(round(height * .49), round(height * .78) - heading_height - gap)
+            if room < height * .13:
+                problems.append("封面标题占用过多空间，主图放不下")
+                photo = None
+            else:
+                scale = min(inner / photo.width, room / photo.height)
+                photo_size = (max(1, round(photo.width * scale)), max(1, round(photo.height * scale)))
+    group = heading_height + (gap + photo_size[1] if photo else 0)
+    top = max(round(height * .09), (height - group) // 2)
+    if top + group > height * .92:
+        problems.append("封面标题放不下，请缩短攻略标题")
+    gold = _rgb(skin.get("gold") or skin.get("accent") or "#e8c877")
+    if kicker:
+        _draw_text(draw, (margin, top), kicker, _font(skin["body_face"], round(height * .023)), gold)
+        top += round(height * .045)
+        draw.line((margin, top, margin + round(inner * .19), top), fill=gold, width=3)
+        top += round(height * .026)
+    for line in title_lines:
+        _draw_text(draw, (margin, top), line, title_font, gold, _rgb(skin["title_stroke"]), 2)
+        top += line_height
+    boxes = []
+    if photo:
+        w, h = photo_size
+        x = (width - w) // 2
+        top += gap
+        radius = min(round(width * .022), w // 2, h // 2)
+        image.paste(photo.resize((w, h), Image.LANCZOS), (x, top), _rounded_mask(w, h, radius))
+        boxes.append([x, top, x + w, top + h])
+    out = io.BytesIO()
+    image.save(out, format="PNG")
+    return out.getvalue(), {"ok": not problems, "problems": problems, "layout": "guide", "layout_label": "封面",
+                            "engine": "pil-guide", "canvas": "%dx%d" % (width, height), "photos": len(boxes),
+                            "photo_boxes": boxes, "cards": 0}
+
+
 def typeset_guide(base_png, plan, ratio="9:16", skin=None, page=None, photo=None):
     """把"一页攻略"排成对标那种样子：栏目名 + 页码 + 结论标题 + 真帧带图注 +
     大字数字 + 要点 + 对照 + 警示 + 互动 + 口径脚注。
@@ -910,6 +977,8 @@ def typeset_guide(base_png, plan, ratio="9:16", skin=None, page=None, photo=None
     """
     plan = plan or {}
     skin = _resolve_skin(plan.get("style_key"), skin)
+    if plan.get("checklist_cover") and base_png:
+        return typeset_checklist_cover(base_png, plan, skin)
     if base_png:
         img = Image.open(io.BytesIO(base_png)).convert("RGB")
     else:

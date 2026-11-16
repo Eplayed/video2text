@@ -67,7 +67,12 @@ def render_wechat(stage, summary, ai_config, plan, publish, render, asset, prima
     promo = add_mini_promo(folder, manifest, asset)
     lines = ["# " + manifest["title"], ""]
     pages = plan.get("pages") or [plan]
+    has_cover = bool(pages[0].get("checklist_cover"))
     for index, page in enumerate(pages):
+        filename = manifest["pages"][index]["file"]
+        if page.get("checklist_cover"):
+            lines.extend(["![封面](%s)" % filename, ""])
+            continue
         if index or page.get("title") != manifest["title"]:
             lines.extend(["## " + page["title"], ""])
         if page.get("subtitle"):
@@ -81,7 +86,7 @@ def render_wechat(stage, summary, ai_config, plan, publish, render, asset, prima
             notes.append(page["warn"])
         for card in notes:
             lines.extend(["**%s**　%s" % (card.get("t", ""), card.get("d", "")), ""])
-        lines.extend(["![攻略配图 %d](%s)" % (index + 1, manifest["pages"][index]["file"]), ""])
+        lines.extend(["![攻略配图 %d](%s)" % (index + 1 - int(has_cover), filename), ""])
     if manifest.get("public_source_note"):
         lines.extend([manifest["public_source_note"], ""])
     lines.extend([promo["copy"], ""])

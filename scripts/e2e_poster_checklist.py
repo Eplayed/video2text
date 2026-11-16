@@ -51,6 +51,17 @@ def main():
         assert [p["title"] for p in plan["pages"]] == ["哀嚎洞穴", "死亡矿井"]
         assert len(scope["points"]) == 2 and "诺莫瑞根" not in publish["copy_text"]
         assert publish["copy_text"] == publish["xhs_copy"]
+        from src import ai_poster
+        covered = guide_checklist.with_cover(plan)
+        assert len(covered["pages"]) == len(plan["pages"]) + 1
+        assert covered["pages"][0]["title"] == plan["title"]
+        assert covered["pages"][0]["role"] == "封面" and covered["pages"][1:] == plan["pages"]
+        assert not ai_poster.lint_plan(covered, ai_poster.limits_for("typeset"))
+        assert ai_poster.page_marker(ai_poster.plan_pages(covered), 2) == (1, 2)
+        cover_long = dict(plan, title="魔兽世界无限地下城掉落装备用途和获取方法攻略清单")
+        assert not ai_poster.lint_plan(guide_checklist.with_cover(cover_long), ai_poster.limits_for("typeset"))
+        _, _, preview_check = ai_poster.preview_pages(guide_checklist.with_cover(cover_long))[0]
+        assert preview_check["ok"] and preview_check["layout_label"] == "封面" and preview_check["photos"] == 0
         audit = guide_mother.audit_output(scope, plan, publish, {"editorial": True},
                                           checker=lambda *_: {"issues": []}, source_text="\n".join(phrases))
         assert not any(issue.get("kind") == "source_review" for issue in audit["coverage"]["issues"])

@@ -1964,6 +1964,10 @@ def plan_pages(plan):
         for _k in GUIDE_KEYS:
             if item.get(_k):
                 pages[-1][_k] = item.get(_k)
+        if plan.get("checklist_revision") and len(pages) == 1 and item.get("checklist_cover"):
+            pages[-1]["checklist_cover"] = True
+            if item.get("cover_source_page"):
+                pages[-1]["cover_source_page"] = item["cover_source_page"]
     # 免责脚注**只留末页一句**：以前每页都从顶层继承同一句，一页一张图就印一次，
     # 跨素材还一字不差——在小红书那就是"批量搬运号"的视觉记号（2026-10-13 复盘）。
     # 只收"从顶层继承来的同一句"；哪一页自己写过不一样的话，那是编辑的决定，不动。
@@ -2040,17 +2044,24 @@ def lint_plan(plan, lim=None, card_min=None):
     if len(pages) > 1:
         bad = []
         used_frames = set()
+        has_cover = bool(pages[0].get("checklist_cover"))
+        page_limit = PAGE_MAX + int(has_cover)
         for i, p in enumerate(pages, 1):
-            for msg in lint_plan(p, lim, card_min=1):
-                bad.append("第 %d 页：%s" % (i, msg))
+            cover = p.get("checklist_cover")
+            page_limits = dict(lim, title=30) if cover else lim
+            for msg in lint_plan(p, page_limits, card_min=1):
+                bad.append(("封面：" if cover else "第 %d 页：" % i) + msg)
+            # 封面复用一张已选正文图。正文之间仍检查重复。
+            if cover:
+                continue
             for ph in p.get("photos") or []:
                 fid = ph.get("frame") if isinstance(ph, dict) else ""
                 if fid and fid in used_frames:
                     bad.append("第 %d 页：画面 %s 已在前页使用，请换图" % (i, fid))
                 if fid:
                     used_frames.add(fid)
-        if len(plan.get("pages") or []) > PAGE_MAX:
-            bad.append("页数 %d 超过上限 %d 页" % (len(plan.get("pages") or []), PAGE_MAX))
+        if len(plan.get("pages") or []) > page_limit:
+            bad.append("页数 %d 超过上限 %d 页" % (len(plan.get("pages") or []), page_limit))
         return bad
     if len(pages) == 1 and isinstance(plan.get("pages"), list):
         # pages 只有一页时也按那一页查：顶层可能只是空壳（脚本或模型只填了 pages）
@@ -2069,7 +2080,7 @@ def lint_plan(plan, lim=None, card_min=None):
                   or any(plan.get(k) for k in GUIDE_KEYS if k != "kicker"))
     if guide_page:
         if not (cards or plan.get("ask") or plan.get("warn") or plan.get("bignum")
-                or plan.get("contrast") or plan.get("photos")):
+                or plan.get("contrast") or plan.get("photos") or plan.get("checklist_cover")):
             bad.append("攻略页这一张卡片、提问、警示、图都没有，是空白页")
         floor = 0
     if len(cards) < floor:
@@ -2599,6 +2610,13 @@ def preview_typeset(plan, ratio="9:16", photo=None, page=None, base=None):
     return ts.typeset(base, plan, ratio, skin, photo=photo, page=page)
 
 
+def page_marker(pages, index):
+    total = len(pages)
+    if pages[0].get("checklist_cover"):
+        return (index - 1, total - 1) if index > 1 else None
+    return (index, total) if total > 1 else None
+
+
 def preview_pages(plan, ratio="9:16", photo=None):
     """整组免费预览：一页一张，全部 0 元（占位底图或模板底图 + 真排版）。
 
@@ -2614,7 +2632,7 @@ def preview_pages(plan, ratio="9:16", photo=None):
         base = None
         if photo and not ph:
             base = template_base(p.get("style_key"))
-        pg = (i, total) if total > 1 else None
+        pg = page_marker(pages, i)
         png, chk = preview_typeset(p, ratio, photo=ph, page=pg, base=base)
         if total > 1 and photo and not ph:
             chk["base_note"] = ("模板底图（0 元）" if base
@@ -3320,7 +3338,9 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
                     caption = evidence.get("subject")
                 else:
                     caption = ph.get("caption")
-                if not frame_related(page, caption):
+                original = page.get("cover_source_page")
+                context = pages[original] if original else page
+                if not frame_related(context, caption):
                     ph.update(_drop="画面无法确认与本页内容相符", page=pi)
     used_photos = [(pi, ph) for pi, p in enumerate(pages, 1)
                    for ph in (p.get("photos") or [])
@@ -3409,7 +3429,7 @@ def generate_poster(summary, ai_config, theme="", title="", ratio="9:16",
             v = {"skipped": True, "ok": None, "missing": [], "extra": "", "transcript": ""}
             ts_chk = None
             # 页码用 pi（第几页），不是 i（同一页抽的第几张）——写反过，三页全标 1/3
-            pg_tag = (pi, len(pages)) if multi else None
+            pg_tag = page_marker(pages, pi)
             if text_mode == "typeset":
                 (out_dir / ("base%s.png" % suffix if n == 1 else "base_%d.png" % i)).write_bytes(raw)
                 _pg("排版第 %d 张（真字体，字不会画错）..." % (pi if multi else i))

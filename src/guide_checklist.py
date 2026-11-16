@@ -191,11 +191,26 @@ def compiled(sheet, mother, style="guide_ink"):
         raise ChecklistError("本次确认内容需要 %d 页，请拆为两篇（单篇最多 %d 页）" %
                              (len(pages), ai_poster.PAGE_MAX))
     plan = dict(pages[0], pages=pages, title=sheet["title"], source_revision=sheet["source_revision"],
-                mother_revision=sheet["mother_revision"], checklist_revision=sheet["revision"])
+                mother_revision=sheet["mother_revision"], checklist_revision=sheet["revision"],
+                checklist_kind=sheet["kind"])
     text = "\n\n".join(paragraphs)
     publish = {"copy_text": text, "xhs_copy": text, "digest": "、".join(groups),
                "tt_titles": [sheet["title"]], "xhs_titles": [sheet["title"]]}
     return plan, publish, scope(mother, included_points)
+
+
+def with_cover(plan):
+    """文案校验后添加封面。封面只复用已经校验的标题与已有配图。"""
+    pages = plan["pages"]
+    chosen = next(((i, page["photos"][0]) for i, page in enumerate(pages, 1)
+                   if page.get("photos")), None)
+    cover = {"title": plan["title"], "style_key": plan["style_key"], "layout_key": "guide",
+             "kicker": KINDS[plan["checklist_kind"]], "role": "封面", "checklist_cover": True,
+             "cards": []}
+    if chosen:
+        cover["cover_source_page"] = chosen[0]
+        cover["photos"] = [dict(chosen[1])]
+    return dict(plan, pages=[cover] + pages)
 
 
 def scope(mother, included_points):

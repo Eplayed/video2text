@@ -6406,11 +6406,14 @@ async function renderPosterResult(id, reveal = false) {
   let imgHtml;
   const pgRows = (m.pages || []).filter(p => p && p.url);
   if (pgRows.length > 1) {
-    imgHtml = '<div class="pk-cands">' + pgRows.map(p =>
-        `<div class="pk-cand on" onclick="window.open('${p.url}','_blank')" title="点击看原图">`
-        + `<img src="${thumbOf(p.url + '?t=' + Date.now(), 420)}" alt="第${p.page}页">`
-        + `<div class="pk-cand-t">第 ${p.page} 页 · ${esc(p.layout_label || '')}</div></div>`
-      ).join('') + '</div>'
+    const hasCover = Boolean((((m.plan || {}).pages || [])[0] || {}).checklist_cover);
+    imgHtml = '<div class="pk-cands">' + pgRows.map(p => {
+      const label = hasCover ? (p.page === 1 ? '封面' : '第 ' + (p.page - 1) + ' 页正文') :
+        '第 ' + p.page + ' 页 · ' + (p.layout_label || '');
+      return `<div class="pk-cand on" onclick="window.open('${p.url}','_blank')" title="点击看原图">`
+        + `<img src="${thumbOf(p.url + '?t=' + Date.now(), 420)}" alt="${esc(label)}">`
+        + `<div class="pk-cand-t">${esc(label)}</div></div>`
+      }).join('') + '</div>'
       + `<div class="pk-hint">一组 ${pgRows.length} 页，按这个顺序一次带走发布（第 1 页也存成了 poster.png，`
       + '列表和发布取图那条路没改）。每页字数：' + pgRows.map(p => p.chars + ' 字').join(' / ') + '。</div>';
   } else if (m.copies > 1 && (m.candidates || []).length > 1) {
@@ -7139,7 +7142,9 @@ async function openPosterDetail(id, channel) {
   document.getElementById('pk-detail-title').textContent = m.title || '海报';
   // 多页那组：一页一格，按页码排，点开放大——这里没有"选一张发布"的说法，整组一起发
   const multi = (m.page_count || 1) > 1 && (m.pages || []).length > 1;
-  const imgs = multi ? m.pages.map(p => ({url: p.url, index: p.page, verify: p.verify,
+  const hasCover = Boolean((((m.plan || {}).pages || [])[0] || {}).checklist_cover);
+  const imgs = multi ? m.pages.map(p => ({url: p.url, index: p.page - Number(hasCover),
+                                          cover: hasCover && p.page === 1, verify: p.verify,
                                           review: p.review, page: true,
                                           lay: p.layout_label || ''}))
     : ((m.copies > 1 && (m.candidates || []).length > 1) ? m.candidates
@@ -7152,7 +7157,7 @@ async function openPosterDetail(id, channel) {
   document.getElementById('pk-img-stack').innerHTML = imgs.map(c => {
     const on = !multi && c.index === (m.chosen || 1);
     const cv = c.verify || {};
-    const tag = multi ? ('第 ' + c.index + ' 页 · ' + (c.lay || ''))
+    const tag = multi ? (c.cover ? '封面' : '第 ' + c.index + ' 页 · ' + (c.lay || ''))
       : (m.text_mode === 'typeset' ? '字已排好' : (cv.ok === false ? '有缺字' : '字全对'));
     const click = (multi || imgs.length <= 1)
       ? 'window.open(\'' + esc(c.url) + '\',\'_blank\')' : 'posterDetailPick(' + c.index + ')';
@@ -11803,7 +11808,7 @@ function bkRender() {
     + bkLedger() + bkHook();
 }
 </script>
-  <script src="/static/guide-checklist.js?v=9"></script>
+  <script src="/static/guide-checklist.js?v=10"></script>
   <script src="/static/today-ops.js?v=20261116b"></script>
 </body>
 </html>
