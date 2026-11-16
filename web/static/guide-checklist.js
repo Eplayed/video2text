@@ -9,11 +9,25 @@ function pkChecklistModeLine() {
   return count ? '攻略清单 · 已保存 ' + count + ' 页配图' : '攻略清单';
 }
 
+function pkUpdateChecklistFooter() {
+  if (pkWorkflow !== 'checklist') return;
+  const status = document.getElementById('pk-checklist-footer-state');
+  status.textContent = pkFrameDirty ? '本页配图待确认' : pkChecklistModeLine().replace(/^攻略清单 · /, '');
+}
+
 function pkSetWorkflow(mode) {
   pkWorkflow = mode;
   const overlay = document.getElementById('pk-overlay');
   overlay.classList.toggle('pk-workflow-checklist', mode === 'checklist');
   overlay.classList.toggle('pk-workflow-simple', mode !== 'free');
+  const footer = document.getElementById('pk-checklist-footer');
+  footer.hidden = mode !== 'checklist';
+  const destination = document.getElementById(mode === 'checklist' ? 'pk-checklist-footer-actions' : 'pk-main-actions');
+  for (const id of ['pk-current-package', 'pk-preview-top', 'pk-go-top']) {
+    const action = document.getElementById(id);
+    if (action.parentElement !== destination) destination.append(action);
+  }
+  pkUpdateChecklistFooter();
   for (const id of ['pk-preview-top', 'pk-preview-bot']) {
     const button = document.getElementById(id);
     button.textContent = mode === 'checklist' ? '② 预览清单' : '② 看版面 · 免费';
@@ -246,7 +260,7 @@ async function pkChecklistSave(render) {
         if (result.status === 'reused') {
           msg.textContent = '清单版本一致，已打开现有成品。';
           document.getElementById('pk-current-package').hidden = false;
-          await renderPosterResult(_pkId);
+          await renderPosterResult(_pkId, true);
           return;
         }
         msg.textContent = '正在核对并排版，请查看任务进度。';
@@ -254,7 +268,10 @@ async function pkChecklistSave(render) {
       }
     }
   } catch (error) {
-    if (token === pkChecklistEpoch) msg.textContent = error.message;
+    if (token === pkChecklistEpoch) {
+      msg.textContent = error.message;
+      msg.scrollIntoView({block: 'nearest'});
+    }
   } finally {
     buttons.forEach(button => { button.disabled = false; });
   }
@@ -301,6 +318,7 @@ function pkFrameReset() {
   pkFrameLayout = null;
   pkFramePageKey = '';
   pkFrameDirty = false;
+  pkUpdateChecklistFooter();
   document.getElementById('pk-page-frames').hidden = true;
   document.getElementById('pk-frame-assignments').replaceChildren();
   document.getElementById('pk-frame-previews').replaceChildren();
@@ -342,6 +360,7 @@ function pkFrameShow(data) {
   pkFrameDirty = false;
   pkChecklistSheet.revision = data.revision;
   document.getElementById('pk-mode').textContent = pkChecklistModeLine();
+  pkUpdateChecklistFooter();
   const host = document.getElementById('pk-frame-assignments');
   document.getElementById('pk-frame-previews').replaceChildren();
   const page = data.pages.find(p => p.key === pkFramePageKey) || data.pages[0];
@@ -477,6 +496,7 @@ function pkFrameShow(data) {
   }
   function markDirty() {
     pkFrameDirty = true;
+    pkUpdateChecklistFooter();
     document.getElementById('pk-frame-previews').replaceChildren();
     pkFrameMessage('选择已更改，确认本页后保存到清单。');
   }

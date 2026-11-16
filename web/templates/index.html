@@ -975,7 +975,7 @@ textarea{resize:vertical;min-height:84px}
 .copy-link{cursor:pointer;color:var(--module-2);font-size:12px;text-decoration:underline}
 </style>
   <link rel="stylesheet" href="/static/today-ops.css?v=20261116">
-  <link rel="stylesheet" href="/static/guide-checklist.css?v=9">
+  <link rel="stylesheet" href="/static/guide-checklist.css?v=10">
 </head>
 <body>
 <div class="layout">
@@ -1651,7 +1651,8 @@ textarea{resize:vertical;min-height:84px}
 
     <!-- AI 海报弹窗：整图由出图模型绘制（文字画进像素），出图后视觉模型回读逐字校验 -->
     <div class="modal-overlay" id="pk-overlay" onclick="closePosterDialog(event)">
-      <div class="modal-box" style="width:880px;max-width:94vw" onclick="event.stopPropagation()">
+      <div class="modal-box pk-poster-box" style="width:880px;max-width:94vw" onclick="event.stopPropagation()">
+        <div class="pk-poster-body">
         <button class="close-btn" onclick="closePosterDialog()"><span data-icon="close" class="ic14"></span></button>
         <div class="tt-gen-title">🎨 AI 海报</div>
         <div class="tt-gen-sub">整合稿 #<span id="pk-id"></span> · <span id="pk-mode">字由程序排，不会错字</span></div>
@@ -1696,7 +1697,7 @@ textarea{resize:vertical;min-height:84px}
           <label class="pk-check"><input type="checkbox" id="pk-review" checked>出图后打分</label>
           <label class="pk-check pk-checklist-control" title="攻略页复用当前正文，另出 3:4 公众号配图与正文"><input type="checkbox" id="pk-also-wechat">一并生成公众号图文攻略</label>
         </div>
-        <div class="pk-actions">
+        <div class="pk-actions" id="pk-main-actions">
           <button type="button" class="btn sm" id="pk-open-checklist" onclick="pkChecklistOpen()">攻略清单</button>
           <button type="button" class="btn ghost sm" id="pk-current-package" hidden onclick="gotoPosterPage(_pkId, _pkChannel)">查看当前成品</button>
           <details class="pk-more-tools">
@@ -1778,6 +1779,11 @@ textarea{resize:vertical;min-height:84px}
           <div class="pk-prov-body" id="pk-prov-body">载入中…</div>
         </details>
         <div id="pk-result"></div>
+        </div>
+        <footer id="pk-checklist-footer" hidden>
+          <span id="pk-checklist-footer-state" role="status"></span>
+          <div id="pk-checklist-footer-actions"></div>
+        </footer>
       </div>
     </div>
 
@@ -6304,7 +6310,7 @@ function pollPoster(stage, task) {
         if (tabs && tabs.scrollIntoView) tabs.scrollIntoView({block: 'start', behavior: 'smooth'});
       }
     }
-    if (stage === 'poster' && st.package && st.package.id) { renderPosterResult(st.package.id); return; }
+    if (stage === 'poster' && st.package && st.package.id) { renderPosterResult(st.package.id, true); return; }
     const warn = (stage === 'plan' && st.plan && st.plan.draft_warning)
       ? `<div class="pk-verify mild">⚠️ ${esc(st.plan.draft_warning)}——文案照拆不误，但出图那一步会先拦你一次，复核后点「仍然出图」放行。</div>` : '';
     box.innerHTML = `<div class="pk-verify ${st.plan && st.plan.fidelity && !st.plan.fidelity.ready ? 'fail' : 'pass'}">${esc(st.progress || '文案已就绪，可编辑后出图')}</div>`
@@ -6356,9 +6362,21 @@ function pkEditorialSourceHtml(m) {
     + '</div>';
 }
 
-async function renderPosterResult(id) {
-  const m = await fetch('/api/poster/' + id).then(r => r.json());
-  if (_pkId !== id || m.error) return;
+async function renderPosterResult(id, reveal = false) {
+  let m;
+  try {
+    const reply = await fetch('/api/poster/' + id, {cache: 'no-store'});
+    m = await reply.json();
+    if (!reply.ok || m.error) throw new Error(m.error || 'HTTP ' + reply.status);
+  } catch (error) {
+    if (_pkId === id && reveal) {
+      const result = document.getElementById('pk-result');
+      result.textContent = '读取成品失败。' + error.message;
+      result.scrollIntoView({block: 'start'});
+    }
+    return;
+  }
+  if (_pkId !== id) return;
   _pkLast = m;
   const v = m.verify || {};
   const tsp = (m.typeset && m.typeset.problems) || [];
@@ -6491,6 +6509,7 @@ async function renderPosterResult(id) {
   pkMountPublishTabs(document.getElementById('pk-result-publish-tabs'),
     document.getElementById('pk-result-copy'), m);
   pkPubBar(m.id, null, m.publish_channel || 'toutiao', 'pk-pub-bar');
+  if (reveal) document.getElementById('pk-result').scrollIntoView({block: 'start'});
 }
 
 // ── 事实与放行（2026-10-29 小红书反例后加的）──────────────────────────────
@@ -11784,7 +11803,7 @@ function bkRender() {
     + bkLedger() + bkHook();
 }
 </script>
-  <script src="/static/guide-checklist.js?v=8"></script>
+  <script src="/static/guide-checklist.js?v=9"></script>
   <script src="/static/today-ops.js?v=20261116b"></script>
 </body>
 </html>

@@ -62,3 +62,10 @@
 .pk-more-tools[open] { display: flex; flex-wrap: wrap; }
 .pk-more-tools[open] summary { margin-bottom: 6px; }
 .pk-checklist-copy { margin-top: 10px; }
+
+#pk-overlay.pk-workflow-checklist .pk-poster-box { display: flex; flex-direction: column; overflow: hidden; padding: 0; }
+.pk-workflow-checklist .pk-poster-body { position: relative; min-height: 0; overflow-y: auto; padding: 24px 26px; }
+#pk-checklist-footer[hidden], #pk-checklist-footer button[hidden] { display: none; }
+#pk-checklist-footer { flex-shrink: 0; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; padding: 10px 26px; border-top: 1px solid var(--border); background: var(--surface-card); }
+#pk-checklist-footer-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+#pk-checklist-footer-state { font-size: 13px; color: var(--text-secondary); }
