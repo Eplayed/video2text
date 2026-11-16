@@ -6,7 +6,7 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from src import content_store, guide_checklist, guide_mother
+from src import checklist_frames, content_store, guide_checklist, guide_mother
 
 
 def main():
@@ -84,6 +84,38 @@ def main():
         else:
             raise AssertionError("旧版本覆盖新清单")
         assert guide_checklist.load(db, 1) == current
+
+        from hashlib import sha256
+        local = Path(tmp) / "frame.jpg"
+        local.write_bytes(b"first approved frame")
+        frame = {"id": "video/6", "digest": sha256(local.read_bytes()).hexdigest(),
+                 "time": "00:42", "subject": "滑行腰索", "source": "装备清单",
+                 "source_url": "", "url": "/media/frame.jpg", "file": str(local), "author": ""}
+        frames = {frame["id"]: frame}
+        bound = checklist_frames.edit(plan, current, frames, {
+            "page": checklist_frames.page_key(plan["pages"][0]), "id": frame["id"],
+            "digest": frame["digest"], "anchor": "滑行腰索",
+        })
+        assert checklist_frames.describe(plan, bound, frames)["pages"][0]["selected"]["id"] == frame["id"]
+        assert not checklist_frames.describe(plan, bound, frames)["pages"][1]["candidates"]
+        preview = deepcopy(plan)
+        checklist_frames.attach(preview, bound, frames)
+        checklist_frames.freeze(preview, Path(tmp) / "preview")
+        assert Path(preview["pages"][0]["photos"][0]["path"]).read_bytes() == local.read_bytes()
+        local.write_bytes(b"updated frame")
+        try:
+            checklist_frames.freeze(preview, Path(tmp) / "unused")
+        except checklist_frames.ChecklistError:
+            raise AssertionError("已冻结的预览文件不应受源文件变化影响")
+        attached = deepcopy(plan)
+        checklist_frames.attach(attached, bound, frames)
+        try:
+            checklist_frames.freeze(attached, Path(tmp) / "final")
+        except checklist_frames.ChecklistError:
+            pass
+        else:
+            raise AssertionError("更新过的帧未经重新确认进入出图")
+        assert checklist_frames.describe(changed, bound, frames)["outdated"] == 1
     print("POSTER_CHECKLIST_OK")
 
 

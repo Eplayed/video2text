@@ -4563,9 +4563,16 @@ def _poster_start_locked(stage, fn, summary_id, plan_snapshot):
         return 0
     previous = None
     if summary_id:
-        previous = ((_poster_status.get("plan")
+        in_memory = (_poster_status.get("plan")
                      if _poster_status.get("summary_id") == int(summary_id) else None)
-                    or _poster_load_plan(summary_id))
+        if stage == "poster":
+            # 自由稿最后一次任务可能比清单新，带它开跑会覆盖清单已通过的核对缓存。
+            checklist = bool(((plan_snapshot or {}).get("plan") or {}).get("checklist_revision"))
+            memory_checklist = bool(((in_memory or {}).get("plan") or {}).get("checklist_revision"))
+            previous = (in_memory if in_memory and checklist == memory_checklist else
+                        _poster_load_plan(summary_id, checklist=checklist))
+        else:
+            previous = in_memory or _poster_load_plan(summary_id)
     saved = None
     if stage == "poster":
         saved = dict(previous or {})
@@ -4890,8 +4897,8 @@ def _guide_materials(summary):
         # 这和"老素材没抽过帧"是两件事，界面以前把两者混成一句"抽帧流程上线前采的"，
         # 还给了一个必然失败的「补画面」按钮（2026-10-29 号主报"看版面没有关键帧"抓到的）。
         out.append({"video_id": vid, "aweme_id": str(v.get("aweme_id") or "").strip(),
-                    "title": v.get("title") or "", "sheet": sheet,
-                    "is_video": supplements.is_video(sheet)})
+                    "title": v.get("title") or "", "sheet": sheet, "author": v.get("author") or "",
+                    "url": v.get("source_url") or "", "is_video": supplements.is_video(sheet)})
     return out
 
 
@@ -5126,9 +5133,88 @@ def api_poster_checklist_prepare(summary_id):
     return jsonify({"task_id": _poster_status["task_id"], "summary_id": summary_id}), 202
 
 
+def _checklist_placed_frames(plan, manifest):
+    expected = [[ph["frame"] for ph in page.get("photos") or []] for page in plan["pages"]]
+    actual = [[ph["frame"] for ph in page.get("photos") or []]
+              for page in ai_poster.plan_pages(manifest["plan"])]
+    if expected != actual:
+        raise ai_poster.PosterError("逐页配图未完整排入，请返回检查，当前成品已保留")
+    results = manifest["pages"] or manifest["candidates"]
+    if len(results) != len(expected):
+        raise ai_poster.PosterError("实际出图页数与清单不一致，请返回检查")
+    for index, (frames, result) in enumerate(zip(expected, results), 1):
+        typeset = result.get("typeset") or {}
+        if frames and (typeset.get("photos") != len(frames) or not typeset.get("ok")):
+            raise ai_poster.PosterError("第 %d 页排不下已选配图，请先查看预览并调整清单" % index)
+
+
+def _checklist_frame_plan(summary_id, sheet):
+    from src import checklist_frames, guide_checklist, guide_mother
+
+    summary = _poster_get_summary(summary_id)
+    if not sheet or not summary:
+        raise guide_checklist.ChecklistError("请先准备攻略清单")
+    _sources, revision = guide_mother.source_snapshot(DB_PATH, summary_id)
+    if revision != sheet["source_revision"]:
+        raise guide_checklist.ChecklistError("原文已更新，请重新准备清单")
+    mother = guide_mother.load_mother(DB_PATH, summary_id)
+    plan, publish, audit_mother = guide_checklist.compiled(sheet, mother)
+    frames = checklist_frames.candidates(_guide_materials(summary), OUTPUT_DIR)
+    return plan, publish, audit_mother, frames
+
+
+@app.route("/api/poster/checklist/<int:summary_id>/frames", methods=["GET", "POST"])
+def api_checklist_frames(summary_id):
+    from src import checklist_frames, guide_checklist, guide_mother
+
+    try:
+        sheet = guide_checklist.load(DB_PATH, summary_id)
+        plan, _publish, _mother, frames = _checklist_frame_plan(summary_id, sheet)
+        if request.method == "POST":
+            body = request.get_json(silent=True)
+            if not isinstance(body, dict) or body.get("revision") != sheet["revision"]:
+                raise guide_checklist.ChecklistError("攻略清单已有更新，请刷新后再确认配图")
+            edited = checklist_frames.edit(plan, sheet, frames, body)
+            sheet = guide_checklist.save(DB_PATH, summary_id, edited, sheet["source_revision"],
+                                         sheet["mother_revision"], body["revision"])
+        return jsonify(checklist_frames.describe(plan, sheet, frames))
+    except (guide_checklist.ChecklistError, guide_mother.MotherError) as exc:
+        return jsonify({"error": str(exc)}), 409
+
+
+@app.route("/api/poster/checklist/<int:summary_id>/preview", methods=["POST"])
+def api_checklist_preview(summary_id):
+    from src import checklist_frames, guide_checklist, guide_mother
+
+    try:
+        sheet = guide_checklist.load(DB_PATH, summary_id)
+        data = request.get_json(silent=True)
+        if not sheet or not isinstance(data, dict) or data.get("revision") != sheet["revision"]:
+            raise guide_checklist.ChecklistError("请重新打开逐页配图再预览")
+        plan, _publish, _mother, frames = _checklist_frame_plan(summary_id, sheet)
+        checklist_frames.attach(plan, sheet, frames)
+        ratio = "3:4" if data.get("channel") == "wechat" else "9:16"
+        out_dir = OUTPUT_DIR / "poster" / "_preview"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        pages = []
+        # 读一次同一份经过摘要校验的图，出图也用相同照片，帧池文件更新时会报错。
+        from tempfile import TemporaryDirectory
+        with TemporaryDirectory(prefix="checklist-preview-") as folder:
+            checklist_frames.freeze(plan, Path(folder))
+            for index, (page, png, check) in enumerate(ai_poster.preview_pages(plan, ratio), 1):
+                key = hashlib.sha1(png).hexdigest()[:16]
+                (out_dir / (key + ".png")).write_bytes(png)
+                pages.append({"page": index, "title": page["title"], "check": check,
+                              "url": "/media/poster/_preview/" + key + ".png"})
+        _prune_previews(out_dir)
+        return jsonify({"pages": pages, "ratio": ratio})
+    except (guide_checklist.ChecklistError, guide_mother.MotherError) as exc:
+        return jsonify({"error": str(exc)}), 409
+
+
 @app.route("/api/poster/checklist/<int:summary_id>/render", methods=["POST"])
 def api_poster_checklist_render(summary_id):
-    from src import guide_checklist, guide_mother
+    from src import checklist_frames, guide_checklist, guide_mother
 
     try:
         sheet = guide_checklist.load(DB_PATH, summary_id)
@@ -5138,8 +5224,8 @@ def api_poster_checklist_render(summary_id):
         channel = data.get("channel")
         if channel not in ("toutiao", "xhs", "wechat"):
             raise guide_checklist.ChecklistError("请选择发布渠道")
-        mother = guide_mother.load_mother(DB_PATH, summary_id)
-        plan, publish, audit_mother = guide_checklist.compiled(sheet, mother)
+        plan, publish, audit_mother, frames = _checklist_frame_plan(summary_id, sheet)
+        image_proof = checklist_frames.attach(plan, sheet, frames, require_basis=True)
         previous = ai_poster.get_package(summary_id) or {}
         also_wechat = (channel == "wechat" or data.get("also_wechat") is True
                        or bool(previous.get("wechat_companion")))
@@ -5152,7 +5238,7 @@ def api_poster_checklist_render(summary_id):
             "summary_id": summary_id, "title": sheet["title"], "plan": plan, "publish": publish,
             "ratio": "9:16", "publish_channel": "toutiao", "form": "newspic",
             "text_mode": "typeset", "review": False, "also_wechat": also_wechat,
-        }, checklist_mother=audit_mother)
+        }, checklist_mother=audit_mother, checklist_image_proof=image_proof)
     except (guide_checklist.ChecklistError, guide_mother.MotherError) as exc:
         return jsonify({"error": str(exc)}), 409
 
@@ -5415,7 +5501,7 @@ def api_poster_generate():
     return _start_poster_graphics(request.get_json(force=True) or {})
 
 
-def _start_poster_graphics(data, *, checklist_mother=None):
+def _start_poster_graphics(data, *, checklist_mother=None, checklist_image_proof=None):
     """出图只用已拆并审过的 plan；空 plan 要回到拆文案，不暗中收费重拆。"""
     if not _original_graphics_enabled():
         return _original_graphics_disabled()
@@ -5506,7 +5592,8 @@ def _start_poster_graphics(data, *, checklist_mother=None):
         # 行动依据闸要比对原转写：多源稿不能只看主素材那一条，把所有来源的转写拼起来
         asr_text = guide_mother.audit_source_text(_sources)
         # 出图前仍重判已选帧；不合格时留下缺图记录，不换一张不相关的画面冒充证据。
-        frame_items = _guide_frames_for(summary, _fast_config(), may_judge=False)
+        frame_items = ([] if checklist_image_proof else
+                       _guide_frames_for(summary, _fast_config(), may_judge=False))
         import copy
         import shutil
         stage = ai_poster.OUTPUT_DIR / ("_pending-%d-%s" % (summary["id"], uuid.uuid4().hex))
@@ -5517,16 +5604,32 @@ def _start_poster_graphics(data, *, checklist_mother=None):
                        frame_items=frame_items)
         asset = OUTPUT_DIR / "promo" / "mini-dungeons.png"
         try:
+            render_plan = copy.deepcopy(plan)
+            # 已逐页确认并看过的裁剪图保持原样。原帧审核负责裁剪与回读。
+            if checklist_image_proof:
+                from src import checklist_frames, guide_checklist
+                try:
+                    checklist_frames.freeze(render_plan, stage)
+                except guide_checklist.ChecklistError as exc:
+                    raise ai_poster.PosterError(str(exc)) from exc
+                options["provenance"] = dict(
+                    prov or {}, materials=list((prov or {}).get("materials") or []) + checklist_image_proof)
             manifest = ai_poster.generate_poster(
-                summary, _fast_config(), ratio=ratio, plan=copy.deepcopy(plan), publish=publish,
+                summary, _fast_config(), ratio=ratio, plan=render_plan, publish=publish,
+                reused_frames=[] if checklist_image_proof else None,
                 copies=copies, do_review=do_review, preview_clicks=clicks,
                 publish_channel=publish_channel, form=pk_form, output_dir=stage, **options)
+            if checklist_image_proof:
+                _checklist_placed_frames(plan, manifest)
             if also_wechat:
                 cb("用同一份攻略正文排版公众号 3:4 图文…")
                 try:
                     manifest["wechat_companion"] = poster_companion.render_wechat(
                         stage, summary, _fast_config(), plan, publish or {},
                         ai_poster.generate_poster, asset, primary=manifest, **options)
+                    if checklist_image_proof:
+                        wechat_manifest = json.loads((stage / "wechat" / "manifest.json").read_text(encoding="utf-8"))
+                        _checklist_placed_frames(plan, wechat_manifest)
                 except ai_poster.PosterError as exc:
                     exc.args = ("公众号 3:4 排版未完成：%s" % exc,)
                     raise

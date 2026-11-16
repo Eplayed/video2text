@@ -19,3 +19,16 @@
 .pk-frame-review-note { font-size: 12px; color: var(--text-secondary); }
 .pk-frame-review p { margin: 3px 0 0; }
 #pk-frames-hint button { margin: 2px 6px; }
+
+.pk-page-frames { margin: 10px 0 16px; padding: 12px; border: 1px solid var(--border); border-radius: 8px; }
+.pk-page-frames p { font-size: 13px; }
+#pk-frame-assignments { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; }
+#pk-frame-assignments > select:first-child { width: auto; max-width: 100%; }
+#pk-frame-assignments > select:nth-child(2) { max-width: 100%; }
+#pk-frame-assignments > label, .pk-frame-selected, #pk-frame-assignments > p { flex-basis: 100%; }
+#pk-frame-assignments > p:empty { display: none; }
+.pk-frame-selected img { display: block; width: min(100%, 370px); height: auto; border-radius: 6px; }
+#pk-frame-previews { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; }
+#pk-frame-previews figure { margin: 0; }
+#pk-frame-previews img { display: block; width: 100%; max-height: 360px; object-fit: contain; }
+#pk-frame-previews figcaption { font-size: 12px; }

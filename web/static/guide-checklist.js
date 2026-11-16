@@ -4,6 +4,7 @@ let pkChecklistEpoch = 0;
 function pkChecklistReset() {
   pkChecklistEpoch++;
   pkChecklistSheet = null;
+  pkFrameReset();
   for (const id of ['pk-checklist', 'pk-current-package', 'pk-existing-revision']) {
     document.getElementById(id).hidden = true;
   }
@@ -147,6 +148,10 @@ function pkChecklistForm() {
 
 async function pkChecklistSave(render) {
   if (!pkChecklistSheet) return;
+  if (pkFrameDirty) {
+    pkFrameMessage('请先确认本页配图，或撤销本页改动。');
+    return;
+  }
   const token = pkChecklistEpoch;
   const actions = document.getElementById('pk-checklist-actions');
   const msg = document.getElementById('pk-checklist-msg');
@@ -156,6 +161,7 @@ async function pkChecklistSave(render) {
     const value = await pkChecklistRequest('', pkChecklistForm());
     if (token !== pkChecklistEpoch) return;
     pkChecklistSheet = value.sheet;
+    if (pkFrameLayout && pkFrameLayout.revision !== value.sheet.revision) pkFrameReset();
     msg.textContent = render ? '已保存，正在提交排版…' : '清单已保存。';
     if (render) {
       const result = await pkChecklistRequest('/render', {revision: value.sheet.revision,
@@ -208,5 +214,211 @@ async function pkChecklistPrepare() {
     if (token === pkChecklistEpoch) msg.textContent = error.message;
   } finally {
     button.disabled = false;
+  }
+}
+
+let pkFrameLayout = null;
+let pkFramePageKey = '';
+let pkFrameDirty = false;
+
+function pkFrameReset() {
+  pkFrameLayout = null;
+  pkFramePageKey = '';
+  pkFrameDirty = false;
+  document.getElementById('pk-page-frames').hidden = true;
+  document.getElementById('pk-frame-assignments').replaceChildren();
+  document.getElementById('pk-frame-previews').replaceChildren();
+  document.getElementById('pk-frame-status').textContent = '';
+}
+
+function pkFrameMessage(message) {
+  document.getElementById('pk-frame-status').textContent = message;
+}
+
+async function pkChecklistFramesOpen() {
+  if (!pkChecklistSheet || document.getElementById('pk-checklist').hidden) await pkChecklistOpen();
+  if (!pkChecklistSheet || document.getElementById('pk-checklist-actions').hidden) return;
+  if (pkFrameDirty) {
+    pkFrameMessage('请先确认本页配图，或撤销本页改动。');
+    return;
+  }
+  const token = pkChecklistEpoch;
+  const panel = document.getElementById('pk-page-frames');
+  panel.hidden = false;
+  pkFrameMessage('正在读取当前清单的页序…');
+  try {
+    const saved = await pkChecklistRequest('', pkChecklistForm());
+    if (token !== pkChecklistEpoch) return;
+    pkChecklistSheet = saved.sheet;
+    const data = await pkChecklistRequest('/frames');
+    if (token !== pkChecklistEpoch) return;
+    pkFrameShow(data);
+    pkFrameMessage('选择页面和关键帧，确认对应的条目后保存。');
+    panel.scrollIntoView({block: 'nearest'});
+  } catch (error) {
+    if (token === pkChecklistEpoch) pkFrameMessage(error.message);
+  }
+}
+
+function pkFrameShow(data) {
+  pkFrameLayout = data;
+  pkFrameDirty = false;
+  pkChecklistSheet.revision = data.revision;
+  const host = document.getElementById('pk-frame-assignments');
+  document.getElementById('pk-frame-previews').replaceChildren();
+  const page = data.pages.find(p => p.key === pkFramePageKey) || data.pages[0];
+  if (!page) return;
+  pkFramePageKey = page.key;
+
+  const chooser = document.createElement('select');
+  chooser.setAttribute('aria-label', '配图页面');
+  for (const p of data.pages) {
+    const state = p.stale ? '需重新确认' : p.selected ?
+      (p.selected.basis ? '已确认 ' + (p.candidates.find(f => f.id === p.selected.id) || {}).time : '待补使用依据')
+      : '文字页';
+    chooser.append(new Option('第 ' + p.page + ' 页 · ' + p.title + ' · ' + state, p.key));
+  }
+  chooser.value = page.key;
+  chooser.addEventListener('change', () => {
+    if (pkFrameDirty) {
+      chooser.value = page.key;
+      pkFrameMessage('请先确认本页配图，或撤销本页改动。');
+      return;
+    }
+    pkFramePageKey = chooser.value;
+    pkFrameShow(data);
+  });
+
+  const candidates = document.createElement('select');
+  candidates.setAttribute('aria-label', '本页关键帧');
+  candidates.append(new Option('文字页', ''));
+  for (const item of page.candidates) {
+    const label = [item.suggested ? '推荐' : '', item.time, item.subject || item.source].filter(Boolean).join(' · ');
+    candidates.append(new Option(label, item.id));
+  }
+  candidates.value = !page.stale && page.selected ? page.selected.id : '';
+
+  const anchor = document.createElement('select');
+  anchor.setAttribute('aria-label', '画面对应的本页条目');
+  anchor.append(new Option('选择画面对应的本页条目', ''));
+  page.labels.forEach(name => anchor.append(new Option(name, name)));
+
+  const basis = pkChecklistField('画面使用依据（发布包需要，预览可留空）',
+    page.selected && !page.stale ? page.selected.basis : '', 200);
+  const basisInput = basis.querySelector('input');
+  basisInput.placeholder = '如本人录制，或已获得作者许可';
+  const info = document.createElement('div');
+  info.className = 'pk-frame-selected';
+  const details = document.createElement('p');
+  details.textContent = page.stale ? '原配图已变化，请重新选图或设为文字页。' : '';
+  const confirm = pkChecklistButton('确认本页配图', () => {
+    const frame = page.candidates.find(item => item.id === candidates.value);
+    pkFrameSave({page: page.key, id: candidates.value, anchor: anchor.value,
+      basis: basisInput.value, digest: frame ? frame.digest : ''});
+  });
+  const undo = pkChecklistButton('撤销本页改动', () => {
+    pkFrameShow(data);
+    pkFrameMessage('已恢复服务器保存的配图。');
+  });
+
+  function selectFrame(reset) {
+    const frame = page.candidates.find(item => item.id === candidates.value);
+    anchor.hidden = basis.hidden = info.hidden = !frame;
+    info.replaceChildren();
+    if (frame) {
+      const figure = document.createElement('img');
+      figure.src = frame.url;
+      figure.alt = (frame.time + ' ' + frame.subject).trim();
+      const link = document.createElement('a');
+      link.href = frame.url;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      link.textContent = '打开大图';
+      const text = document.createElement('p');
+      text.textContent = [frame.source, frame.time, frame.subject].filter(Boolean).join(' · ');
+      info.append(figure, text, link);
+      if (/^https?:/i.test(frame.source_url)) {
+        const source = link.cloneNode();
+        source.href = frame.source_url;
+        source.textContent = '打开原视频';
+        info.append(' · ', source);
+      }
+      if (reset) {
+        anchor.value = frame.anchor || (page.labels.length === 1 ? page.labels[0] : '');
+        basisInput.value = '';
+      }
+    }
+    confirm.textContent = frame ? '确认用在第 ' + page.page + ' 页' : '确认第 ' + page.page + ' 页为文字页';
+  }
+  function markDirty() {
+    pkFrameDirty = true;
+    document.getElementById('pk-frame-previews').replaceChildren();
+    pkFrameMessage('选择已更改，确认本页后保存到清单。');
+  }
+  candidates.addEventListener('change', () => { selectFrame(true); markDirty(); });
+  anchor.addEventListener('change', markDirty);
+  basisInput.addEventListener('input', markDirty);
+  if (page.selected && candidates.value) anchor.value = page.selected.anchor;
+  selectFrame(false);
+
+  host.replaceChildren(chooser, candidates, details, info, anchor, basis, confirm, undo);
+  if (data.outdated) {
+    host.append(pkChecklistButton('清除已失效的配图', () => pkFrameSave({discard_stale: true})));
+    pkFrameMessage('有 ' + data.outdated + ' 个页面改动过，请清除失效配图或重新选择。');
+  }
+}
+
+async function pkFrameSave(body) {
+  const token = pkChecklistEpoch;
+  const host = document.getElementById('pk-frame-assignments');
+  const inputs = Array.from(host.querySelectorAll('button, select, input'));
+  inputs.forEach(el => { el.disabled = true; });
+  pkFrameMessage('正在保存逐页配图…');
+  try {
+    const data = await pkChecklistRequest('/frames', Object.assign({revision: pkFrameLayout.revision}, body));
+    if (token !== pkChecklistEpoch) return;
+    pkFrameShow(data);
+    pkFrameMessage(body.id ? (body.basis.trim() ? '本页配图已确认。' : '本页配图已保存，可先预览。出图前需填写使用依据。')
+      : body.discard_stale ? '已清除失效配图。' : '本页已设为文字页。');
+  } catch (error) {
+    if (token === pkChecklistEpoch) pkFrameMessage(error.message);
+  } finally {
+    inputs.forEach(el => { el.disabled = false; });
+  }
+}
+
+async function pkFramePreview(channel) {
+  if (!pkFrameLayout) return;
+  if (pkFrameDirty) {
+    pkFrameMessage('请先确认本页配图，再预览。');
+    return;
+  }
+  const token = pkChecklistEpoch;
+  pkFrameMessage('正在排版预览…');
+  try {
+    const result = await pkChecklistRequest('/preview', {revision: pkFrameLayout.revision, channel});
+    if (token !== pkChecklistEpoch) return;
+    const target = document.getElementById('pk-frame-previews');
+    target.replaceChildren();
+    for (const page of result.pages) {
+      const figure = document.createElement('figure');
+      const link = document.createElement('a');
+      link.href = page.url;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      const img = document.createElement('img');
+      img.src = page.url;
+      img.alt = '第 ' + page.page + ' 页 ' + page.title;
+      const caption = document.createElement('figcaption');
+      caption.textContent = [img.alt, page.check.photos ? '含配图' : '文字页',
+        ...(page.check.problems || [])].join(' · ');
+      link.append(img);
+      figure.append(link, caption);
+      target.append(figure);
+    }
+    pkFrameMessage(result.ratio + ' 预览已生成，可点图放大确认。');
+    target.scrollIntoView({block: 'nearest'});
+  } catch (error) {
+    if (token === pkChecklistEpoch) pkFrameMessage(error.message);
   }
 }

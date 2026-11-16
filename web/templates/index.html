@@ -975,7 +975,7 @@ textarea{resize:vertical;min-height:84px}
 .copy-link{cursor:pointer;color:var(--module-2);font-size:12px;text-decoration:underline}
 </style>
   <link rel="stylesheet" href="/static/today-ops.css?v=20261116">
-  <link rel="stylesheet" href="/static/guide-checklist.css?v=4">
+  <link rel="stylesheet" href="/static/guide-checklist.css?v=5">
 </head>
 <body>
 <div class="layout">
@@ -1708,7 +1708,7 @@ textarea{resize:vertical;min-height:84px}
         <section class="pk-frame-review" aria-labelledby="pk-frame-review-title">
           <strong id="pk-frame-review-title">素材关键帧审核</strong>
           <div id="pk-frames-hint" aria-live="polite"></div>
-          <p class="pk-frame-review-note">审核后可以查看候选画面。按攻略清单出图目前仍采用文字页。</p>
+          <p class="pk-frame-review-note">审核通过后，可以到「逐页配图」选择画面、确认对应条目和预览。</p>
         </section>
         <section class="guide-sheet" id="pk-checklist" hidden aria-label="攻略清单">
           <div class="guide-sheet-header">
@@ -1724,8 +1724,20 @@ textarea{resize:vertical;min-height:84px}
           <div id="pk-checklist-msg" role="status"></div>
           <div class="guide-sheet-actions" id="pk-checklist-actions" hidden>
             <button type="button" class="btn ghost sm" onclick="pkChecklistSave(false)">保存清单</button>
+            <button type="button" class="btn ghost sm" onclick="pkChecklistFramesOpen()">逐页配图</button>
             <button type="button" class="btn sm" onclick="pkChecklistSave(true)">按清单生成图文</button>
           </div>
+          <section id="pk-page-frames" class="pk-page-frames" aria-label="逐页配图" hidden>
+            <strong>逐页配图</strong>
+            <p>按页选择关键帧，确认画面展示的条目。没有合适画面的页可保留文字排版。</p>
+            <div id="pk-frame-status" role="status"></div>
+            <div id="pk-frame-assignments"></div>
+            <div class="guide-sheet-actions">
+              <button type="button" class="btn ghost sm" onclick="pkFramePreview('toutiao')">预览竖版</button>
+              <button type="button" class="btn ghost sm" onclick="pkFramePreview('wechat')">预览公众号版</button>
+            </div>
+            <div id="pk-frame-previews"></div>
+          </section>
           <div id="pk-checklist-editor"></div>
         </section>
         <div id="pk-layout-hint" style="font-size:11.5px;color:var(--text-secondary);margin:2px 0 8px;min-height:16px"></div>
@@ -4197,7 +4209,8 @@ function pkRenderFramesHint() {
   if (items.length) {
     html += ' <button class="btn ghost sm" onclick="pkToggleFrameStrip()"'
       + ' title="逐张看一遍这些画面，以及每一张被排到了第几页">'
-      + (_pkStripOpen ? '收起' : '看这 ' + items.length + ' 张') + '</button>';
+      + (_pkStripOpen ? '收起' : '看这 ' + items.length + ' 张') + '</button>'
+      + ' <button type="button" class="btn ghost sm" onclick="pkChecklistFramesOpen()">去逐页配图</button>';
   }
   html += isGuide
     ? '<br>这一组 <b>' + np + ' 页</b>，每页最多用 1 张相关画面作证据；没有相关画面可以保留文字页；'
@@ -11749,7 +11762,7 @@ function bkRender() {
     + bkLedger() + bkHook();
 }
 </script>
-  <script src="/static/guide-checklist.js?v=2"></script>
+  <script src="/static/guide-checklist.js?v=4"></script>
   <script src="/static/today-ops.js?v=20261116b"></script>
 </body>
 </html>
