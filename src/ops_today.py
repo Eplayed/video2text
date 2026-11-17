@@ -2,7 +2,7 @@
 import datetime as dt
 import re
 
-from . import frame_pool, plan_brief, plan_series, supplements
+from . import content_store, frame_pool, plan_brief, plan_series, supplements
 
 
 _CONTEXT_TERMS = re.compile(
@@ -17,7 +17,75 @@ def topic_overlap(main_title, supplement_title):
                for part in supplements.strong_fragments(main_title, supplement_title))
 
 
-def recommend(board, package_for):
+def material(video):
+    return {"video_id": video["id"], "title": video["title"], "author": video["author"],
+            "date": (video.get("published_at") or "")[:10], "sheet": video["source_sheet"],
+            "row": video["source_row"]}
+
+
+def standalone_topic(key, title, videos, reason, *, custom=False, summary_id=None):
+    return {"slot_key": key, "title": title, "form": "guide", "angle": "", "boundary": "",
+            "reason": reason, "stage": "已有整合稿" if summary_id else "有候选",
+            "summary_id": summary_id, "has_package": False, "task_error": "", "task_error_at": "",
+            "materials": [material(v) for v in videos], "candidate_id": None,
+            "standalone": True, "custom": custom}
+
+
+def recent_videos(db_path, today, excluded, limit):
+    if limit <= 0:
+        return []
+    start = (dt.date.fromisoformat(today) - dt.timedelta(days=plan_brief.FRESH_DAYS)).isoformat()
+    conn = content_store.open_readonly(db_path)
+    try:
+        owner = plan_series.douyin_owner_map(conn)
+        rows = conn.execute(
+            "SELECT id, source_sheet, source_row, title, author, published_at, category, game,"
+            " source, author_sec_uid, substr(transcript, 1, 1200) AS tr FROM videos"
+            " WHERE published_at >= ? AND published_at < ? AND length(trim(transcript)) >= ?"
+            " ORDER BY published_at DESC, id DESC",
+            (start, (dt.date.fromisoformat(today) + dt.timedelta(days=1)).isoformat(), plan_series.MIN_TL))
+        results = []
+        for entry in rows:
+            v = dict(entry)
+            if not v["title"] or v["id"] in excluded:
+                continue
+            sheet = v["source_sheet"] or ""
+            verdict, _ = plan_series.forever_call(v["title"], v["author"], v["tr"], sheet)
+            if verdict == "off":
+                continue
+            if "正式服" in v["title"] and plan_series.forever_call(v["title"], "", "", sheet)[0] != "yes":
+                continue
+            if plan_series.level1_ok(sheet, v["category"], verdict, v["game"], owner=owner, row=v)[0]:
+                results.append(v)
+                if len(results) == limit:
+                    break
+        return results
+    finally:
+        conn.close()
+
+
+def search_topic(db_path, theme, limit=12):
+    # 允许输入自然语言。完整短语优先，空格分词或常见提问词可召回分开的关键词。
+    terms = []
+    for part in re.split(r"[\s，、；：？！。,:;!?/]+|怎么|怎样|如何|哪里|在哪|去哪|是什么|有哪些|值得",
+                         theme):
+        part = re.sub(r"^(?:获得|获取|领取|想要|帮我|拿|找|查|领)+", "", part)
+        if len(part) >= 2 and part not in {"魔兽", "魔兽无限", "攻略"} and part not in terms:
+            terms.append(part)
+    terms = terms[:8]
+    hits = {}
+    for term in dict.fromkeys([theme] + terms):
+        for v in content_store.search_videos(db_path, term, limit=120):
+            if supplements.is_video(v["source_sheet"]) and (v.get("transcript") or "").strip():
+                hits[v["id"]] = v
+    rank = lambda v: (theme.casefold() in v["title"].casefold(),
+                      sum(term.casefold() in v["title"].casefold() for term in terms),
+                      sum(term.casefold() in (v["transcript"] or "").casefold() for term in terms),
+                      v["published_at"] or "", v["id"])
+    return sorted(hits.values(), key=rank, reverse=True)[:limit]
+
+
+def recommend(board, package_for, used=()):
     """只推荐已有明确素材或在制稿件的可采用题位。"""
     today = board["today"]
     channel = board["channel"]
@@ -49,7 +117,7 @@ def recommend(board, package_for):
             fresh = []
             for row in slot["candidates"]:
                 material_day = plan_series._day_ordinal(row["date"])
-                if not cutoff <= material_day <= day:
+                if row["video_id"] in used or not cutoff <= material_day <= day:
                     continue
                 hits = plan_series._match_terms(slot["keywords"], row["title"], "", "")
                 aid = str(row.get("aweme_id") or "").strip()
@@ -87,6 +155,7 @@ def recommend(board, package_for):
             "materials": [{k: r.get(k) for k in ("video_id", "title", "author", "date",
                                                  "sheet", "row")} for r in rows],
             "candidate_id": rows[0]["video_id"] if priority == 0 else None,
+            "custom": key.startswith("topic-") and slot.get("origin") == "today",
         }
         date = max((plan_series._day_ordinal(r["date"]) for r in rows), default=0)
         items.append(((priority, bool(priority == 0 and not scheduled_date),

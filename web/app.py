@@ -9109,7 +9109,15 @@ def _today_board(channel):
     from src import ops_today
     plan_tasks.ensure_table(DB_PATH)
     board = plan_series.board(DB_PATH, channel=channel, compact=True)
-    return board, ops_today.recommend(board, _today_package)
+    used = content_store.used_video_ids(DB_PATH)
+    topics = ops_today.recommend(board, _today_package, used)
+    fresh = [topic for topic in topics if topic["candidate_id"]]
+    used.update(t["candidate_id"] for t in fresh)
+    used.update(m["video_id"] for t in topics if not t["candidate_id"] for m in t["materials"])
+    for v in ops_today.recent_videos(DB_PATH, board["today"], used, 3):
+        key = "today-%d" % v["id"]
+        topics.append(ops_today.standalone_topic(key, v["title"], [v], "近期发布，尚未用于整合稿"))
+    return board, topics
 
 
 def _today_public_job(job):
@@ -9192,36 +9200,31 @@ def api_ops_today():
             topic["poster_package"] = bool(_today_poster_package(topic["summary_id"], channel))
         elif not topic["has_package"] and topic["form"] != "guide":
             topic["edit_notice"] = _today_edit_notice(topic["summary_id"], channel)
-    blocked = max((topic for topic in topics if topic.get("edit_notice")),
-                  key=lambda topic: topic["summary_id"], default=None)
     with _today_lock:
         for key, job in list(_today_jobs.items()):
             if not job["running"] and job["date"] < board["today"]:
                 del _today_jobs[key]
         jobs = {key: dict(job) for (ch, key), job in _today_jobs.items() if ch == channel}
     by_key = {topic["slot_key"]: topic for topic in topics}
-    retryable = [(topic["task_error_at"], topic) for topic in topics
-                 if topic["task_error_at"][:10] == board["today"]]
-    active = None
     for key, job in jobs.items():
-        topic = by_key.get(key)
-        if job["running"]:
-            if topic is not None:
-                topics.remove(topic)
-            active = dict(topic or job["topic"], job=_today_public_job(job))
-        elif (topic is not None and not topic["has_package"] and job["error"]
-              and topic["materials"] == job["topic"]["materials"]
-              and (not job["summary_id"] or topic["summary_id"] == job["summary_id"])):
-            topic["job"] = _today_public_job(job)
-            retryable.append((job["finished_at"], topic))
-    # 只保留最近一条失败入口，历史稿仍按日常推荐顺序展示。
-    retry = max(((at, topic) for at, topic in retryable if topic in topics),
-                key=lambda entry: entry[0], default=None)
-    for topic in (retry[1] if retry else None, blocked if blocked in topics else None, active):
-        if topic is not None:
-            if topic in topics:
-                topics.remove(topic)
-            topics.insert(0, topic)
+        if job["running"] or job["date"] == board["today"]:
+            topic = by_key.setdefault(key, dict(job["topic"]))
+            if job["summary_id"]:
+                topic["summary_id"] = job["summary_id"]
+                if not topic["has_package"]:
+                    topic["stage"] = "已有整合稿"
+            if job["error"] or job["running"]:
+                topic["job"] = _today_public_job(job)
+            topic["custom"] = job["topic"].get("custom", False)
+    fresh = [topic for topic in by_key.values()
+             if (topic["candidate_id"] or topic.get("standalone") and not topic.get("custom"))
+             and not (topic["summary_id"] or topic.get("job"))]
+    fresh.sort(key=lambda t: max((m.get("date") or "" for m in t["materials"]), default=""),
+               reverse=True)
+    fresh_keys = {topic["slot_key"] for topic in fresh}
+    existing = [topic for key, topic in by_key.items() if key not in fresh_keys]
+    existing.sort(key=lambda t: (not (t.get("job") or {}).get("running"),
+                                 t["slot_key"] not in jobs, -(t["summary_id"] or 0)))
     status = board["status"]
     last_result = next((run for run in status["runs"] if run["status"] in ("ok", "failed")), None)
     match_error = None
@@ -9231,7 +9234,7 @@ def api_ops_today():
         text_model = _editorial_config(required=True)["model"]
     except ValueError:
         text_model = ""
-    return jsonify({"today": board["today"], "channel": channel, "topics": topics[:3],
+    return jsonify({"today": board["today"], "channel": channel, "topics": fresh[:3], "existing": existing,
                     "sources": sources, "last_match": status.get("last_ok"),
                     "match_error": match_error, "text_model": text_model,
                     "generation_enabled": bool(text_model) and _original_graphics_enabled()})
@@ -9342,25 +9345,29 @@ def _today_run(job, channel):
     form = topic["form"]
     try:
         with app.app_context():
+            if topic.get("standalone"):
+                plan_series.new_slot(DB_PATH, title=topic["title"], form=form, origin="today",
+                                     stable_key=key)
             guard = plan_series.slot_guard(DB_PATH, key, channel=channel)
             if guard["error"]:
                 raise RuntimeError(guard["error"])
             worker = _wx_task_status if channel == "wechat" else _poster_status
-            if not topic["has_package"] and worker.get("running") and worker.get("summary_id") != sid:
+            if (not topic.get("custom") and not topic["has_package"]
+                    and worker.get("running") and worker.get("summary_id") != sid):
                 raise RuntimeError("该渠道已有一篇图文在处理，请等它完成")
             if not sid:
                 task = plan_tasks.find_task(DB_PATH, key, channel, form)
                 if task is None:
-                    material_id = topic["candidate_id"]
-                    selected, problems = _plan_materials([material_id] if material_id else [])
-                    if not selected:
+                    ids = [material["video_id"] for material in topic["materials"]]
+                    selected, problems = _plan_materials(ids)
+                    if problems or not selected:
                         raise RuntimeError(problems[0]["msg"] if problems else "选题素材已不可用，请刷新后重新选择")
                     task, _ = plan_tasks.save_sources(
                         DB_PATH, key, channel, form,
                         {"title": topic["title"], "hook": topic["angle"],
                          "note": topic["boundary"], "date": job["date"]},
                         selected, only_if_missing=True)
-                    if task["video_ids"] != [material_id]:
+                    if task["video_ids"] != ids:
                         raise RuntimeError("排产表的采用清单刚刚变化，请刷新后重新确认")
                 elif topic["candidate_id"] or task["video_ids"] != [
                         m["video_id"] for m in topic["materials"]]:
@@ -9396,6 +9403,9 @@ def _today_run(job, channel):
                 if not sid:
                     raise RuntimeError("整合稿未生成，请到排产表查看")
             job["summary_id"] = sid
+            if topic.get("custom"):
+                job["progress"] = "整合稿已生成，可打开核对"
+                return
             if _today_package(sid, channel):
                 job["progress"] = "已有图文包，打开查看审核结果"
                 return
@@ -9502,13 +9512,56 @@ def api_ops_today_generate():
         notice = _today_edit_notice(topic["summary_id"], channel)
         if notice:
             return jsonify({"error": notice["message"], "edit_required": True}), 409
+    return _queue_today(topic, channel, board["today"], selection)
+
+
+@app.route("/api/ops/today/custom", methods=["GET", "POST"])
+def api_ops_today_custom():
+    from src import ops_today
+    data = request.args if request.method == "GET" else request.get_json(silent=True)
+    if data is None or not hasattr(data, "get"):
+        return jsonify({"error": "请求格式有误"}), 400
+    theme = data.get("theme")
+    theme = " ".join(theme.split()) if isinstance(theme, str) else ""
+    if not 2 <= len(theme) <= 80:
+        return jsonify({"error": "请输入 2 至 80 字的话题或关键词"}), 400
+    try:
+        channel = plan_series.norm_channel(data.get("channel"))
+    except ValueError:
+        return jsonify({"error": "请选择头条号或公众号"}), 400
+    if channel not in plan_tasks.VALID_CHANNELS:
+        return jsonify({"error": "请选择头条号或公众号"}), 400
+    if request.method == "GET":
+        return jsonify({"materials": [ops_today.material(v) for v in ops_today.search_topic(DB_PATH, theme)]})
+    ids = data.get("video_ids")
+    if (not isinstance(ids, list) or not 1 <= len(ids) <= 4 or
+            any(type(i) is not int or i < 1 for i in ids) or len(set(ids)) != len(ids)):
+        return jsonify({"error": "请勾选 1 至 4 条素材"}), 400
+    if not _original_graphics_enabled():
+        return _original_graphics_disabled()
+    try:
+        _editorial_config(required=True)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 409
+    ranked = {v["id"]: v for v in ops_today.search_topic(DB_PATH, theme)}
+    if any(vid not in ranked for vid in ids):
+        return jsonify({"error": "勾选的素材已变化，请重新搜索确认"}), 409
+    key = "topic-" + hashlib.sha256(json.dumps([theme, ids], ensure_ascii=False).encode()).hexdigest()[:18]
+    task = plan_tasks.find_task(DB_PATH, key, channel, "guide") or {}
+    topic = ops_today.standalone_topic(key, theme, [ranked[i] for i in ids], "自定义选题",
+                                       custom=True, summary_id=task.get("summary_id"))
+    return _queue_today(topic, channel, plan_series.cn_now().date().isoformat(), None)
+
+
+def _queue_today(topic, channel, day, selection):
+    slot_key = topic["slot_key"]
     with _today_lock:
         current = _today_jobs.get((channel, slot_key))
         if current and current["running"]:
             return jsonify({"status": "running"}), 202
         if any(ch == channel and job["running"] for (ch, _), job in _today_jobs.items()):
             return jsonify({"error": "该渠道已有一篇待审稿在生成，请等它完成"}), 409
-        job = {"slot_key": slot_key, "topic": topic, "date": board["today"],
+        job = {"slot_key": slot_key, "topic": topic, "date": day,
                "running": True, "summary_id": topic["summary_id"],
                "progress": "准备待审稿", "error": "", "finished_at": "",
                "supplement_selection": selection}

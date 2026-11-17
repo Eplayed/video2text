@@ -27,3 +27,9 @@
 .today-error { color: var(--danger); overflow-wrap: anywhere; }
 .today-supplement-option{display:flex;align-items:baseline;gap:7px;cursor:pointer}
 .today-supplement-option input[type="checkbox"]{flex:none;width:auto;margin:0}
+
+#today-existing-list, #today-custom-form { margin-top: 10px; }
+#today-custom-theme { flex: 1 1 230px; min-width: 0; }
+#today-custom-results ul { margin: 10px 0; padding-left: 0; list-style: none; }
+#today-custom-results li { margin: 7px 0; }
+#today-custom-status:empty { display: none; }

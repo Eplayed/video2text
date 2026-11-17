@@ -279,7 +279,7 @@ def main():
             out, bodies = [], []
 
             def shoot():
-                rr = client.post("/api/plan/task/generate", json=payload(slot="level", vids=(12,)))
+                rr = client.post("/api/plan/task/generate", json=payload(slot="e2e-plan-task-race", vids=(12,)))
                 out.append(rr.status_code)
                 bodies.append(rr.get_json())
 

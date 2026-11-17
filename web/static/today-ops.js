@@ -3,6 +3,24 @@
   const picker = document.getElementById('today-channel');
   const list = document.getElementById('today-topics');
   const sources = document.getElementById('today-sources');
+  const existing = document.getElementById('today-existing');
+  const existingList = document.getElementById('today-existing-list');
+  const customForm = document.getElementById('today-custom-form');
+  const customTheme = document.getElementById('today-custom-theme');
+  const customResults = document.getElementById('today-custom-results');
+  const customStatus = document.getElementById('today-custom-status');
+  let searchId = 0;
+
+  function clearCustom() {
+    searchId++;
+    customResults.replaceChildren();
+    customStatus.textContent = '';
+  }
+
+  function busyChannel() {
+    return snapshot && snapshot.channel === picker.value
+      && snapshot.existing.some(topic => topic.job && topic.job.running);
+  }
   const context = document.getElementById('today-context');
   const refresh = panel.querySelector('[data-today-refresh]');
   const loadProgress = panel.querySelector('[data-today-load-progress]');
@@ -60,7 +78,8 @@
         gotoPosterPage(id, channel);
       }
     } else if (id) {
-      if (topic.form === 'guide') {
+      if (topic.custom) openSummary(id);
+      else if (topic.form === 'guide') {
         openPosterDialog(id, {channel, checklist: true});
       } else if (channel === 'wechat') {
         openWechatGenDialog(id);
@@ -94,7 +113,7 @@
       }
       sources.append(block);
     }
-    const overview = document.querySelector('.today-sources > summary');
+    const overview = sources.parentElement.querySelector('summary');
     const hasError = items.some(source => source.status === 'error' || source.status === 'fail');
     overview.textContent = hasError ? '素材源最近回执 · 有拉取异常' : '素材源最近回执';
     overview.classList.toggle('today-error', hasError);
@@ -166,13 +185,20 @@
   }
 
   function render(data) {
-    list.replaceChildren();
     if (!data.topics.length) {
-      list.append(text('p', '当前没有具备近期素材的选题或在制稿件。'));
-      return;
-    }
-    const busy = data.topics.some(topic => topic.job && topic.job.running);
-    for (const topic of data.topics) {
+      list.replaceChildren(text('p', '近期没有未做过的新题，可在下方输入话题搜索素材。'));
+    } else renderTopics(list, data.topics, data);
+    existing.hidden = !data.existing.length;
+    existing.querySelector('summary').textContent = '待审与在制稿件 · ' + data.existing.length + ' 篇';
+    if (busyChannel()) existing.open = true;
+    renderTopics(existingList, data.existing, data);
+    const generate = customResults.querySelector('[data-custom-generate]');
+    if (generate) generate.disabled = Boolean(busyChannel() || !data.generation_enabled);
+  }
+
+  function renderTopics(container, topics, data) {
+    container.replaceChildren();
+    for (const topic of topics) {
       const job = topic.job || {};
       const notice = job.running ? null : topic.edit_notice;
       const failure = job.error || topic.task_error;
@@ -203,7 +229,7 @@
         }
         card.append(materials);
       }
-      const supplements = !topic.summary_id && !job.summary_id && !job.running && topic.materials.length
+      const supplements = !topic.custom && !topic.summary_id && !job.summary_id && !job.running && topic.materials.length
         ? supplementPicker(topic, data.channel) : null;
       if (supplements) card.append(supplements.details);
       const actions = document.createElement('div');
@@ -215,7 +241,7 @@
             () => openPosterDialog(topic.summary_id, {channel: data.channel, checklist: true})));
         }
       } else if (!job.running && topic.form === 'guide' && (topic.summary_id || job.summary_id)) {
-        actions.append(button('核对攻略清单', () => openTopic(topic, data.channel), true));
+        actions.append(button(topic.custom ? '查看整合稿' : '核对攻略清单', () => openTopic(topic, data.channel), true));
       } else if (notice) {
         actions.append(button('修改草稿', () => openTopic(topic, data.channel), true));
       } else {
@@ -223,7 +249,7 @@
         const generate = button(job.running ? '生成中…' : hasSummary ? '继续生成图文'
           : failure ? '重试生成' : '生成待审稿',
           () => start(topic, data.channel, generate, supplements ? supplements.selection() : {}), true);
-        generate.disabled = busy || !data.generation_enabled;
+        generate.disabled = Boolean(busyChannel()) || !data.generation_enabled;
         actions.append(generate);
         if (topic.summary_id || job.summary_id) {
           actions.append(button('查看并编辑草稿', () => openTopic(topic, data.channel)));
@@ -254,13 +280,13 @@
         }
         card.append(progress);
       }
-      list.append(card);
+      container.append(card);
     }
   }
 
   async function poll(id, channel, slot) {
     if (id !== requestId || currentView !== 'dashboard') return;
-    const progress = list.querySelector('[data-slot="' + slot + '"] [data-today-progress]');
+    const progress = existingList.querySelector('[data-slot="' + slot + '"] [data-today-progress]');
     try {
       const data = await json('/api/ops/today/status?channel=' + encodeURIComponent(channel)
         + '&slot_key=' + encodeURIComponent(slot));
@@ -290,7 +316,7 @@
       const data = await json('/api/ops/today?channel=' + encodeURIComponent(picker.value));
       if (id !== requestId || currentView !== 'dashboard') return;
       const sameTopics = snapshot && snapshot.channel === data.channel
-        && JSON.stringify(snapshot.topics) === JSON.stringify(data.topics);
+        && JSON.stringify([snapshot.topics, snapshot.existing]) === JSON.stringify([data.topics, data.existing]);
       const generationChanged = snapshot && snapshot.generation_enabled !== data.generation_enabled;
       snapshot = data;
       const refreshed = manual ? (sameTopics ? '已刷新 · 当前选题无变化 · ' : '已刷新 · ') : '';
@@ -300,13 +326,13 @@
         + (data.text_model && !data.generation_enabled ? ' · 图文生成已暂停' : '');
       if (!manual || !sameTopics || generationChanged) render(data);
       renderSources(data.sources);
-      const active = data.topics.find(topic => topic.job && topic.job.running);
+      const active = data.existing.find(topic => topic.job && topic.job.running);
       if (active) refreshTimer = setTimeout(() => poll(id, data.channel, active.slot_key), 3000);
     } catch (error) {
       if (id !== requestId || currentView !== 'dashboard') return;
       context.textContent = '今日选题刷新失败。' + errorMessage(error);
       if (snapshot && snapshot.channel === picker.value) {
-        if (snapshot.topics.some(topic => topic.job && topic.job.running)) {
+        if (snapshot.existing.some(topic => topic.job && topic.job.running)) {
           refreshTimer = setTimeout(load, 5000);
         }
       } else {
@@ -343,7 +369,76 @@
     }
   }
 
+  customTheme.addEventListener('input', clearCustom);
+  customForm.addEventListener('submit', async event => {
+    event.preventDefault();
+    clearCustom();
+    const id = searchId;
+    const channel = picker.value;
+    const theme = customTheme.value.trim();
+    customStatus.textContent = '正在搜索素材库…';
+    try {
+      const data = await json('/api/ops/today/custom?' + new URLSearchParams({channel, theme}));
+      if (id !== searchId) return;
+      if (!data.materials.length) {
+        customStatus.textContent = '没有找到有转写的相关视频，可以换一两个具体关键词。';
+        return;
+      }
+      const rows = document.createElement('ul');
+      for (const material of data.materials) {
+        const row = document.createElement('li');
+        const label = document.createElement('label');
+        label.className = 'today-supplement-option';
+        const check = document.createElement('input');
+        check.type = 'checkbox';
+        check.value = material.video_id;
+        label.append(check, text('span', material.title + ' · ' +
+          [material.author, material.date].filter(Boolean).join(' · ')));
+        row.append(label);
+        if (material.sheet && material.row) {
+          const view = button('查看素材', () => gotoMaterial(material.sheet, Number(material.row)));
+          view.className = 'today-link';
+          row.append(view);
+        }
+        rows.append(row);
+      }
+      const generate = button('生成整合稿', async () => {
+        const video_ids = Array.from(rows.querySelectorAll('input:checked'), item => Number(item.value));
+        if (!video_ids.length || video_ids.length > 4) {
+          customStatus.textContent = '请勾选 1 至 4 条素材。';
+          return;
+        }
+        generate.disabled = true;
+        customStatus.textContent = '正在提交整合稿…';
+        try {
+          await json('/api/ops/today/custom', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({channel, theme, video_ids}),
+          });
+          if (id !== searchId) return;
+          customStatus.textContent = '已提交，进度和稿件见下方「待审与在制稿件」。';
+          existing.open = true;
+          await load();
+        } catch (error) {
+          if (id !== searchId) return;
+          customStatus.textContent = errorMessage(error);
+          generate.disabled = Boolean(busyChannel());
+        }
+      }, true);
+      generate.dataset.customGenerate = '';
+      generate.disabled = Boolean(busyChannel() || (snapshot && !snapshot.generation_enabled));
+      customResults.append(rows, generate);
+      customStatus.textContent = '勾选 1 至 4 条素材。选多条会合并成一篇整合稿。';
+    } catch (error) {
+      if (id === searchId) customStatus.textContent = errorMessage(error);
+    }
+  });
+
   picker.addEventListener('change', () => {
+    clearCustom();
+    existing.open = false;
+    existing.hidden = true;
+    existingList.replaceChildren();
     list.replaceChildren(text('p', '正在加载选题…'));
     load();
   });

@@ -454,7 +454,8 @@ def check_creation(series: str, chapter: str) -> str:
 
 def new_slot(db_path, title: str, series: str = "free", chapter: str = "",
              position: str = "", form: str = "guide", link_slot: str = "",
-             keywords: Optional[List[str]] = None, origin: str = "user") -> Dict[str, Any]:
+             keywords: Optional[List[str]] = None, origin: str = "user",
+             stable_key: str = "") -> Dict[str, Any]:
     """建一篇"由真实消息/人工起稿"的位置：S2 的文章、素材库直接起的独立篇。
 
     键怎么给：`s2o1-3` / `free-7a3f1c`。都是**服务端算出来的短键**，
@@ -473,7 +474,16 @@ def new_slot(db_path, title: str, series: str = "free", chapter: str = "",
         if err:
             con.rollback()
             raise ValueError(err)
-        key = _alloc_key(con, series, chapter or position or "o1")
+        if stable_key:
+            con.row_factory = sqlite3.Row
+            if series != "free" or not SLOT_RE.fullmatch(stable_key):
+                raise ValueError("独立选题编号有误")
+            existing = con.execute("SELECT * FROM plan_slots WHERE slot_key=?", (stable_key,)).fetchone()
+            if existing:
+                if existing["series"] != "free" or existing["origin"] != origin:
+                    raise ValueError("选题编号与已有选题冲突")
+                return _slot_dict(existing)
+        key = stable_key or _alloc_key(con, series, chapter or position or "o1")
         now = _now()
         con.execute(
             "INSERT INTO plan_slots (slot_key, series, chapter, position, title, angle,"

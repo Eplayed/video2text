@@ -974,7 +974,7 @@ textarea{resize:vertical;min-height:84px}
 #modal-kf img{aspect-ratio:16/9;object-fit:cover;cursor:zoom-in}
 .copy-link{cursor:pointer;color:var(--module-2);font-size:12px;text-decoration:underline}
 </style>
-  <link rel="stylesheet" href="/static/today-ops.css?v=20261116">
+  <link rel="stylesheet" href="/static/today-ops.css?v=20261117">
   <link rel="stylesheet" href="/static/guide-checklist.css?v=10">
 </head>
 <body>
@@ -1041,6 +1041,21 @@ textarea{resize:vertical;min-height:84px}
         <div id="today-context" class="today-context" role="status"></div>
         <progress class="today-load-progress" data-today-load-progress aria-label="读取今日选题" hidden></progress>
         <div id="today-topics" class="today-topics"><p>正在加载选题…</p></div>
+        <details class="today-sources">
+          <summary>自定义选题</summary>
+          <form id="today-custom-form" class="today-actions">
+            <label for="today-custom-theme">想写什么</label>
+            <input id="today-custom-theme" type="search" maxlength="80" required minlength="2"
+                   placeholder="例如 地下城 掉落">
+            <button class="btn ghost sm" type="submit">搜索素材</button>
+          </form>
+          <div id="today-custom-results"></div>
+          <p id="today-custom-status" class="today-reason" role="status"></p>
+        </details>
+        <details class="today-sources" id="today-existing" hidden>
+          <summary>待审与在制稿件</summary>
+          <div id="today-existing-list" class="today-topics"></div>
+        </details>
         <details class="today-sources">
           <summary>素材源最近回执</summary>
           <div id="today-sources"></div>
@@ -11813,6 +11828,6 @@ function bkRender() {
 }
 </script>
   <script src="/static/guide-checklist.js?v=11"></script>
-  <script src="/static/today-ops.js?v=20261116b"></script>
+  <script src="/static/today-ops.js?v=20261117"></script>
 </body>
 </html>
