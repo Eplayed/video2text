@@ -203,7 +203,7 @@ def with_cover(plan):
     """文案校验后添加封面。封面只复用已经校验的标题与已有配图。"""
     pages = plan["pages"]
     chosen = next(((i, page["photos"][0]) for i, page in enumerate(pages, 1)
-                   if page.get("photos")), None)
+                   if page.get("photos") and not page["photos"][0].get("scene_only")), None)
     cover = {"title": plan["title"], "style_key": plan["style_key"], "layout_key": "guide",
              "kicker": KINDS[plan["checklist_kind"]], "role": "封面", "checklist_cover": True,
              "cards": []}

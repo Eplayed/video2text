@@ -54,6 +54,15 @@ def _allowed(frame, page, pages):
                    for other in pages)
 
 
+def _matched_cards(frame, page):
+    return {card["t"] for card in page["cards"] if card["t"] in frame["subject"]}
+
+
+def _scene_only(frame, page, selected):
+    return selected.get("usage", "evidence" if selected["anchor"] in _matched_cards(frame, page)
+                        else "scene") == "scene"
+
+
 def describe(plan, sheet, frames):
     pages = plan["pages"]
     saved = sheet.get("frames") or {}
@@ -66,7 +75,7 @@ def describe(plan, sheet, frames):
         for frame in frames.values():
             if not _allowed(frame, page, pages):
                 continue
-            labels = [card["t"] for card in page["cards"] if card["t"] in frame["subject"]]
+            labels = sorted(_matched_cards(frame, page))
             choices.append({k: frame[k] for k in ("id", "url", "time", "subject", "source", "source_url", "digest")})
             choices[-1]["suggested"] = poster_content.frame_related(page, frame["subject"])
             choices[-1]["anchor"] = labels[0] if len(labels) == 1 else ""
@@ -74,6 +83,8 @@ def describe(plan, sheet, frames):
         available = frames.get(selected["id"]) if selected else None
         stale = bool(selected and (not available or available["digest"] != selected["digest"]
                                    or not any(c["id"] == selected["id"] for c in choices)))
+        if available and not stale:
+            selected = dict(selected, usage="scene" if _scene_only(available, page, selected) else "evidence")
         response["pages"].append({
             "key": key, "page": order, "title": page["title"],
             "labels": list(dict.fromkeys(card["t"] for card in page["cards"])),
@@ -129,6 +140,12 @@ def edit(plan, sheet, frames, body):
         raise ChecklistError("请选择这张图展示的本页条目")
     if any(other.get("id") == frame_id for k, other in bindings.items() if k != key):
         raise ChecklistError("这张关键帧已用于另一页，请选择其他帧")
+    usage = body.get("usage")
+    matched = _matched_cards(frame, page)
+    if usage is not None and usage not in ("evidence", "scene"):
+        raise ChecklistError("请选择画面用途")
+    if usage == "evidence" and matched and anchor not in matched:
+        raise ChecklistError("画面已识别为「%s」，请改选对应条目或标为场景参考" % "、".join(sorted(matched)))
     basis = body.get("basis") or ""
     if not isinstance(basis, str) or len(basis.strip()) > 200:
         raise ChecklistError("画面使用依据最多 200 字")
@@ -140,6 +157,8 @@ def edit(plan, sheet, frames, body):
         except OSError as exc:
             raise ChecklistError("关键帧无法读取，请重新选择") from exc
     bindings[key] = {"id": frame_id, "anchor": anchor, "basis": basis.strip(), "digest": frame["digest"]}
+    if usage is not None:
+        bindings[key]["usage"] = usage
     if crop:
         bindings[key]["crop"] = crop
     return dict(sheet, frames=bindings)
@@ -163,6 +182,8 @@ def attach(plan, sheet, frames):
             "path": frame["file"], "frame": frame["id"], "caption": selected["anchor"],
             "ts": frame["time"], "judged": True, "sha256": frame["digest"],
         }]
+        if plan.get("checklist_reading"):
+            page["photos"][0]["scene_only"] = _scene_only(frame, page, selected)
         if selected.get("crop"):
             page["photos"][0]["crop"] = selected["crop"]
         materials.append({"ref": "%s %s" % (frame["id"], frame["time"]), "url": frame["source_url"],

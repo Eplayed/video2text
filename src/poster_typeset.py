@@ -964,6 +964,130 @@ def typeset_checklist_cover(base_png, plan, skin):
                             "photo_boxes": boxes, "cards": 0}
 
 
+def typeset_checklist_reading(base_png, plan, skin, page):
+    """3:4 阅读版。条目图跟随卡片，场景参考单独放置，保留裁剪后的全部内容。"""
+    with Image.open(io.BytesIO(base_png)) as base:
+        width, height = base.size
+    image = _guide_bg(width, height, skin)
+    draw = ImageDraw.Draw(image, "RGBA")
+    margin = round(width * .065)
+    inner = width - 2 * margin
+    cards = plan.get("cards") or []
+    dense = len(cards) >= 4
+    pad = round(width * (.024 if dense else .032))
+    gap = round(width * (.017 if dense else .025))
+    cover = bool(plan.get("checklist_cover"))
+    accent = _rgb(skin.get("gold") or skin["accent"])
+    main = (248, 246, 234)
+    body_color = _rgb(skin["ink"])
+    card_fill = _rgb(skin["panel"])
+    rule = _rgb(skin["rule"])
+    body = _font(skin["body_face"], round(width * (.035 if dense else .039)))
+    label = _font(skin["title_face"], round(width * .029))
+    radius = round(width * .023)
+    problems, boxes = [], []
+
+    def paint_lines(lines, font, x, y, color, spacing):
+        for line in lines:
+            _draw_text(draw, (x, y), line, font, color)
+            y += spacing
+        return y
+
+    def paint_photo(x, y, w, h, photo):
+        scale = min(w / photo.width, h / photo.height)
+        pw, ph = max(1, round(photo.width * scale)), max(1, round(photo.height * scale))
+        left = x + (w - pw) // 2
+        box = [left, y, left + pw, y + ph]
+        image.paste(photo.resize((pw, ph), Image.LANCZOS), (left, y),
+                    _rounded_mask(pw, ph, min(radius, pw // 2, ph // 2)))
+        boxes.append(box)
+        return box[3]
+
+    frame, frame_image = next(iter(plan.get("photos") or []), None), None
+    if frame:
+        try:
+            with Image.open(io.BytesIO(_photo_bytes(frame) or b"")) as source:
+                frame_image = ImageOps.exif_transpose(source).convert("RGB")
+        except OSError:
+            problems.append("配图打不开，请重新选择")
+    headline = plan["title"]
+    f_title, title_lines, title_size = _fit_head(
+        headline, skin["title_face"], round(width * (.087 if cover else .068)),
+        inner, round(width * .041), round(width * .046), orphan=3)
+    if _text_lost(headline, title_lines):
+        problems.append("标题放不下，请缩短标题")
+    y = round(height * (.115 if cover else .055))
+    kicker = plan.get("kicker") or ""
+    if kicker:
+        _draw_text(draw, (margin, y), kicker, label, accent)
+    if page:
+        number = "%02d / %02d" % (page[0], page[1])
+        _draw_text(draw, (width - margin - label.getlength(number), y), number, label, accent)
+    y += round(width * .064)
+    if cover:
+        draw.line((margin, y, margin + round(inner * .17), y), fill=accent, width=max(2, width // 270))
+        y += round(width * .055)
+    y = paint_lines(title_lines, f_title, margin, y, main, round(title_size * 1.24)) + gap
+    footer = plan.get("footer") or ""
+    bottom = height - margin - (round(label.size * 1.9) if footer else 0)
+    if cover:
+        if frame_image:
+            room = bottom - y - gap
+            if room < height * .19:
+                problems.append("封面主图放不下，请缩短标题")
+            else:
+                y = paint_photo(margin, y + gap, inner, min(room, round(height * .49)), frame_image)
+    else:
+        measured = []
+        title_font = _font(skin["title_face"], round(width * (.043 if dense else .049)))
+        title_step = round(title_font.size * 1.26)
+        body_step = round(body.size * 1.29)
+        for card in cards:
+            heading = _wrap(card["t"], title_font, inner - 2 * pad)
+            content = _wrap(card["d"], body, inner - 2 * pad)
+            block_h = 2 * pad + len(heading) * title_step + len(content) * body_step
+            measured.append((card["t"], heading, content, block_h))
+        photo_height = 0
+        inline_index = None
+        if frame_image:
+            if not frame.get("scene_only"):
+                inline_index = next((i for i, (name, *_rest) in enumerate(measured)
+                                     if name == frame.get("caption")), None)
+            allowance = bottom - y - sum(h + gap for _, _, _, h in measured)
+            space = gap if inline_index is not None else gap + label.size * 2
+            photo_height = min(round(height * .35), (inner - 2 * pad) * frame_image.height // frame_image.width,
+                               allowance - space)
+            if photo_height < height * .085:
+                problems.append("配图放不下，请拆页或改为文字页")
+                photo_height = 0
+        for index, (_, heading, content, block_h) in enumerate(measured):
+            has_inline = index == inline_index and photo_height > 0
+            card_bottom = y + block_h + (gap + photo_height if has_inline else 0)
+            draw.rounded_rectangle((margin, y, width - margin, card_bottom), radius=radius,
+                                   fill=card_fill, outline=rule, width=max(1, width // 600))
+            text_x = margin + pad
+            row_y = paint_lines(heading, title_font, text_x, y + pad, accent, title_step)
+            row_y = paint_lines(content, body, text_x, row_y, body_color, body_step)
+            if has_inline:
+                paint_photo(text_x, row_y + gap, inner - 2 * pad, photo_height, frame_image)
+            y = card_bottom + gap
+        if photo_height > 0 and inline_index is None:
+            _draw_text(draw, (margin, y), "场景参考", label, accent)
+            y = paint_photo(margin, y + label.size * 2, inner, photo_height, frame_image)
+    if y > bottom + gap:
+        problems.append("内容超出版面，请拆页或缩短文字")
+    if footer:
+        _draw_text(draw, (margin, bottom + gap), footer, label, _rgb(skin["muted"]))
+    out = io.BytesIO()
+    image.save(out, format="PNG")
+    return out.getvalue(), {
+        "ok": not problems, "problems": problems, "layout": "guide",
+        "layout_label": "阅读版封面" if cover else "阅读版", "engine": "pil-guide",
+        "canvas": "%dx%d" % (width, height), "photos": len(boxes),
+        "photo_boxes": boxes, "cards": len(cards),
+    }
+
+
 def typeset_guide(base_png, plan, ratio="9:16", skin=None, page=None, photo=None):
     """把"一页攻略"排成对标那种样子：栏目名 + 页码 + 结论标题 + 真帧带图注 +
     大字数字 + 要点 + 对照 + 警示 + 互动 + 口径脚注。
@@ -977,6 +1101,8 @@ def typeset_guide(base_png, plan, ratio="9:16", skin=None, page=None, photo=None
     """
     plan = plan or {}
     skin = _resolve_skin(plan.get("style_key"), skin)
+    if plan.get("checklist_reading") and base_png:
+        return typeset_checklist_reading(base_png, plan, skin, page)
     if plan.get("checklist_cover") and base_png:
         return typeset_checklist_cover(base_png, plan, skin)
     if base_png:

@@ -84,6 +84,7 @@ async function pkPosterAction(generate) {
 function pkChecklistReset() {
   pkChecklistEpoch++;
   pkChecklistSheet = null;
+  document.getElementById('pk-checklist-format').value = 'classic';
   pkSetWorkflow('auto');
   document.querySelector('.pk-more-tools').open = false;
   pkFrameReset();
@@ -245,6 +246,7 @@ async function pkChecklistSave(render) {
     return;
   }
   const token = pkChecklistEpoch;
+  const reading = pkChecklistReading();
   const actions = document.getElementById('pk-checklist-actions');
   const msg = document.getElementById('pk-checklist-msg');
   const buttons = [...actions.querySelectorAll('button'), document.getElementById('pk-go-top')];
@@ -257,7 +259,7 @@ async function pkChecklistSave(render) {
     msg.textContent = render ? '已保存，正在提交排版…' : '清单已保存。';
     if (render) {
       const result = await pkChecklistRequest('/render', {revision: value.sheet.revision,
-        channel: _pkChannel, also_wechat: document.getElementById('pk-also-wechat').checked});
+        channel: _pkChannel, reading, also_wechat: document.getElementById('pk-also-wechat').checked});
       if (token === pkChecklistEpoch) {
         if (result.status === 'reused') {
           msg.textContent = '清单版本一致，已打开现有成品。';
@@ -426,6 +428,12 @@ function pkFrameShow(data) {
   anchor.append(new Option('选择画面对应的本页条目', ''));
   page.labels.forEach(name => anchor.append(new Option(name, name)));
 
+  const usage = document.createElement('select');
+  usage.setAttribute('aria-label', '画面用途');
+  usage.append(new Option('条目实图（可辨认对应内容）', 'evidence'),
+    new Option('场景参考', 'scene'));
+  usage.value = page.selected && !page.stale ? page.selected.usage : 'scene';
+
   const basis = pkChecklistField('画面使用依据（选填，发布前核对）',
     page.selected && !page.stale ? page.selected.basis : '', 200);
   const basisInput = basis.querySelector('input');
@@ -438,7 +446,7 @@ function pkFrameShow(data) {
   const confirm = pkChecklistButton('确认本页配图', () => {
     const frame = page.candidates.find(item => item.id === frameChoice());
     pkFrameSave({page: page.key, id: frameChoice(), anchor: anchor.value,
-      basis: basisInput.value, digest: frame ? frame.digest : '', crop});
+      usage: usage.value, basis: basisInput.value, digest: frame ? frame.digest : '', crop});
   });
   const undo = pkChecklistButton('撤销本页改动', () => {
     pkFrameShow(data);
@@ -447,7 +455,7 @@ function pkFrameShow(data) {
 
   function selectFrame(reset) {
     const frame = page.candidates.find(item => item.id === frameChoice());
-    anchor.hidden = basis.hidden = info.hidden = !frame;
+    anchor.hidden = usage.hidden = basis.hidden = info.hidden = !frame;
     info.replaceChildren();
     if (frame) {
       const figure = document.createElement('img');
@@ -491,6 +499,7 @@ function pkFrameShow(data) {
       }
       if (reset) {
         anchor.value = frame.anchor || (page.labels.length === 1 ? page.labels[0] : '');
+        usage.value = frame.anchor ? 'evidence' : 'scene';
         basisInput.value = '';
       }
     }
@@ -507,16 +516,18 @@ function pkFrameShow(data) {
     selectFrame(true);
     if (page.selected && page.selected.id === frameChoice()) {
       anchor.value = page.selected.anchor;
+      usage.value = page.selected.usage;
       basisInput.value = page.selected.basis;
     }
     markDirty();
   });
   anchor.addEventListener('change', markDirty);
+  usage.addEventListener('change', markDirty);
   basisInput.addEventListener('input', markDirty);
   if (page.selected && frameChoice()) anchor.value = page.selected.anchor;
   selectFrame(false);
 
-  host.replaceChildren(chooser, candidates, details, info, anchor, basis, confirm, undo);
+  host.replaceChildren(chooser, candidates, details, info, anchor, usage, basis, confirm, undo);
   if (data.outdated) {
     host.append(pkChecklistButton('清除已失效的配图', () => pkFrameSave({discard_stale: true})));
     pkFrameMessage('有 ' + data.outdated + ' 个页面改动过，请清除失效配图或重新选择。');
@@ -542,6 +553,15 @@ async function pkFrameSave(body) {
   }
 }
 
+function pkChecklistReading() {
+  return document.getElementById('pk-checklist-format').value === 'reading';
+}
+
+document.getElementById('pk-checklist-format').addEventListener('change', () => {
+  document.getElementById('pk-frame-previews').replaceChildren();
+  if (pkFrameLayout) pkFrameMessage('已切换版式，请重新预览。');
+});
+
 async function pkFramePreview(channel) {
   if (!pkFrameLayout) return;
   if (pkFrameDirty) {
@@ -549,10 +569,11 @@ async function pkFramePreview(channel) {
     return;
   }
   const token = pkChecklistEpoch;
+  const reading = pkChecklistReading();
   pkFrameMessage('正在排版预览…');
   try {
-    const result = await pkChecklistRequest('/preview', {revision: pkFrameLayout.revision, channel});
-    if (token !== pkChecklistEpoch) return;
+    const result = await pkChecklistRequest('/preview', {revision: pkFrameLayout.revision, channel, reading});
+    if (token !== pkChecklistEpoch || reading !== pkChecklistReading()) return;
     const target = document.getElementById('pk-frame-previews');
     target.replaceChildren();
     for (const page of result.pages) {

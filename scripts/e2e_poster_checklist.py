@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """攻略清单的固定分页、编辑范围、来源绑定和版本并发。"""
 from copy import deepcopy
+import json
 import sys
 import tempfile
 from pathlib import Path
@@ -150,6 +151,56 @@ def main():
             except checklist_frames.ChecklistError:
                 continue
             raise AssertionError("无效裁剪没有被拒绝")
+        reading = dict(deepcopy(plan), checklist_reading=True)
+        checklist_frames.attach(reading, cropped, frames)
+        assert not reading["pages"][0]["photos"][0]["scene_only"]
+        assert reading["pages"][0]["photos"][0]["caption"] == "滑行腰索"
+        reading = guide_checklist.with_cover(reading)
+        checklist_frames.freeze(reading, Path(tmp) / "reading")
+        previews = ai_poster.preview_pages(reading, "3:4")
+        assert all(check["ok"] for _, _, check in previews)
+        assert previews[0][2]["layout_label"] == "阅读版封面"
+        assert previews[1][2]["photos"] == 1 and previews[2][2]["photos"] == 0
+
+        scene = checklist_frames.edit(plan, cropped, frames, dict(chosen, usage="scene"))
+        reading = dict(deepcopy(plan), checklist_reading=True)
+        checklist_frames.attach(reading, scene, frames)
+        assert reading["pages"][0]["photos"][0]["scene_only"]
+        assert not guide_checklist.with_cover(reading)["pages"][0].get("photos")
+        updated = checklist_frames.edit(plan, scene, frames, dict(chosen, id=""))
+        reading = dict(deepcopy(plan), checklist_reading=True)
+        assert not checklist_frames.attach(reading, updated, frames)
+        assert not reading["pages"][0].get("photos")
+
+        extra = "从入口往左走。拿到钥匙后才能打开上层门。"
+        conn = content_store.connect(db)
+        _, data = guide_checklist.view(conn, 1)
+        data["editorial_supplements"] = [{"id": 9999, "title": "补充资料夹具",
+                                          "evidence_status": "official", "body": extra}]
+        conn.execute("UPDATE ai_summaries SET structured_data=? WHERE id=1",
+                     (json.dumps(data, ensure_ascii=False),))
+        conn.commit()
+        conn.close()
+
+        def extract(segment, *_args):
+            if segment.get("role"):
+                return {"points": [{"quote": extra, "display_text": extra, "priority": "must",
+                                   "subject": "上层门", "conditions": ["拿到钥匙后"]}]}
+            return {"points": points}
+
+        mother_with_extra = guide_mother.ensure_mother(db, 1, {"editorial": True}, extractor=extract)
+        sheet_with_extra = guide_checklist.from_mother(mother_with_extra, "steps", "路线核对")
+        ref = next(p for p in mother_with_extra["points"] if p["source_ref"].get("role"))
+        for entry in sheet_with_extra["rows"]:
+            entry["included"] = ref["point_id"] in entry["point_ids"]
+        sheet_with_extra.update(mother_revision=mother_with_extra["mother_revision"],
+                                source_revision=mother_with_extra["source_revision"], revision="fixture")
+        extra_plan, extra_publish, extra_scope = guide_checklist.compiled(sheet_with_extra, mother_with_extra)
+        extra_plan["checklist_reading"] = True
+        assert "拿到钥匙后" in extra_publish["copy_text"]
+        assert extra_scope["points"] == [ref]
+        assert all(check["ok"] for _, _, check in
+                   ai_poster.preview_pages(guide_checklist.with_cover(extra_plan), "3:4"))
     print("POSTER_CHECKLIST_OK")
 
 

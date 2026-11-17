@@ -5183,6 +5183,13 @@ def api_checklist_frames(summary_id):
         return jsonify({"error": str(exc)}), 409
 
 
+def _checklist_output_ratio(plan, payload, *, companion=False):
+    reading = payload.get("reading") is True
+    if reading:
+        plan.update(checklist_reading=True, checklist_layout=5)
+    return "3:4" if reading or companion else "9:16"
+
+
 @app.route("/api/poster/checklist/<int:summary_id>/preview", methods=["POST"])
 def api_checklist_preview(summary_id):
     from src import checklist_frames, guide_checklist, guide_mother
@@ -5193,9 +5200,9 @@ def api_checklist_preview(summary_id):
         if not sheet or not isinstance(data, dict) or data.get("revision") != sheet["revision"]:
             raise guide_checklist.ChecklistError("请重新打开逐页配图再预览")
         plan, _publish, _mother, frames = _checklist_frame_plan(summary_id, sheet)
+        ratio = _checklist_output_ratio(plan, data, companion=data.get("channel") == "wechat")
         checklist_frames.attach(plan, sheet, frames)
         plan = guide_checklist.with_cover(plan)
-        ratio = "3:4" if data.get("channel") == "wechat" else "9:16"
         out_dir = OUTPUT_DIR / "poster" / "_preview"
         out_dir.mkdir(parents=True, exist_ok=True)
         pages = []
@@ -5228,6 +5235,7 @@ def api_poster_checklist_render(summary_id):
         if channel not in ("toutiao", "xhs", "wechat"):
             raise guide_checklist.ChecklistError("请选择发布渠道")
         plan, publish, audit_mother, frames = _checklist_frame_plan(summary_id, sheet)
+        ratio = _checklist_output_ratio(plan, data)
         image_proof = checklist_frames.attach(plan, sheet, frames)
         previous = ai_poster.get_package(summary_id) or {}
         also_wechat = (channel == "wechat" or data.get("also_wechat") is True
@@ -5240,7 +5248,7 @@ def api_poster_checklist_render(summary_id):
             return jsonify({"status": "reused", "summary_id": summary_id})
         return _start_poster_graphics({
             "summary_id": summary_id, "title": sheet["title"], "plan": plan, "publish": publish,
-            "ratio": "9:16", "publish_channel": "toutiao", "form": "newspic",
+            "ratio": ratio, "publish_channel": "toutiao", "form": "newspic",
             "text_mode": "typeset", "review": False, "also_wechat": also_wechat,
         }, checklist_mother=audit_mother, checklist_image_proof=image_proof)
     except (guide_checklist.ChecklistError, guide_mother.MotherError) as exc:
@@ -5609,7 +5617,7 @@ def _start_poster_graphics(data, *, checklist_mother=None, checklist_image_proof
         # 行动依据闸要比对原转写：多源稿不能只看主素材那一条，把所有来源的转写拼起来
         asr_text = guide_mother.audit_source_text(_sources)
         # 出图前仍重判已选帧；不合格时留下缺图记录，不换一张不相关的画面冒充证据。
-        frame_items = ([] if checklist_image_proof else
+        frame_items = ([] if checklist_mother is not None else
                        _guide_frames_for(summary, _fast_config(), may_judge=False))
         import copy
         import shutil
@@ -5637,10 +5645,10 @@ def _start_poster_graphics(data, *, checklist_mother=None, checklist_image_proof
                     prov or {}, materials=list((prov or {}).get("materials") or []) + checklist_image_proof)
             manifest = ai_poster.generate_poster(
                 summary, _fast_config(), ratio=ratio, plan=render_plan, publish=publish,
-                reused_frames=[] if checklist_image_proof else None,
+                reused_frames=[] if checklist_mother is not None else None,
                 copies=copies, do_review=do_review, preview_clicks=clicks,
                 publish_channel=publish_channel, form=pk_form, output_dir=stage, **options)
-            if checklist_image_proof:
+            if checklist_mother is not None:
                 _checklist_placed_frames(outgoing_plan, manifest)
             if also_wechat:
                 cb("用同一份攻略正文排版公众号 3:4 图文…")
@@ -5648,7 +5656,7 @@ def _start_poster_graphics(data, *, checklist_mother=None, checklist_image_proof
                     manifest["wechat_companion"] = poster_companion.render_wechat(
                         stage, summary, _fast_config(), outgoing_plan, publish or {},
                         ai_poster.generate_poster, asset, primary=manifest, **options)
-                    if checklist_image_proof:
+                    if checklist_mother is not None:
                         wechat_manifest = json.loads((stage / "wechat" / "manifest.json").read_text(encoding="utf-8"))
                         _checklist_placed_frames(outgoing_plan, wechat_manifest)
                 except ai_poster.PosterError as exc:

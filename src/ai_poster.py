@@ -1964,6 +1964,8 @@ def plan_pages(plan):
         for _k in GUIDE_KEYS:
             if item.get(_k):
                 pages[-1][_k] = item.get(_k)
+        if plan.get("checklist_revision") and plan.get("checklist_reading"):
+            pages[-1]["checklist_reading"] = True
         if plan.get("checklist_revision") and len(pages) == 1 and item.get("checklist_cover"):
             pages[-1]["checklist_cover"] = True
             if item.get("cover_source_page"):

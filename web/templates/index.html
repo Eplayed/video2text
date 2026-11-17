@@ -1726,17 +1726,21 @@ textarea{resize:vertical;min-height:84px}
           </div>
           <div id="pk-checklist-msg" role="status"></div>
           <div class="guide-sheet-actions" id="pk-checklist-actions" hidden>
+            <label>图文版式 <select id="pk-checklist-format">
+              <option value="classic">原版</option>
+              <option value="reading">3:4 阅读版（试用）</option>
+            </select></label>
             <button type="button" class="btn ghost sm" onclick="pkChecklistSave(false)">保存清单</button>
             <button type="button" class="btn ghost sm" onclick="pkChecklistFramesOpen()">逐页配图</button>
 
           </div>
           <section id="pk-page-frames" class="pk-page-frames" aria-label="逐页配图" hidden>
             <strong>逐页配图</strong>
-            <p>每页勾选一张缩略图，可拖框裁剪。确认画面展示的条目后保存。</p>
+            <p>每页勾选一张缩略图，可拖框裁剪。确认关联条目和画面用途后保存。</p>
             <div id="pk-frame-status" role="status"></div>
             <div id="pk-frame-assignments"></div>
             <div class="guide-sheet-actions">
-              <button type="button" class="btn ghost sm" onclick="pkFramePreview('toutiao')">预览竖版</button>
+              <button type="button" class="btn ghost sm" onclick="pkFramePreview('toutiao')">预览当前版式</button>
               <button type="button" class="btn ghost sm" onclick="pkFramePreview('wechat')">预览公众号版</button>
             </div>
             <div id="pk-frame-previews"></div>
@@ -11808,7 +11812,7 @@ function bkRender() {
     + bkLedger() + bkHook();
 }
 </script>
-  <script src="/static/guide-checklist.js?v=10"></script>
+  <script src="/static/guide-checklist.js?v=11"></script>
   <script src="/static/today-ops.js?v=20261116b"></script>
 </body>
 </html>
