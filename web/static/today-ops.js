@@ -78,7 +78,7 @@
         gotoPosterPage(id, channel);
       }
     } else if (id) {
-      if (topic.custom) openSummary(id);
+      if (topic.custom && topic.materials.length === 1) openSummary(id);
       else if (topic.form === 'guide') {
         openPosterDialog(id, {channel, checklist: true});
       } else if (channel === 'wechat') {
@@ -241,7 +241,10 @@
             () => openPosterDialog(topic.summary_id, {channel: data.channel, checklist: true})));
         }
       } else if (!job.running && topic.form === 'guide' && (topic.summary_id || job.summary_id)) {
-        actions.append(button(topic.custom ? '查看整合稿' : '核对攻略清单', () => openTopic(topic, data.channel), true));
+        const collection = topic.custom && topic.materials.length > 1;
+        actions.append(button(topic.custom && !collection ? '查看整合稿' : '核对攻略清单',
+          () => openTopic(topic, data.channel), true));
+        if (collection) actions.append(button('查看整合稿', () => openSummary(topic.summary_id || job.summary_id)));
       } else if (notice) {
         actions.append(button('修改草稿', () => openTopic(topic, data.channel), true));
       } else {
@@ -425,10 +428,14 @@
           generate.disabled = Boolean(busyChannel());
         }
       }, true);
+      rows.addEventListener('change', () => {
+        generate.textContent = rows.querySelectorAll('input:checked').length > 1
+          ? '生成攻略清单' : '生成整合稿';
+      });
       generate.dataset.customGenerate = '';
       generate.disabled = Boolean(busyChannel() || (snapshot && !snapshot.generation_enabled));
       customResults.append(rows, generate);
-      customStatus.textContent = '勾选 1 至 4 条素材。选多条会合并成一篇整合稿。';
+      customStatus.textContent = '勾选 1 至 4 条素材。选多条会合成一个主题的攻略清单。';
     } catch (error) {
       if (id === searchId) customStatus.textContent = errorMessage(error);
     }

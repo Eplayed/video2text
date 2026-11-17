@@ -2298,7 +2298,7 @@ def _prepare_summary_generation(videos, summary_type, cfg, brief=None, *, progre
             brief["supplements"] = supplements.prepare_evidence(
                 brief.get("supplements"), "\n".join(video["transcript"] for video in videos))
         if progress:
-            progress("核对选题与主素材原句...")
+            progress("核对选题与各视频原文..." if len(videos) > 1 else "核对选题与主素材原句...")
         proof = editorial_model.review_topic(brief.get("title"), videos, cfg)
         brief.update(title=proof["title"], topic_evidence=proof)
     return videos, brief, proof
@@ -2394,9 +2394,14 @@ def _run_generation(video_keys, summary_type, combine, st, brief=None, video_ids
                 return []
 
             st["progress"] = f"合并整理 {len(selected_videos)} 条视频..."
-            result, model, status = content_store.generate_collection_summary(
-                selected_videos, summary_type, config, brief
-            )
+            if summary_type == "game_guide" and (topic_proof or {}).get("mode") == "collection":
+                # 多素材攻略直接沿用随后生成的母稿与清单。生成一份独立改写的正文会再引入一套事实。
+                result = {"title": topic_proof["title"], "content": "已核对所选视频。正在准备攻略要点和出处。"}
+                model, status = config["model"], "ai"
+            else:
+                result, model, status = content_store.generate_collection_summary(
+                    selected_videos, summary_type, config, brief
+                )
             _freeze_summary_sources(result, selected_videos, summary_type, config, brief, topic_proof)
             _risk_inherit(result, selected_videos)      # 台账兜底：模型漏写的待核不能消失
             if summary_type in GUIDE_SUMMARY_TYPES:
@@ -2450,7 +2455,7 @@ def _run_generation(video_keys, summary_type, combine, st, brief=None, video_ids
         st["progress"] = f"✅ 已生成 {success_count} 条{label}"
         st["done"] = True
         return summary_ids
-    except (source_frame_evidence.EvidenceError, source_corrections.CorrectionError) as e:
+    except (source_frame_evidence.EvidenceError, source_corrections.CorrectionError, ValueError) as e:
         st.update(error=str(e), progress="素材需要核对", done=True)
         return []
     except Exception:
@@ -4412,6 +4417,9 @@ def _verified_topic_title(summary, sources):
     proof = guide_mother._json_dict(summary.get("structured_data")).get("editorial_topic")
     if not proof:
         return ""
+    if proof.get("mode") == "collection":
+        # guide_mother.source_snapshot 已校验原视频 ID、区间和逐字证据。
+        return proof["title"]
     for source in sources:
         if not source.get("role") and source["video_id"] == proof.get("video_id") and proof.get("quote"):
             from src.term_glossary import normalize_wow
@@ -4927,7 +4935,7 @@ def _preflight_guide_mother(summary):
     sources, revision = guide_mother.source_snapshot(DB_PATH, summary["id"])
     recorded = guide_mother._json_dict(summary.get("structured_data")).get("summary_source_revision")
     primary_sources = [source for source in sources if not source.get("role")]
-    if recorded and recorded != guide_mother._source_revision(primary_sources):
+    if recorded and recorded != guide_mother._source_revision(primary_sources, include_topic=False):
         raise guide_mother.MotherError("整理稿生成后素材已修订，请先重新生成整理稿，再拆文案。")
     return sources, revision, _verified_topic_title(summary, sources)
 
@@ -5052,21 +5060,58 @@ def api_source_corrections(video_id):
         return jsonify({"error": "修订未保存，请查看服务日志"}), 500
 
 
+def _write_collection_guide_draft(summary_id, title, mother, sources):
+    """从同一份清单母稿生成待审正文，来源与待核项随条目保留。"""
+    from src import guide_mother
+
+    videos = [source for source in sources if source.get("topic_spans")]
+    if not videos:
+        return
+    labels = {source["video_id"]: "视频%d｜%s" % (i, source.get("published_at") or "日期不明")
+              for i, source in enumerate(videos, 1)}
+    body, pending = [], []
+    for point in mother["points"]:
+        if point["priority"] == "optional":
+            continue
+        label = labels.get(point["source_ref"]["video_id"], "补充资料")
+        reason = point.get("review_reason")
+        line = "- %s（%s）" % (point["display_text"], label)
+        if reason:
+            pending.append(line + " · " + reason)
+        else:
+            body.append(line)
+    lines = ["# " + title, "## 攻略要点", *dict.fromkeys(body)]
+    if pending:
+        lines.extend(["## 待核资料", *dict.fromkeys(pending)])
+    lines.extend(["## 来源", *("- %s · %s" % (labels[v["video_id"]], v["title"]) for v in videos)])
+    conn = content_store.connect(DB_PATH)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        current = guide_mother.current_revisions(conn, summary_id)
+        if current != (mother["source_revision"], mother["mother_revision"]):
+            raise guide_mother.MotherError("来源或母稿刚更新，请刷新后重试")
+        conn.execute("UPDATE ai_summaries SET content=? WHERE id=?", ("\n\n".join(lines), summary_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def _prepare_poster_checklist(summary, kind, progress=None):
     from src import guide_checklist, guide_mother
 
     sid = summary["id"]
     old = guide_checklist.load(DB_PATH, sid)
     _sources, revision, _theme = _preflight_guide_mother(summary)
-    mother = guide_mother.load_mother(DB_PATH, sid)
+    # ensure_mother 会优先复用已通过的当前母稿，也会在证据规则升级后重核旧稿。
+    mother = guide_mother.ensure_mother(
+        DB_PATH, sid, _editorial_config(required=True), progress=progress)
     if (old and old.get("source_revision") == revision
             and old.get("mother_revision") == mother.get("mother_revision")):
         return old
-    mother = guide_mother.ensure_mother(
-        DB_PATH, sid, _editorial_config(required=True), progress=progress)
     if mother["source_revision"] != revision:
         raise guide_checklist.ChecklistError("原文已更新，请重新准备清单")
     sheet = guide_checklist.from_mother(mother, kind, summary["title"])
+    _write_collection_guide_draft(sid, summary["title"], mother, _sources)
     return guide_checklist.save(DB_PATH, sid, sheet, revision, mother["mother_revision"],
                                 old.get("revision") or "")
 
@@ -9403,7 +9448,7 @@ def _today_run(job, channel):
                 if not sid:
                     raise RuntimeError("整合稿未生成，请到排产表查看")
             job["summary_id"] = sid
-            if topic.get("custom"):
+            if topic.get("custom") and len(topic["materials"]) == 1:
                 job["progress"] = "整合稿已生成，可打开核对"
                 return
             if _today_package(sid, channel):

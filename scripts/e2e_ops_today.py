@@ -46,7 +46,8 @@ def main():
                 patch.object(web.ai_poster, "OUTPUT_DIR", root / "poster"), \
                 patch.object(web, "_editorial_config", return_value={"model": "deepseek-v4-pro"}), \
                 patch.object(web, "_original_graphics_enabled", return_value=True), \
-                patch.object(web, "_run_generation", side_effect=fake_generate):
+                patch.object(web, "_run_generation", side_effect=fake_generate), \
+                patch.object(web, "_prepare_poster_checklist", return_value={"revision": "fixture"}) as checklist:
             client = web.app.test_client()
             data = client.get("/api/ops/today?channel=toutiao").get_json()
             assert {m["video_id"] for t in data["topics"] for m in t["materials"]} == {2, 3}, data
@@ -80,6 +81,8 @@ def main():
             options, item = finish()
             assert not options["topics"] and item["summary_id"], options
             assert [r["video_id"] for r in item["materials"]] == [2, 3]
+            checklist.assert_called_once()
+            assert checklist.call_args.args[0]["id"] == item["summary_id"]
             assert client.post("/api/ops/today/custom", json=body).status_code == 202
             _, second = finish()
             assert second["summary_id"] == item["summary_id"] and generated == [([2, 3], "地下城 装备")]

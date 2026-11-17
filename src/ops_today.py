@@ -220,7 +220,9 @@ def recommend(board, package_for, used=()):
         package = package_for(sid, channel) if sid else None
         rows = slot["adopted_rows"]
         priority = 2
-        reason = "继续处理排产表中已采用的素材"
+        custom = key.startswith("topic-") and slot.get("origin") == "today"
+        reason = "自定义选题 · 已选素材合稿" if custom and len(rows) > 1 else (
+            "自定义选题" if custom else "继续处理排产表中已采用的素材")
         if package:
             priority, reason = 1, "已有图文包，先查看成品与审核结果"
         elif not rows:
@@ -268,7 +270,7 @@ def recommend(board, package_for, used=()):
             "materials": [{k: r.get(k) for k in ("video_id", "title", "author", "date",
                                                  "sheet", "row")} for r in rows],
             "candidate_id": rows[0]["video_id"] if priority == 0 else None,
-            "custom": key.startswith("topic-") and slot.get("origin") == "today",
+            "custom": custom,
         }
         date = max((plan_series._day_ordinal(r["date"]) for r in rows), default=0)
         items.append(((priority, bool(priority == 0 and not scheduled_date),

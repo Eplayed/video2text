@@ -1395,6 +1395,13 @@ def _generate_collection_with_llm(
     ai_config: dict[str, str],
     brief: dict | None = None,
 ) -> dict[str, Any]:
+    proof = (brief or {}).get("topic_evidence") or {}
+    if ai_config.get("editorial") and proof.get("mode") == "collection":
+        from .editorial_model import collection_spans
+        spans = collection_spans(proof, {video["id"]: video["transcript"] for video in videos})
+        videos = [dict(video, transcript="\n".join(video["transcript"][a:b]
+                                                   for a, b in spans[video["id"]]))
+                  for video in videos]
     prompt = _collection_prompt(videos, summary_type, None if ai_config.get("editorial") else brief)
     if ai_config.get("editorial"):
         from .editorial_model import prompt_scope

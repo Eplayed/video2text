@@ -24,6 +24,49 @@ def main():
         else:
             raise AssertionError("fake topic evidence accepted")
 
+    second = {"id": 42, "transcript": "第二条资料提到只在固定队伍条件下考虑副本任务。"
+                                       "需要先核对当前版本，再安排经验分配和路线。"}
+    collection = editorial_model.review_topic(
+        "部落1–20练级攻略", [video, second], {}, lambda _: {
+            "ready": True, "topic": "低等级副本练级条件", "refs": ["23:0", "42:0"]})
+    raw = {v["id"]: v["transcript"] for v in (video, second)}
+    assert collection["title"] == "低等级副本练级条件"
+    assert all(collection["title"] not in t for t in raw.values())
+    assert set(editorial_model.collection_spans(collection, raw)) == {23, 42}
+    for refs in (["23:0"], ["23:0", "99:0"]):
+        try:
+            editorial_model.review_topic("部落1–20练级攻略", [video, second], {}, lambda _: {
+                "ready": True, "topic": "低等级副本练级条件", "refs": refs})
+        except ValueError as exc:
+            assert "每条已选视频" in str(exc)
+        else:
+            raise AssertionError("multi-source evidence did not check every selected source")
+    try:
+        editorial_model.collection_spans(collection, {**raw, 42: "整段已替换"})
+    except ValueError as exc:
+        assert "原文片段已变化" in str(exc)
+    else:
+        raise AssertionError("changed source accepted")
+    scoped = [{"video_id": 23, "text": video["transcript"] + "超出主题的后续内容",
+               "topic_spans": [(0, len(video["transcript"]))], "topic": collection["title"]},
+              {"video_id": 42, "text": second["transcript"],
+               "topic_spans": [(0, len(second["transcript"]))], "topic": collection["title"]}]
+    segments = guide_mother.split_sources(scoped, "source")
+    assert [seg["text"] for seg in segments] == list(raw.values())
+    assert "超出主题" not in guide_mother.audit_source_text(scoped)
+    assert editorial_model.collection_point_outside("部落1-20级练级攻略", "30级开始去中立地图。")
+    assert editorial_model.collection_point_outside("部落1-20级练级攻略", "联盟可以去泰达希尔。")
+    assert not editorial_model.collection_point_outside("部落1-20级练级攻略", "10到20级走新手村旁边的地图。")
+    quote = "以部落为例怒焰峡谷一共经验是2.64万经验。"
+    old = {"video_id": 42, "start": 0, "text": quote, "segment_id": "old",
+           "topic": "部落1-20级练级攻略", "published_at": "2025-01-01"}
+    points = guide_mother._points_from_result(
+        old, {"points": [{"quote": quote, "subject": "怒焰峡谷", "priority": "must"}]},
+        "fixture-source", editorial=True)
+    assert points[0]["review_reason"].startswith("早期素材")
+    assert editorial_model.collection_point_note("部落1-20级练级攻略", "可以直接升到19级", "2025-01-01")
+    assert editorial_model.collection_point_note("部落1-20级练级攻略", "部落和联盟的起始地图", "2025-01-01")
+
     primary = must("p1", exact, ["仅限测试服普通难度地下城"])
     p2 = must("p2", "两点致命偷袭。")
     p3 = must("p3", "三点无情。")
