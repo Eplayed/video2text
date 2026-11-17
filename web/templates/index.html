@@ -975,7 +975,7 @@ textarea{resize:vertical;min-height:84px}
 .copy-link{cursor:pointer;color:var(--module-2);font-size:12px;text-decoration:underline}
 </style>
   <link rel="stylesheet" href="/static/today-ops.css?v=20261117">
-  <link rel="stylesheet" href="/static/guide-checklist.css?v=10">
+  <link rel="stylesheet" href="/static/guide-checklist.css?v=11">
 </head>
 <body>
 <div class="layout">
@@ -1745,10 +1745,15 @@ textarea{resize:vertical;min-height:84px}
               <option value="classic">原版</option>
               <option value="reading">3:4 阅读版（试用）</option>
             </select></label>
+            <button type="button" class="btn ghost sm" onclick="pkChecklistFocusSelection()">选择出图条目</button>
             <button type="button" class="btn ghost sm" onclick="pkChecklistSave(false)">保存清单</button>
             <button type="button" class="btn ghost sm" onclick="pkChecklistFramesOpen()">逐页配图</button>
 
           </div>
+          <details class="pk-checklist-copy">
+            <summary id="pk-checklist-copy-title">选择出图条目</summary>
+            <div id="pk-checklist-editor"></div>
+          </details>
           <section id="pk-page-frames" class="pk-page-frames" aria-label="逐页配图" hidden>
             <strong>逐页配图</strong>
             <p>每页勾选一张缩略图，可拖框裁剪。确认关联条目和画面用途后保存。</p>
@@ -1760,10 +1765,6 @@ textarea{resize:vertical;min-height:84px}
             </div>
             <div id="pk-frame-previews"></div>
           </section>
-          <details class="pk-checklist-copy">
-            <summary id="pk-checklist-copy-title">核对文案</summary>
-            <div id="pk-checklist-editor"></div>
-          </details>
         </section>
         <div id="pk-layout-hint" style="font-size:11.5px;color:var(--text-secondary);margin:2px 0 8px;min-height:16px"></div>
         <!-- 额度预警：拆解/出图都按模型算额度，快没了在这里先说，别等点了才吐一堆堆栈 -->
@@ -11827,7 +11828,7 @@ function bkRender() {
     + bkLedger() + bkHook();
 }
 </script>
-  <script src="/static/guide-checklist.js?v=11"></script>
+  <script src="/static/guide-checklist.js?v=12"></script>
   <script src="/static/today-ops.js?v=20261117c"></script>
 </body>
 </html>

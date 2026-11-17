@@ -7,7 +7,11 @@
 .guide-sheet fieldset { border: 1px solid var(--border); border-radius: 8px; margin: 12px 0; padding: 12px; min-width: 0; }
 .guide-sheet legend { font-weight: 600; }
 .guide-sheet textarea { display: block; width: 100%; }
-.guide-sheet-fields input[type=checkbox] { width: auto; }
+.guide-sheet-choice { display: inline-flex; align-items: center; gap: 6px; min-height: 26px; }
+.guide-sheet-choice:has(input:enabled) { cursor: pointer; }
+.guide-sheet-choice input { width: auto; }
+.guide-sheet .guide-sheet-excerpt { margin: 4px 0; color: var(--text-secondary); }
+.guide-sheet fieldset:has(> .guide-sheet-choice input:checked) { border-color: var(--accent); }
 .guide-sheet-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; margin-block: 8px; }
 .guide-sheet-card label { grid-column: 1; }
 .guide-sheet-card button { grid-column: 2; }

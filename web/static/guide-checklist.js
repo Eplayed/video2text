@@ -12,7 +12,12 @@ function pkChecklistModeLine() {
 function pkUpdateChecklistFooter() {
   if (pkWorkflow !== 'checklist') return;
   const status = document.getElementById('pk-checklist-footer-state');
-  status.textContent = pkFrameDirty ? '本页配图待确认' : pkChecklistModeLine().replace(/^攻略清单 · /, '');
+  const checked = document.querySelectorAll('#pk-checklist-editor [data-include]:checked:not(:disabled)').length;
+  const frames = pkChecklistModeLine().replace(/^攻略清单 · /, '');
+  const selection = checked ? '已选 ' + checked + ' 条' : '请先选择出图条目';
+  status.textContent = pkFrameDirty ? '本页配图待确认'
+    : !pkChecklistSheet ? '请先准备清单'
+    : [selection, frames === '攻略清单' ? '' : frames].filter(Boolean).join(' · ');
 }
 
 function pkSetWorkflow(mode) {
@@ -72,6 +77,7 @@ async function pkPosterAction(generate) {
     document.getElementById('pk-checklist').scrollIntoView({block: 'nearest'});
     return;
   }
+  if (!pkChecklistRequireSelection()) return;
   if (generate) return pkChecklistSave(true);
   if (pkFrameDirty) {
     pkFrameMessage('请先确认本页配图，再预览。');
@@ -150,11 +156,20 @@ function pkChecklistRow(item) {
   included.type = 'checkbox';
   included.checked = item.included;
   included.disabled = item.evidence.some(point => point.review_reason);
-  control.append(included, ' 纳入成品');
-  fields.append(control);
+  control.append(included, included.disabled ? ' 待核，暂不可选' : ' 纳入图文');
+  included.dataset.include = '';
+  included.addEventListener('change', () => {
+    if (pkFrameLayout && !pkFrameDirty) pkFrameReset();
+    pkChecklistUpdateSelection();
+  });
+  control.className = 'guide-sheet-choice';
+  const preview = document.createElement('p');
+  preview.className = 'guide-sheet-excerpt';
+  const excerpt = item.cards.map(card => card.d).join(' ').trim();
+  preview.textContent = excerpt.length > 100 ? excerpt.slice(0, 100) + '…' : excerpt;
   const details = document.createElement('details');
   const summary = document.createElement('summary');
-  summary.textContent = item.evidence.some(point => point.review_reason) ? '待核原句' : '对照引用原句';
+  summary.textContent = included.disabled ? '查看待核原因与原句' : '核对原句与编辑文案';
   details.append(summary);
   for (const point of item.evidence) {
     const proof = document.createElement('p');
@@ -172,12 +187,48 @@ function pkChecklistRow(item) {
   }
   const cards = document.createElement('div');
   item.cards.forEach((card, i) => cards.append(pkChecklistCard(card, i)));
-  row.append(heading, fields, cards, details,
-    pkChecklistField('核对备注（选填）', item.note, 200),
+  details.append(fields, cards, pkChecklistField('核对备注（选填）', item.note, 200),
     pkChecklistButton('添加附卡', () => {
       if (cards.children.length < 5) cards.append(pkChecklistCard({}, cards.children.length));
     }));
+  row.append(heading, control, preview, details);
   return row;
+}
+
+function pkChecklistUpdateSelection() {
+  const choices = document.querySelectorAll('#pk-checklist-editor [data-include]');
+  const count = Array.from(choices).filter(input => input.checked && !input.disabled).length;
+  const held = Array.from(choices).filter(input => input.disabled).length;
+  document.getElementById('pk-checklist-copy-title').textContent =
+    '出图条目 · 已选 ' + count + ' 条' + (held ? ' · ' + held + ' 条待核' : '');
+  if (count && document.getElementById('pk-checklist-msg').dataset.selectionNeeded) {
+    const status = document.getElementById('pk-checklist-msg');
+    status.textContent = '已勾选条目，可预览清单或逐页配图。';
+    delete status.dataset.selectionNeeded;
+  }
+  pkUpdateChecklistFooter();
+}
+
+function pkChecklistFocusSelection() {
+  const copy = document.querySelector('.pk-checklist-copy');
+  copy.open = true;
+  const fields = copy.querySelector('[data-include]:checked:not(:disabled)')
+    || copy.querySelector('[data-include]:not(:disabled)');
+  const target = fields || document.getElementById('pk-checklist-copy-title');
+  target.scrollIntoView({block: 'center'});
+  target.focus({preventScroll: true});
+}
+
+function pkChecklistRequireSelection() {
+  const copy = document.querySelector('.pk-checklist-copy');
+  if (copy.querySelector('[data-include]:checked:not(:disabled)')) return true;
+  const status = document.getElementById('pk-checklist-msg');
+  status.dataset.selectionNeeded = 'true';
+  status.textContent = copy.querySelector('[data-include]:not(:disabled)')
+    ? '请勾选至少一条「纳入图文」，再预览、配图或出图。'
+    : '这份清单的条目都待核，请先核对原句。';
+  pkChecklistFocusSelection();
+  return false;
 }
 
 function pkChecklistShow(value) {
@@ -189,8 +240,10 @@ function pkChecklistShow(value) {
   const copy = document.querySelector('.pk-checklist-copy');
   const stale = value.stale;
   copy.hidden = !pkChecklistSheet || stale;
-  document.getElementById('pk-checklist-msg').textContent = stale
-    ? '原文或母稿已有更新，请重新准备清单。' : '';
+  const status = document.getElementById('pk-checklist-msg');
+  delete status.dataset.selectionNeeded;
+  delete status.dataset.lengthWarning;
+  status.textContent = stale ? '原文或母稿已有更新，请重新准备清单。' : '';
   if (pkChecklistSheet) {
     kind.value = pkChecklistSheet.kind;
     pkSetWorkflow('checklist');
@@ -200,13 +253,12 @@ function pkChecklistShow(value) {
   actions.hidden = !pkChecklistSheet || stale;
   kind.disabled = false;
   if (!pkChecklistSheet || stale) return;
-  const pending = pkChecklistSheet.rows.filter(row => !row.included).length;
-  copy.open = pending > 0;
-  document.getElementById('pk-checklist-copy-title').textContent = '核对文案 · '
-    + pkChecklistSheet.rows.length + ' 条' + (pending ? ' · ' + pending + ' 条未纳入' : '');
+  copy.open = !pkChecklistSheet.rows.some(row => row.included &&
+    !row.evidence.some(point => point.review_reason));
   const title = pkChecklistField('攻略标题', pkChecklistSheet.title, 30);
   title.querySelector('input').id = 'pk-checklist-title';
   editor.append(title, ...pkChecklistSheet.rows.map(pkChecklistRow));
+  pkChecklistUpdateSelection();
 }
 
 async function pkChecklistOpen() {
@@ -226,7 +278,7 @@ async function pkChecklistOpen() {
 function pkChecklistForm() {
   const editor = document.getElementById('pk-checklist-editor');
   const rows = Array.from(editor.querySelectorAll('fieldset'), row => {
-    const [group, name, included, ...rest] = row.querySelectorAll('input');
+    const [included, group, name, ...rest] = row.querySelectorAll('input');
     const cards = Array.from(row.querySelectorAll('.guide-sheet-card'), (card, i) => ({
       t: i === 0 ? name.value : card.querySelector('input').value,
       d: card.querySelector('textarea').value,
@@ -238,6 +290,32 @@ function pkChecklistForm() {
     kind: document.getElementById('pk-checklist-kind').value, rows};
 }
 
+function pkChecklistCheckLength(form) {
+  const limit = PK_BY_MODE.typeset.cardD;
+  const blocked = form.rows.find(row => row.included &&
+    row.cards.some(card => Array.from(card.d.trim()).length > limit));
+  const status = document.getElementById('pk-checklist-msg');
+  if (!blocked) {
+    if (status.dataset.lengthWarning) {
+      delete status.dataset.lengthWarning;
+      status.textContent = '';
+    }
+    return true;
+  }
+  const copy = document.querySelector('.pk-checklist-copy');
+  copy.open = true;
+  const entry = Array.from(copy.querySelectorAll('fieldset')).find(row => row.dataset.id === blocked.id);
+  const details = entry.querySelector('details');
+  details.open = true;
+  const target = Array.from(details.querySelectorAll('textarea'))
+    .find(input => Array.from(input.value.trim()).length > limit);
+  status.dataset.lengthWarning = 'true';
+  status.textContent = '「' + blocked.name + '」的卡片正文超过 ' + limit + ' 字，请精简或拆成附卡后继续。';
+  target.scrollIntoView({block: 'center'});
+  target.focus({preventScroll: true});
+  return false;
+}
+
 async function pkChecklistSave(render) {
   if (!pkChecklistSheet) return;
   if (pkFrameDirty) {
@@ -245,6 +323,8 @@ async function pkChecklistSave(render) {
     document.getElementById('pk-frame-status').scrollIntoView({block: 'nearest'});
     return;
   }
+  const form = pkChecklistForm();
+  if (!pkChecklistCheckLength(form)) return;
   const token = pkChecklistEpoch;
   const reading = pkChecklistReading();
   const actions = document.getElementById('pk-checklist-actions');
@@ -252,7 +332,7 @@ async function pkChecklistSave(render) {
   const buttons = [...actions.querySelectorAll('button'), document.getElementById('pk-go-top')];
   buttons.forEach(button => { button.disabled = true; });
   try {
-    const value = await pkChecklistRequest('', pkChecklistForm());
+    const value = await pkChecklistRequest('', form);
     if (token !== pkChecklistEpoch) return;
     pkChecklistSheet = value.sheet;
     if (pkFrameLayout && pkFrameLayout.revision !== value.sheet.revision) pkFrameReset();
@@ -336,22 +416,25 @@ function pkFrameMessage(message) {
 async function pkChecklistFramesOpen() {
   if (!pkChecklistSheet || document.getElementById('pk-checklist').hidden) await pkChecklistOpen();
   if (!pkChecklistSheet || document.getElementById('pk-checklist-actions').hidden) return;
+  if (!pkChecklistRequireSelection()) return;
   if (pkFrameDirty) {
     pkFrameMessage('请先确认本页配图，或撤销本页改动。');
     return;
   }
+  const form = pkChecklistForm();
+  if (!pkChecklistCheckLength(form)) return;
   const token = pkChecklistEpoch;
   const panel = document.getElementById('pk-page-frames');
   panel.hidden = false;
   pkFrameMessage('正在读取当前清单的页序…');
   try {
-    const saved = await pkChecklistRequest('', pkChecklistForm());
+    const saved = await pkChecklistRequest('', form);
     if (token !== pkChecklistEpoch) return;
     pkChecklistSheet = saved.sheet;
     const data = await pkChecklistRequest('/frames');
     if (token !== pkChecklistEpoch) return;
     pkFrameShow(data);
-    pkFrameMessage('选择页面和关键帧，确认对应的条目后保存。');
+    pkFrameMessage('配图可选。选择画面后确认对应条目，文字页也能直接预览。');
     panel.scrollIntoView({block: 'nearest'});
     return true;
   } catch (error) {
