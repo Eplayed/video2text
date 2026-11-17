@@ -392,8 +392,8 @@
         const check = document.createElement('input');
         check.type = 'checkbox';
         check.value = material.video_id;
-        label.append(check, text('span', material.title + ' · ' +
-          [material.author, material.date].filter(Boolean).join(' · ')));
+        label.append(check, text('span', [material.title, material.author, material.date,
+          material.version_note].filter(Boolean).join(' · ')));
         row.append(label);
         if (material.sheet && material.row) {
           const view = button('查看素材', () => gotoMaterial(material.sheet, Number(material.row)));

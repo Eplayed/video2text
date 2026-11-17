@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """今日选题的未用候选，以及首页自定义选题复用排产生成。"""
+from datetime import timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -87,5 +88,54 @@ def main():
     print("OPS_TODAY_OK")
 
 
+def check_compact_topic():
+    rows = [
+        (1, "魔兽世界无限 1-60级升级路线", "部落从杜隆塔尔出发，10到20级到贫瘠之地。"),
+        (2, "魔兽无限联盟专属 1-20级练级路线", "对比部落，这条路线是给联盟玩家的。"),
+        (3, "无限服日活新高，部落号还能建吗？", "这里说的是部落角色的创建限制。"),
+        (4, "怀旧服部落1-20级升级指南", "部落可以到贫瘠之地升级。"),
+        (5, "无限服部落升到20级后去哪里", "部落20至30级练级主要看这段。"),
+        (6, "魔兽无限 B 测1-20级部落升级路线", "部落1-20级测试路线。"),
+        (7, "魔兽世界无限 11-17蓝贴", "11月17日在线修正。"),
+        (8, "魔兽世界无限 11-18蓝贴", "公告提到了11到17级的任务。"),
+        (9, "无限服部落10到17级练级路线", "部落10到17级按地图任务推进。"),
+        (10, "魔兽无限部落15-20级冲级路线", "部落15到20级可以按任务线升级。"),
+        (11, "魔兽无限部落1-20级练级路线已失效", "这条部落练级路线有更新。"),
+        (12, "魔兽无限练级路上顺手赚金币", "提到部落10到15级练级，但是主题是搓绷带。"),
+    ]
+    with TemporaryDirectory(prefix="v2t-topic-phrase-") as folder:
+        db = Path(folder) / "video2text.db"
+        conn = content_store.connect(db)
+        today = plan_series.cn_now().date()
+        for number, title, body in rows:
+            date = today - timedelta(days={9: 1, 10: 30, 11: 0, 12: 0}.get(number, 9))
+            conn.execute("INSERT INTO videos(id,source_sheet,source_row,title,transcript,updated_at,published_at)"
+                         " VALUES(?, 'B站视频', ?, ?, ?, ?, ?)",
+                         (number, number, title, body, today.isoformat(), date.isoformat()))
+        conn.commit()
+        conn.close()
+        with patch.object(web, "DB_PATH", db):
+            client = web.app.test_client()
+            for theme in ("魔兽无限部落1–20练级攻略", "魔兽无限部落１～２０练级攻略",
+                          "魔兽无限 部落 1-20级 练级攻略"):
+                response = client.get("/api/ops/today/custom", query_string={
+                    "theme": theme, "channel": "toutiao"})
+                ids = [video["video_id"] for video in response.get_json()["materials"]]
+                assert ids[0:1] == [1] and not {2, 3, 4, 5}.intersection(ids), (theme, ids)
+            latest = client.get("/api/ops/today/custom", query_string={
+                "theme": "最新魔兽无限部落1-20级练级攻略", "channel": "toutiao"})
+            results = latest.get_json()["materials"]
+            assert results[0]["video_id"] == 9
+            notes = {video["video_id"]: video.get("version_note") for video in results}
+            assert "测试期" in notes[6] and "较早发布" not in notes[6]
+            assert "发布时间较早" in notes[10]
+            assert "注明失效" in notes[11] and results[-1]["video_id"] == 11
+            date = client.get("/api/ops/today/custom", query_string={
+                "theme": "魔兽无限11-17蓝贴", "channel": "toutiao"})
+            assert [video["video_id"] for video in date.get_json()["materials"]] == [7]
+    print("OPS_TODAY_COMPACT_TOPIC_OK")
+
+
 if __name__ == "__main__":
+    check_compact_topic()
     main()
