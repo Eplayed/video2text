@@ -1736,6 +1736,8 @@ textarea{resize:vertical;min-height:84px}
               <option value="equipment">装备清单</option>
               <option value="class">职业改动</option>
               <option value="steps">任务步骤</option>
+              <option value="ranking">梯度榜单</option>
+              <option value="digest">汇总盘点</option>
             </select></label>
             <button type="button" class="btn ghost sm" id="pk-checklist-prepare" onclick="pkChecklistPrepare()">准备清单</button>
           </div>
@@ -1746,6 +1748,7 @@ textarea{resize:vertical;min-height:84px}
               <option value="reading">3:4 阅读版（试用）</option>
             </select></label>
             <button type="button" class="btn ghost sm" onclick="pkChecklistFocusSelection()">选择出图条目</button>
+            <button type="button" class="btn ghost sm" id="pk-checklist-recommend" onclick="pkChecklistRecommend()" hidden>推荐勾选</button>
             <button type="button" class="btn ghost sm" onclick="pkChecklistSave(false)">保存清单</button>
             <button type="button" class="btn ghost sm" onclick="pkChecklistFramesOpen()">逐页配图</button>
 
@@ -1756,7 +1759,7 @@ textarea{resize:vertical;min-height:84px}
           </details>
           <section id="pk-page-frames" class="pk-page-frames" aria-label="逐页配图" hidden>
             <strong>逐页配图</strong>
-            <p>每页勾选一张缩略图，可拖框裁剪。确认关联条目和画面用途后保存。</p>
+            <p>按页确认视频画面，也可以用本地图标或纯文字信息页。</p>
             <div id="pk-frame-status" role="status"></div>
             <div id="pk-frame-assignments"></div>
             <div class="guide-sheet-actions">
@@ -11828,7 +11831,7 @@ function bkRender() {
     + bkLedger() + bkHook();
 }
 </script>
-  <script src="/static/guide-checklist.js?v=12"></script>
+  <script src="/static/guide-checklist.js?v=13"></script>
   <script src="/static/today-ops.js?v=20261117c"></script>
 </body>
 </html>

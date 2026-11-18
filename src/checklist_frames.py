@@ -8,6 +8,7 @@ from PIL import Image
 
 from . import frame_pool, guide_mother, poster_content
 from .guide_checklist import ChecklistError
+from .graphics import icons
 
 
 def page_key(page):
@@ -63,6 +64,17 @@ def _scene_only(frame, page, selected):
                         else "scene") == "scene"
 
 
+def _generic_scene(frame, pages):
+    subject = frame["subject"]
+    return not poster_content._classes(subject) and not any(
+        poster_content.frame_related(page, subject) for page in pages)
+
+
+def _page_visual(page, sheet):
+    saved = (sheet.get("visuals") or {}).get(page_key(page))
+    return "asset" if saved != "text" and icons.page_visual(page) else "text"
+
+
 def describe(plan, sheet, frames):
     pages = plan["pages"]
     saved = sheet.get("frames") or {}
@@ -79,6 +91,7 @@ def describe(plan, sheet, frames):
             choices.append({k: frame[k] for k in ("id", "url", "time", "subject", "source", "source_url", "digest")})
             choices[-1]["suggested"] = poster_content.frame_related(page, frame["subject"])
             choices[-1]["anchor"] = labels[0] if len(labels) == 1 else ""
+            choices[-1]["reusable_scene"] = _generic_scene(frame, pages)
         choices.sort(key=lambda frame: not frame["suggested"])
         available = frames.get(selected["id"]) if selected else None
         stale = bool(selected and (not available or available["digest"] != selected["digest"]
@@ -89,6 +102,12 @@ def describe(plan, sheet, frames):
             "key": key, "page": order, "title": page["title"],
             "labels": list(dict.fromkeys(card["t"] for card in page["cards"])),
             "selected": selected, "stale": stale, "candidates": choices,
+            "visual": "frame" if selected and not stale else _page_visual(page, sheet),
+            "manual_visual": (sheet.get("visuals") or {}).get(key, "") if icons.page_visual(page)
+                             else "text" if (sheet.get("visuals") or {}).get(key) == "text" else "",
+            "has_asset": icons.page_visual(page),
+            "recommended": ("evidence" if any(row["suggested"] for row in choices) else
+                            "asset" if icons.page_visual(page) else "scene" if choices else "text"),
         })
     return response
 
@@ -120,8 +139,9 @@ def edit(plan, sheet, frames, body):
     pages = plan["pages"]
     keyed = {page_key(page): page for page in pages}
     bindings = {key: value for key, value in (sheet.get("frames") or {}).items() if key in keyed}
+    visuals = {key: value for key, value in (sheet.get("visuals") or {}).items() if key in keyed}
     if body.get("discard_stale") is True:
-        return dict(sheet, frames=bindings)
+        return dict(sheet, frames=bindings, visuals=visuals)
     key = body.get("page")
     page = keyed.get(key) if isinstance(key, str) else None
     if not page:
@@ -129,7 +149,16 @@ def edit(plan, sheet, frames, body):
     frame_id = body.get("id")
     if frame_id in ("", None):
         bindings.pop(key, None)
-        return dict(sheet, frames=bindings)
+        visual = body.get("visual", "text")
+        if visual not in ("auto", "asset", "text"):
+            raise ChecklistError("请选择可用的画面方案")
+        if visual == "asset" and not icons.page_visual(page):
+            raise ChecklistError("本页暂无匹配的本地画面，可使用纯文字页")
+        if visual == "auto":
+            visuals.pop(key, None)
+        else:
+            visuals[key] = visual
+        return dict(sheet, frames=bindings, visuals=visuals)
     frame = frames.get(frame_id) if isinstance(frame_id, str) else None
     if not frame or not _allowed(frame, page, pages):
         raise ChecklistError("这张帧尚未审核通过，或画面主体属于另一页")
@@ -138,9 +167,11 @@ def edit(plan, sheet, frames, body):
     anchor = body.get("anchor")
     if not isinstance(anchor, str) or anchor not in {card["t"] for card in page["cards"]}:
         raise ChecklistError("请选择这张图展示的本页条目")
-    if any(other.get("id") == frame_id for k, other in bindings.items() if k != key):
-        raise ChecklistError("这张关键帧已用于另一页，请选择其他帧")
     usage = body.get("usage")
+    other_uses = [other for k, other in bindings.items() if k != key and other.get("id") == frame_id]
+    if other_uses and (usage != "scene" or len(other_uses) >= 2 or not _generic_scene(frame, pages)
+                       or any(other.get("usage") != "scene" for other in other_uses)):
+        raise ChecklistError("证据画面只用于一页，通用场景最多用于两页")
     matched = _matched_cards(frame, page)
     if usage is not None and usage not in ("evidence", "scene"):
         raise ChecklistError("请选择画面用途")
@@ -161,29 +192,32 @@ def edit(plan, sheet, frames, body):
         bindings[key]["usage"] = usage
     if crop:
         bindings[key]["crop"] = crop
-    return dict(sheet, frames=bindings)
+    visuals.pop(key, None)
+    return dict(sheet, frames=bindings, visuals=visuals)
 
 
 def attach(plan, sheet, frames):
     saved = sheet.get("frames") or {}
     pages = plan["pages"]
-    if set(saved) - {page_key(page) for page in pages}:
-        raise ChecklistError("部分配图对应的页面已改动，请到逐页配图重新确认")
     materials = []
     for index, page in enumerate(pages, 1):
         selected = saved.get(page_key(page))
+        page["visual_mode"] = _page_visual(page, sheet)
         if not selected:
             continue
         frame = frames.get(selected["id"])
         if (not frame or selected["digest"] != frame["digest"] or not _allowed(frame, page, pages)
                 or selected["anchor"] not in {card["t"] for card in page["cards"]}):
-            raise ChecklistError("第 %d 页的关键帧已变化，请重新确认" % index)
+            continue
+        page["visual_mode"] = "frame"
         page["photos"] = [{
             "path": frame["file"], "frame": frame["id"], "caption": selected["anchor"],
             "ts": frame["time"], "judged": True, "sha256": frame["digest"],
         }]
-        if plan.get("checklist_reading"):
-            page["photos"][0]["scene_only"] = _scene_only(frame, page, selected)
+        scene = _scene_only(frame, page, selected)
+        page["photos"][0]["scene_only"] = scene
+        if scene and selected.get("usage") == "scene" and _generic_scene(frame, pages):
+            page["photos"][0]["reusable_scene"] = True
         if selected.get("crop"):
             page["photos"][0]["crop"] = selected["crop"]
         materials.append({"ref": "%s %s" % (frame["id"], frame["time"]), "url": frame["source_url"],

@@ -966,85 +966,16 @@ def typeset_checklist_cover(base_png, plan, skin):
 
 
 
-_WOW_CARDS_CACHE = {"mtime": None, "cards": {}}
-_ASSETS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "output", "_assets")
+def _open_local_visual(folder, name):
+    from .graphics import icons
 
-
-def _load_wow_cards():
-    cpath = os.path.join(_ASSETS_DIR, "wow_cards.json")
+    path = icons.visual_path(folder, name)
+    if not path:
+        return None
     try:
-        m = os.path.getmtime(cpath)
+        with Image.open(path) as im:
+            return im.convert("RGB")
     except OSError:
-        return {}
-    if _WOW_CARDS_CACHE["mtime"] == m and _WOW_CARDS_CACHE["cards"]:
-        return _WOW_CARDS_CACHE["cards"]
-    try:
-        with open(cpath, encoding="utf-8") as fp:
-            data = json.load(fp).get("cards") or {}
-        _WOW_CARDS_CACHE["mtime"] = m
-        _WOW_CARDS_CACHE["cards"] = data
-        return data
-    except Exception:
-        return {}
-
-
-def _lookup_wow_card(title, desc="", page_title=""):
-    cards = _load_wow_cards()
-    if not cards:
-        return {}
-    t = (title or "").strip()
-    if t in cards:
-        return cards[t]
-    # 优先在卡片标题 t 中匹配（例如「搅汤棒」→「曲奇的搅汤棒」，「水藤法杖」→「水藤」）
-    best = None
-    best_score = 0
-    if len(t) >= 2:
-        for k, v in cards.items():
-            if len(k) < 2:
-                continue
-            if k.endswith(t) or k.startswith(t) or t.startswith(k) or t.endswith(k):
-                score = len(k) + (20 if v.get("kind") in ("item", "set", "spell", "talent", "class") else 0)
-                if score > best_score:
-                    best = v
-                    best_score = score
-    if best:
-        return best
-    # 标题未命中时再从正文匹配（仅限非首领或明确技能/物品）
-    for k, v in cards.items():
-        if len(k) >= 3 and k in (desc or "") and v.get("kind") in ("item", "set", "spell", "talent"):
-            if len(k) > best_score:
-                best = v
-                best_score = len(k)
-    if best:
-        return best
-    if page_title and page_title in cards:
-        return {"icon": cards[page_title].get("icon"), "quality": cards[page_title].get("quality", 3)}
-    return {}
-
-
-def _open_icon_img(icon_name):
-    if not icon_name:
-        return None
-    ipath = os.path.join(_ASSETS_DIR, "icons", icon_name)
-    if not os.path.isfile(ipath):
-        return None
-    try:
-        with Image.open(ipath) as im:
-            return im.convert("RGB")
-    except Exception:
-        return None
-
-
-def _open_art_img(rel_path):
-    if not rel_path:
-        return None
-    apath = os.path.join(_ASSETS_DIR, "art", rel_path)
-    if not os.path.isfile(apath):
-        return None
-    try:
-        with Image.open(apath) as im:
-            return im.convert("RGB")
-    except Exception:
         return None
 
 
@@ -1061,7 +992,11 @@ def _quality_rgb(q, kind, default_rgb):
 
 
 def typeset_checklist_reading(base_png, plan, skin, page):
-    """3:4 阅读版。条目图跟随卡片，场景参考单独放置，并自动挂载本地高清图标、属性条与副本/职业原画。"""
+    """用同一份已核卡片渲染视频帧、本地图标或纯文字信息页。"""
+    from .graphics import icons
+
+    visual_mode = plan.get("visual_mode", "asset")
+    show_assets = visual_mode != "text"
     with Image.open(io.BytesIO(base_png)) as base:
         width, height = base.size
     image = _guide_bg(width, height, skin)
@@ -1080,9 +1015,10 @@ def typeset_checklist_reading(base_png, plan, skin, page):
     rule = _rgb(skin["rule"])
     body = _font(skin["body_face"], round(width * (.035 if dense else .039)))
     label = _font(skin["title_face"], round(width * .029))
-    small_font = _font(skin["body_face"], max(16, round(width * .024)))
     radius = round(width * .023)
     problems, boxes = [], []
+    art_boxes = 0
+    icon_count = 0
 
     def paint_lines(lines, font, x, y, color, spacing):
         for line in lines:
@@ -1111,7 +1047,7 @@ def typeset_checklist_reading(base_png, plan, skin, page):
         except OSError:
             problems.append("配图打不开，请重新选择")
     headline = plan["title"]
-    page_meta = _lookup_wow_card(headline)
+    page_meta = icons.card_visual(headline) if show_assets else {}
     f_title, title_lines, title_size = _fit_head(
         headline, skin["title_face"], round(width * (.087 if cover else .068)),
         inner, round(width * .041), round(width * .046), orphan=3)
@@ -1119,8 +1055,6 @@ def typeset_checklist_reading(base_png, plan, skin, page):
         problems.append("标题放不下，请缩短标题")
     y = round(height * (.115 if cover else .055))
     kicker = plan.get("kicker") or ""
-    if not kicker and not cover and page_meta.get("meta"):
-        kicker = page_meta.get("meta")
     if kicker:
         _draw_text(draw, (margin, y), kicker, label, accent)
     if page:
@@ -1140,42 +1074,32 @@ def typeset_checklist_reading(base_png, plan, skin, page):
                 problems.append("封面主图放不下，请缩短标题")
             else:
                 y = paint_photo(margin, y + gap, inner, min(room, round(height * .49)), frame_image, record_box=True)
-        else:
-            # 无视频截图时自动渲染装饰原画横幅与核对说明卡（不计入 photo_boxes）
+        elif show_assets:
             room = bottom - y - gap
-            art_im = _open_art_img(page_meta.get("banner") or page_meta.get("map_img") or "dungeons/hall-of-thanes.webp")
+            art_im = _open_local_visual("art", page_meta.get("banner") or page_meta.get("map_img"))
             if art_im and room >= round(height * .28):
-                bh = min(round(height * .36), room - round(height * .12))
-                y = paint_photo(margin, y + gap // 2, inner, bh, art_im, record_box=False) + gap
-            if bottom - y >= round(height * .12):
-                box_h = min(round(height * .14), bottom - y - gap // 2)
-                draw.rounded_rectangle((margin, y, width - margin, y + box_h), radius=radius,
-                                       fill=card_fill + (230,), outline=accent + (120,), width=max(1, width // 600))
-                _draw_text(draw, (margin + pad, y + pad // 2), "魔兽世界：无限 · 实测核对指南", label, accent)
-                _draw_text(draw, (margin + pad, y + pad // 2 + round(label.size * 1.45)),
-                           "完整副本掉落、任务坐标与配装清单可微信搜小程序「跑本助手」", small_font, body_color)
+                y = paint_photo(margin, y + gap, inner, round(height * .34), art_im, record_box=False)
+                art_boxes = 1
     else:
         measured = []
         title_font = _font(skin["title_face"], round(width * (.043 if dense else .049)))
         title_step = round(title_font.size * 1.26)
         body_step = round(body.size * 1.29)
-        stat_step = round(small_font.size * 1.45)
         for card in cards:
-            cmeta = _lookup_wow_card(card["t"], card["d"], headline)
-            heading = _wrap(card["t"], title_font, inner - 2 * pad)
+            cmeta = icons.card_visual(card["t"]) if show_assets else {}
+            icon = _open_local_visual("icons", cmeta.get("icon"))
+            reserve = round(title_font.size * 1.12) + pad if icon else 0
+            heading = _wrap(card["t"], title_font, inner - 2 * pad - reserve)
             content = _wrap(card["d"], body, inner - 2 * pad)
-            stat_txt = (cmeta.get("stats") or "").strip()
-            if stat_txt and stat_txt[:6] in (card["d"] or ""):
-                stat_txt = ""
-            base_h = 2 * pad + len(heading) * title_step + len(content) * body_step
-            measured.append((card["t"], heading, content, base_h, cmeta, stat_txt))
+            compare = (plan.get("checklist_kind") == "ranking" and len(heading) == 1 and len(content) == 1
+                       and re.fullmatch(r"第[0-9一二三四五六七八九十]+名", content[0])
+                       and title_font.getlength(heading[0]) + body.getlength(content[0]) + reserve + pad * 3 <= inner)
+            base_h = (round(height * .109) if compare else
+                      2 * pad + len(heading) * title_step + len(content) * body_step)
+            measured.append((card["t"], heading, content, base_h, cmeta, icon, compare))
         photo_height = 0
         inline_index = None
-        total_stat_need = sum(stat_step + pad // 3 for *_, st in measured if st)
-        base_sum = sum(h + gap for _, _, _, h, _, _ in measured)
-        space_for_photo = (gap if (frame_image and not frame.get("scene_only")) else (gap + label.size * 2 if frame_image else 0))
-        show_stats = total_stat_need > 0 and (bottom - y - base_sum - total_stat_need - space_for_photo) >= (round(height * .11) if frame_image else 0)
-        eff_sum = base_sum + (total_stat_need if show_stats else 0)
+        eff_sum = sum(h + gap for _, _, _, h, _, _, _ in measured)
         if frame_image:
             if not frame.get("scene_only"):
                 inline_index = next((i for i, (name, *_rest) in enumerate(measured)
@@ -1189,91 +1113,48 @@ def typeset_checklist_reading(base_png, plan, skin, page):
                 photo_height = 0
 
         icon_sz = round(title_font.size * 1.12)
-        for index, (cname, heading, content, base_h, cmeta, stat_txt) in enumerate(measured):
+        for index, (cname, heading, content, block_h, cmeta, icon, compare) in enumerate(measured):
             has_inline = index == inline_index and photo_height > 0
-            extra_stat_h = (stat_step + pad // 3) if (show_stats and stat_txt) else 0
-            block_h = base_h + extra_stat_h
             card_bottom = y + block_h + (gap + photo_height if has_inline else 0)
             q_color = _quality_rgb(cmeta.get("quality"), cmeta.get("kind"), accent)
             draw.rounded_rectangle((margin, y, width - margin, card_bottom), radius=radius,
                                    fill=card_fill, outline=rule, width=max(1, width // 600))
-            # 左侧品质色竖条
-            draw.rounded_rectangle((margin, y + radius // 2, margin + max(4, width // 220), card_bottom - radius // 2),
-                                   radius=2, fill=q_color)
             text_x = margin + pad
-            # 标题行左侧画本地高清图标（或序号角标）
-            ic_im = _open_icon_img(cmeta.get("icon"))
-            ic_box = (text_x, y + pad - 2, text_x + icon_sz, y + pad - 2 + icon_sz)
-            if ic_im:
-                image.paste(ic_im.resize((icon_sz, icon_sz), Image.LANCZOS), (ic_box[0], ic_box[1]),
+            head_x = text_x
+            text_y = y + (max(pad, (block_h - title_font.size) // 2) if compare else pad)
+            if icon:
+                image.paste(icon.resize((icon_sz, icon_sz), Image.LANCZOS), (text_x, text_y),
                             _rounded_mask(icon_sz, icon_sz, max(4, icon_sz // 5)))
-                draw.rounded_rectangle(ic_box, radius=max(4, icon_sz // 5), outline=q_color, width=2)
+                head_x += icon_sz + pad
+                icon_count += 1
+            row_y = paint_lines(heading, title_font, head_x, text_y, q_color, title_step)
+            if compare:
+                rank = content[0]
+                _draw_text(draw, (round(width - margin - pad - body.getlength(rank)), text_y + 3),
+                           rank, body, body_color)
+                row_y = y + block_h - pad
             else:
-                draw.rounded_rectangle(ic_box, radius=max(4, icon_sz // 5),
-                                       fill=(q_color[0] // 4, q_color[1] // 4, q_color[2] // 4, 220),
-                                       outline=q_color, width=2)
-                num_s = "%02d" % (index + 1)
-                nw = small_font.getlength(num_s)
-                _draw_text(draw, (ic_box[0] + (icon_sz - nw) // 2, ic_box[1] + (icon_sz - small_font.size) // 2 - 2),
-                           num_s, small_font, q_color)
-            head_x = text_x + icon_sz + max(8, pad // 2)
-            # 若标题只有 1 行且不超宽，缩进在图标右侧并绘制右上角元数据标签
-            if len(heading) == 1 and title_font.getlength(heading[0]) <= (inner - 2 * pad - icon_sz - pad):
-                _draw_text(draw, (head_x, y + pad), heading[0], title_font, q_color)
-                meta_tag = (cmeta.get("meta") or "").strip()
-                if meta_tag:
-                    avail_w = (width - margin - pad) - (head_x + title_font.getlength(heading[0]) + pad)
-                    if avail_w >= small_font.size * 4:
-                        seg_parts = [s.strip() for s in meta_tag.split("·") if s.strip()]
-                        while len(seg_parts) > 1 and small_font.getlength(" · ".join(seg_parts)) + 20 > avail_w:
-                            seg_parts.pop()
-                        meta_tag = " · ".join(seg_parts)
-                        if small_font.getlength(meta_tag) + 20 > avail_w:
-                            meta_tag = ""
-                        if len(meta_tag) >= 3:
-                            tw = round(small_font.getlength(meta_tag)) + 16
-                            th = round(small_font.size * 1.35)
-                            tx = width - margin - pad - tw
-                            ty = y + pad + max(0, (title_font.size - th) // 2)
-                            draw.rounded_rectangle((tx, ty, tx + tw, ty + th), radius=th // 2,
-                                                   fill=(q_color[0] // 5, q_color[1] // 5, q_color[2] // 5, 200),
-                                                   outline=q_color + (140,), width=1)
-                            _draw_text(draw, (tx + 8, ty + (th - small_font.size) // 2 - 1), meta_tag, small_font, q_color)
-                row_y = y + pad + title_step
-            else:
-                row_y = paint_lines(heading, title_font, text_x, y + pad, q_color, title_step)
-            row_y = paint_lines(content, body, text_x, row_y, body_color, body_step)
-            if extra_stat_h > 0:
-                st_line = "属性参考：" + stat_txt
-                while st_line and small_font.getlength(st_line) > inner - 2 * pad - 16:
-                    st_line = st_line[:-1]
-                sh = round(small_font.size * 1.35)
-                draw.rounded_rectangle((text_x, row_y + 2, width - margin - pad, row_y + 2 + sh),
-                                       radius=6, fill=(10, 18, 14, 210), outline=q_color + (110,), width=1)
-                _draw_text(draw, (text_x + 8, row_y + 2 + (sh - small_font.size) // 2 - 1),
-                           st_line, small_font, (134, 239, 172))
-                row_y += extra_stat_h
+                row_y = paint_lines(content, body, text_x, row_y, body_color, body_step)
             if has_inline:
                 paint_photo(text_x, row_y + gap, inner - 2 * pad, photo_height, frame_image, record_box=True)
             y = card_bottom + gap
         if photo_height > 0 and inline_index is None:
             _draw_text(draw, (margin, y), "场景参考", label, accent)
             y = paint_photo(margin, y + label.size * 2, inner, photo_height, frame_image, record_box=True)
-        elif photo_height == 0 and bottom - y >= round(height * .16):
+        elif visual_mode == "asset" and bottom - y >= round(height * .16):
             # 当页面无视频帧且下方留白较多时，自动补绘对应副本底图或职业原画（不计入 photo_boxes）
             art_rel = page_meta.get("map_img") or page_meta.get("banner")
             if not art_rel:
-                for _, _, _, _, cm, _ in measured:
-                    if cm.get("map_img") or cm.get("banner"):
-                        art_rel = cm.get("map_img") or cm.get("banner")
-                        break
-            art_im = _open_art_img(art_rel)
+                arts = {cm.get("map_img") or cm.get("banner") for _, _, _, _, cm, _, _ in measured}
+                if len(arts) == 1:
+                    art_rel = next(iter(arts))
+            art_im = _open_local_visual("art", art_rel)
             if art_im:
                 rem = bottom - y - label.size * 2 - gap
                 if rem >= round(height * .11):
-                    _draw_text(draw, (margin, y), "资料附图 · " + headline, label, accent)
                     y = paint_photo(margin, y + round(label.size * 1.6), inner, min(rem, round(height * .30)),
                                     art_im, record_box=False)
+                    art_boxes = 1
 
     if y > bottom + gap:
         problems.append("内容超出版面，请拆页或缩短文字")
@@ -1285,7 +1166,8 @@ def typeset_checklist_reading(base_png, plan, skin, page):
         "ok": not problems, "problems": problems, "layout": "guide",
         "layout_label": "阅读版封面" if cover else "阅读版", "engine": "pil-guide",
         "canvas": "%dx%d" % (width, height), "photos": len(boxes),
-        "photo_boxes": boxes, "cards": len(cards),
+        "photo_boxes": boxes, "cards": len(cards), "icons": icon_count, "art": art_boxes,
+        "visual_mode": visual_mode,
     }
 
 

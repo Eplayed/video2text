@@ -321,8 +321,7 @@ def compose_source_note(ctx, fallback=""):
     open_r = (ctx or {}).get("open_risks") or []
     resolved = (ctx or {}).get("resolved") or []
     if open_r:
-        line += "｜未逐项核验 %d 条（%s）" % (
-            len(open_r), "、".join(_risk_preview(r) for r in open_r[:2]))
+        line += "｜来源有 %d 条待核事项，详见事实闸记录" % len(open_r)
     # 「已核」必须同时满足：具体一手帖 URL ＋ 对得上登记表登记的那个来源（带登记日期）。
     # 对不上的（旧稿德莱尼更正记的是官网公告页）标「已更正」，不得计入已核。
     verified, corrected = [], []
@@ -1964,8 +1963,13 @@ def plan_pages(plan):
         for _k in GUIDE_KEYS:
             if item.get(_k):
                 pages[-1][_k] = item.get(_k)
-        if plan.get("checklist_revision") and plan.get("checklist_reading"):
-            pages[-1]["checklist_reading"] = True
+        if plan.get("checklist_revision"):
+            if plan.get("checklist_reading") or item.get("visual_mode") == "asset":
+                pages[-1]["checklist_reading"] = True
+            if item.get("visual_mode"):
+                pages[-1]["visual_mode"] = item["visual_mode"]
+            if plan.get("checklist_kind"):
+                pages[-1]["checklist_kind"] = plan["checklist_kind"]
         if plan.get("checklist_revision") and len(pages) == 1 and item.get("checklist_cover"):
             pages[-1]["checklist_cover"] = True
             if item.get("cover_source_page"):
@@ -2045,7 +2049,7 @@ def lint_plan(plan, lim=None, card_min=None):
     pages = plan_pages(plan)
     if len(pages) > 1:
         bad = []
-        used_frames = set()
+        used_frames = {}
         has_cover = bool(pages[0].get("checklist_cover"))
         page_limit = PAGE_MAX + int(has_cover)
         for i, p in enumerate(pages, 1):
@@ -2058,10 +2062,12 @@ def lint_plan(plan, lim=None, card_min=None):
                 continue
             for ph in p.get("photos") or []:
                 fid = ph.get("frame") if isinstance(ph, dict) else ""
-                if fid and fid in used_frames:
-                    bad.append("第 %d 页：画面 %s 已在前页使用，请换图" % (i, fid))
                 if fid:
-                    used_frames.add(fid)
+                    previous = used_frames.setdefault(fid, [])
+                    scene = bool(ph.get("scene_only") and ph.get("reusable_scene"))
+                    if previous and (not scene or not all(previous) or len(previous) >= 2):
+                        bad.append("第 %d 页：画面 %s 已在前页使用，请换图" % (i, fid))
+                    previous.append(scene)
         if len(plan.get("pages") or []) > page_limit:
             bad.append("页数 %d 超过上限 %d 页" % (len(plan.get("pages") or []), page_limit))
         return bad

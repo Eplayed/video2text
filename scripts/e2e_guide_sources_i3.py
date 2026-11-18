@@ -31,7 +31,7 @@ def main():
               "publish.copy_text.1": {"point_ids": ["p1"]},
               "publish.copy_text.2": {"point_ids": ["p2"]},
               "publish.digest.1": {"point_ids": ["p1", "p2"]}}
-    pub = {"copy_text": "大号先拿1点。小号随后拿1点。", "digest": "两步拿2点"}
+    pub = {"copy_text": "大号先拿1点。随后由小号拿1点。", "digest": "两步拿2点"}
     good = guide_mother.audit_output(mother, plan, pub, {},
                                       checker=lambda *_: {"issues": [], "field_sources": fields})
     check("公众号两张卡共同覆盖两条必保点", good["ready"])
@@ -42,6 +42,11 @@ def main():
                                            checker=lambda *_: {"issues": [], "field_sources": dropped})
     check("配文第二句漏来源不能由第一句蒙混", not split_bad["ready"]
           and any(x.get("field") == "publish.copy_text.2" for x in split_bad["coverage"]["issues"]))
+    literal = dict(pub, copy_text="大号先拿1点。小号随后拿1点。")
+    auto = guide_mother.audit_output(mother, plan, literal, {},
+                                     checker=lambda *_: {"issues": [], "field_sources": dropped})
+    check("配文第二句逐字与原句一致时可直接回指",
+          auto["ready"] and auto["coverage"]["field_sources"]["publish.copy_text.2"]["point_ids"] == ["p2"])
     wrong = dict(fields, **{"publish.digest.1": {"point_ids": ["fake"]}})
     bad = guide_mother.audit_output(mother, plan, pub, {},
                                      checker=lambda *_: {"issues": [], "field_sources": wrong})

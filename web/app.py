@@ -5105,7 +5105,11 @@ def _prepare_poster_checklist(summary, kind, progress=None):
     # ensure_mother 会优先复用已通过的当前母稿，也会在证据规则升级后重核旧稿。
     mother = guide_mother.ensure_mother(
         DB_PATH, sid, _editorial_config(required=True), progress=progress)
-    if (old and old.get("source_revision") == revision
+    if kind == "auto":
+        kind = guide_checklist.suggest_kind(summary["title"], mother)
+    if (old and old.get("kind") == kind
+            and old.get("compact_version") == guide_checklist.COMPACT_VERSION
+            and old.get("source_revision") == revision
             and old.get("mother_revision") == mother.get("mother_revision")):
         return old
     if mother["source_revision"] != revision:
@@ -5130,7 +5134,10 @@ def api_poster_checklist(summary_id):
             sheet = guide_checklist.save(DB_PATH, summary_id, updated, sheet["source_revision"],
                                          sheet["mother_revision"], data.get("revision"))
         if not sheet:
-            return jsonify({"sheet": None, "kinds": guide_checklist.KINDS, "stale": False})
+            summary = _poster_get_summary(summary_id) or {}
+            mother = guide_mother.load_mother(DB_PATH, summary_id) if summary else {}
+            return jsonify({"sheet": None, "kinds": guide_checklist.KINDS, "stale": False,
+                            "suggested_kind": guide_checklist.suggest_kind(summary.get("title") or "", mother)})
         sources, revision = guide_mother.source_snapshot(DB_PATH, summary_id)
         mother = guide_mother.load_mother(DB_PATH, summary_id)
         stale = (revision != sheet["source_revision"]
@@ -5152,7 +5159,11 @@ def api_poster_checklist(summary_id):
                     "review_reason": point.get("review_reason") or "", "title": material.get("title") or "",
                     "url": material.get("url") or urls.get(vid) or "",
                 })
-        return jsonify({"sheet": sheet, "kinds": guide_checklist.KINDS, "stale": stale})
+        suggested = guide_checklist.suggest_kind(sheet["title"], mother)
+        return jsonify({"sheet": sheet, "kinds": guide_checklist.KINDS, "stale": stale,
+                        "suggested_kind": suggested,
+                        "can_merge": sheet.get("compact_version") != guide_checklist.COMPACT_VERSION,
+                        "recommendation": guide_checklist.recommendations(sheet, mother) if not stale else {}})
     except (guide_checklist.ChecklistError, guide_mother.MotherError) as exc:
         return jsonify({"error": str(exc)}), 409
 
@@ -5166,7 +5177,7 @@ def api_poster_checklist_prepare(summary_id):
     summary = _poster_get_summary(summary_id)
     data = request.get_json(silent=True) or {}
     kind = data.get("kind") if isinstance(data, dict) else None
-    if not summary or not isinstance(kind, str) or kind not in guide_checklist.KINDS:
+    if not summary or not isinstance(kind, str) or kind not in (*guide_checklist.KINDS, "auto"):
         return jsonify({"error": "请选择整理稿和攻略模板"}), 400
 
     def run():
@@ -5204,7 +5215,7 @@ def _checklist_frame_plan(summary_id, sheet):
         raise guide_checklist.ChecklistError("原文已更新，请重新准备清单")
     mother = guide_mother.load_mother(DB_PATH, summary_id)
     plan, publish, audit_mother = guide_checklist.compiled(sheet, mother)
-    plan["checklist_layout"] = 4
+    plan["checklist_layout"] = 6
     frames = checklist_frames.candidates(_guide_materials(summary), OUTPUT_DIR)
     return plan, publish, audit_mother, frames
 
@@ -5229,9 +5240,9 @@ def api_checklist_frames(summary_id):
 
 
 def _checklist_output_ratio(plan, payload, *, companion=False):
-    reading = payload.get("reading") is True
+    reading = payload.get("reading") is True or plan.get("checklist_kind") == "ranking"
     if reading:
-        plan.update(checklist_reading=True, checklist_layout=5)
+        plan.update(checklist_reading=True, checklist_layout=7)
     return "3:4" if reading or companion else "9:16"
 
 
@@ -9459,8 +9470,7 @@ def _today_run(job, channel):
                 summary = _poster_get_summary(sid)
                 if not summary:
                     raise RuntimeError("整理稿不存在")
-                kind = guide_checklist.suggest_kind(topic["title"] + " " + topic.get("angle", ""))
-                _prepare_poster_checklist(summary, kind, progress=lambda msg: job.update(progress=msg))
+                _prepare_poster_checklist(summary, "auto", progress=lambda msg: job.update(progress=msg))
                 job["progress"] = "攻略清单已就绪，请核对后出图"
                 return
             if channel == "wechat":

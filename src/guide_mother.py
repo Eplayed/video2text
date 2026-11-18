@@ -506,9 +506,13 @@ def _editorial_compare(mother, source_text, mappings, fields, ai_config):
         if value:
             units.append((None, value, [point_index[pid] for pid in card["point_ids"]
                                          if pid in point_index]))
+    repeated = {}
     for key, field in (fields or {}).items():
-        units.append((key, field["text"], [point_index[pid] for pid in field.get("point_ids") or []
-                                           if pid in point_index]))
+        refs = [point_index[pid] for pid in field.get("point_ids") or [] if pid in point_index]
+        identity = (field["text"], tuple(refs))
+        repeated.setdefault(identity, []).append(key)
+    for (value, refs), keys in repeated.items():
+        units.append((keys[0], value, list(refs)))
     result = {"issues": [], "field_sources": {}}
     if not units:
         return result
@@ -551,7 +555,8 @@ why 只写失败原因，至多 60 字；ok 必须是布尔值。"""
             check = checks[str(i)]
             refs = [points[index - 1]["point_id"] for index in check.get("refs", [])]
             if key is not None:
-                result["field_sources"][key] = {"point_ids": refs, "navigation": check.get("nav") is True}
+                for equivalent in repeated[(text, tuple(_refs))]:
+                    result["field_sources"][equivalent] = {"point_ids": refs, "navigation": check.get("nav") is True}
             if not check["ok"]:
                 result["issues"].append({"text": text, "problem": check["why"],
                                          "field": key or "card", "source_quote": ""})
@@ -657,10 +662,13 @@ def audit_output(mother, plan, publish, ai_config, checker=None, source_text="")
                 "mother_revision": mother["mother_revision"], "ready": False}
     try:
         exact = _exact_field_sources(fields, points, literal_only=editorial)
-        fields_for_model = {
-            field: {"text": text, "point_ids": exact[field]["point_ids"]} if field in exact else {"text": text}
-            for field, text in fields.items()
-        }
+        tier_refs = plan.get("checklist_tier_refs") or {}
+        fields_for_model = {}
+        for field, text in fields.items():
+            refs = (exact.get(field) or {}).get("point_ids") or []
+            if not refs and text in tier_refs and tier_refs[text] in points:
+                refs = [tier_refs[text]]
+            fields_for_model[field] = {"text": text, "point_ids": refs}
         result = (checker(mother, output, ai_config, source_text) if checker
                   else _model_compare(mother, output, ai_config, source_text, mappings, fields_for_model))
         issues = result.get("issues") if isinstance(result, dict) else None
@@ -718,6 +726,8 @@ def audit_revision(mother, plan, publish, source_text=""):
            _field_texts(plan, publish), bindings, _digest(source_text)]
     if plan.get("checklist_revision"):
         key.append("approved-checklist-scope-v1")
+        if plan.get("checklist_tier_refs"):
+            key.append(plan["checklist_tier_refs"])
     return _digest(key)
 
 

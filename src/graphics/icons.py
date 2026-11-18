@@ -77,3 +77,47 @@ def attach(cards):
                 else:
                     rep["missing"].append(want)
     return rep
+
+
+_WOW_CARDS = {"signature": None, "cards": {}}
+
+
+def wow_card(name):
+    """读取同步的实名卡片，不做近似匹配。"""
+    path = MAP_FILE.with_name("wow_cards.json")
+    try:
+        sig = (path, path.stat().st_mtime_ns)
+        if sig != _WOW_CARDS["signature"]:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            _WOW_CARDS.update(signature=sig, cards=data.get("cards") or {})
+    except (OSError, ValueError, AttributeError):
+        return {}
+    return _WOW_CARDS["cards"].get(name) or {}
+
+
+def visual_path(folder, name):
+    if not isinstance(name, str) or not name:
+        return None
+    root = (MAP_FILE.parent / folder).resolve()
+    path = (root / name).resolve()
+    return path if path.is_relative_to(root) and path.is_file() else None
+
+
+def card_visual(name):
+    """精确匹配条目名或专精所属职业，素材仅用于配图。"""
+    from ..term_glossary import WOW_CLASSES
+
+    card = wow_card(name)
+    if card.get("icon") or card.get("banner") or card.get("map_img"):
+        return card
+    owner = next((cls for cls in WOW_CLASSES if name.endswith(cls)), "")
+    return (wow_card(owner) or wow_card("潜行者")) if owner == "盗贼" else wow_card(owner)
+
+
+def page_visual(page):
+    names = [page["title"]] + [c["t"] for c in page.get("cards") or []]
+    assets = [card_visual(name) for name in names]
+    for asset in assets:
+        if visual_path("art", asset.get("map_img") or asset.get("banner")) or visual_path("icons", asset.get("icon")):
+            return True
+    return False

@@ -21,6 +21,7 @@ import sqlite3
 import sys
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -211,11 +212,17 @@ def main():
     check("点名来源号 + 第三方口播 + 素材发布日（不是生成日）",
           material["author"] in note and "第三方口播" in note and "2026-10-24" in note, note[:76])
     check("未核验时明写没核，绝不出现「截至生成日」那种话",
-          "事实核验：无" in note and "截至" not in note, note[-80:])
+          "1 条待核事项" in note and "递增40%" not in note and "截至" not in note, note[-80:])
     check("生成日单独标，不与素材日混为一谈", "本稿生成于 2026-10-29" in note, "")
-    note2 = ai_poster.compose_source_note(
-        dict(ctx, resolved=[{"raw": "愈合祷言", "source": "官方公告 24301514"}], open_risks=[]))
-    check("核过之后才写已核，并带出处", "已核 1 条" in note2 and "24301514" in note2, note2[:100])
+    registry_url = "https://example.test/news/24301514"
+    registry = {"meta": {"source_url": registry_url, "source_date": "2026-10-24"}}
+    with patch("src.claim_check.load", return_value=registry):
+        note2 = ai_poster.compose_source_note(
+            dict(ctx, resolved=[{"raw": "愈合祷言", "source": registry_url}], open_risks=[]))
+        corrected = ai_poster.compose_source_note(
+            dict(ctx, resolved=[{"raw": "愈合祷言", "source": "官方公告 24301514"}], open_risks=[]))
+    check("核过之后才写已核，并带出处", "已核 1 条" in note2 and registry_url in note2, note2[:100])
+    check("没有可定位原帖的条目记为更正", "已更正 1 条" in corrected, corrected[:100])
     note3 = ai_poster.compose_source_note({}, "整理自公开分享")
     check("没接台账的老路径不自己编日期（原样交回，不假装）", note3 == "整理自公开分享", note3)
 

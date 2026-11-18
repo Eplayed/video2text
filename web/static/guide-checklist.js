@@ -1,5 +1,6 @@
 let pkChecklistSheet = null;
 let pkChecklistEpoch = 0;
+let pkChecklistRecommendation = null;
 let pkWorkflow = 'auto';
 
 function pkChecklistModeLine() {
@@ -90,6 +91,7 @@ async function pkPosterAction(generate) {
 function pkChecklistReset() {
   pkChecklistEpoch++;
   pkChecklistSheet = null;
+  pkChecklistRecommendation = null;
   document.getElementById('pk-checklist-format').value = 'classic';
   pkSetWorkflow('auto');
   document.querySelector('.pk-more-tools').open = false;
@@ -231,11 +233,29 @@ function pkChecklistRequireSelection() {
   return false;
 }
 
+function pkChecklistRecommend() {
+  if (!pkChecklistRecommendation || pkFrameDirty) return;
+  const ids = new Set(pkChecklistRecommendation.row_ids);
+  for (const row of document.querySelectorAll('#pk-checklist-editor fieldset')) {
+    const checkbox = row.querySelector('[data-include]');
+    if (!checkbox.disabled) checkbox.checked = ids.has(row.dataset.id);
+  }
+  pkFrameReset();
+  pkChecklistUpdateSelection();
+  document.getElementById('pk-checklist-msg').textContent =
+    '已勾选推荐条目，预计 ' + pkChecklistRecommendation.pages + ' 页（含封面）。';
+  pkChecklistFocusSelection();
+}
+
 function pkChecklistShow(value) {
   pkChecklistSheet = value.sheet;
   const editor = document.getElementById('pk-checklist-editor');
   const kind = document.getElementById('pk-checklist-kind');
   const prepare = document.getElementById('pk-checklist-prepare');
+  const recommend = document.getElementById('pk-checklist-recommend');
+  pkChecklistRecommendation = value.recommendation;
+  recommend.hidden = !(pkChecklistRecommendation && pkChecklistRecommendation.pages);
+  if (!recommend.hidden) recommend.textContent = '推荐勾选 · 预计 ' + pkChecklistRecommendation.pages + ' 页';
   const actions = document.getElementById('pk-checklist-actions');
   const copy = document.querySelector('.pk-checklist-copy');
   const stale = value.stale;
@@ -245,11 +265,16 @@ function pkChecklistShow(value) {
   delete status.dataset.lengthWarning;
   status.textContent = stale ? '原文或母稿已有更新，请重新准备清单。' : '';
   if (pkChecklistSheet) {
-    kind.value = pkChecklistSheet.kind;
+    kind.value = value.can_merge && value.suggested_kind ? value.suggested_kind : pkChecklistSheet.kind;
     pkSetWorkflow('checklist');
-  }
+  } else if (value.suggested_kind) kind.value = value.suggested_kind;
   editor.replaceChildren();
-  prepare.hidden = Boolean(pkChecklistSheet && !stale);
+  prepare.hidden = Boolean(pkChecklistSheet && !stale && !value.can_merge);
+  prepare.textContent = pkChecklistSheet && !stale ? '按选中模板智能合并' : '准备清单';
+  kind.onchange = () => {
+    prepare.hidden = Boolean(pkChecklistSheet && !stale && !value.can_merge &&
+      kind.value === pkChecklistSheet.kind);
+  };
   actions.hidden = !pkChecklistSheet || stale;
   kind.disabled = false;
   if (!pkChecklistSheet || stale) return;
@@ -287,7 +312,7 @@ function pkChecklistForm() {
       cards, note: rest[rest.length - 1].value};
   });
   return {revision: pkChecklistSheet.revision, title: document.getElementById('pk-checklist-title').value,
-    kind: document.getElementById('pk-checklist-kind').value, rows};
+    kind: pkChecklistSheet.kind, rows};
 }
 
 function pkChecklistCheckLength(form) {
@@ -459,7 +484,7 @@ function pkFrameShow(data) {
   for (const p of data.pages) {
     const state = p.stale ? '需重新确认' : p.selected ?
       (p.selected.basis ? '已确认 ' + (p.candidates.find(f => f.id === p.selected.id) || {}).time : '待补使用依据')
-      : '文字页';
+      : (p.visual === 'asset' ? '本地图标／原画' : '纯文字信息页');
     chooser.append(new Option('第 ' + p.page + ' 页 · ' + p.title + ' · ' + state, p.key));
   }
   chooser.value = page.key;
@@ -476,10 +501,15 @@ function pkFrameShow(data) {
   const candidates = document.createElement('div');
   candidates.className = 'pk-frame-gallery';
   candidates.setAttribute('role', 'radiogroup');
-  candidates.setAttribute('aria-label', '本页关键帧');
-  const selectedId = !page.stale && page.selected ? page.selected.id : '';
-  let crop = selectedId ? page.selected.crop || null : null;
-  for (const item of [{id: ''}, ...page.candidates]) {
+  candidates.setAttribute('aria-label', '本页配图方案');
+  const selectedId = !page.stale && page.selected ? page.selected.id : '__' + (page.manual_visual || 'auto');
+  let crop = page.selected && !page.stale ? page.selected.crop || null : null;
+  const alternatives = [
+    {id: '__auto', label: '自动配图'},
+    {id: '__text', label: '纯文字信息页'},
+  ];
+  if (page.has_asset) alternatives.splice(1, 0, {id: '__asset', label: '本地图标 / 原画'});
+  for (const item of [...alternatives, ...page.candidates]) {
     const tile = document.createElement('label');
     tile.className = 'pk-frame-tile';
     const radio = document.createElement('input');
@@ -489,11 +519,10 @@ function pkFrameShow(data) {
     radio.checked = item.id === selectedId;
     const text = document.createElement('span');
     text.className = 'pk-frame-tile-label';
-    text.textContent = item.id ?
-      [item.time, item.suggested ? '推荐' : '', item.subject || item.source].filter(Boolean).join(' · ')
-      : '文字页';
+    text.textContent = item.label ||
+      [item.time, item.suggested ? '推荐实图' : '', item.subject || item.source].filter(Boolean).join(' · ');
     tile.append(radio);
-    if (item.id) {
+    if (item.url) {
       const thumb = document.createElement('img');
       thumb.src = thumbOf(item.url, 360);
       thumb.alt = '';
@@ -525,11 +554,13 @@ function pkFrameShow(data) {
   info.className = 'pk-frame-selected';
   info.setAttribute('aria-label', '本页配图预览');
   const details = document.createElement('p');
-  details.textContent = page.stale ? '原配图已变化，请重新选图或设为文字页。' : '';
+  details.textContent = page.stale ? '原配图已变化，预览采用当前可用的备选方案。' :
+    '本页推荐 · ' + ({evidence: '核对后使用视频实图', asset: '本地图标或原画',
+      scene: '可选视频场景', text: '纯文字信息页'})[page.recommended];
   const confirm = pkChecklistButton('确认本页配图', () => {
     const frame = page.candidates.find(item => item.id === frameChoice());
-    pkFrameSave({page: page.key, id: frameChoice(), anchor: anchor.value,
-      usage: usage.value, basis: basisInput.value, digest: frame ? frame.digest : '', crop});
+    pkFrameSave({page: page.key, id: frame ? frame.id : '', visual: frame ? undefined : frameChoice().slice(2),
+      anchor: anchor.value, usage: usage.value, basis: basisInput.value, digest: frame ? frame.digest : '', crop});
   });
   const undo = pkChecklistButton('撤销本页改动', () => {
     pkFrameShow(data);
@@ -586,7 +617,7 @@ function pkFrameShow(data) {
         basisInput.value = '';
       }
     }
-    confirm.textContent = frame ? '确认用在第 ' + page.page + ' 页' : '确认第 ' + page.page + ' 页为文字页';
+    confirm.textContent = frame ? '确认用在第 ' + page.page + ' 页' : '保存本页画面方案';
   }
   function markDirty() {
     pkFrameDirty = true;
@@ -628,7 +659,7 @@ async function pkFrameSave(body) {
     if (token !== pkChecklistEpoch) return;
     pkFrameShow(data);
     pkFrameMessage(body.id ? '本页配图已保存，预览和出图会使用这张图。'
-      : body.discard_stale ? '已清除失效配图。' : '本页已设为文字页。');
+      : body.discard_stale ? '已清除失效配图。' : '本页画面方案已保存。');
   } catch (error) {
     if (token === pkChecklistEpoch) pkFrameMessage(error.message);
   } finally {
@@ -669,7 +700,7 @@ async function pkFramePreview(channel) {
       img.src = page.url;
       img.alt = (page.role === '封面' ? '封面 · ' : '第 ' + page.page + ' 页 · ') + page.title;
       const caption = document.createElement('figcaption');
-      caption.textContent = [img.alt, page.check.photos ? '含配图' : '文字页',
+      caption.textContent = [img.alt, page.check.photos ? '视频画面' : page.check.icons || page.check.art ? '本地图标 / 原画' : '纯文字信息页',
         ...(page.check.problems || [])].join(' · ');
       link.append(img);
       figure.append(link, caption);
